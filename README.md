@@ -4,20 +4,6 @@
 A MapleStory **v83** (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)
 
 (ALPHA) Work in progress...
-<div align="center">
-  <table width="700" align="center">
-    <tr>
-      <td align="center" width="55%">
-        <img src="https://github.com/user-attachments/assets/3162edc5-b5e8-4053-abd5-872e8e9b22e8" width="500" alt="In-Game" /><br>
-        <sub><b>In-Game</b></sub>
-      </td>
-      <td align="center" width="110%">
-        <img src="https://github.com/user-attachments/assets/f7bbe8b6-463a-4c4b-9632-dad696eff7a4" width="500" alt="Screenshot" /><br>
-        <sub><b>Login</b></sub>
-      </td>
-    </tr>
-  </table>
-</div>
 
 
 ## Directories
