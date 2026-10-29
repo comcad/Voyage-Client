@@ -1,7 +1,7 @@
 
 # Voyage Client
 
-A MapleStory **v83** (GMS) browser client — pure JavaScript. (Fully compatible with cosmic server)
+A MapleStory **v83** (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)
 
 (ALPHA) Work in progress...
 <div align="center">
