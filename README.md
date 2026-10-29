@@ -3,7 +3,7 @@
 
 A MapleStory **v83** (GMS) browser client — pure JavaScript. (Fully compatible with cosmic server)
 
-Work in progress...
+(ALPHA) Work in progress...
 <div align="center">
   <table width="700" align="center">
     <tr>
