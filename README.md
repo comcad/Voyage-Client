@@ -12,7 +12,7 @@ Work in progress...
         <sub><b>Login</b></sub>
       </td>
       <td align="center" width="100%">
-        <img src="https://github.com/user-attachments/assets/6186adc4-f108-4558-9588-0c0362da9c00" width="500" alt="IMG_1494" /><br>
+        <img src="https://github.com/user-attachments/assets/6186adc4-f108-4558-9588-0c0362da9c00" width="550" alt="IMG_1494" /><br>
         <sub><b>In-Game</b></sub>
       </td>
     </tr>
