@@ -1,9 +1,27 @@
 # Voyage Client
 
-A MapleStory **v83** (GMS) browser client — pure JavaScript, no WASM.
+A MapleStory **v83** (GMS) browser client — pure JavaScript. (Fully compatible with cosmic server)
+
+Work in progress...
+
+<div align="center">
+  <table width="700" align="center">
+    <tr>
+      <td align="center" width="60%">
+        <img src="https://github.com/user-attachments/assets/0ab3508f-e043-4bbb-836f-059d923dc950" width="500" alt="Screenshot" /><br>
+        <sub><b>Login</b></sub>
+      </td>
+      <td align="center" width="100%">
+        <img src="https://github.com/user-attachments/assets/6186adc4-f108-4558-9588-0c0362da9c00" width="500" alt="IMG_1494" /><br>
+        <sub><b>In-Game</b></sub>
+      </td>
+    </tr>
+  </table>
+</div>
 
 ```
 maplestory-v83/
+├── assets/* 
 ├── webclient/            # the browser client
 │   ├── server.js         # Express server + WS↔TCP relay to the Cosmic v83 server
 │   ├── index.html
@@ -26,32 +44,20 @@ maplestory-v83/
 
 - Node.js ≥ 18
 - A folder of MapleStory v83 GMS `*.wz` files
-- (Optional) a Cosmic v83 server to log in and play against
+- A Cosmic v83 server to log in and play against
 
 ## 1. Extract assets
 
 The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/xcomcadx/voyage-wz-extractor)** (pure Node, zero deps).
 
 ```sh
-git clone https://github.com/xcomcadx/voyage-wz-extractor
-# all WZs
-node voyage-wz-extractor/tools/wz-extract.mjs <path-to-wz-folder> assets
-
-# only some WZs
-node voyage-wz-extractor/tools/wz-extract.mjs <path-to-wz-folder> assets Character Mob Map Sound
-
-# one IMG (fast)
-node voyage-wz-extractor/tools/wz-extract.mjs <path-to-wz-folder> assets --only=Character/00002000
-
-# JSON only, or resume a partial run
-node voyage-wz-extractor/tools/wz-extract.mjs <path-to-wz-folder> assets --json-only
-node voyage-wz-extractor/tools/wz-extract.mjs <path-to-wz-folder> assets --resume
+- git clone https://github.com/xcomcadx/voyage-wz-extractor
+- cd voyage-wz-extractor
+- mkdir assets
+- node wz-extract.mjs <path-to-wz-folder> ./assets
+- copy assets folder to the root of the client folder next to the webclient folder
 ```
 
-Extractor features: auto version detection (v83: hash `0x754`, enc byte 172),
-encrypted strings + encrypted canvas blocks, all pixel formats (BGRA4444,
-BGRA8888, RGB565, 16×16 block RGB565, DXT3, DXT5), UOL / Vector2D / Convex2D,
-sounds as MP3 or proper WAV.
 
 ## 2. Run the server
 
@@ -62,27 +68,22 @@ node server.js
 ```
 
 Point it at a Cosmic server by setting `COSMIC_HOST` / `COSMIC_PORT` (or edit
-the relay defaults in `server.js`). The browser talks to the server over
-WebSocket; the server relays to the Cosmic TCP port with the v83 AES-OFB
-crypto + IV shuffle.
+the relay defaults in `server.js`).
 
 ## 3. Play
 
 Open `http://localhost:3000`, log in, pick a channel, pick a character.
 
-Offline asset viewer (no server needed): `http://localhost:3000/?offline=1&map=100000000`
 
 ## Protocol notes
 
 - SET_FIELD must be followed by PLAYER_MAP_TRANSFER (not PLAYER_ENTER_MAP).
 - Sending fixdamage with wrong values autobans the character — the client only
   sends what the server expects.
-- See `webclient/src/net/opcodes.js` for the full opcode table.
 
 ## Credits
 
 - **Author:** [xcomcadx](https://github.com/xcomcadx)
-- WZ format reference: NoLifeWzToNx
 - Server: Cosmic v83
 
 ## License
