@@ -18,3 +18,4 @@ __pycache__/
 # --- Logs from runs ---
 *.log
 nohup.out
+*.bak-loading

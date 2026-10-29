@@ -24,6 +24,7 @@ import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
+import { settings } from './settings.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
@@ -55,7 +56,8 @@ class Input {
     });
     addEventListener('keyup', (e) => { const k = map(e); if (k) this.down.delete(k); });
     addEventListener('blur', () => this.down.clear());
-    canvas.addEventListener('click', (e) => {
+    // NPCs open on a double-click, as in the client
+    canvas.addEventListener('dblclick', (e) => {
       const r = canvas.getBoundingClientRect();
       this.clicks.push({ x: ((e.clientX - r.left) / r.width) * VIEW_W, y: ((e.clientY - r.top) / r.height) * VIEW_H });
     });
@@ -104,8 +106,9 @@ class RemotePlayer {
     if (this.action !== action) { this.action = action; this.frame = 0; this.frameT = 0; }
     const moving = !(action === 'ladder' || action === 'rope') || this.path;
     if (moving) this.frameT += dt * 1000;
-    while (this.frameT >= look.delay(action, this.frame)) {
-      this.frameT -= look.delay(action, this.frame);
+    const k = this.attack && action === this.attack ? this.attackScale || 1 : 1;   // their weapon's speed
+    while (this.frameT >= look.delay(action, this.frame) * k) {
+      this.frameT -= look.delay(action, this.frame) * k;
       if (++this.frame >= look.frameCount(action)) { this.frame = 0; if (this.attack) { this.attack = null; break; } }
     }
     if (this.chat && (this.chat.t -= dt) <= 0) this.chat = null;
@@ -118,7 +121,17 @@ const isPetFood = (id) => Math.floor(id / 10000) === 212;
 const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 3101002, 3201002, 4101003, 4201002, 5101006, 5201003,
   11101001, 13101001, 14101002, 15101002, 21001003]);
 /** Drop motion runs on the client's 8ms physics tick. */
-const DROP_TICK = 0.008, DROP_GRAVITY = 0.14, DROP_LAUNCH = 4.1, THROW_LAUNCH = 5;   // monster loot hops ~60px, a player's throw ~90px
+/** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
+const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/** Meso piles animate on fixed timings (the client overrides the WZ): four 80ms frames below 100, four 200ms below 1000, the bag 4000/120/120/120. */
+function mesoTiming(node, amount) {
+  const delays = amount < 100 ? [80, 80, 80, 80] : amount < 1000 ? [200, 200, 200, 200] : [4000, 120, 120, 120];
+  const out = {};
+  for (let i = 0; node[i]; i++) out[i] = { ...node[i], delay: delays[i] ?? delays[delays.length - 1] };
+  return out;
+}
+/** Drop hop heights (the original uses 100px for both) and the pickup's length; see updateDrops. */
+const DROP_HOP = 64, THROW_HOP = 93, PICKUP_TIME = 0.7;
 
 /** Chat line colours, as in the v83 chat log. */
 const CHAT_COLORS = { whisper: '#7cfc5a', buddy: '#ffb36b', party: '#ff9ed6', guild: '#d6a4ff', alliance: '#9fe6c2', find: '#ffe08a', notice: '#ff9e9e' };
@@ -206,7 +219,11 @@ export class Game {
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
       if (rp) this.requestCharInfo(rp.id);
     });
-    c.addEventListener('wheel', (e) => { if (wm.pointer('wheel', at(e)[0], e.deltaY)) e.preventDefault(); }, { passive: false });
+    c.addEventListener('wheel', (e) => {
+      // deltaMode 1 = lines (some mice / Firefox): count each as a pixel step of 40
+      const dy = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
+      if (wm.pointer('wheel', ...at(e), dy)) e.preventDefault();
+    }, { passive: false });
     const place = () => sb.place({ left: 0, top: 0 }, c.clientWidth / VIEW_W);
     new ResizeObserver(place).observe(c);
     place();
@@ -757,22 +774,35 @@ export class Game {
     this.hud.message(`${name} : ${c.text}`, c.gm ? '#ffb3ff' : '#fff');
   }
 
+  /**
+   * Another player's attack, timed like ours: their animation runs at the speed in the packet and the
+   * hits land when the swing connects (a shot after its draw frame, a swing or spell on its last frame),
+   * with the monster's death and loot held until then.
+   */
   onRemoteAttack(a) {
     const rp = this.others.get(a.id);
+    let delay = 0;
     if (rp) {
       rp.attack = this.actionName(a.stance); rp.facingRight = !(a.direction & 0x80);
+      rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
+      rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
       if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
+      const last = Math.max(0, rp.look.frameCount(rp.attack) - 1), hitAt = a.kind === 'ranged' ? Math.min(1, last) : last;
+      for (let i = 0; i < hitAt; i++) delay += rp.look.delay(rp.attack, i);
+      delay *= rp.attackScale;
     }
     const shoots = rp && (a.kind === 'ranged' || (a.kind === 'magic' && a.skill));
     for (const t of a.targets) {
       const e = this.lifeByOid.get(t.oid);
       if (!e || e.pending) continue;
+      e.pendingHits = (e.pendingHits || 0) + 1;
       const land = () => {
         e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
         this.damageNumbers(e, t.dmg, false);
         this.playHitEffect(a.skill, e);
+        if (--e.pendingHits <= 0) { if (e.queuedKill) this.finishKill(e); else this.releaseDrops(e); }
       };
-      if (shoots) this.shoot(a.skill, rp, e, a.projectile, land); else land();
+      if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay, land);
     }
   }
 
@@ -795,7 +825,8 @@ export class Game {
     const pending = (this.pendingDrops ??= new Set());
     if (this.drops.has(d.oid) || pending.has(d.oid)) return;
     pending.add(d.oid);
-    const node = d.meso ? await mesoIcon(this.assets, d.id) : await itemIcon(this.assets, d.id, true);
+    let node = d.meso ? await mesoIcon(this.assets, d.id) : await itemIcon(this.assets, d.id, true);
+    if (d.meso && node) node = mesoTiming(node, d.id);
     const anim = new Anim(node || null);
     await this.assets.preload(anim.frames);
     if (!this.map) return;
@@ -803,9 +834,15 @@ export class Game {
     const y = fh ? Footholds.yAt(fh, d.x) : d.y;
     const fromX = d.fromX ?? d.x, fromY = d.fromY ?? y;
     pending.delete(d.oid);
-    if (d.mode !== 2) sfx.play('Game/DropItem');           // a fresh drop, not one already lying there
+    // a fresh drop sounds as it appears (not one already lying there), at most once every 300ms
+    if (d.mode !== 2 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem'); }
     const thrown = !d.meso && (d.dropper === this.player.id || this.others.has(d.dropper));   // dropped by a character, not a monster
-    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, cx: fromX, cy: fromY - 4, alpha: 1, phase: Math.random() * 6, spin: thrown, angle: 0, launch: thrown ? THROW_LAUNCH : DROP_LAUNCH });
+    // launch speed for the hop height (Y = Ys - V t + 400 t^2 peaks at V^2/1600); the flight lasts until it is back at its
+    // starting height, or until it comes down on a higher floor
+    const speed = Math.sqrt(1600 * (thrown ? THROW_HOP : DROP_HOP)), sy = fromY - 4;
+    const up = sy - y, flight = up > 0 && up < speed * speed / 1600 ? (speed + Math.sqrt(speed * speed - 1600 * up)) / 800 : speed / 400;
+    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, cx: fromX, cy: sy, fromY: sy, alpha: 1, phase: Math.random() * 6,
+      spin: thrown, angle: 0, speed, flight });
   }
 
   removeDrop(oid, anim, chr, petSlot = -1) {
@@ -1084,41 +1121,56 @@ export class Game {
   }
 
   /**
-   * Drops move like the client's (Journey's Drop, 8ms ticks, gravity 0.14 px/tick^2):
-   *   dropped: launched at DROP_LAUNCH px/tick (a hop of ~60px) from where it fell, drifting a 48th of the way across per tick
-   *     until it comes down on its spot, then bobs; an item a player throws down goes higher (THROW_LAUNCH)
-   *     and spins 0.2 rad/tick on the way (monster loot and meso bags don't)
-   *   picked up: hops up and is drawn into the looter's body over 48 ticks, speeding up as it
-   *     goes and fading out as it arrives
+   * Drops, as the original client moves them (openms' recovery of its drop routine, docs/drop-motion.md):
+   *   flight: Y = Ys - V*t + 400*t^2 (t in s) while X drifts across, then a destination below the
+   *     source is reached by falling straight down at V; the original launches at V = 400 (a 100px hop),
+   *     here monster loot hops DROP_HOP and a player's throw THROW_HOP, as tuned for this client
+   *   items a player throws spin a full turn every 300ms until they land (monster loot and meso bags don't)
+   *   resting: Y = Yg + 3*sin(phase), phase advancing pi per second (a 2s, 3px bob)
+   *   pickup (700ms): straight from the landing spot to the middle of the looter's body, lifted by a
+   *     40px arc, -40 + (ms-350)^2 * 160/490000; fully opaque until 420ms, then fading to 63/255
    */
   pickUp(d, looter) {
-    if (!d.landed) { d.cx = d.x; d.cy = d.y; d.landed = true; }
-    d.pickedBy = looter; d.age = 0;
-    d.sx = d.cx; d.sy = d.cy;
+    if (!d.landed) { d.landed = true; d.cx = d.x; d.cy = d.y; }
+    d.pickedBy = looter; d.age = 0; d.angle = 0;
+    d.sx = d.x; d.sy = d.y;
   }
   updateDrops(dt) {
-    const ticks = dt / DROP_TICK;
     for (const [oid, d] of this.drops) {
       d.anim.update(dt * 1000);
-      d.phase += dt * 3;
+      d.phase += dt * Math.PI;
+      d.age += dt;
       if (d.pickedBy) {
-        const L = d.pickedBy;
-        d.age += ticks;
-        const k = Math.min(1, d.age / 48), ease = k * k;          // follows the looter as they move
-        d.cx = d.sx + (L.x - d.sx) * ease;
-        d.cy = d.sy + (L.y - 28 - d.sy) * ease - Math.sin(k * Math.PI) * 26;
-        d.alpha = k < 0.6 ? 1 : Math.max(0, 1 - (k - 0.6) / 0.4);
-        if (k >= 1) this.drops.delete(oid);
-      } else if (!d.landed) {
-        d.age += ticks;
-        const k = d.age, dx = d.x - d.fromX;
-        d.cx = d.fromX + Math.sign(dx) * Math.min(Math.abs(dx), (Math.abs(dx) / 48) * k);
-        d.cy = d.fromY - 4 - d.launch * k + 0.5 * DROP_GRAVITY * k * k;
-        if (k > d.launch / DROP_GRAVITY && d.cy >= d.y) { d.landed = true; d.cx = d.x; d.cy = d.y; d.angle = 0; }
-        else if (d.spin) d.angle += 0.2 * ticks;
+        const L = d.pickedBy, u = Math.min(PICKUP_TIME, d.age), k = u / PICKUP_TIME, ms = u * 1000;
+        const tx = L.x, ty = L.y - (L === this.player || this.others.has(L.id) ? 32 : 15);   // the middle of a character (a pet is smaller)
+        d.cx = d.sx + (tx - d.sx) * k;
+        d.cy = d.sy + (ty - d.sy) * k - 40 + ((ms - 350) ** 2 * 160) / 490000;
+        d.alpha = ms < 420 ? 1 : (255 - ((ms - 420) * 192) / 280) / 255;
+        if (d.age >= PICKUP_TIME) this.drops.delete(oid);
+        continue;
       }
+      if (d.landed) {
+        // mode 3: an item that cannot be dropped (untradeable / quest) lands, fades and is gone
+        if (d.mode === 3 && (d.vanish = (d.vanish || 0) + dt) > 0) {
+          d.alpha = Math.max(0, 1 - d.vanish / 0.5);
+          if (d.vanish >= 0.5) this.drops.delete(oid);
+        }
+        continue;
+      }
+      const V = d.speed, t = d.age;
+      if (d.falling) {                                  // straight down to a lower floor
+        d.cx = d.x; d.cy = d.fromY + V * (t - d.flight);
+        if (d.cy >= d.y) this.land(d);
+      } else {
+        const k = Math.min(1, t / d.flight);
+        d.cx = d.fromX + (d.x - d.fromX) * k;
+        d.cy = d.fromY - V * t + 400 * t * t;
+        if (t >= d.flight) { if (d.y > d.fromY + 1) d.falling = true; else this.land(d); }
+      }
+      if (d.spin && !d.landed) d.angle += (2 * Math.PI / 0.3) * dt;
     }
   }
+  land(d) { d.landed = true; d.falling = false; d.cx = d.x; d.cy = d.y; d.angle = 0; }
 
   updatePlayer(dt) {
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
@@ -1126,6 +1178,7 @@ export class Game {
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
+    if (p.regrabT > 0) p.regrabT -= dt;
 
     if (p.ladder) {
       const l = p.ladder;
@@ -1134,6 +1187,7 @@ export class Game {
       action = l.l ? 'ladder' : 'rope';
       if (this.hitAction(ACTION.JUMP) && dir) {
         p.ladder = null; p.vy = -PHYS.jump * 0.55; p.vx = dir * PHYS.walk; p.facingRight = dir > 0;
+        p.regrabT = 0.35;              // jumping off with up still held must not catch the same rope again
         sfx.play('Game/Jump');
       } else if (p.y < l.y1) {
         p.ladder = null;
@@ -1166,7 +1220,8 @@ export class Game {
       this.touchedPortal = portal && TOUCH_PORTALS.has(portal.pt) ? portal : null;
       if (portal && (inp.hit('up') || touched)) { this.usePortal(portal); if (!touched) return; }
     }
-    if (inp.is('up') && !dir) {
+    // up grabs a ladder / rope you are over, whether or not left / right is held too (mid-jump included)
+    if (inp.is('up') && !(p.regrabT > 0)) {
       const l = map.ladderAt(p.x, p.y, true);
       if (l && (!p.fh || p.y > l.y1 + 5)) { this.grab(l); return; }
     }
@@ -1319,7 +1374,7 @@ export class Game {
       else this.after(hitDelay, land);
     }
     if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
-    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack), facingLeft: !p.facingRight });
+    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack), facingLeft: !p.facingRight, speed: this.attackSpeed() });
     return true;
   }
 
@@ -1327,11 +1382,12 @@ export class Game {
    * Attack speed, as v83 does it: every frame of an attack lasts (speed + 10) / 16 of its delay, where
    * speed is the weapon's attackSpeed (2 fastest .. 9 slowest, 6 normal), two faster under a Booster.
    */
-  attackScale() {
+  attackSpeed() {
     let speed = this.windows?.info(this.weaponId())?.attackSpeed ?? 6;
     if ((this.buffs || []).some((b) => BOOSTERS.has(b.source) && b.until > Date.now())) speed -= 2;
-    return (Math.max(2, Math.min(9, speed)) + 10) / 16;
+    return Math.max(2, Math.min(9, speed));
   }
+  attackScale(speed = this.attackSpeed()) { return (speed + 10) / 16; }
   /**
    * The frame an attack connects on: a shot leaves after the draw (frame 1), a swing lands on the
    * frame its afterimage plays on, a spell (or a swing without one) on its last frame.
@@ -1391,22 +1447,43 @@ export class Game {
   }
 
   /**
-   * Teleport: jump up to `range` px in the held direction (Up/Down for vertical) onto a foothold.
+   * Teleport: jump up to `range` px in the held direction (Up/Down for vertical) onto a foothold,
+   * only while standing on one.
    * The new position reaches the server through the normal movement sync; SPECIAL_MOVE charges the MP.
    */
   teleport(id, lv) {
     const p = this.player, fh = this.map.fh, inp = this.input;
+    if (!p.fh) return false;               // only from the ground: not mid-jump, falling or on a ladder / rope
     const dist = this.skills.levelData(id, lv)?.range || 130;
     const dy = inp.is('up') ? -1 : inp.is('down') ? 1 : 0;
-    const dx = dy ? 0 : (p.facingRight ? 1 : -1);
-    const tx = p.x + dx * dist;
-    const ty = dy ? p.y + dy * dist : p.y;
-    const land = fh.below(tx, ty - (dy < 0 ? 0 : 40), dy ? 60 : 200);
+    let tx = p.x, land = null;
+    if (dy) {
+      // up / down: the farthest platform under your x within range, above or below the one you stand on
+      let bestY = null;
+      for (const f of fh.floors) {
+        if (f === p.fh || tx < f.x1 || tx > f.x2) continue;
+        const fy = Footholds.yAt(f, tx), d = (fy - p.y) * dy;
+        if (d > 5 && d <= dist && (bestY === null || d > (bestY - p.y) * dy)) { land = f; bestY = fy; }
+      }
+    } else {
+      tx = p.x + (p.facingRight ? 1 : -1) * dist;
+      land = fh.below(tx, p.y - 40, 200);
+    }
     if (!land) return false;
-    this.playSkillEffect(id, p);
+    // BasicEff Teleport plays where you left and where you arrive
+    this.playTeleportEffect(p.x, p.y);
     p.x = tx; p.y = Footholds.yAt(land, tx); p.fh = land; p.vx = 0; p.vy = 0; p.ladder = null;
+    this.playTeleportEffect(p.x, p.y);
+    sfx.play(`Skill/${pad(id, 7)}/Use`);
     this.net?.specialMove(id, lv, null);
     return true;
+  }
+  async playTeleportEffect(x, y) {
+    const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Teleport;
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, x, y, flip: false });
   }
 
   /** Same rules as RangedAttackHandler: first usable ammo in USE for the weapon (or a skill that needs none). */
@@ -1553,7 +1630,9 @@ export class Game {
     const p = this.player;
     if (this.invincible > 0) { this.invincible -= dt; return; }
     if (p.ladder || this.dead || !this.stats) return;
-    const pb = { left: p.x - 12, right: p.x + 12, top: p.y - 60, bottom: p.y };
+    // the original receiver: 44x65 standing, 46x31 lying down
+    const prone = p.action === 'prone' || p.action === 'proneStab';
+    const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
       const b = m.box();
@@ -1564,8 +1643,9 @@ export class Game {
       const fromRight = m.x > p.x;
       this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0 });
       this.vfx?.damage(p, [damage], 'violet');
-      p.fh = null; p.vy = -260; p.vx = fromRight ? -PHYS.walk : PHYS.walk;
-      this.invincible = 2;
+      p.fh = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
+      p.attack = null;
+      this.invincible = HIT_PROTECTION;
       return;
     }
   }
@@ -1657,7 +1737,23 @@ export class Game {
     c.y = b.bottom - b.top < VIEW_H ? (b.top + b.bottom - VIEW_H) / 2 : Math.max(b.top, Math.min(b.bottom - VIEW_H, c.y));
   }
 
+  /**
+   * Draw at the screen's own pixel density (as openms does), so text and scaled art are crisp instead of
+   * an 800x600 image stretched to fit; every coordinate stays in the 800x600 game space.
+   */
+  fitBacking() {
+    const c = this.canvas, dpr = window.devicePixelRatio || 1;
+    // System Option PICTURE QUALITY: NORMAL draws one canvas pixel per game pixel, BEST the screen's density
+    const best = Math.max(1, Math.min(4, ((c.clientWidth || VIEW_W) * dpr) / VIEW_W));
+    const k = 1 + (best - 1) * Math.max(0, Math.min(1, settings.quality));
+    const w = Math.round(VIEW_W * k), h = Math.round(VIEW_H * k);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    this.ctx.setTransform(w / VIEW_W, 0, 0, h / VIEW_H, 0, 0);
+    this.ctx.imageSmoothingEnabled = false;
+  }
+
   render() {
+    this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
     if (this.inCashShop) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H); this.windows?.draw(ctx); return; }
     const cam = { ...this.cam, x: Math.round(this.cam.x), y: Math.round(this.cam.y) };
@@ -1705,10 +1801,13 @@ export class Game {
   drawChar(ctx, cam, ent, look, local) {
     const parts = look.compose(ent.action, ent.frame);
     const sx = ent.x - cam.x, sy = ent.y - cam.y;
-    const blink = local && this.invincible > 0 && Math.floor(this.invincible * 10) % 2 === 0;
+    // while protected after a hit, alternate gray and normal every 60ms, as the original does
+    const blink = local && this.invincible > 0 && Math.floor(this.invincible / 0.06) % 2 === 0;
     // dead: the ghost (body action "dead") hovers over the tombstone, bobbing slowly
     const ghost = ent.action === 'dead' ? -24 + Math.round(Math.sin(performance.now() / 450) * 3) : 0;
-    drawParts(ctx, this.assets, parts, sx, sy + ghost, ent.facingRight, blink ? 0.5 : 1);
+    if (blink) { ctx.save(); ctx.filter = 'grayscale(1) brightness(0.85)'; }
+    drawParts(ctx, this.assets, parts, sx, sy + ghost, ent.facingRight, 1);
+    if (blink) ctx.restore();
     nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
     const guild = local ? this.guild?.name : ent.guild;
     if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);
@@ -1719,7 +1818,7 @@ export class Game {
       const node = d.anim.node;
       const img = this.assets.image(node);
       if (!img) continue;
-      const x = d.cx, y = d.landed && !d.pickedBy ? d.y + Math.sin(d.phase) * 2 - 2 : d.cy;
+      const x = d.cx, y = d.landed && !d.pickedBy ? d.y + Math.trunc(3 * Math.sin(d.phase)) : d.cy;
       // icons hang from their left edge (origin x ~0), so centre them on the spot they lie on
       const oy = node.origin?.[1] ?? img.height;
       ctx.globalAlpha = d.alpha;

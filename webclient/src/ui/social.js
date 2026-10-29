@@ -300,38 +300,204 @@ export class PlayerMenu extends Win {
 
 // ==================================================================== character info
 /**
- * UserInfo backgrnd 275x199: portrait box x 7-98 y 26-166 with the name bar at y 147-163 and a
- * shadow at (52, 133); LEVEL / JOB / FAME / GUILD / ALLIANCE label boxes x 104-150 with the value
- * fields x 152-268 at y 80 / 97 / 115 / 133 / 152; the blue header holds the Party / Trade buttons.
+ * UserInfo, 275 wide, measured from the art:
+ *   backgrnd (199 tall): portrait box x 7-98 y 26-166, name bar y 147-163, shadow at (52, 133); LEVEL / JOB /
+ *     FAME / GUILD / ALLIANCE labels x 104-150 with values from x 157 at row centres 84 / 102 / 120 / 138 / 156;
+ *     the blue header takes REQ.PARTY / REQ.TRADE (x 148) and ITEM / WISHLIST (x 208) at y 21 / 42;
+ *     the bottom band (y 170-196) holds TAMING MOB / PET INFO / COLLECTION / EXCLUDED.
+ *   Those four open a taller frame with the same top 160 px: backgrnd5 (taming, 362), backgrnd2 (pets, 399),
+ *     backgrnd7 (Monster Book and medals, 404); the button band moves to the new bottom.
+ *   backgrnd4 ITEM LIST / backgrnd3 WISH LIST (240x162) open beside it: rows every 40 from y 31, icon cell
+ *     x 15-50, name from x 55 over a rule at +17, ReqLv / price under it; scrollbar at x 220.
  */
-const INFO_ROWS = [80, 97, 115, 133, 152];
+const INFO_ROWS = [84, 102, 120, 138, 156];
+const INFO_PANELS = {
+  none: { bg: 'backgrnd', band: 170 },
+  taming: { bg: 'backgrnd5', band: 336 },
+  pet: { bg: 'backgrnd2', band: 374 },
+  book: { bg: 'backgrnd7', band: 377 },
+};
+const SIDE_X = 271, SIDE_ROWS = 3, SIDE_ROW_Y = 31;
 export class CharInfoWin extends Win {
   constructor(mgr, info) {
     const U = mgr.W.UserInfo;
-    super(mgr, U.backgrnd, 262, 120);
-    this.U = U; this.info = info;
+    super(mgr, null, 200, 60);
+    this.w = 275; this.h = 199;
+    this.closePinned = true; this.closeBtn.x = 275 - 17;
+    this.U = U; this.info = info; this.panel = 'none'; this.side = null; this.sideFirst = 0; this.petSel = 0;
     const g = this.g, other = info.id !== g.player.id;
-    const party = this.button(U.BtParty, 206, 26, () => {
+    const party = this.button(U.BtParty, 148, 21, () => {
       if (!g.party) g.net?.partyOp(1);
       g.net?.partyOp(4, this.name());
     });
     party.enabled = other && (!g.party || g.party.leader === g.player.id);
     const rp = g.others.get(info.id);
-    this.button(U.BtTrade, 206, 46, () => { if (rp) g.requestTrade(rp); }).enabled = other && !!rp;
+    this.button(U.BtTrade, 148, 42, () => { if (rp) g.requestTrade(rp); }).enabled = other && !!rp;
+    this.button(U.BtItem, 208, 21, () => this.toggleSide('item'));
+    this.button(U.BtWish, 208, 42, () => this.toggleSide('wish'));
+    // the bottom band: each opens its panel (its Hide twin, drawn while open, closes it)
+    this.bandBtns = [];
+    const band = (show, hide, x, panel) => {
+      const on = this.button(show, x, 0, () => this.setPanel(panel)), off = this.button(hide, x, 0, () => this.setPanel('none'));
+      this.bandBtns.push({ on, off, panel });
+    };
+    band(U.BtTamingShow, U.BtTamingHide, 5, 'taming');
+    band(U.BtPetShow, U.BtPetHide, 93, 'pet');
+    band(U.BtCollectionShow, U.BtCollectionHide, 145, 'book');
+    const exc = this.button(U.BtExceptionShow, 197, 0, () => {});
+    exc.enabled = false;                       // pet loot exclusions are not in CHAR_INFO
+    this.bandBtns.push({ on: exc, off: null, panel: null });
+    this.petBtns = [U.BtPet1, U.BtPet2, U.BtPet3].map((n, k) => this.button(n, 188 + k * 33, 196, () => { this.petSel = k; }));   // the art's origin sits 16,19 into it
+    this.sideClose = this.button(mgr.B.BtClose, SIDE_X + 240 - 17, 6, () => this.toggleSide(this.side));
+    // pet portraits and the wish list's catalogue
+    this.petArt = [];
+    (info.pets || []).forEach((p, k) => mgr.assets.json(`Item/Pet/${p.id}.img`).then(async (n) => {
+      const f = n?.stand0?.[0] || n?.stand0;
+      if (f?._canvas) { await mgr.assets.preload([f]); this.petArt[k] = f; }
+    }));
+    if (info.wish?.length) mgr.assets.json('Etc/Commodity.img').then((c) => { this.commodity = new Map(Object.values(c || {}).map((x) => [x.SN, x])); });
+    this.layout();
+  }
+  frames() {
+    const U = this.U;
+    return [...super.frames(), U.backgrnd, U.backgrnd2, U.backgrnd3, U.backgrnd4, U.backgrnd5, U.backgrnd7, U.ReqLv, ...allCanvases(U.Marry)];
   }
   name() { return this.info.id === this.g.player.id ? this.g.player.name : this.g.others.get(this.info.id)?.name || ''; }
-  frames() { return [...super.frames()]; }
   key(e) { if (e.key === 'Escape') this.mgr.close(this); }
+  setPanel(p) { this.panel = this.panel === p ? 'none' : p; this.layout(); }
+  toggleSide(s) { this.side = this.side === s ? null : s; this.sideFirst = 0; this.layout(); }
+  layout() {
+    const P = INFO_PANELS[this.panel], bg = this.U[P.bg];
+    this.h = bg?._h || 199;
+    this.w = this.side ? SIDE_X + 240 : 275;
+    for (const b of this.bandBtns) {
+      const open = this.panel === b.panel;
+      b.on.y = P.band + 5; b.on.visible = !open || !b.off;
+      if (b.off) { b.off.y = P.band + 5; b.off.visible = open; }
+    }
+    const pets = this.info.pets || [];
+    this.petBtns.forEach((b, k) => { b.visible = this.panel === 'pet' && k < pets.length; });
+    this.sideClose.visible = !!this.side;
+  }
+
+  // ---------------------------------------------------------------- lists
+  /** What the ITEM LIST shows: the equipped items, normal ones before cash ones. */
+  equipped() {
+    const g = this.g, me = this.info.id === g.player.id;
+    if (me) {
+      return Object.entries(g.inventory?.equipped || {}).map(([s, it]) => ({ slot: Number(s), id: it.id }))
+        .sort((a, b) => (a.slot < -99) - (b.slot < -99) || b.slot - a.slot).map((x) => x.id);
+    }
+    return [...(g.others.get(this.info.id)?.look?.equipIds || [])].filter(Boolean);
+  }
+  wishItems() { return (this.info.wish || []).map((sn) => this.commodity?.get(sn)).filter(Boolean); }
+  sideRows() { return this.side === 'item' ? this.equipped().map((id) => ({ id })) : this.side === 'wish' ? this.wishItems().map((c) => ({ id: c.ItemId, price: c.Price })) : []; }
+
+  // ---------------------------------------------------------------- frame
   body(ctx) {
-    const g = this.g, i = this.info, me = i.id === g.player.id;
-    const ent = me ? g.player : g.others.get(i.id), look = me ? g.look : ent?.look;
+    const m = this.mgr, im = (n) => m.image(n), g = this.g, i = this.info, U = this.U;
+    const bg = im(U[INFO_PANELS[this.panel].bg]);
+    if (bg) ctx.drawImage(bg, 0, 0);
+    const me = i.id === g.player.id, ent = me ? g.player : g.others.get(i.id), look = me ? g.look : ent?.look;
     if (look) {
       ctx.save(); ctx.beginPath(); ctx.rect(8, 27, 90, 118); ctx.clip();
       drawParts(ctx, g.assets, look.compose(look.standAction(), 0), 52, 133, false);
       ctx.restore();
     }
-    this.text(ctx, this.name(), 52, 149, { color: '#fff', bold: true, align: 'center' });
-    [String(i.level), jobName(i.job), String(i.fame), i.guild || '-', i.alliance || '-']
-      .forEach((v, k) => this.text(ctx, v, 158, INFO_ROWS[k] + 2));
+    const hn = U.Marry?.[i.married ? 'married' : 'unmarried'], heart = im(hn?._canvas ? hn : hn?.[0]);
+    if (heart) ctx.drawImage(heart, 12, 31);
+    this.text(ctx, this.name(), 52, 147, { color: '#fff', bold: true, align: 'center', size: 12 });   // inside the bar (y 147-163)
+    [String(i.level), jobName(i.job).toUpperCase(), String(i.fame), i.guild || '', i.alliance || '']
+      .forEach((v, k) => this.text(ctx, v, 157, INFO_ROWS[k] - 7, { size: 12 }));
+    if (this.panel === 'pet') this.drawPet(ctx);
+    else if (this.panel === 'taming') this.drawTaming(ctx);
+    else if (this.panel === 'book') this.drawBook(ctx);
+    if (this.side) this.drawSide(ctx);
+  }
+  /** Name over a rule, a smaller line under it: the rows of every list here. */
+  listRow(ctx, x, y, id, sub) {
+    const m = this.mgr;
+    m.drawIcon(ctx, m.icon(id), x + 2, y + 1);
+    ctx.save(); ctx.beginPath(); ctx.rect(x + 38, y, 170, 36); ctx.clip();
+    this.text(ctx, m.itemName(id), x + 40, y + 2, { size: 12 });
+    sub?.(x + 40, y + 20);
+    ctx.restore();
+  }
+  drawSide(ctx) {
+    const m = this.mgr, U = this.U, panel = m.image(U[this.side === 'item' ? 'backgrnd4' : 'backgrnd3']);
+    if (panel) ctx.drawImage(panel, SIDE_X, 0);
+    const rows = this.sideRows(), reqLv = m.image(U.ReqLv);
+    for (let k = 0; k < SIDE_ROWS; k++) {
+      const r = rows[this.sideFirst + k];
+      if (!r) break;
+      this.listRow(ctx, SIDE_X + 15, SIDE_ROW_Y + k * 40, r.id, (x, y) => {
+        if (r.price !== undefined) { this.text(ctx, `${r.price.toLocaleString('en-US')} NX`, x, y, { size: 12 }); return; }
+        if (reqLv) ctx.drawImage(reqLv, x, y + 2);
+        this.text(ctx, String(m.info(r.id)?.reqLevel ?? 0), x + 36, y, { size: 12 });
+      });
+    }
+    if (!rows.length) this.text(ctx, this.side === 'item' ? 'No items equipped.' : 'The wish list is empty.', SIDE_X + 120, 80, { align: 'center', color: '#555' });
+    this.scrollbar(ctx, SIDE_X + 220, 27, 122, this.sideFirst, rows.length, SIDE_ROWS);
+  }
+  drawPet(ctx) {
+    const m = this.mgr, pets = this.info.pets || [], p = pets[this.petSel];
+    if (!p) { this.text(ctx, 'No pets are out.', 52, 260, { align: 'center', color: '#555' }); return; }
+    const art = m.image(this.petArt[this.petSel]);
+    if (art) { const o = this.petArt[this.petSel].origin || [art.width / 2, art.height]; ctx.drawImage(art, Math.round(53 - o[0]), Math.round(297 - o[1])); }
+    this.text(ctx, p.name, 53, 306, { color: '#fff', bold: true, align: 'center', size: 12 });
+    if (p.equip) this.listRow(ctx, 105, 215, p.equip);
+    const v = (t, x, y) => this.text(ctx, t, x, y - 7, { size: 12 });
+    v(m.itemName(p.id), 57, 338); v(String(p.level), 57, 356);
+    v(String(p.closeness), 190, 338); v(String(p.fullness), 190, 356);
+  }
+  drawTaming(ctx) {
+    const m = this.mgr, t = this.info.mount;
+    const ids = this.equipped().filter((id) => [190, 191].includes(Math.floor(id / 10000)));
+    const mount = ids.find((id) => Math.floor(id / 10000) === 190);
+    if (!t) { this.text(ctx, 'No taming mob.', 52, 230, { align: 'center', color: '#555' }); return; }
+    if (mount) { const ic = m.icon(mount); if (ic) m.drawIcon(ctx, ic, 37, 228); }
+    ids.forEach((id, k) => this.listRow(ctx, 105, 177 + k * 38, id));
+    const v = (s, x, y) => this.text(ctx, s, x, y - 7, { size: 12 });
+    v(mount ? m.itemName(mount) : '', 57, 300); v(String(t.level), 57, 319);
+    v(String(t.exp), 190, 300); v(String(t.tiredness), 190, 319);
+  }
+  drawBook(ctx) {
+    const m = this.mgr, g = this.g, b = this.info.book || {}, v = (s, x, y) => this.text(ctx, s, x, y - 7, { size: 12 });
+    v(String(b.level ?? 0), 100, 186);
+    v(b.cover ? m.strings.mob?.[b.cover]?.name || '' : '', 100, 204);
+    v(String(b.total ?? 0), 100, 222); v(String(b.normal ?? 0), 166, 222); v(String(b.special ?? 0), 234, 222);
+    if (this.info.medal) { const ic = m.icon(this.info.medal); if (ic) m.drawIcon(ctx, ic, 8, 246); v(m.itemName(this.info.medal), 100, 252); }
+    const quests = this.info.medalQuests || [];
+    v(String(quests.length), 100, 270);
+    quests.slice(this.medalFirst || 0, (this.medalFirst || 0) + 4).forEach((q, k) => v(g.quests?.name(q) || `Quest ${q}`, 52, 305 + k * 18));
+    this.scrollbar(ctx, 254, 297, 72, this.medalFirst || 0, quests.length, 4);
+  }
+
+  // ---------------------------------------------------------------- mouse
+  sideRowAt(lx, ly) {
+    if (!this.side || lx < SIDE_X + 15 || lx >= SIDE_X + 50 || ly < SIDE_ROW_Y) return -1;
+    const k = Math.floor((ly - SIDE_ROW_Y) / 40);
+    if (k >= SIDE_ROWS || (ly - SIDE_ROW_Y) % 40 >= 36) return -1;
+    const idx = this.sideFirst + k;
+    return idx < this.sideRows().length ? idx : -1;
+  }
+  down(lx, ly) {
+    if (this.side) {
+      const s = this.scrollClick(lx, ly, SIDE_X + 220, 27, 122, this.sideFirst, this.sideRows().length, SIDE_ROWS);
+      if (s !== null) { this.sideFirst = s; return; }
+    }
+    if (this.panel === 'book') {
+      const s = this.scrollClick(lx, ly, 254, 297, 72, this.medalFirst || 0, (this.info.medalQuests || []).length, 4);
+      if (s !== null) this.medalFirst = s;
+    }
+  }
+  wheel(dy) {
+    const d = Math.sign(dy), lx = this.mgr.mouse.x - this.x;
+    if (this.side && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.sideRows().length - SIDE_ROWS, this.sideFirst + d));
+    else if (this.panel === 'book') this.medalFirst = Math.max(0, Math.min((this.info.medalQuests || []).length - 4, (this.medalFirst || 0) + d));
+  }
+  tooltip(lx, ly) {
+    const r = this.sideRowAt(lx, ly);
+    return r >= 0 ? { item: { id: this.sideRows()[r].id } } : null;
   }
 }

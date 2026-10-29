@@ -327,14 +327,27 @@ export class Life {
     this.state = s; this.anims[s].reset();
   }
 
+  /**
+   * A blow. As in the original, a monster only flinches (hit1) and recoils when the damage reaches its
+   * `pushed` threshold; the recoil slides it back along its floor from 130px/s, braking at 400px/s^2.
+   */
   hit(dmg, fromRight) {
     if (!this.alive || this.kind !== 'Mob') return;
     this.hp -= dmg;
-    this.facingRight = fromRight;
     if (this.online) this.hp = Math.max(0, this.hp); // the server decides death (KILL_MONSTER)
     else if (this.hp <= 0) { this.setState('die1'); return; }
+    if (dmg < (this.src.info?.pushed ?? 1)) return;
+    this.facingRight = fromRight;
     if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
-    if (this.fh) this.footholds.walk(this, fromRight ? 12 : -12);
+    // fromRight: the blow came from the right, so it slides away to the left
+    if (this.fh && !this.flying && (this.controlled || !this.online)) this.recoil = (fromRight ? -1 : 1) * 130;
+  }
+  /** Slide back after a blow, braking to a stop; a floor's edge or a wall stops it. */
+  recoilStep(dt) {
+    const v = this.recoil, slowed = Math.sign(v) * Math.max(0, Math.abs(v) - 400 * dt);
+    const fh = this.fh, x = this.x, y = this.y;
+    if (this.footholds.walk(this, ((v + slowed) / 2) * dt) !== 'ok') { this.fh = fh; this.x = x; this.y = y; this.recoil = 0; return; }
+    this.recoil = slowed;
   }
 
   update(dt) {
@@ -342,7 +355,8 @@ export class Life {
     anim?.update(dt * 1000);
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
-      if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState('stand'); return; }
+      if (this.recoil && this.fh) this.recoilStep(dt);
+      if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
       if (this.path) { this._replay(dt); return; }
       if (!this.controlled) return;
     }

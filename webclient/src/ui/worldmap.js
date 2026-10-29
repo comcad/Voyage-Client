@@ -17,7 +17,7 @@ export class WorldMapWin extends Win {
   constructor(mgr) {
     super(mgr, null, Math.round((800 - W) / 2), Math.round((600 - H) / 2));
     this.w = W; this.h = H;
-    this.closeBtn.x = W - 40; this.closeBtn.y = 9;
+    this.closeBtn.x = W - 20; this.closeBtn.y = 10; this.closePinned = true;   // the frame's 33px title bar
     this.F = mgr.W.WorldMap;
     this.name = null; this.data = null; this.hover = null;
     mgr.assets.json('Map/MapHelper.img').then((h) => { this.helper = h?.worldMap; mgr.assets.preload(allCanvases(this.helper)); });

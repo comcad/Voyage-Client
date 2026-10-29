@@ -278,8 +278,24 @@ export class ChannelSession {
       else if (op === 0x0A) { r.ubyte(); this.emit('tradeEnd', r.available ? r.ubyte() : 2); }
       else if (op === 6 && r.ubyte() === 8) { r.ubyte(); this.emit('tradeChat', r.string()); }
     });
-    // CHAR_INFO: id, level, job, fame, married, guild, alliance (pets, mount, wish list, book... follow)
-    on(S.CHAR_INFO, (r) => this.emit('charInfo', { id: r.int(), level: r.ubyte(), job: r.short(), fame: r.short(), married: r.bool(), guild: r.string(), alliance: r.string() }));
+    // CHAR_INFO (Cosmic PacketCreator.charInfo): id, level, job, fame, married, guild, alliance, medal-info byte,
+    // pets (each led by a non-zero byte, 0 ends), mount, wish list SNs, Monster Book, medal, medal quests
+    on(S.CHAR_INFO, (r) => {
+      const i = { id: r.int(), level: r.ubyte(), job: r.short(), fame: r.short(), married: r.bool(), guild: r.string(), alliance: r.string() };
+      r.ubyte();
+      i.pets = [];
+      while (r.ubyte()) {
+        i.pets.push({ id: r.int(), name: r.string(), level: r.ubyte(), closeness: r.short(), fullness: r.ubyte() });
+        r.short();
+        i.pets[i.pets.length - 1].equip = r.int();
+      }
+      i.mount = r.ubyte() ? { level: r.int(), exp: r.int(), tiredness: r.int() } : null;
+      i.wish = Array.from({ length: r.ubyte() }, () => r.int());
+      i.book = { level: r.int(), normal: r.int(), special: r.int(), total: r.int(), cover: r.int() };
+      i.medal = r.int();
+      i.medalQuests = Array.from({ length: r.short() }, () => r.short());
+      this.emit('charInfo', i);
+    });
     // MULTICHAT mode: 0 buddy, 1 party, 2 guild, 3 alliance
     on(S.MULTICHAT, (r) => this.emit('groupChat', { mode: r.ubyte(), name: r.string(), text: r.string() }));
     // WHISPER (CField::OnWhisper): flags LOCATION 1, WHISPER 2, RESULT 8, RECEIVE 0x10, LOCATION_FRIEND 0x40

@@ -2,6 +2,7 @@ import { isCanvas, frames } from './assets.js';
 import { Anim } from './map.js';
 import { itemIcon } from './data.js';
 import { uiText, wrapText } from './ui/wzui.js';
+import { settings } from './settings.js';
 
 /**
  * World-space effects from the original art:
@@ -78,9 +79,10 @@ export class WorldFx {
 
   drawWorld(ctx, cam) {
     const im = (n) => this.assets.image(n);
-    // HP bars over monsters you have just hit
+    // HP bars over monsters you have just hit (System Option MONSTER INFO: none / HP / name and HP)
     const now = performance.now();
     for (const e of this.game.map.life) {
+      if (!settings.mobInfo) break;
       if (e.kind !== 'Mob' || !(e.hpShownUntil > now) || !e.alive || e.src?.info?.boss || Number(e.spawn.id) === this.boss?.oid) continue;
       const b = e.box(), w = 50, x = Math.round(e.x - cam.x - w / 2), y = Math.round(b.top - cam.y - 10);
       const k = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)));
@@ -88,6 +90,7 @@ export class WorldFx {
       ctx.fillStyle = '#4a4a4a'; ctx.fillRect(x, y, w, 5);
       ctx.fillStyle = '#e8323c'; ctx.fillRect(x, y, Math.round(w * k), 5);
       ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(x, y, Math.round(w * k), 1);
+      if (settings.mobInfo === 2 && e.name) uiText(ctx, e.name, x + w / 2, y - 15, { color: '#fff', size: 11, bold: true, align: 'center', outline: '#000' });
     }
     // quest icons above NPC heads
     for (const [e, anim] of this.questIcons) {

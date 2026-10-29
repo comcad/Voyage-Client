@@ -3,6 +3,7 @@ import { Anim } from '../map.js';
 import { EXP, jobName, itemIcon } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText } from './wzui.js';
+import { settings } from '../settings.js';
 
 /**
  * The v83 status bar (UI/StatusBar.img), drawn on the game canvas across the bottom 71px,
@@ -44,12 +45,12 @@ export class StatusBar {
     this.hpFlash = new Anim(S.gauge.hpFlash, false); this.mpFlash = new Anim(S.gauge.mpFlash, false);
     this.hpFlash.done = this.mpFlash.done = true;
     const y = () => this.y;
-    // Cash Shop / Menu / Shortcut / Trade, centred in backgrnd's grey band right of backgrnd2 (x 570-800, rows 35-70)
+    // Cash Shop / Trade / Menu / Shortcut (the client's order), centred in backgrnd's grey band right of backgrnd2 (x 570-800, rows 35-70)
     const big = (node, i, fn) => this.btn(node, 577 + i * 54, () => y() + 36, fn);
     this.shopBtn = big(S.BtShop, 0, () => g.enterCashShop());
-    this.menuBtn = big(S.BtMenu, 1, () => this.toggleMenu('GameMenu', this.menuBtn));
-    this.shortBtn = big(S.BtShort, 2, () => this.toggleMenu('ShortCut', this.shortBtn));
-    this.tradeBtn = big(S.BtNPT, 3, () => g.notice('The Maple Trading System is not available on this server.'));
+    this.menuBtn = big(S.BtMenu, 2, () => this.toggleMenu('GameMenu', this.menuBtn));
+    this.shortBtn = big(S.BtShort, 3, () => this.toggleMenu('ShortCut', this.shortBtn));
+    this.tradeBtn = big(S.BtNPT, 1, () => g.notice('The Maple Trading System is not available on this server.'));
     // hotkey tabs centred on the white band above (rows 3-29)
     const small = [
       [S.EquipKey, () => g.windows.toggle('equip')], [S.InvenKey, () => g.windows.toggle('inventory')],
@@ -241,16 +242,18 @@ export class StatusBar {
       if (gray && full < f.w) ctx.drawImage(gray, gx + f.x + full, gy + FILL_Y, f.w - full, FILL_H);
     }
     // the low-HP / low-MP warning flash covers the whole gauge
-    const lowHp = part.hp < 0.2, lowMp = part.mp < 0.2;
+    // System Option HP / MP ALERT: flash below the chosen share (0 = never)
+    const lowHp = part.hp < settings.hpAlert, lowMp = part.mp < settings.mpAlert;
     if (lowHp && !this.lowHp) this.hpFlash.reset();
     if (lowMp && !this.lowMp) this.mpFlash.reset();
     this.lowHp = lowHp; this.lowMp = lowMp;
     if (!this.hpFlash.done) this.flash(ctx, this.hpFlash, gx, gy + 13);
     if (!this.mpFlash.done) this.flash(ctx, this.mpFlash, gx + 108, gy + 13);
     if (grad) ctx.drawImage(grad, gx, gy);
-    this.number(ctx, `[${s.hp}/${maxHp}]`, gx + FILLS.hp.x + FILLS.hp.w / 2, gy + 18);
-    this.number(ctx, `[${s.mp}/${maxMp}]`, gx + FILLS.mp.x + FILLS.mp.w / 2, gy + 18);
-    this.number(ctx, `${s.exp}[${((s.exp / need) * 100).toFixed(2)}%]`, gx + FILLS.exp.x + FILLS.exp.w / 2, gy + 18);
+    // [cur/max] sits in the label row beside "HP" / "MP", left-aligned, as the client draws it
+    this.number(ctx, `[${s.hp}/${maxHp}]`, gx + 21, gy + 4, 'left');
+    this.number(ctx, `[${s.mp}/${maxMp}]`, gx + 133, gy + 4, 'left');
+    this.number(ctx, `${s.exp}[${((s.exp / need) * 100).toFixed(2)}%]`, gx + 250, gy + 4, 'left');
 
     for (const b of this.allButtons()) if (!this.menu?.buttons.includes(b)) b.draw(ctx, this.assets);
     if (this.quickOpen) this.drawQuickSlots(ctx);
@@ -324,11 +327,11 @@ export class StatusBar {
   }
 
   /** StatusBar.img/number glyphs, centred on cx; digits sit on row y, brackets one row higher. */
-  number(ctx, text, cx, y) {
+  number(ctx, text, cx, y, align = 'center') {
     const N = this.S.number;
     const glyph = (ch) => (ch === '[' ? N.Lbracket : ch === ']' ? N.Rbracket : ch === '/' ? N.slash : ch === '%' ? N.percent : N[ch]);
     const width = (ch) => (ch === '.' ? 2 : (glyph(ch)?._w ?? 5) + 1);
-    let x = Math.round(cx - [...text].reduce((w, ch) => w + width(ch), 0) / 2);
+    let x = align === 'left' ? Math.round(cx) : Math.round(cx - [...text].reduce((w, ch) => w + width(ch), 0) / 2);
     for (const ch of text) {
       if (ch === '.') {
         // the set has no decimal point: a 1px dot in the digits' colour, on their baseline

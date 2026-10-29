@@ -1,10 +1,9 @@
 import { pad } from '../assets.js';
 import { invType, itemInfo } from '../data.js';
 import { drawParts } from '../character.js';
-import { nameTag } from '../map.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
-import { Win, allCanvases } from './windows.js';
+import { Win, allCanvases, drawTabStrip } from './windows.js';
 import { richText, drawRich, optionAt, LIGHT_COLORS } from './richtext.js';
 
 /**
@@ -23,6 +22,13 @@ function textRef(mgr) {
     player: g.player.name, item: (id) => mgr.itemName(id) || '...', icon: (id) => mgr.icon(id),
     mob: (id) => s.mob?.[id]?.name || `monster ${id}`, npc: (id) => s.npc?.[id]?.name || `NPC ${id}`,
     map: mapName, count: (id) => g.itemCount(id),
+    // #f paths into the UI files we hold (UI/UIWindow.img/..., UI/Basic.img/...)
+    image: (path) => {
+      const [, file, ...rest] = path.split('/');
+      let n = file === 'UIWindow.img' ? mgr.W : file === 'Basic.img' ? mgr.B : null;
+      for (const k of rest) n = n?.[k];
+      return n?._canvas ? n : null;
+    },
   };
 }
 const scratch = () => document.createElement('canvas').getContext('2d');
@@ -40,11 +46,15 @@ function placeField(mgr, f, x, y) {
 
 // ==================================================================== NPC chat
 /**
- * UtilDlgEx: 529 wide. t (28) / c (20, tiled) / s (58). Portrait area x 10-148 with the text area
- * x 150-510; the quest frame (it / ic / is) mirrors it: text x 16-380, portrait on the right.
+ * UtilDlgEx: 529 wide. t (28) / c (20, tiled) / s (58). Laid out as the client does (openms' recovery of
+ * CUtilDlgEx): the body is at least 120px, text is 12px Arial on 18px lines, 341 wide at x 157 (25 when the
+ * speaker is on the right, as in the quest frame it / ic / is) and centred in the body; the portrait is
+ * centred on x 80 (450) with UtilDlgEx/bar under it carrying the name in white 12px Arial.
  * Buttons sit in s's band (rows 29-51): End Chat on the left, Prev / Next / OK / Yes / No on the right.
  * d: { npc, type, text, prev, next, def, min, max, styles } as sent in NPC_TALK.
  */
+/** NPC dialogue text: the client's font0, 12px Arial on 18px lines. */
+const NPC_TEXT = { size: 12, lineH: 18, bullet: 18 };
 export class NpcDialog extends Win {
   constructor(mgr, d, done) {
     const U = mgr.W.UtilDlgEx;
@@ -54,10 +64,10 @@ export class NpcDialog extends Win {
     this.quest = d.type === 12;
     const F = this.quest ? { t: U.it, c: U.ic, s: U.is } : { t: U.t, c: U.c, s: U.s };
     this.F = F;
-    this.textX = this.quest ? 22 : 160; this.textW = this.quest ? 350 : 340; this.faceX = this.quest ? 452 : 79;
+    this.textX = this.quest ? 25 : 157; this.textW = 341; this.faceX = this.quest ? 450 : 80;
     let text = d.text;
     if (d.type === 7) text += '\n' + d.styles.map((s, i) => `#L${i}##bStyle ${i + 1}#k#l`).join('\n');
-    this.layout = richText(scratch(), text, this.textW, textRef(mgr));
+    this.layout = richText(scratch(), text, this.textW, textRef(mgr), NPC_TEXT);
     this.laidOut = mgr.namesVersion;
     const input = d.type === 2 || d.type === 3;
     if (input) {
@@ -81,9 +91,11 @@ export class NpcDialog extends Win {
   }
   btn(node, x, y, fn) { const b = this.button(node, x, 0, fn); b.yAt = y; return b; }
   size() {
-    const extra = this.field ? 26 : 0;
-    this.tiles = Math.max(3, Math.ceil((12 + this.layout.height + extra + 8 - 28) / 20));
+    const measured = this.layout.height + (this.field ? 26 : 0);
+    this.tiles = Math.ceil(Math.max(120, measured + 8) / 20);
     this.bandY = 28 + this.tiles * 20;
+    const body = this.tiles * 20;
+    this.textY = 28 + Math.max(4, Math.trunc((body - measured - (this.field ? 20 : 6)) / 2));
     this.w = 529; this.h = this.bandY + 58;
     this.x = Math.round((800 - this.w) / 2); this.y = Math.max(8, Math.round((529 - this.h) / 2));
   }
@@ -94,7 +106,7 @@ export class NpcDialog extends Win {
     const st = n?.stand?.[0] || n?.stand;
     if (st?._canvas) { await a.preload([st]); this.face = st; }
   }
-  frames() { return [...allCanvases(this.F), this.U.dot0, ...this.buttons.flatMap((b) => b.frames())]; }
+  frames() { const U = this.U; return [...allCanvases(this.F), U.dot0, U.dot1, U.list0, U.list1, U.list2, U.list3, ...this.buttons.flatMap((b) => b.frames())]; }
   reply(action, sel) { this.close(); this.done({ action, sel }); }
   submit() {
     const v = this.field.value;
@@ -108,7 +120,7 @@ export class NpcDialog extends Win {
   }
   draw(ctx) {
     if (this.laidOut !== this.mgr.namesVersion) {
-      this.layout = richText(scratch(), this.d.type === 7 ? this.d.text + '\n' + this.d.styles.map((s, i) => `#L${i}##bStyle ${i + 1}#k#l`).join('\n') : this.d.text, this.textW, textRef(this.mgr));
+      this.layout = richText(scratch(), this.d.type === 7 ? this.d.text + '\n' + this.d.styles.map((s, i) => `#L${i}##bStyle ${i + 1}#k#l`).join('\n') : this.d.text, this.textW, textRef(this.mgr), NPC_TEXT);
       this.laidOut = this.mgr.namesVersion; this.size();
     }
     for (const b of this.buttons) b.y = b.yAt();
@@ -121,26 +133,29 @@ export class NpcDialog extends Win {
     ctx.drawImage(t, 0, 0);
     for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 28 + i * 20);
     ctx.drawImage(s, 0, this.bandY);
-    const face = im(this.face);
-    if (face) {
-      const o = this.face.origin || [face.width / 2, face.height];
-      const foot = this.bandY - 4;
-      const scale = Math.min(1, (foot - 6) / face.height);   // tall NPCs shrink to fit, like the client's portrait box
-      ctx.drawImage(face, Math.round(this.faceX - o[0] * scale), Math.round(foot - o[1] * scale), face.width * scale, face.height * scale);
+    // portrait and its name bar, centred together in the body (a tall portrait sits on the band instead)
+    const face = im(this.face), bar = im(this.U.bar), name = m.strings.npc?.[this.d.npc]?.name, body = this.tiles * 20;
+    const fh = face ? Math.min(face.height, body - 23) : 0, k = face ? fh / face.height : 1;
+    const top = 28 + Math.max(0, Math.trunc((body - fh - 23) / 2));
+    if (face) ctx.drawImage(face, Math.round(this.faceX - (face.width * k) / 2), top, Math.round(face.width * k), fh);
+    if (name) {
+      if (bar) ctx.drawImage(bar, this.faceX - 60, top + fh + 3);
+      uiText(ctx, name, this.faceX, top + fh + 5, { color: '#fff', size: 12, align: 'center' });
     }
-    const name = m.strings.npc?.[this.d.npc]?.name;
-    if (name) nameTag(ctx, name, this.faceX, this.bandY + 6, '#fff');
-    drawRich(ctx, this.layout, this.textX, 12, { drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y), hover: this.hoverOpt });
+    // the client draws every choice in the same muted purple, whatever colour code it carries
+    drawRich(ctx, this.layout, this.textX, this.textY, { drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y), hover: this.hoverOpt, size: NPC_TEXT.size, optColor: '#4f3b98',
+      drawImage: (n, x, y) => { const i = im(n); if (i) ctx.drawImage(i, x, y); },
+      drawBullet: (x, y, on) => { const i = im(on ? this.U.dot1 : this.U.dot0); if (i) ctx.drawImage(i, x, y); } });
     if (this.field) {
-      const bar = im(this.U.bar), fy = 12 + this.layout.height + 6;
+      const bar = im(this.U.bar), fy = this.textY + this.layout.height + 6;
       if (bar) ctx.drawImage(bar, this.textX, fy);
       placeField(m, this.field, this.x + this.textX + 2, this.y + fy + 1);
       if (!this.focused) { this.focused = true; setTimeout(() => this.field.focus(), 0); }
     }
   }
-  move(lx, ly) { this.hoverOpt = optionAt(this.layout, lx - this.textX, ly - 12); }
+  move(lx, ly) { this.hoverOpt = optionAt(this.layout, lx - this.textX, ly - this.textY); }
   down(lx, ly) {
-    const o = optionAt(this.layout, lx - this.textX, ly - 12);
+    const o = optionAt(this.layout, lx - this.textX, ly - this.textY);
     if (o !== null && (this.d.type === 4 || this.d.type === 7 || this.d.type === 0)) { sfx.play('UI/BtMouseClick'); this.reply(1, o); }
   }
 }
@@ -165,9 +180,12 @@ export async function localTalk(mgr, npcId, text, buttons) {
   return d.next ? 'Next' : (buttons.find((b) => b !== 'End Chat') || 'OK');
 }
 
-/** A menu of choices in the NPC dialog (#L options); resolves with the chosen index or null. */
+/**
+ * A menu of choices in the NPC dialog (#L options); resolves with the chosen index or null.
+ * An option { header } is a section title image (a #f path) instead of a choice.
+ */
 export async function npcMenu(mgr, npcId, text, options) {
-  const body = `${text}\n${options.map((o, i) => `#L${i}#${o}#l`).join('\n')}`;
+  const body = `${text}\n${options.map((o, i) => (o.header ? `#f${o.header}#` : `#L${i}#${o}#l`)).join('\n')}`;
   const r = await npcTalk(mgr, { npc: npcId, type: 4, text: body });
   return r.action === 1 ? r.sel : null;
 }
@@ -230,21 +248,29 @@ export class MessageBox extends Win {
 /**
  * Shop.img backgrnd 463x339: two panels - the NPC's goods (x 5-225) and your inventory (x 233-453).
  * Headers y 5-83 with a shadow where the NPC / your character stands (feet at x 51 / 279, y 74);
- * meso box x 358-447 y 64-79. Tab strips y 87-115 (red rule ~117). Lists: 5 rows of 35px every 40
+ * meso box x 358-447 y 64-79. Tab strips y 87-115 (red rule ~117). Lists: rows of 35px every 40
  * from y 125 - an icon cell (x +0..35) and the text area, where Shop/select (162x35) marks the choice.
+ * The art holds 5 rows; the window is drawn taller by repeating one row band (y 205-245) EXTRA times,
+ * so 9 rows show. Each row: the name, a thin rule, then the coin and "<price> meso".
  */
-const SHOP_ROWS = 5, SHOP_ROW_Y = 125, SHOP_ROW_H = 40;
+const SHOP_EXTRA = 4, SHOP_ROWS = 5 + SHOP_EXTRA, SHOP_ROW_Y = 125, SHOP_ROW_H = 40;
+const SHOP_W = 463, SHOP_H = 339 + SHOP_EXTRA * SHOP_ROW_H, SHOP_CUT = 245, SHOP_BAND = 205;
+const SHOP_TAB_Y = 95, SHOP_BAR_H = 200 + SHOP_EXTRA * SHOP_ROW_H;
 const SELL_TABS = [1, 2, 3, 4, 5];
+// the goods' tabs: All, and Must - the potions, ammo and other use items
+const BUY_TABS = [() => true, (it) => invType(it.id) === 2];
 export class ShopWin extends Win {
   constructor(mgr, shop) {
     const S = mgr.W.Shop;
-    super(mgr, S.backgrnd, Math.round((800 - 463) / 2), 60);
+    super(mgr, null, Math.round((800 - SHOP_W) / 2), 15);
+    this.w = SHOP_W; this.h = SHOP_H;
     this.buttons = [];
-    this.S = S; this.shop = shop; this.tab = 2; this.firstBuy = 0; this.firstSell = 0; this.selBuy = -1; this.selSell = -1;
+    this.S = S; this.shop = shop; this.tab = 1; this.buyTab = 0;
+    this.firstBuy = 0; this.firstSell = 0; this.selBuy = -1; this.selSell = -1;
     this.button(S.BtExit, 132, 14, () => this.close());
     this.button(S.BtBuy, 132, 42, () => this.buy());
-    this.button(S.BtSell, 362, 14, () => this.sell());
-    this.recharge = this.button(S.BtRecharge, 362 + 50, 38, () => this.doRecharge());
+    this.button(S.BtSell, 362, 42, () => this.sell());
+    this.recharge = this.button(S.BtRecharge, 312, 36, () => this.doRecharge());
     mgr.assets.json(`Npc/${pad(shop.npc, 7)}.img`).then(async (n) => {
       if (n?.info?.link) n = (await mgr.assets.json(`Npc/${pad(n.info.link, 7)}.img`)) || n;
       const st = n?.stand?.[0] || n?.stand;
@@ -252,20 +278,23 @@ export class ShopWin extends Win {
     });
     for (const it of shop.items) itemInfo(mgr.assets, it.id).then((info) => { it.info = info; });
   }
-  frames() { return [...super.frames(), this.S.select, this.S.meso, ...allCanvases(this.S.TabSell), ...allCanvases(this.S.TabBuy)]; }
+  frames() { return [...super.frames(), this.S.backgrnd, this.S.select, this.S.meso, ...allCanvases(this.S.TabSell), ...allCanvases(this.S.TabBuy), ...allCanvases(this.mgr.B.Tab2)]; }
   close() { this.mgr.close(this); this.g.net?.shopClose(); this.g.shopWin = null; }
   key(e) { if (e.key === 'Escape') this.close(); }
   result(code) {
     const msg = { 2: 'You do not have enough mesos.', 3: 'Please check if your inventory is full.', 5: 'You cannot sell this item.' }[code];
     if (msg) this.mgr.notice(msg);
   }
+  /** The goods on the open tab, each with its index in the shop's own list (what BUY sends). */
+  buyItems() { return this.shop.items.map((it, idx) => ({ it, idx })).filter(({ it }) => BUY_TABS[this.buyTab](it)); }
   sellItems() {
     const inv = this.g.inventory?.[this.tab] || {};
     return Object.entries(inv).map(([pos, it]) => ({ pos: Number(pos), it })).sort((a, b) => a.pos - b.pos);
   }
-  async buy(idx = this.selBuy) {
-    const it = this.shop.items[idx];
-    if (!it) return;
+  async buy(row = this.selBuy) {
+    const r = this.buyItems()[row];
+    if (!r) return;
+    const { it, idx } = r;
     let qty = 1;
     if (!it.recharge && invType(it.id) !== 1) {
       const max = Math.max(1, Math.min(it.info?.slotMax || 100, Math.floor(this.g.meso / Math.max(1, it.price))));
@@ -285,9 +314,14 @@ export class ShopWin extends Win {
     } else if (!(await this.mgr.confirm(`Are you sure you want to sell #t${it.id}#?`))) return;
     this.g.net?.shopSell(pos, it.id, qty);
   }
-  doRecharge() {
+  canRecharge() {
     const row = this.sellItems()[this.selSell];
-    if (row && isRechargeable(row.it.id) && this.shop.items.some((s) => s.recharge)) this.g.net?.shopRecharge(row.pos);
+    return !!row && isRechargeable(row.it.id) && this.shop.items.some((s) => s.recharge);
+  }
+  doRecharge() {
+    if (!this.shop.items.some((s) => s.recharge)) { this.mgr.notice('This shop does not recharge items.'); return; }
+    if (!this.canRecharge()) { this.mgr.notice('Select throwing stars or bullets in your Use tab to recharge them.'); return; }
+    this.g.net?.shopRecharge(this.sellItems()[this.selSell].pos);
   }
   rowAt(lx, ly, left) {
     const x0 = left ? 5 : 233;
@@ -295,67 +329,78 @@ export class ShopWin extends Win {
     const i = Math.floor((ly - SHOP_ROW_Y) / SHOP_ROW_H);
     if (i >= SHOP_ROWS || (ly - SHOP_ROW_Y) % SHOP_ROW_H >= 35) return -1;
     const idx = (left ? this.firstBuy : this.firstSell) + i;
-    return idx < (left ? this.shop.items.length : this.sellItems().length) ? idx : -1;
+    return idx < (left ? this.buyItems().length : this.sellItems().length) ? idx : -1;
+  }
+  /** The art, five rows tall, stretched to SHOP_ROWS by repeating one row band. */
+  drawFrame(ctx) {
+    const bg = this.mgr.image(this.S.backgrnd);
+    if (!bg) return;
+    ctx.drawImage(bg, 0, 0, SHOP_W, SHOP_CUT, 0, 0, SHOP_W, SHOP_CUT);
+    for (let j = 0; j < SHOP_EXTRA; j++) ctx.drawImage(bg, 0, SHOP_BAND, SHOP_W, SHOP_ROW_H, 0, SHOP_CUT + j * SHOP_ROW_H, SHOP_W, SHOP_ROW_H);
+    ctx.drawImage(bg, 0, SHOP_CUT, SHOP_W, 339 - SHOP_CUT, 0, SHOP_CUT + SHOP_EXTRA * SHOP_ROW_H, SHOP_W, 339 - SHOP_CUT);
+  }
+  /** One list row: icon, name, a thin rule, then the coin and the price. */
+  row(ctx, x, y, id, price, selected, qty) {
+    const m = this.mgr, im = (n) => m.image(n);
+    if (selected) { const s = im(this.S.select); if (s) ctx.drawImage(s, x + 35, y); }
+    m.drawIcon(ctx, m.icon(id), x + 2, y + 1);
+    if (qty > 1) m.count(ctx, qty, x + 2, y + 22);
+    ctx.save(); ctx.beginPath(); ctx.rect(x + 38, y, 168, 35); ctx.clip();
+    this.text(ctx, m.itemName(id), x + 41, y + 3, { size: 12 });
+    ctx.restore();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fillRect(x + 39, y + 18, 164, 1);
+    if (price === null) return;
+    const coin = im(this.S.meso);
+    if (coin) ctx.drawImage(coin, x + 41, y + 21);
+    this.text(ctx, `${price.toLocaleString('en-US')} meso`, x + 56, y + 21, { size: 12 });
   }
   body(ctx) {
     const m = this.mgr, im = (n) => m.image(n), g = this.g;
+    this.drawFrame(ctx);
     // the NPC and you, standing on the header shadows
     const face = im(this.face);
     if (face) { const o = this.face.origin || [face.width / 2, face.height]; ctx.drawImage(face, Math.round(51 - o[0]), Math.round(74 - o[1])); }
     if (g.look) drawParts(ctx, m.assets, g.look.compose(g.look.standAction(), 0), 279, 74, false);
-    const npcName = m.strings.npc?.[this.shop.npc]?.name;
-    if (npcName) nameTag(ctx, npcName, 51, 76, '#fff');
-    nameTag(ctx, g.player.name, 279, 76, '#fff');
     const meso = im(this.S.meso);
     if (meso) ctx.drawImage(meso, 345, 66);
-    this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 444, 66, { align: 'right' });
-    // tabs: the goods have one list ("All"); your side has Equip / Use / Set-up / Etc / Cash
-    const allTab = im(this.S.TabBuy.enabled[0]);
-    if (allTab) ctx.drawImage(allTab, 12, 99);
-    let tx = 240;
-    SELL_TABS.forEach((t, i) => {
-      const n = this.S.TabSell[t === this.tab ? 'enabled' : 'disabled'][i], ti = im(n);
-      if (ti) { ctx.drawImage(ti, tx, 99); this[`tabX${t}`] = [tx, ti.width]; tx += ti.width + 12; }
-    });
+    this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 444, 66, { align: 'right', size: 12 });
+    // tab strips (Basic.img Tab2): All / Must over the goods, Equip .. Cash over yours
+    this.buyTabRects = drawTabStrip(ctx, m, this.S.TabBuy, BUY_TABS.length, this.buyTab, 214, SHOP_TAB_Y);
+    ctx.save(); ctx.translate(228, 0);
+    this.sellTabRects = drawTabStrip(ctx, m, this.S.TabSell, SELL_TABS.length, this.tab - 1, 214, SHOP_TAB_Y);
+    ctx.restore();
     // goods
+    const goods = this.buyItems();
     for (let i = 0; i < SHOP_ROWS; i++) {
-      const idx = this.firstBuy + i, it = this.shop.items[idx];
-      if (!it) break;
-      const y = SHOP_ROW_Y + i * SHOP_ROW_H;
-      if (idx === this.selBuy) { const s = im(this.S.select); if (s) ctx.drawImage(s, 42, y); }
-      m.drawIcon(ctx, m.icon(it.id), 7, y + 1);
-      this.text(ctx, m.itemName(it.id), 46, y + 4, { bold: true });
-      this.text(ctx, it.price ? `${it.price.toLocaleString('en-US')} mesos` : 'Free', 46, y + 19);
+      const r = goods[this.firstBuy + i];
+      if (!r) break;
+      this.row(ctx, 5, SHOP_ROW_Y + i * SHOP_ROW_H, r.it.id, r.it.price || 0, this.firstBuy + i === this.selBuy, 0);
     }
-    this.scrollbar(ctx, 212, 121, 200, this.firstBuy, this.shop.items.length, SHOP_ROWS);
-    // your items
+    this.scrollbar(ctx, 212, 121, SHOP_BAR_H, this.firstBuy, goods.length, SHOP_ROWS);
+    // your items, at what the shop pays for them
     const rows = this.sellItems();
     for (let i = 0; i < SHOP_ROWS; i++) {
-      const idx = this.firstSell + i, r = rows[idx];
+      const r = rows[this.firstSell + i];
       if (!r) break;
-      const y = SHOP_ROW_Y + i * SHOP_ROW_H;
-      if (idx === this.selSell) { const s = im(this.S.select); if (s) ctx.drawImage(s, 270, y); }
-      m.drawIcon(ctx, m.icon(r.it.id), 235, y + 1);
-      if (r.it.quantity > 1) m.count(ctx, r.it.quantity, 235, y + 22);
-      this.text(ctx, m.itemName(r.it.id), 274, y + 4, { bold: true });
       const info = m.info(r.it.id);
-      this.text(ctx, info?.price ? `${info.price.toLocaleString('en-US')} mesos` : '', 274, y + 19);
+      this.row(ctx, 233, SHOP_ROW_Y + i * SHOP_ROW_H, r.it.id, info ? info.price || 0 : null, this.firstSell + i === this.selSell, r.it.quantity);
     }
-    this.scrollbar(ctx, 440, 121, 200, this.firstSell, rows.length, SHOP_ROWS);
-    const sel = rows[this.selSell];
-    this.recharge.visible = !!sel && isRechargeable(sel.it.id) && this.shop.items.some((s) => s.recharge);
+    this.scrollbar(ctx, 440, 121, SHOP_BAR_H, this.firstSell, rows.length, SHOP_ROWS);
+  }
+  tabHit(rects, lx, ly, dx = 0) {
+    return (rects || []).findIndex(([x, w, y]) => lx >= x + dx && lx < x + dx + w && ly >= y && ly < y + 22);
   }
   down(lx, ly) {
-    for (const t of SELL_TABS) {
-      const tx = this[`tabX${t}`];
-      if (tx && lx >= tx[0] - 4 && lx < tx[0] + tx[1] + 4 && ly >= 90 && ly < 116) { this.tab = t; this.firstSell = 0; this.selSell = -1; sfx.play('UI/Tab'); return; }
-    }
-    let s = this.scrollClick(lx, ly, 212, 121, 200, this.firstBuy, this.shop.items.length, SHOP_ROWS);
+    const b = this.tabHit(this.buyTabRects, lx, ly);
+    if (b >= 0) { if (b !== this.buyTab) { this.buyTab = b; this.firstBuy = 0; this.selBuy = -1; sfx.play('UI/Tab'); } return; }
+    const t = this.tabHit(this.sellTabRects, lx, ly, 228);
+    if (t >= 0) { if (t + 1 !== this.tab) { this.tab = t + 1; this.firstSell = 0; this.selSell = -1; sfx.play('UI/Tab'); } return; }
+    let s = this.scrollClick(lx, ly, 212, 121, SHOP_BAR_H, this.firstBuy, this.buyItems().length, SHOP_ROWS);
     if (s !== null) { this.firstBuy = s; return; }
-    s = this.scrollClick(lx, ly, 440, 121, 200, this.firstSell, this.sellItems().length, SHOP_ROWS);
+    s = this.scrollClick(lx, ly, 440, 121, SHOP_BAR_H, this.firstSell, this.sellItems().length, SHOP_ROWS);
     if (s !== null) { this.firstSell = s; return; }
-    const b = this.rowAt(lx, ly, true);
-    if (b >= 0) { this.selBuy = b; return; }
+    const r = this.rowAt(lx, ly, true);
+    if (r >= 0) { this.selBuy = r; return; }
     const v = this.rowAt(lx, ly, false);
     if (v >= 0) this.selSell = v;
   }
@@ -367,12 +412,12 @@ export class ShopWin extends Win {
   }
   wheel(dy) {
     const left = this.mgr.mouse.x - this.x < 230, d = Math.sign(dy);
-    if (left) this.firstBuy = Math.max(0, Math.min(this.shop.items.length - SHOP_ROWS, this.firstBuy + d));
+    if (left) this.firstBuy = Math.max(0, Math.min(this.buyItems().length - SHOP_ROWS, this.firstBuy + d));
     else this.firstSell = Math.max(0, Math.min(this.sellItems().length - SHOP_ROWS, this.firstSell + d));
   }
   tooltip(lx, ly) {
     const b = this.rowAt(lx, ly, true);
-    if (b >= 0 && lx < 42) return { item: { id: this.shop.items[b].id } };
+    if (b >= 0 && lx < 42) return { item: { id: this.buyItems()[b].it.id } };
     const v = this.rowAt(lx, ly, false);
     if (v >= 0 && lx < 270) return { item: this.sellItems()[v].it };
     return null;

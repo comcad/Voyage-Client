@@ -10,6 +10,8 @@ import { richText, drawRich } from './richtext.js';
  * double-click actions and drag-and-drop (inventory slots, skills/items onto the quick slots).
  * Positions inside each window are measured from its background art (see each class).
  */
+const WHEEL_STEP = 100;
+
 export class WindowManager {
   constructor(game, statusBar) {
     this.game = game; this.assets = game.assets; this.bar = statusBar;
@@ -60,6 +62,8 @@ export class WindowManager {
   show(w) { this.order.push(w); sfx.play('UI/DlgNotice'); return w; }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
+    // Escape puts back an item held by a click
+    if (e.key === 'Escape' && this.carry?.sticky) { e.preventDefault(); e.stopImmediatePropagation(); this.carry = null; return; }
     const top = this.modal || (this.order[this.order.length - 1]?.key && e.key === 'Escape' ? this.order[this.order.length - 1] : null);
     if (!top) return;
     const typing = e.target instanceof HTMLInputElement;
@@ -116,9 +120,21 @@ export class WindowManager {
   }
 
   startCarry(payload, node) { this.carry = { ...payload, node }; }
+  /**
+   * Put down what is being carried at (x, y): on the window there, on the quick slots, or outside
+   * (the source decides - an item is dropped on the field). Returns whether a window took the event.
+   */
+  placeCarry(x, y) {
+    const c = this.carry, w = this.top(x, y);
+    this.carry = null;
+    if (w) w.drop?.(x - w.x, y - w.y, c);
+    else if (this.bar.contains?.(x, y)) this.bar.dropOnQuickSlot?.(x, y, c);
+    else c.source?.dropOutside?.(c, x, y);
+    return !!w;
+  }
 
   // ---------------------------------------------------------------- input (canvas coordinates)
-  pointer(type, x, y) {
+  pointer(type, x, y, dy = 0) {
     this.mouse = { x, y };
     if (this.drag) {
       const d = this.drag;
@@ -138,12 +154,20 @@ export class WindowManager {
       if (over && over !== this.hovered) sfx.play('UI/BtMouseOver');
     }
     this.hovered = over;
-    this.tip = w && !over && !this.carry ? w.tooltip?.(x - w.x, y - w.y) : null;
+    // the wheel slides rows under a still cursor: keep the tooltip down until the mouse itself moves,
+    // or it would pop from item to item (a flicker) as the list scrolls
+    if (type === 'wheel') this.tipHeld = true;
+    else if (type === 'move' && (x !== this.tipAt?.x || y !== this.tipAt?.y)) this.tipHeld = false;
+    this.tipAt = { x, y };
+    this.tip = w && !over && !this.carry && !this.tipHeld ? w.tooltip?.(x - w.x, y - w.y) : null;
     if (w) w.move?.(x - w.x, y - w.y);
 
     if (type === 'down') {
       // menus close on any click outside them
       for (const o of [...this.order]) if (o.transient && o !== w) this.close(o);
+      // an item held by a click goes where the next click is (a quick second click on it is a double-click)
+      const held = this.carry?.sticky ? this.carry : null, quick = held && performance.now() - held.at < 350 && Math.abs(held.x - x) < 4 && Math.abs(held.y - y) < 4;
+      if (held && !quick) { this.lastDown = null; if (!modal || w === modal) this.placeCarry(x, y); return true; }
       if (!w) return !!modal;
       this.raise(w);
       const lx = x - w.x, ly = y - w.y;
@@ -154,17 +178,20 @@ export class WindowManager {
       if (last && last.w === w && now - last.t < 350 && Math.abs(last.x - x) < 4 && Math.abs(last.y - y) < 4) {
         this.lastDown = null; this.carry = null; w.dblclick?.(lx, ly); return true;
       }
-      if (!over) { w.down?.(lx, ly); if (this.carry) this.carry.source = w; }
+      if (!over) {
+        w.down?.(lx, ly);
+        if (this.carry) Object.assign(this.carry, { source: w, x, y, at: now });
+      }
       return true;
     }
     if (type === 'up') {
-      for (const o of this.order) o.up?.();
+      for (const o of this.order) if (typeof o.up === 'function') o.up();   // the mouse-up hook (sliders, drags)
       if (this.carry) {
-        const c = this.carry; this.carry = null;
-        if (w) w.drop?.(x - w.x, y - w.y, c);
-        else if (this.bar.contains?.(x, y)) this.bar.dropOnQuickSlot?.(x, y, c);
-        else c.source?.dropOutside?.(c, x, y);
-        return !!w;
+        const c = this.carry;
+        if (c.sticky) return !!w;
+        // released where it was picked up: a click, not a drag - keep holding the item until the next click
+        if (c.kind === 'item' && Math.abs(c.x - x) < 4 && Math.abs(c.y - y) < 4) { c.sticky = true; return true; }
+        return this.placeCarry(x, y);
       }
       if (!w) return false;
       const target = w.buttons.find((b) => b.down && b === over);
@@ -172,7 +199,18 @@ export class WindowManager {
       target?.onClick();
       return true;
     }
-    if (type === 'wheel') { if (w) { w.wheel?.(y); return true; } return !!modal; }
+    if (type === 'wheel') {
+      if (!w) return !!modal;
+      // one row per WHEEL_STEP of scroll: a row per mouse notch (~100), a trackpad glides through several
+      if (this.wheelWin !== w) { this.wheelWin = w; this.wheelAcc = 0; }
+      this.wheelAcc += dy;
+      while (Math.abs(this.wheelAcc) >= WHEEL_STEP) {
+        const s = Math.sign(this.wheelAcc);
+        this.wheelAcc -= s * WHEEL_STEP;
+        w.wheel?.(s);
+      }
+      return true;
+    }
     return !!w || !!modal;
   }
 
@@ -188,14 +226,44 @@ export class WindowManager {
   }
 }
 
-/** A window: background from UIWindow.img, its own buttons (window-local coords) and the close tab. */
+/** A window: background from UIWindow.img, its own buttons (window-local coords) and the close button. */
+/**
+ * The client's tab strip (tab type 1, Basic.img/Tab2), as openms recovered it: `count` tabs share `span` px
+ * from x 7 at y 23, each a stretched fill plus an 8px edge (a 4px end on the last), after a 4px left cap.
+ * The selected tab uses the "1" pieces and the edge just before it the "2" one; each window's own
+ * Tab/enabled|disabled label is centred on its tab. Returns each tab's [x, width] for hit testing.
+ */
+export function drawTabStrip(ctx, mgr, labels, count, selected, span, y = 23) {
+  const T = mgr.B.Tab2, im = (n) => mgr.image(n), rects = [];
+  if (!T || !count) return rects;
+  const width = Math.trunc((span - (count - 1) * 8 - 8) / count), rem = span - (width + 8) * count;
+  const cap = im(T[selected === 0 ? 'left1' : 'left0']);
+  if (cap) ctx.drawImage(cap, 3, y);
+  let x = 7;
+  for (let i = 0; i < count; i++) {
+    const size = width + (i < rem ? 1 : 0), on = i === selected, last = i === count - 1;
+    const fill = im(T[on ? 'fill1' : 'fill0']);
+    if (fill) ctx.drawImage(fill, x, y, size, fill.height);
+    const edge = im(T[last ? (on ? 'right1' : 'right0') : `middle${on ? 1 : i + 1 === selected ? 2 : 0}`]);
+    if (edge) ctx.drawImage(edge, x + size, y);
+    const label = im(labels?.[on ? 'enabled' : 'disabled']?.[i]);
+    if (label) ctx.drawImage(label, x + Math.trunc(size / 2) - Math.trunc(label.width / 2), y + 11 - Math.trunc(label.height / 2));
+    rects.push([x, size + 8, y]);
+    x += size + 8;
+  }
+  return rects;
+}
+const tabAt = (rects, lx, ly) => (rects || []).findIndex(([x, w, y]) => lx >= x && lx < x + w && ly >= y && ly < y + 19);
+
+/** The close box sits this far in from a window's right edge (12px wide, 5px margin). */
+const CLOSE_INSET = 17;
 export class Win {
   constructor(mgr, bg, x, y) {
     this.mgr = mgr; this.g = mgr.game; this.bg = bg; this.x = x; this.y = y;
     this.w = bg?._w || 175; this.h = bg?._h || 289;
     this.buttons = [];
-    // the "X CLOSE" tab sits on the title bar's right end
-    this.closeBtn = this.button(mgr.W.BtUIClose, this.w - 38, 6, () => mgr.close(this));
+    // Basic.img's small blue close box on the title bar's right end (kept there as the window resizes)
+    this.closeBtn = this.button(mgr.B.BtClose, this.w - CLOSE_INSET, 6, () => mgr.close(this));
   }
   button(node, x, y, fn) {
     const b = new WzButton(node, x, y, () => { sfx.play('UI/BtMouseClick'); fn(); });
@@ -205,6 +273,7 @@ export class Win {
   frames() { return [this.bg, ...this.buttons.flatMap((b) => b.frames())].filter(isCanvas); }
   contains(x, y) { return x >= this.x && x < this.x + this.w && y >= this.y && y < this.y + this.h; }
   draw(ctx) {
+    if (this.closeBtn && !this.closePinned) this.closeBtn.x = this.w - CLOSE_INSET;
     ctx.save(); ctx.translate(this.x, this.y);
     const bg = this.mgr.image(this.bg);
     if (bg) ctx.drawImage(bg, 0, 0);
@@ -273,10 +342,7 @@ class InventoryWin extends Win {
   }
   body(ctx) {
     const g = this.g, inv = g.inventory, m = this.mgr;
-    for (let t = 1; t <= 5; t++) {
-      const im = m.image(this.W.Tab[t === this.tab ? 'enabled' : 'disabled'][t - 1]);
-      if (im) ctx.drawImage(im, Math.round(tabX(t) + TAB_W[t - 1] / 2 - im.width / 2), t === this.tab ? 26 : 27);
-    }
+    this.tabRects = drawTabStrip(ctx, m, this.W.Tab, 5, this.tab - 1, 170);
     const items = inv?.[this.tab] || {};
     for (let r = 0; r < 6; r++) for (let c = 0; c < 4; c++) {
       const slot = (this.first + r) * 4 + c + 1;
@@ -291,7 +357,8 @@ class InventoryWin extends Win {
     this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 135, 268, { align: 'right' });
   }
   down(lx, ly) {
-    for (let t = 1; t <= 5; t++) if (lx >= tabX(t) - 6 && lx < tabX(t) + TAB_W[t - 1] + 6 && ly >= 22 && ly < 40) { this.tab = t; this.first = 0; sfx.play('UI/Tab'); return; }
+    const hit = tabAt(this.tabRects, lx, ly);
+    if (hit >= 0) { if (this.tab !== hit + 1) { this.tab = hit + 1; this.first = 0; sfx.play('UI/Tab'); } return; }
     const s = this.scrollClick(lx, ly, 156, 51, 201, this.first, this.rows, 6);
     if (s !== null) { this.first = s; return; }
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
@@ -326,9 +393,6 @@ class InventoryWin extends Win {
     return it ? { item: it } : null;
   }
 }
-const TAB_W = [22, 13, 26, 13, 20];
-const TAB_X = [8, 46, 75, 117, 146];     // even 16px gaps across the strip (x 8-166)
-const tabX = (t) => TAB_X[t - 1];
 
 // ==================================================================== Equipment
 /**
@@ -428,7 +492,7 @@ class SkillWin extends Win {
     const W = mgr.W.Skill;
     super(mgr, W.backgrnd, 200, 90);
     this.W = W; this.first = 0; this.sel = null;
-    this.up = [0, 1, 2, 3].map((i) => this.button(W.BtSpUp, 9 + 141 - 16, 93 + i * 40 + 20, () => this.raise(i)));
+    this.spUp = [0, 1, 2, 3].map((i) => this.button(W.BtSpUp, 9 + 141 - 16, 93 + i * 40 + 20, () => this.raise(i)));
   }
   frames() { return [...super.frames(), this.W.skill0, this.W.skill1, ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled)]; }
   onOpen() { const b = this.books; this.book ??= b[b.length - 1]; }
@@ -457,10 +521,7 @@ class SkillWin extends Win {
   body(ctx) {
     const g = this.g, sb = g.skills, m = this.mgr;
     if (!sb || !g.stats) return;
-    this.books.forEach((b, i) => {
-      const im = m.image(this.W.Tab[b === this.book ? 'enabled' : 'disabled'][i]);
-      if (im) ctx.drawImage(im, 12 + i * 18, 27);
-    });
+    this.tabRects = drawTabStrip(ctx, m, this.W.Tab, this.books.length, this.books.indexOf(this.book), 34 * this.books.length);
     const book = sb.books[this.book], bi = book && !(book instanceof Promise) ? book.info?.icon : null;
     const bim = m.image(bi);
     if (bim) ctx.drawImage(bim, 6 + 4, 80 - 30);
@@ -470,7 +531,7 @@ class SkillWin extends Win {
     this.first = Math.min(this.first, Math.max(0, list.length - 4));
     for (let i = 0; i < 4; i++) {
       const id = list[this.first + i];
-      this.up[i].visible = !!id;
+      this.spUp[i].visible = !!id;
       if (!id) continue;
       const y = 93 + i * 40, lv = sb.level(id);
       const row = m.image(id === this.sel ? this.W.skill1 : this.W.skill0);
@@ -478,14 +539,15 @@ class SkillWin extends Win {
       const icon = lv ? sb.icon(id) : sb.node(id)?.iconDisabled || sb.icon(id);
       if (m.image(icon)) m.drawIcon(ctx, icon, 9 + 2, y + 2); else if (icon) m.assets.preload([icon]);
       this.text(ctx, sb.name(id), 9 + 39, y + 3);
-      this.text(ctx, `${lv}`, 9 + 39, y + 20);
-      this.up[i].enabled = this.canRaise(id);
+      this.text(ctx, `Lv. ${lv}/${sb.maxLevel(id)}`, 9 + 39, y + 20);
+      this.spUp[i].enabled = this.canRaise(id);
     }
     this.scrollbar(ctx, 154, 92, 160, this.first, list.length, 4);
     this.text(ctx, this.sp, 97, 266, { align: 'center' });
   }
   down(lx, ly) {
-    for (let i = 0; i < this.books.length; i++) if (lx >= 10 + i * 18 && lx < 26 + i * 18 && ly >= 22 && ly < 40) { this.book = this.books[i]; this.first = 0; sfx.play('UI/Tab'); return; }
+    const hit = tabAt(this.tabRects, lx, ly);
+    if (hit >= 0) { if (this.book !== this.books[hit]) { this.book = this.books[hit]; this.first = 0; sfx.play('UI/Tab'); } return; }
     const s = this.scrollClick(lx, ly, 154, 92, 160, this.first, this.list.length, 4);
     if (s !== null) { this.first = s; return; }
     const r = this.rowAt(lx, ly);
@@ -629,10 +691,14 @@ class QuestWin extends Win {
 /**
  * MiniMap frame: a 9-slice in three styles - MaxMap (72px header: title strip, then a blue band with
  * the map mark and street / map names), MinMap (29px header, title only) and Min (a 20px bar).
- * The map image is the map's own miniMap canvas, where pixel = (world + center) >> mag; markers are
+ * The map picture is the map itself - every layer's tiles and objects, no backgrounds - shrunk onto a
+ * dark navy ground (the game's own miniMap canvas carries a blurred sky). Markers are
  * Map/MapHelper.img/minimap sprites centred on their spot.
  */
 const MM_MODES = ['max', 'min', 'bar'];
+// The map is shrunk to fit the view's width, but never below MIN_SCALE: a bigger map shows through
+// the view centred on you (stopping at its edges). MAX_SCALE keeps small maps from blowing up.
+const MM_VIEW = { w: 220, h: 100 }, MM_MIN_SCALE = 1 / 10, MM_MAX_SCALE = 1 / 5, MM_GROUND = '#1b2741';
 class MiniMapWin extends Win {
   constructor(mgr) {
     super(mgr, null, 0, 0);
@@ -646,22 +712,43 @@ class MiniMapWin extends Win {
     mgr.assets.json('String/Map.img').then((s) => { this.strMap = s; });
   }
   frames() { return [this.W.title, ...allCanvases(this.W.MinMap), ...allCanvases(this.W.MaxMap), ...allCanvases(this.W.Min), ...this.buttons.flatMap((b) => b.frames())]; }
-  get mm() { return this.g.map?.data?.miniMap; }
+  /** The shrunk map, drawn once per map (and again shortly after, for art that was still loading). */
+  picture() {
+    const map = this.g.map;
+    if (!map?.bounds) return null;
+    const p = this.pic, now = performance.now();
+    if (p?.map === map && (p.final || now - p.at < 1500)) return p;
+    const b = map.bounds, mw = b.right - b.left, mh = b.bottom - b.top;
+    const k = Math.min(MM_MAX_SCALE, Math.max(MM_MIN_SCALE, MM_VIEW.w / mw));
+    const c = p?.map === map ? p.canvas : document.createElement('canvas');
+    c.width = Math.ceil(mw * k); c.height = Math.ceil(mh * k);
+    const g = c.getContext('2d');
+    g.fillStyle = MM_GROUND; g.fillRect(0, 0, c.width, c.height);
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.setTransform(k, 0, 0, k, 0, 0);
+    for (let l = 0; l < map.layers.length; l++) map.drawLayer(g, { x: b.left, y: b.top }, l);
+    this.pic = { map, canvas: c, k, at: now, final: p?.map === map };
+    return this.pic;
+  }
   layout() {
-    const img = this.mgr.image(this.mm?.canvas);
+    const img = this.picture()?.canvas;
     if (this.mode === 'bar') { this.w = 160; this.h = 20; } else {
       const F = this.mode === 'max' ? this.W.MaxMap : this.W.MinMap;
       const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
-      ctx.font = 'bold 12px Arial, sans-serif';
+      ctx.font = 'bold 13px Arial, sans-serif';
       const n = this.names(), names = Math.max(ctx.measureText(n.mapName || '').width, ctx.measureText(n.streetName || '').width);
-      this.w = Math.ceil(Math.max((img?.width || 120) + 12, 170, this.mode === 'max' ? 52 + names + 54 : 0));
-      this.h = F.nw._h + (img?.height || 60) + F.sw._h;
+      this.w = Math.ceil(Math.max(Math.min(img?.width || 120, MM_VIEW.w) + 12, 170, this.mode === 'max' ? 52 + names + 12 : 0));
+      this.h = F.nw._h + Math.min(img?.height || 60, MM_VIEW.h) + F.sw._h;
     }
-    this.minBtn.x = this.w - 30; this.maxBtn.x = this.w - 17;
-    this.minBtn.visible = this.mode !== 'bar'; this.maxBtn.visible = this.mode !== 'max';
-    if (!this.maxBtn.visible) this.minBtn.x = this.w - 17;
-    this.worldBtn.visible = this.mode === 'max';
-    this.worldBtn.x = this.w - 44; this.worldBtn.y = 72 - 18;
+    // the title bar, right to left: WORLD, + and - (the bar alone keeps just +)
+    this.minBtn.visible = this.mode !== 'bar'; this.maxBtn.visible = true;
+    this.worldBtn.visible = this.mode !== 'bar';
+    let bx = this.w - 6;
+    for (const b of [this.worldBtn, this.maxBtn, this.minBtn]) {
+      if (!b.visible) continue;
+      const bw = b.frames()[0]?._w || 12;
+      bx -= bw; b.x = bx; b.y = b === this.worldBtn ? 5 : 6; bx -= 2;
+    }
   }
   draw(ctx) { this.layout(); super.draw(ctx); }
   names() {
@@ -685,20 +772,28 @@ class MiniMapWin extends Win {
     if (this.mode === 'max') {
       const n = this.names(), mark = this.helper?.mark?.[this.g.map?.data?.info?.mapMark];
       if (mark) { if (im(mark)) ctx.drawImage(im(mark), 8, 26); else m.assets.preload([mark]); }
-      uiText(ctx, n.streetName || '', 52, 30, { color: '#fff', size: 11 });
-      uiText(ctx, n.mapName || '', 52, 45, { color: '#fff', size: 12, bold: true });
+      // street and map name both bold white, outlined like the client's title text
+      uiText(ctx, n.streetName || '', 52, 28, { color: '#fff', size: 13, bold: true, outline: '#2b3a55' });
+      uiText(ctx, n.mapName || '', 52, 45, { color: '#fff', size: 13, bold: true, outline: '#2b3a55' });
     }
-    const mm = this.mm, map = im(mm?.canvas);
-    if (!map) return;
-    const ox = Math.round((this.w - map.width) / 2);
-    ctx.drawImage(map, ox, top);
-    const scale = 1 << (mm.mag || 0);
+    const pic = this.picture();
+    if (!pic) return;
+    const map = pic.canvas, k = pic.k, b = this.g.map.bounds, g = this.g;
+    // the visible part: centred on you, clamped to the map; a map smaller than the view is centred instead
+    const vw = Math.min(map.width, MM_VIEW.w), vh = Math.min(map.height, MM_VIEW.h);
+    const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(v)));
+    const vx = clamp((g.player.x - b.left) * k - vw / 2, map.width - vw);
+    const vy = clamp((g.player.y - 20 - b.top) * k - vh / 2, map.height - vh);
+    const ox = Math.round((this.w - vw) / 2);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(ox, top, vw, vh); ctx.clip();
+    ctx.drawImage(map, vx, vy, vw, vh, ox, top, vw, vh);
     const H = this.helper?.minimap || {};
     const mark = (node, wx, wy) => {
       const s = im(node);
-      if (s) ctx.drawImage(s, Math.round(ox + (wx + mm.centerX) / scale - s.width / 2), Math.round(top + (wy + mm.centerY) / scale - s.height / 2));
+      if (s) ctx.drawImage(s, Math.round(ox + (wx - b.left) * k - vx - s.width / 2), Math.round(top + (wy - b.top) * k - vy - s.height / 2));
     };
-    const g = this.g, qctx = g.textCtx?.();
+    const qctx = g.textCtx?.();
     for (const p of g.map.portals) if (p.pt === 2) mark(H.portal, p.x, p.y);
     for (const e of g.map.life) {
       if (e.kind !== 'Npc') continue;
@@ -707,6 +802,7 @@ class MiniMapWin extends Win {
     }
     for (const o of g.others.values()) mark(H.another, o.x, o.y - 20);
     mark(H.user, g.player.x, g.player.y - 20);
+    ctx.restore();
   }
 }
 
@@ -757,7 +853,7 @@ class KeyConfigWin extends Win {
     this.button(W.BtOK, 629 - 112, 236, () => this.save());
     this.button(W.BtCancel, 629 - 60, 236, () => mgr.close(this));
   }
-  frames() { return [...super.frames(), ...allCanvases(this.W.icon)]; }
+  frames() { return [...super.frames(), ...allCanvases(this.W.icon), ...allCanvases(this.W.key)]; }
   onOpen() { this.draft = Object.fromEntries(Object.entries(this.g.keymap || {}).map(([k, v]) => [k, { ...v }])); this.picked = null; }
 
   save() {
@@ -800,6 +896,9 @@ class KeyConfigWin extends Win {
       if (!b || (m.carry?.fromSc === Number(sc))) continue;
       const icon = this.iconFor(b);
       if (icon && m.image(icon)) m.drawIcon(ctx, icon, x - 2, y - 4); else if (icon) m.assets.preload([icon]);
+      // the key's own letter stays readable on top of what is bound to it
+      const label = m.image(this.W.key?.[sc]);
+      if (label) ctx.drawImage(label, x + 2, y + 1);
       if (this.picked === Number(sc)) { ctx.strokeStyle = '#ff0'; ctx.strokeRect(x + 0.5, y + 0.5, 27, 24); }
     }
     this.palette().forEach(([, a], i) => {

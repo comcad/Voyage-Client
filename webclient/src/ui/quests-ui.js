@@ -5,14 +5,33 @@ export function localDialog(game, npcId, text, buttons) {
   return localTalk(game.windows, npcId, String(text), buttons);
 }
 
-/** Clicking an NPC that has quests: choose between its script and its quests (like the v83 client). */
+/**
+ * Clicking an NPC that has quests: choose between its script and its quests, in the client's sections,
+ * each under its UtilDlgEx title: list3 "QUEST THAT CAN BE COMPLETED", list0 "QUEST IN PROGRESS",
+ * list1 "QUEST AVAILABLE", list2 "ETC" (talking to the NPC).
+ */
+const HEAD = (n) => ({ header: `UI/UIWindow.img/UtilDlgEx/list${n}` });
+/**
+ * ETC: only NPCs with a script (Npc.img info/script) offer one, worded by Etc/ScriptInfo.img
+ * under the script's name ("medal_rank" -> "I want to see the medal rankings.").
+ */
+async function talkSection(game, npc) {
+  const script = npc.src?.info?.script?.[0]?.script;
+  if (!script) return [];
+  const info = await game.assets.json('Etc/ScriptInfo.img');
+  return [HEAD(2), { talk: true, label: `#d${info?.[script] || `Talk to ${npc.name}.`}#k` }];
+}
 export async function npcQuestMenu(game, npc, q) {
   const book = game.quests;
-  const choices = [{ talk: true, label: '#bTalk#k' },
-    ...q.complete.map((id) => ({ complete: id, label: `#r[Complete]#k ${book.name(id)}` })),
-    ...q.start.map((id) => ({ start: id, label: `#b[Start]#k ${book.name(id)}` })),
-    ...q.progress.map((id) => ({ progress: id, label: `#g[In Progress]#k ${book.name(id)}` }))];
-  const i = await npcMenu(game.windows, npc.spawn.id, `What would you like to do with #b${npc.name}#k?`, choices.map((c) => c.label));
+  const section = (n, rows) => (rows.length ? [HEAD(n), ...rows] : []);
+  const choices = [
+    ...section(3, q.complete.map((id) => ({ complete: id, label: `#d${book.name(id)}#k` }))),
+    ...section(0, q.progress.map((id) => ({ progress: id, label: `#d${book.name(id)} (In Progress)#k` }))),
+    ...section(1, q.start.map((id) => ({ start: id, label: `#d${book.name(id)}#k` }))),
+    ...(await talkSection(game, npc))];
+  // it opens with the NPC's own greeting (String/Npc.img d0), as the client does
+  const greet = game.windows.strings.npc?.[npc.spawn.id]?.d0 || `What would you like to do with #b${npc.name}#k?`;
+  const i = await npcMenu(game.windows, npc.spawn.id, greet, choices.map((c) => (c.header ? c : c.label)));
   const choice = i === null ? null : choices[i];
   if (!choice) return;
   if (choice.talk) game.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });

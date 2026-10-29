@@ -23,10 +23,10 @@ body.at-login .keys, body:not(.offline) .keys { display: none; }
 #hud .label { color: #999; } #hud .value { color: #ffd54f; }
 #map-form { margin-top: 4px; display: flex; gap: 4px; } #map-form input { width: 110px; padding: 2px 6px; }
 
-#loading-overlay { position: absolute; inset: 0; background: rgba(10,10,20,0.92); z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.3s; }
+#loading-overlay { position: absolute; inset: 0; background: #000; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.3s; }
 #loading-overlay.hidden { opacity: 0; pointer-events: none; }
-#loading-overlay h1 { font-size: 28px; margin-bottom: 12px; color: #ffb32b; }
-#loading-overlay p { color: #aaa; font-size: 14px; }
+/* loading is a plain black screen: no title or progress text */
+#loading-overlay h1, #loading-overlay p { display: none; }
 
 .panel { background: linear-gradient(#f7f3e8, #e4dcc8); color: #2b2b2b; border: 2px solid #8b7a55; border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.5); padding: 16px; }
 .panel h2, .panel h3 { color: #6b4a12; margin-bottom: 10px; }
