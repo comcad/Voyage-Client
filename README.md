@@ -50,10 +50,10 @@ Voyage-Client/
 
 ## 1. Extract assets
 
-The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/xcomcadx/voyage-wz-extractor)** (pure Node, zero deps).
+The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero deps).
 
 ```sh
-- git clone https://github.com/xcomcadx/voyage-wz-extractor
+- git clone https://github.com/comcad/Voyage-Wz-Extractor
 - cd voyage-wz-extractor
 - mkdir assets
 - node wz-extract.mjs <path-to-wz-folder> ./assets
@@ -89,10 +89,9 @@ Join the Discord: [discord.gg/SCVxm6tB4g](https://discord.gg/SCVxm6tB4g)
 
 ## Credits
 
-- **Author:** [xcomcadx](https://github.com/xcomcadx)
-- Server: Cosmic v83
+- **Server:** Cosmic v83
 
 ## License
 
 MIT. The WZ extractor is published separately as
-[voyage-wz-extractor](https://github.com/xcomcadx/voyage-wz-extractor).
+[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor).
