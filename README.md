@@ -7,12 +7,12 @@ Work in progress...
 <div align="center">
   <table width="700" align="center">
     <tr>
-      <td align="center" width="60%">
+      <td align="center" width="55%">
         <img src="https://github.com/user-attachments/assets/0ab3508f-e043-4bbb-836f-059d923dc950" width="500" alt="Screenshot" /><br>
         <sub><b>Login</b></sub>
       </td>
-      <td align="center" width="100%">
-        <img src="https://github.com/user-attachments/assets/6186adc4-f108-4558-9588-0c0362da9c00" width="550" alt="IMG_1494" /><br>
+      <td align="center" width="110%">
+        <img src="https://github.com/user-attachments/assets/6186adc4-f108-4558-9588-0c0362da9c00" width="500" alt="IMG_1494" /><br>
         <sub><b>In-Game</b></sub>
       </td>
     </tr>
