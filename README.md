@@ -19,6 +19,8 @@ Work in progress...
   </table>
 </div>
 
+## Directory tree
+
 ```
 Voyage-Client/
 ├── assets/* 
