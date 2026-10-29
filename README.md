@@ -20,7 +20,7 @@ Work in progress...
 </div>
 
 ```
-maplestory-v83/
+Voyage-Client/
 ├── assets/* 
 ├── webclient/            # the browser client
 │   ├── server.js         # Express server + WS↔TCP relay to the Cosmic v83 server
