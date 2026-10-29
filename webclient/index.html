@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voyage — MapleStory v83 Web Client</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="game-container">
+    <canvas id="game-canvas"></canvas>
+    <div id="ui-root"></div>
+    <div id="hud" class="offline-only">
+      <div><span class="value" id="hud-map">-</span> <span class="label">(<span id="hud-id">-</span>)</span></div>
+      <form id="map-form"><input id="map-input" placeholder="map id" inputmode="numeric"><button>Go</button></form>
+    </div>
+    <div id="loading-overlay">
+      <h1>MapleStory v83</h1>
+      <p id="loading-text">Loading...</p>
+    </div>
+  </div>
+  <div id="login-root"></div>
+  <div class="keys">Arrows move · Alt jump · Ctrl attack · Z pick up · Up portal/rope · Down+Jump drop · Click NPC · Enter chat · Space NPC · I items · S stats · K skills · Q quests · M minimap · keys follow your server keymap</div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

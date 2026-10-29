@@ -1,0 +1,20 @@
+# --- Generated / runtime ---
+assets/
+**/node_modules/
+**/*.pid
+**/*.log
+**/*.tmp
+
+# --- OS / editor noise ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Python (extractor scripts) ---
+__pycache__/
+*.pyc
+
+# --- Logs from runs ---
+*.log
+nohup.out
