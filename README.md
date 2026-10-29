@@ -1,26 +1,26 @@
+
 # Voyage Client
 
 A MapleStory **v83** (GMS) browser client — pure JavaScript. (Fully compatible with cosmic server)
 
 Work in progress...
-
 <div align="center">
   <table width="700" align="center">
     <tr>
-      <td align="center" width="55%">
-        <img src="https://github.com/user-attachments/assets/0ab3508f-e043-4bbb-836f-059d923dc950" width="500" alt="Screenshot" /><br>
-        <sub><b>Login</b></sub>
-      </td>
-      <td align="center" width="110%">
-        <img src="https://github.com/user-attachments/assets/6186adc4-f108-4558-9588-0c0362da9c00" width="500" alt="IMG_1494" /><br>
+      <td align="center" width="50%">
+        <img src="https://github.com/user-attachments/assets/3162edc5-b5e8-4053-abd5-872e8e9b22e8" width="500" alt="In-Game" /><br>
         <sub><b>In-Game</b></sub>
+      </td>
+      <td align="center" width="50%">
+        <img src="https://github.com/user-attachments/assets/f7bbe8b6-463a-4c4b-9632-dad696eff7a4" width="500" alt="Screenshot" /><br>
+        <sub><b>Login</b></sub>
       </td>
     </tr>
   </table>
 </div>
 
 
-## Dir
+## Directories
 ```
 Voyage-Client/
 ├── assets/* 
