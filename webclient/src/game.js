@@ -878,6 +878,9 @@ export class Game {
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
       chat: later((c) => this.onChat(c)),
       spawnPlayer: later((d) => this.spawnPlayer(d)),
+      clock: later((secs) => { this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt(); }),
+      fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
+      ship: later((here) => this.moveShip(here)),
       mistSpawn: later((d) => this.addMist(d)),
       mistRemove: later((oid) => this.mists?.delete(oid)),
       doorSpawn: later((d) => {
@@ -1112,7 +1115,8 @@ export class Game {
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
-      this.doors?.clear(); this.mists?.clear();
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null;
+      this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       this.snapCamera();
@@ -2083,6 +2087,99 @@ export class Game {
     return true;
   }
 
+  // ------------------------------------------------------------------ the field's timer
+  async loadClockArt() {
+    if (this.clockArt) return;
+    const etc = await this.assets.json('Map/Obj/etc.img');
+    const art = { box: etc?.timer?.backgrnd, boxHour: etc?.timer?.backgrndhour, digits: etc?.clock?.fontTime };
+    await this.assets.preload([art.box, art.boxHour, ...Object.values(art.digits || {})].filter(Boolean));
+    this.clockArt = art;
+  }
+  /**
+   * Map/Obj/etc.img/timer at the top centre: "Time Left" with minutes and seconds (clock/fontTime digits, its
+   * comma between), or from an hour up the Hr / Min box with hours and minutes. It stays on 00:00 at the end until
+   * the server takes it away.
+   */
+  drawClock(ctx) {
+    const art = this.clockArt;
+    if (!this.clock || !art?.digits) return;
+    const left = Math.max(0, Math.ceil((this.clock.end - performance.now()) / 1000));
+    const hours = left >= 3600, box = this.assets.image(hours ? art.boxHour : art.box);
+    if (!box) return;
+    const bx = Math.round((VIEW_W - box.width) / 2), by = 22;   // under the server's scrolling notice
+    ctx.drawImage(box, bx, by);
+    const two = (n) => String(n).padStart(2, '0');
+    const put = (ch, x) => { const img = this.assets.image(art.digits[ch]); if (img) ctx.drawImage(img, bx + x, by + 11); return img?.width || 0; };
+    if (hours) {
+      const [h, m] = [two(Math.min(99, Math.floor(left / 3600))), two(Math.floor(left / 60) % 60)];
+      put(h[0], 98); put(h[1], 124); put(m[0], 176); put(m[1], 202);
+    } else {
+      const [m, s] = [two(Math.floor(left / 60)), two(left % 60)];
+      let x = 105;
+      for (const ch of [m[0], m[1], 'comma', s[0], s[1]]) x += put(ch, x);
+    }
+  }
+
+  // ------------------------------------------------------------------ ships and the station clock
+  /**
+   * The map's shipObj: the ship at a station (shipKind 0) or the Balrog's ship on a voyage (1). It is drawn at x
+   * when in; it sails in from x0 and back out there over tMove seconds. A voyage's ship has no x0: it comes from
+   * 800px behind the way it faces (art faces left, f flips it) - our reading, not recovered.
+   */
+  async setupShip() {
+    const o = this.map?.data?.shipObj;
+    this.ship = null;
+    if (!o?.shipObj) return;
+    const map = this.map, x0 = o.x0 ?? o.x + (o.f ? -800 : 800);
+    const ship = { x: o.x, y: o.y, x0, flip: !!o.f, tMove: (o.tMove || 1) * 1000, state: 'gone', from: x0, to: x0, t0: 0, node: null };
+    this.ship = ship;
+    // Map/Obj/<image>[.img]/<path...>: usually vehicle.img (written with or without .img), the Genie's in acc8.img
+    const [, img, path] = String(o.shipObj).match(/^Map\/Obj\/([^/]+?)(?:\.img)?\/(.+)$/) || [];
+    if (!img) return;
+    let node = await this.assets.json(`Map/Obj/${img}.img`);
+    for (const k of path.split('/')) node = node?.[k];
+    node = node?.[0] || node;
+    if (!node) return;
+    await this.assets.preload([node]);
+    if (this.map === map) ship.node = node;
+  }
+  /** The server says the ship is in (true) or gone; on arriving at the map that is how it already is, no sailing. */
+  moveShip(here) {
+    const s = this.ship;
+    if (!s) return;
+    const now = performance.now(), entering = now - (this.mapEnteredAt || 0) < 1500;
+    const at = this.shipX();
+    s.state = here ? 'in' : 'gone';
+    s.from = entering ? (here ? s.x : s.x0) : at; s.to = here ? s.x : s.x0; s.t0 = entering ? now - s.tMove : now;
+  }
+  shipX() {
+    const s = this.ship;
+    if (!s) return 0;
+    const k = Math.min(1, (performance.now() - s.t0) / s.tMove), e = k * k * (3 - 2 * k);   // eased in and out
+    return s.from + (s.to - s.from) * e;
+  }
+  drawShip(ctx, cam) {
+    const s = this.ship, img = s?.node && this.assets.image(s.node);
+    if (!img || (s.state === 'gone' && performance.now() - s.t0 >= s.tMove)) return;
+    const o = s.node.origin || [0, 0], x = Math.round(this.shipX() - cam.x), y = Math.round(s.y - cam.y);
+    if (!s.flip) { ctx.drawImage(img, x - o[0], y - o[1]); return; }
+    ctx.save(); ctx.translate(x + o[0], y - o[1]); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
+  }
+  /** A station's clock (the map's clock box): the time of day, am / pm and hours, its comma, minutes, centred. */
+  drawFieldClock(ctx, cam) {
+    const c = this.map?.data?.clock, art = this.clockArt;
+    if (!c || !this.fieldClock || !art?.digits) return;
+    const t = Math.floor(this.fieldClock.secs + (performance.now() - this.fieldClock.at) / 1000) % 86400;
+    const h24 = Math.floor(t / 3600), h = h24 % 12 || 12, m = Math.floor(t / 60) % 60;
+    const parts = [h24 < 12 ? 'am' : 'pm', ...String(h).padStart(2, '0'), 'comma', ...String(m).padStart(2, '0')];
+    const imgs = parts.map((p) => this.assets.image(art.digits[p]));
+    if (imgs.some((i) => !i)) return;
+    const w = imgs.reduce((a, i) => a + i.width, 0);
+    let x = Math.round(c.x + (c.width - w) / 2 - cam.x);
+    const cy = c.y + c.height / 2 - cam.y;
+    for (const img of imgs) { ctx.drawImage(img, x, Math.round(cy - img.height / 2)); x += img.width; }
+  }
+
   // ------------------------------------------------------------------ mists
   /**
    * A mist over a box of the map: the skill's `tile` clouds (a monster's from MobSkill.img/<skill>/level/<n>), each
@@ -2803,6 +2900,7 @@ export class Game {
       map.drawLayer(ctx, cam, l);
       for (const e of map.life) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
+      if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.drawDoors(ctx, cam);
       if (l === playerLayer) this.vfx?.drawTombs(ctx, cam);   // behind every character, so a ghost floats in front of its stone
       if (l === playerLayer) {
@@ -2838,7 +2936,9 @@ export class Game {
       ctx.strokeText(e.text, x, y); ctx.fillText(e.text, x, y);
       ctx.restore();
     }
+    this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
     this.vfx?.drawHud(ctx);
+    this.drawClock(ctx);
     this.hud?.draw?.(ctx);              // what you gain, in the lower-right corner
     this.hud?.drawBanner?.(ctx);        // the server's scrolling notice, under the bar and every window
     this.statusBar?.draw(ctx);
