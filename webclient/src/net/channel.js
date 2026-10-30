@@ -518,6 +518,17 @@ export class ChannelSession {
       this.emit('mistSpawn', { oid, kind, owner, skill, level, left: r.int(), top: r.int(), right: r.int(), bottom: r.int() });
     });
     on(S.REMOVE_MIST, (r) => this.emit('mistRemove', r.int()));
+    // the field's timer: type 2 counts down from a number of seconds (a party quest, an event, a boat ride)
+    on(S.CLOCK, (r) => {
+      const type = r.ubyte();
+      if (type === 2) this.emit('clock', r.int());
+      else if (type === 1) this.emit('fieldClock', r.ubyte(), r.ubyte(), r.ubyte());   // a station's time of day
+    });
+    // ships: at a station 1 = it is in (docked), 2 = it has gone; on a voyage 10 then 4 / 5 = the Balrog's ship
+    // comes / goes
+    on(S.CONTI_STATE, (r) => this.emit('ship', r.ubyte() === 1));
+    on(S.CONTI_MOVE, (r) => { if (r.ubyte() === 10) this.emit('ship', r.ubyte() === 4); });
+    on(S.STOP_CLOCK, () => this.emit('clock', null));
     on(S.REMOVE_DOOR, (r) => { r.ubyte(); this.emit('doorRemove', r.int()); });
     on(S.SPAWN_PORTAL, (r) => { const from = r.int(), to = r.int(); this.emit('townPortal', from, to, r.available >= 4 ? { x: r.short(), y: r.short() } : null); });
     // ---- pets: SPAWN_PET (summon / send home), MOVE_PET, PET_CHAT, PET_COMMAND (0 command answer, 1 food answer)
