@@ -4,8 +4,22 @@
  * x1 > x2 are ceilings/undersides and are never landed on.
  */
 export const PHYS = {
-  walk: 125, jump: 555, gravity: 2000, maxFall: 670, climb: 100, airControl: 0.6,
+  walk: 125, jump: 555, gravity: 2000, maxFall: 670, climb: 100,
+  // Map.wz/Physics.img over the avatar's mass of 100 (openms, docs/physics-evidence.md): on the ground a held
+  // direction pushes at walkForce/100 and letting go brakes at walkDrag/100; in the air a held direction
+  // pushes at 2*floatDrag2/100 but only up to walkSpeed/walkForce*floatDrag2 (~9px/s), and letting go drags
+  // at floatDrag2*floatCoefficient/100 - so a jump keeps the speed it left the ground with
+  walkAccel: 1400, walkBrake: 800, airAccel: 200, airLimit: (125 / 140000) * 10000, airDrag: 1,
 };
+
+/** Speed up toward the force's side of +-limit without passing it (the client's accelerate). */
+export function accelerate(v, accel, limit, dt) {
+  if (accel > 0 && v < limit) return Math.min(limit, v + accel * dt);
+  if (accel < 0 && v > -limit) return Math.max(-limit, v + accel * dt);
+  return v;
+}
+/** Brake toward a target without overshooting it. */
+export function approach(v, target, amount) { return v > target ? Math.max(target, v - amount) : Math.min(target, v + amount); }
 
 export class Footholds {
   constructor(mapFoothold) {

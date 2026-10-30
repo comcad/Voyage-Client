@@ -28,6 +28,8 @@ export async function loadZmap(assets) {
 
 const BACK_ACTIONS = new Set(['ladder', 'rope']);
 
+const PING_PONG = new Set(['stand1', 'stand2', 'alert']);
+
 export class CharacterLook {
   constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [] } = {}) {
     this.assets = assets;
@@ -48,14 +50,35 @@ export class CharacterLook {
     // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
     this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
     this.weapon = this.equips.find((e, i) => Math.floor(this.equipIds[i] / 10000) >= 130);
+    // what stays on a dead character: the headgear (cap, face / eye accessory, earrings); clothes and weapon come off
+    this.deadKeep = new Set(eq.map((n, i) => n && [100, 101, 102, 103].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
     this.hasCap = this.equipIds.some((id) => Math.floor(id / 10000) === 100);
+    // the face's expressions (blink, smile...) load in the background; until a frame is ready the default shows
+    const exprs = [this.face, ...this.faceAcc].flatMap((n) => Object.entries(n || {}).filter(([k]) => k !== 'info')
+      .flatMap(([, e]) => [e, ...Object.values(e || {})]).flatMap((f) => [f, ...Object.values(f || {})]));
+    a.preload(exprs);
   }
 
+  /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */
+  exprReady(n) { return !!n && (isCanvas(n) ? !!this.assets.image(n) : Object.values(n).filter(isCanvas).every((c) => this.assets.image(c))); }
   has(action) { return !!this.body?.[action]?.[0]; }
   /** Body actions in WZ order; the index is the action id used in attack packets. */
   actionList() { return (this._actions ??= Object.keys(this.body || {}).filter((k) => k !== 'info')); }
   frameCount(action) { return frames(this.body?.[action]).length; }
-  delay(action, frame) { return Math.abs(this.body?.[action]?.[frame]?.delay ?? 180) || 180; }
+  /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms. */
+  delay(action, frame) { return Math.abs(this.body?.[action]?.[frame]?.delay ?? 150) || 150; }
+  /**
+   * The frame after `frame`. The client plays stand1, stand2 and alert forward and back (0,1,2,1,0...), so standing
+   * breathes smoothly; every other action loops. `back` is which way a back-and-forth one is going; `wrapped`
+   * says it has come round to its first frame again.
+   */
+  nextFrame(action, frame, back) {
+    const n = this.frameCount(action);
+    if (!PING_PONG.has(action) || n < 3) { const f = frame + 1; return f >= n ? { frame: 0, back: false, wrapped: true } : { frame: f, back: false, wrapped: false }; }
+    if ((back && frame > 0) || frame >= n - 1) { const f = Math.min(frame, n - 1) - 1; return { frame: f, back: f > 0, wrapped: f === 0 }; }
+    const f = frame + 1;
+    return { frame: f, back: f >= n - 1, wrapped: false };
+  }
 
   /** Attack animation for the equipped weapon (weapon.img/info/attack -> body action). */
   attackAction() {
@@ -82,12 +105,14 @@ export class CharacterLook {
     };
 
     add(bf);
-    add(this.head?.[action]?.[frame] ?? (back ? this.head?.back : this.head?.front));
+    // dead: the body's own dead pose, with the head, hair and headgear of the jump pose (the client's composition)
+    const dead = action === 'dead', ha = dead ? 'jump' : action, hf = dead ? 0 : frame;
+    add(this.head?.[ha]?.[hf] ?? (back ? this.head?.back : this.head?.front));
     if (bf.face !== 0 && !back) {
       const ex = expr && this.face?.[expr.name], node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null);
-      add(node || this.face?.default);
+      add(this.exprReady(node) ? node : this.face?.default);
     }
-    const hairFrame = this.hair?.[action]?.[frame] ?? this.hair?.default;
+    const hairFrame = this.hair?.[ha]?.[hf] ?? this.hair?.default;
     add(hairFrame, (v) => {
       const z = v.z || '';
       if (z === 'hairShade') return false;
@@ -95,12 +120,14 @@ export class CharacterLook {
       return !z.startsWith('back') && (!this.hasCap || z !== 'hairOverHead');
     });
     for (const eq of this.equips) {
-      let node = eq[action]?.[frame];
+      if (dead && !this.deadKeep?.has(eq)) continue;
+      let node = eq[ha]?.[hf];
       // a face / eye accessory follows the face: its art for the expression (smile, cry...) or its default;
       // like the face it isn't drawn from behind (on a ladder / rope)
       if (!node && this.faceAcc?.has(eq) && !back && bf.face !== 0) {
         const ex = expr && eq[expr.name];
-        node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null) ?? eq.default;
+        node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null);
+        if (!this.exprReady(node)) node = eq.default;
       }
       add(node);
     }
@@ -141,9 +168,10 @@ export class CharacterLook {
   }
 }
 
-export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1) {
+/** whole: snap to whole game pixels (crisp); false lets slow drifts like a ghost's circle move smoothly. */
+export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true) {
   ctx.save();
-  ctx.translate(Math.round(x), Math.round(y));
+  ctx.translate(whole ? Math.round(x) : x, whole ? Math.round(y) : y);
   if (facingRight) ctx.scale(-1, 1);
   if (alpha !== 1) ctx.globalAlpha = alpha;
   for (const p of parts) {

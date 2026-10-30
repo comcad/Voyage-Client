@@ -17,6 +17,7 @@ export class WorldMapWin extends Win {
   constructor(mgr) {
     super(mgr, null, Math.round((800 - W) / 2), Math.round((600 - H) / 2));
     this.w = W; this.h = H;
+    this.openSound = 'UI/WorldmapOpen'; this.closeSound = 'UI/WorldmapClose';
     this.closeBtn.x = W - 20; this.closeBtn.y = 10; this.closePinned = true;   // the frame's 33px title bar
     this.F = mgr.W.WorldMap;
     this.name = null; this.data = null; this.hover = null;

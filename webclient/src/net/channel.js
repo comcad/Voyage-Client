@@ -236,6 +236,8 @@ export class ChannelSession {
           n.channel = r.ubyte() + 1; r.skip(9); n.ear = r.bool();
         }
       } catch { /* an older server's shorter form: the text alone */ }
+      // a server with USE_DEBUG on reports every hit ("Hitted MOB 100100, OID 1234"): not for the chat log
+      if (type === 5 && /^Hitted (MOB|REACTOR) /.test(n.msg)) return;
       this.emit('notice', n);
     });
     // SPOUSE_CHAT: a line between husband and wife (5: from whom, 5, the text), echoed to both
@@ -504,6 +506,20 @@ export class ChannelSession {
       this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
+    // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
+    on(S.SHOW_CHAIR, (r) => this.emit('showChair', r.int(), r.int()));
+    on(S.CANCEL_CHAIR, (r) => this.emit('cancelChair', r.ubyte() ? r.short() : -1));
+    // Mystic Door: the door out in the field (owner, where; launched = it was already open), and the portal
+    // record both ends get - from this map to the other, where it stands (999999999 twice: it is gone)
+    on(S.SPAWN_DOOR, (r) => { const launched = r.bool(), owner = r.int(); this.emit('doorSpawn', { owner, launched, x: r.short(), y: r.short() }); });
+    // a mist (Poison Mist, Smokescreen, a monster's poison cloud...): kind 0 a monster's, 1 poison, 2 smoke, 4 recovery
+    on(S.SPAWN_MIST, (r) => {
+      const oid = r.int(), kind = r.int(), owner = r.int(), skill = r.int(), level = r.ubyte(); r.short();
+      this.emit('mistSpawn', { oid, kind, owner, skill, level, left: r.int(), top: r.int(), right: r.int(), bottom: r.int() });
+    });
+    on(S.REMOVE_MIST, (r) => this.emit('mistRemove', r.int()));
+    on(S.REMOVE_DOOR, (r) => { r.ubyte(); this.emit('doorRemove', r.int()); });
+    on(S.SPAWN_PORTAL, (r) => { const from = r.int(), to = r.int(); this.emit('townPortal', from, to, r.available >= 4 ? { x: r.short(), y: r.short() } : null); });
     // ---- pets: SPAWN_PET (summon / send home), MOVE_PET, PET_CHAT, PET_COMMAND (0 command answer, 1 food answer)
     on(S.SPAWN_PET, (r) => {
       const owner = r.int(), slot = r.ubyte();
@@ -557,6 +573,7 @@ export class ChannelSession {
     // GIVE_BUFF: two 64-bit masks, then (short value, int source, int duration) per set bit
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
     const SHARP_EYES = [3121002, 3221002];
+    const SPEED = 0x8000000000n, JUMP = 0x10000000000n;   // BuffStat.SPEED / JUMP
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -566,6 +583,13 @@ export class ChannelSession {
       // giveBuff: per stat (short value, int source, int duration ms)
       r.pos = start + 2;
       const normal = { source: r.int(), duration: r.int() };
+      // a monster's curse (giveDebuff): the source is its mob skill (low 16 bits 100-200) and level (high 16 bits)
+      const mobSkill = normal.source & 0xffff, mobLevel = normal.source >>> 16;
+      if (normal.source > 0 && mobSkill >= 100 && mobSkill <= 200 && mobLevel > 0 && mobLevel < 256) {
+        r.pos = start;
+        this.emit('disease', { m1, m2, skill: mobSkill, level: mobLevel, value: r.short(), duration: normal.duration });
+        return;
+      }
       // givePirateBuff (Dash, Speed Infusion): short 0, then (int value, int source, 5|10 skip, short seconds)
       r.pos = start + 6;
       const pSource = r.int();
@@ -582,6 +606,16 @@ export class ChannelSession {
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         if (hbHp) b.hbHp = values[0];
         if (hbMp) b.hbMp = values[hbHp ? 1 : 0];
+      }
+      // Speed / Jump (Haste, Nimble Feet, speed potions...): the values come in mask-bit order, so each one's place
+      // is the number of set bits below it (both live in the second mask)
+      const mask = BigInt.asUintN(64, m2);
+      if (pick === normal && (mask & (SPEED | JUMP))) {
+        r.pos = start;
+        const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
+        const at = (bit) => popcount(mask & (bit - 1n));   // Cosmic lists the plain stats (WATK..JUMP) first
+        if (mask & SPEED) b.speed = values[at(SPEED)];
+        if (mask & JUMP) b.jump = values[at(JUMP)];
       }
       // Sharp Eyes' one stat is (critical rate << 8 | critical damage)
       if (pick === normal && SHARP_EYES.includes(normal.source)) { r.pos = start; const v = r.short(); b.sharpEyes = { rate: v >> 8, dmg: v & 0xff }; }
@@ -616,11 +650,28 @@ export class ChannelSession {
     on(S.SHOW_FOREIGN_EFFECT, (r) => {
       const id = r.int(), effect = r.ubyte();
       if (effect === 1 && r.available >= 4) this.emit('foreignSkill', id, r.int());
+      else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
+      else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 0 || effect === 8 || effect === 9) this.emit('foreignEffect', id, effect); // level up / job change / quest clear
     });
     on(S.SKILL_EFFECT, (r) => this.emit('foreignSkill', r.int(), r.int()));
-    on(S.GIVE_FOREIGN_BUFF, () => {});
-    on(S.CANCEL_FOREIGN_BUFF, () => {});
+    // your own effects; 2 = a party member's buff (Bless, Haste, Holy Symbol...) reached you
+    // and 0x0a = HP you recovered (a blue number over you)
+    on(S.SHOW_ITEM_GAIN_INCHAT, (r) => {
+      const type = r.ubyte();
+      if (type === 2 && r.available >= 4) this.emit('affected', null, r.int());
+      else if (type === 0x0a && r.available >= 1) this.emit('healNumber', null, r.ubyte());
+    });
+    // another player's curse (giveForeignDebuff): the masks, then per stat (Poison's value first) the mob skill as
+    // short id + short level; an ordinary foreign buff has values and zeros there instead, so the id tells them apart
+    on(S.GIVE_FOREIGN_BUFF, (r) => {
+      const id = r.int(), m1 = r.long(), m2 = r.long();
+      if (BigInt.asUintN(64, m2) & 0x4000000000000n && r.available >= 2) r.short();   // Disease.POISON's value
+      if (r.available < 4) return;
+      const src = r.int(), skill = src & 0xffff, level = src >>> 16;
+      if (skill >= 100 && skill <= 200 && level > 0 && level < 256) this.emit('foreignDisease', id, { m1, m2, skill, level });
+    });
+    on(S.CANCEL_FOREIGN_BUFF, (r) => { const id = r.int(); this.emit('foreignCancel', id, r.long(), r.long()); });
     on(S.CANCEL_SKILL_EFFECT, () => {});
     on(S.DAMAGE_PLAYER, (r) => {
       const id = r.int(), from = r.byte();
@@ -638,10 +689,15 @@ export class ChannelSession {
         // so count ints 0 and 2 only), then 8 bytes per active status
         const masks = [r.uint(), r.uint(), r.uint(), r.uint()];
         let entries = 0; for (const m of [masks[0], masks[2]]) for (let v = m; v; v &= v - 1) entries++;
-        r.skip(entries * 8);
+        // each: value (short), its source skill (int), duration (short); keep the statuses it already has
+        const sources = Array.from({ length: entries }, () => { r.short(); const s = r.int(); r.short(); return s; });
+        var statuses = entries ? { first: masks[0], second: masks[2], source: sources[0] } : null;
       } else r.skip(16);
       const pos = r.pos2(); const stance = r.ubyte(); r.short(); const fh = r.short();
-      return { oid, id, x: pos.x, y: pos.y, stance, fh };
+      // the appearance: an optional summon effect (id, 0, short, +1 byte for 15), then -2 a new spawn / -1 already here
+      let appear = r.available ? r.byte() : -1;
+      if (appear > 0) { r.byte(); r.short(); if (appear === 15) r.byte(); appear = r.available ? r.byte() : -1; }
+      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, statuses: controlMode !== undefined ? statuses : null };
     };
     on(S.SPAWN_MONSTER, (r) => this.emit('spawnMob', readMob(r)));
     on(S.SPAWN_MONSTER_CONTROL, (r) => {
@@ -650,16 +706,30 @@ export class ChannelSession {
       this.emit('controlMob', readMob(r, mode), mode === 2);
     });
     on(S.MOVE_MONSTER, (r) => {
-      const oid = r.int(); r.ubyte(); r.bool(); const act = r.byte(); r.skip(3 + 2);
+      // oid, 0, skill possible, activity, skill id, skill level, option (short), start position, the moves
+      const oid = r.int(); r.ubyte(); r.bool(); const act = r.byte(), skill = r.ubyte(), level = r.ubyte(); r.short();
       const start = r.pos2();
-      this.emit('moveMob', oid, start, readMovement(r), act);
+      this.emit('moveMob', oid, start, readMovement(r), act, skill, level);
     });
     on(S.KILL_MONSTER, (r) => this.emit('killMob', r.int(), r.ubyte()));
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
     on(S.DAMAGE_MONSTER, (r) => { const oid = r.int(); r.ubyte(); this.emit('mobDamaged', oid, r.int()); });
-    on(S.MOVE_MONSTER_RESPONSE, () => {});
+    // the controller's answer: the monster's MP and the skill it may cast next (0 for none)
+    // a monster's statuses: two masks (first / second, MonsterStatus), then per status its value (short), the skill
+    // behind it (a player skill id, or a monster skill as short id + short level) and a short; all from one skill
+    on(S.APPLY_MONSTER_STATUS, (r) => {
+      const oid = r.int(); r.long(); const first = r.uint(), second = r.uint();
+      const value = r.short(), source = r.int();
+      this.emit('mobStatus', oid, { first, second, source, value });
+    });
+    on(S.CANCEL_MONSTER_STATUS, (r) => { const oid = r.int(); r.long(); this.emit('mobStatusCancel', oid, r.uint(), r.uint()); });
+    on(S.MOVE_MONSTER_RESPONSE, (r) => {
+      const oid = r.int(); r.short(); r.bool(); r.short(); const skill = r.ubyte(), level = r.ubyte();   // the flag is aggro, not skills
+      this.emit('mobSkillOffer', oid, skill, level);
+    });
 
-    const readNpc = (r) => ({ oid: r.int(), id: r.int(), x: r.short(), y: r.short(), facingRight: r.bool(), fh: r.short(), rx0: r.short(), rx1: r.short() });
+    // Cosmic sends f != 1 in the direction byte; the client mirrors the art only when it is 0
+    const readNpc = (r) => ({ oid: r.int(), id: r.int(), x: r.short(), y: r.short(), facingRight: !r.bool(), fh: r.short(), rx0: r.short(), rx1: r.short() });
     on(S.SPAWN_NPC, (r) => this.emit('spawnNpc', readNpc(r)));
     on(S.SPAWN_NPC_REQUEST_CONTROLLER, (r) => {
       if (r.ubyte() === 0) { this.emit('removeNpc', r.int()); return; }
@@ -675,6 +745,10 @@ export class ChannelSession {
       if (mode !== 2) { const from = r.pos2(); d.fromX = from.x; d.fromY = from.y; d.delay = r.short(); }
       this.emit('drop', d);
     });
+    // reactors: spawn (oid, id, state, position, facing), hit (oid, new state, position, stance), destroy (oid, state)
+    on(S.REACTOR_SPAWN, (r) => { const oid = r.int(), id = r.int(), state = r.byte(), pos = r.pos2(); this.emit('reactorSpawn', { oid, id, state, x: pos.x, y: pos.y }); });
+    on(S.REACTOR_HIT, (r) => { const oid = r.int(), state = r.byte(), pos = r.pos2(), stance = r.available ? r.ubyte() : 0; this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, stance }); });
+    on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(); this.emit('reactorDestroy', { oid, state }); });
     on(S.REMOVE_ITEM_FROM_MAP, (r) => {
       const anim = r.ubyte(), oid = r.int(), chr = anim >= 2 ? r.int() : 0;
       this.emit('removeDrop', oid, anim, chr, anim === 5 && r.available ? r.ubyte() : -1);   // 5: a pet picked it up
@@ -760,9 +834,10 @@ export class ChannelSession {
     this.send(w);
   }
 
-  moveMob(oid, start, moves, activity = -1) {
+  /** activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its id/level). */
+  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0) {
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(this.moveId++ & 0x7fff)
-      .byte(0).byte(activity).byte(0).byte(0).short(0).zero(8).byte(0).int(0).pos(start);
+      .byte(0).byte(activity).byte(skill).byte(level).short(0).zero(8).byte(0).int(0).pos(start);
     writeMovement(w, moves);
     this.send(w);
   }
@@ -799,6 +874,12 @@ export class ChannelSession {
     this.send(w);
   }
   cancelBuff(skillId) { this.send(new PacketWriter(C.CANCEL_BUFF).int(skillId)); }
+  /** Sit on a chair item (Install 0301xxxx). */
+  /** Through a Mystic Door: its owner, and whether you are going from town out to the field. */
+  useDoor(owner, fromTown) { this.send(new PacketWriter(C.USE_DOOR).int(owner).byte(fromTown ? 1 : 0)); }
+  useChair(itemId) { this.send(new PacketWriter(C.USE_CHAIR).int(itemId)); }
+  /** Sit on the map's seat `id`, or -1 to stand up. */
+  cancelChair(id) { this.send(new PacketWriter(C.CANCEL_CHAIR).short(id)); }
   /** changes: [{key, type, action}] (type 0 clears the key) */
   changeKeymap(changes) {
     const w = new PacketWriter(C.CHANGE_KEYMAP).int(0).int(changes.length);
@@ -806,6 +887,12 @@ export class ChannelSession {
     this.send(w);
   }
 
+  /** DAMAGE_REACTOR: an attack reached it. stance: 0/1 in the air facing left/right, 2/3 on the ground. */
+  damageReactor(oid, charPos, stance, skill = 0) {
+    this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(charPos).short(stance).int(0).int(skill));
+  }
+  /** TOUCHING_REACTOR: walked onto (true) or off (false) a reactor set off by touch. */
+  touchReactor(oid, touching) { this.send(new PacketWriter(C.TOUCHING_REACTOR).int(oid).byte(touching ? 1 : 0)); }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
   }

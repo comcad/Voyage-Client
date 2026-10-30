@@ -3,11 +3,25 @@
  * Maps name their track in info/bgm, e.g. "Bgm00/FloralLife"; the login uses "BgmUI/Title".
  * Browsers block audio until the first user gesture, so a pending track starts on the first click/key.
  */
+/**
+ * A volume slider (0-1) as the client hears it (Sound_DX8, openms docs/ingame-audiovisual.md): the slider is a
+ * backend level 0-128, attenuated by 625 - 1280000/(15*level + 128) hundredths of a decibel, so each step sounds
+ * like an even change instead of all the difference crowding into the quiet end.
+ */
+export function sliderGain(v) {
+  const level = Math.round(Math.max(0, Math.min(1, v)) * 128);
+  if (level < 1) return 0;
+  if (level >= 128) return 1;
+  return Math.min(1, 10 ** ((625 - Math.trunc(1280000 / (15 * level + 128))) / 2000));
+}
+const BGM_FADE = 600;   // map music hands over in 600ms (the client's transition), not a hard cut
+
 class Music {
   constructor() {
     this.el = new Audio();
     this.el.loop = true;
-    this.el.volume = this.loadVolume();
+    this.level = this.loadVolume(); this.fadeK = 1;
+    this.applyVolume();
     this.el.muted = load('maple.bgmMute') === '1';
     this.current = null;
     this.blocked = false;
@@ -21,11 +35,25 @@ class Music {
   }
 
   setVolume(v) {
-    this.el.volume = Math.max(0, Math.min(1, v));
-    try { localStorage.setItem('maple.bgm', String(this.el.volume)); } catch { /* ignore */ }
+    this.level = Math.max(0, Math.min(1, v));
+    this.applyVolume();
+    try { localStorage.setItem('maple.bgm', String(this.level)); } catch { /* ignore */ }
+  }
+  applyVolume() { this.el.volume = sliderGain(this.level) * this.fadeK; }
+  /** Ramp the fade factor to `to` over BGM_FADE ms. */
+  fade(to) {
+    clearInterval(this.fadeTimer);
+    const from = this.fadeK, t0 = performance.now();
+    return new Promise((resolve) => {
+      this.fadeTimer = setInterval(() => {
+        const k = Math.min(1, (performance.now() - t0) / BGM_FADE);
+        this.fadeK = from + (to - from) * k; this.applyVolume();
+        if (k >= 1) { clearInterval(this.fadeTimer); resolve(); }
+      }, 30);
+    });
   }
 
-  get volume() { return this.el.volume; }
+  get volume() { return this.level; }
   get muted() { return this.el.muted; }
   setMuted(m) { this.el.muted = !!m; save('maple.bgmMute', m ? '1' : '0'); }
 
@@ -38,9 +66,13 @@ class Music {
     // Sound.wz may not be extracted: check first so a missing file doesn't spam errors
     const ok = await fetch(url, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
     if (this.current !== bgm) return;
+    // the old track fades out, the new one fades in
+    if (!this.el.paused && this.el.src) { await this.fade(0); if (this.current !== bgm) return; }
     if (!ok) { this.el.pause(); return; }
     this.el.src = url;
+    this.fadeK = 0; this.applyVolume();
     this.el.play().then(() => { this.blocked = false; }).catch(() => { this.blocked = true; });
+    this.fade(1);
   }
 
   stop() { this.current = null; this.el.pause(); }
@@ -125,7 +157,7 @@ class Sfx {
     const ctx = this.ctx;
     if (!this.volume || this.muted || !ctx || ctx.state !== 'running') return true;
     const src = ctx.createBufferSource(), gain = ctx.createGain();
-    src.buffer = buf; gain.gain.value = this.volume * volume;
+    src.buffer = buf; gain.gain.value = sliderGain(this.volume) * volume;
     src.connect(gain).connect(ctx.destination);
     src.start();
     return true;
