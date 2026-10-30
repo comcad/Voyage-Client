@@ -159,8 +159,11 @@ export function readCharacterInfo(r) {
   const friend = r.short(); r.skip(friend * 37);
   if (r.short() === 1) r.skip(4 + 4 + 4 + 2 + 4 + 4 + 13 + 13);
   const rocks = []; for (let i = 0; i < 15; i++) rocks.push(r.int());
-  r.int(); r.ubyte(); const cards = r.short(); r.skip(cards * 3);
-  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks };
+  // monster book: the cover card, then each card (item id % 10000) with its count 1-5
+  const book = { cover: r.int(), cards: {} };
+  r.ubyte();
+  for (let n = r.short(); n > 0; n--) { const id = 2380000 + r.short(); book.cards[id] = r.ubyte(); }
+  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book };
 }
 
 /** Movement fragments (AbstractMovementPacketHandler.parseMovement). */

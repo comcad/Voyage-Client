@@ -194,6 +194,11 @@ export async function npcMenu(mgr, npcId, text, options) {
 /**
  * Basic.img Notice3 / YesNo3: 266 wide; t (21) / c (20, tiled) / s (55). The blue box holds the
  * (white) text, the band in s holds the 65x24 buttons. kind: 'notice' | 'yesno' | 'number'.
+ * 'server' is the server's own pop-up on the classic metal plate, Basic.img/Notice2, 258 wide: t (40: the
+ * header strip and the screwed top edge), c (20, tiled: the white sheet the black text sits on), s (47, the
+ * bottom edge with the OK slot centred at 96, 11).
+ * 'request' is another player asking something of you (a trade, a party, a guild...): the same plate as
+ * Basic.img/YesNo2, its bottom edge with two slots for YES (58, 11) and NO (155, 11).
  */
 export class MessageBox extends Win {
   constructor(mgr, kind, text, done, opts = {}) {
@@ -201,7 +206,20 @@ export class MessageBox extends Win {
     this.buttons = [];
     const B = mgr.B;
     this.kind = kind; this.done = done; this.modal = true; this.opts = opts;
-    this.F = kind === 'notice' ? B.Notice3 : B.YesNo3;
+    this.F = kind === 'server' ? B.Notice2 : kind === 'request' ? B.YesNo2 : kind === 'notice' ? B.Notice3 : B.YesNo3;
+    if (kind === 'server' || kind === 'request') {
+      this.layout = richText(scratch(), text, 226, textRef(mgr), { base: '#000', size: 12 });
+      this.tiles = Math.max(2, Math.ceil((this.layout.height + 10) / 20));
+      this.bandY = 40 + this.tiles * 20;
+      this.w = 258; this.h = this.bandY + 47;
+      this.x = Math.round((800 - this.w) / 2); this.y = opts.y ?? Math.round((529 - this.h) / 2);
+      if (kind === 'server') this.button(B.BtOK, 96, this.bandY + 11, () => this.finish(true));
+      else {
+        this.button(B.BtYes, 58, this.bandY + 11, () => this.finish(true));
+        this.button(B.BtNo, 155, this.bandY + 11, () => this.finish(false));
+      }
+      return;
+    }
     this.layout = richText(scratch(), text, 238, textRef(mgr), { base: '#fff', colors: LIGHT_COLORS });
     if (kind === 'number') { this.field = overlayField(mgr, 120, { max: 10 }); this.field.value = String(opts.def ?? 1); }
     if (kind === 'text') { this.field = overlayField(mgr, opts.width || 150, { max: opts.max || 13 }); this.field.value = opts.def || ''; }
@@ -227,10 +245,19 @@ export class MessageBox extends Win {
     } else if (this.kind === 'text') this.done(ok && this.field.value.trim() ? this.field.value.trim() : null);
     else this.done(ok);
   }
-  key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(this.kind === 'notice'); }
+  key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(this.kind === 'notice' || this.kind === 'server'); }
   body(ctx) {
     const m = this.mgr, t = m.image(this.F.t), c = m.image(this.F.c), s = m.image(this.F.s);
     if (!t || !c || !s) return;
+    if (this.kind === 'server' || this.kind === 'request') {
+      ctx.drawImage(t, 0, 0);
+      for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 40 + i * 20);
+      ctx.drawImage(s, 0, this.bandY);
+      // centred on the sheet, as the client sets its pop-ups
+      const top = 40 + Math.round((this.tiles * 20 - this.layout.height) / 2) - 2;
+      drawRich(ctx, this.layout, 16, top, { size: 12, drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
+      return;
+    }
     ctx.drawImage(t, 0, 0);
     for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 21 + i * 20);
     ctx.drawImage(s, 0, this.bandY);
@@ -447,7 +474,7 @@ const SPEED = { 2: 'Faster', 3: 'Faster', 4: 'Fast', 5: 'Fast', 6: 'Normal', 7: 
 export function drawItemTip(ctx, mgr, it, mx, my) {
   const T = mgr.W.ToolTip?.Equip, g = mgr.game, s = g.stats || {};
   const info = mgr.info(it.id), equip = invType(it.id) === 1;
-  const name = mgr.itemName(it.id) || '...';
+  const name = (mgr.itemName(it.id) || '...') + (it.level > 0 ? ` (+${it.level})` : '');   // successful scrolls
   const desc = String(mgr.desc(it.id) || '').replace(/\\n/g, '\n');
   ctx.save();
   ctx.font = '11px Arial, sans-serif';

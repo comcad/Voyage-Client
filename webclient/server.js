@@ -25,9 +25,23 @@ const server = http.createServer(app);
 /**
  * WebSocket <-> TCP relay. The browser speaks the full encrypted v83 protocol itself;
  * this only forwards bytes. ws://host/ws?server=cosmic&port=8484
+ * Every HEARTBEAT ms each socket gets a text frame 'hb' (game data is always binary) so the browser
+ * can tell a dead link from a quiet one, and a ws ping: a browser that missed the last one is gone,
+ * and its game connection is dropped instead of lingering.
  */
+const HEARTBEAT = 10000;
 const wss = new WebSocketServer({ server, path: '/ws' });
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.alive === false) { ws.terminate(); continue; }
+    ws.alive = false;
+    ws.ping();
+    ws.send('hb');
+  }
+}, HEARTBEAT);
 wss.on('connection', (ws, req) => {
+  ws.alive = true;
+  ws.on('pong', () => { ws.alive = true; });
   const q = new URL(req.url, 'http://x').searchParams;
   const host = SERVERS[q.get('server')] ?? Object.values(SERVERS)[0];
   const port = Number(q.get('port'));

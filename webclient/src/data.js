@@ -28,7 +28,12 @@ export const invType = (id) => Math.floor(id / 1000000);
 /** WZ path of an item's .img and the node holding it. */
 export function itemNode(id) {
   const t = invType(id);
-  if (t === 1) return { path: equipPath(id), key: null };
+  if (t === 1) {
+    // equips the avatar never draws still have icons: pendants / belts / medals, pet equipment, mounts
+    const cat = Math.floor(id / 10000);
+    const dir = [112, 113, 114].includes(cat) ? 'Accessory' : cat === 180 || cat === 181 ? 'PetEquip' : cat >= 190 && cat < 200 ? 'TamingMob' : cat === 170 ? 'Weapon' : null;
+    return { path: equipPath(id) || (dir && `Character/${dir}/${pad(id, 8)}.img`), key: null };
+  }
   const dir = { 2: 'Consume', 3: 'Install', 4: 'Etc', 5: 'Cash' }[t];
   if (Math.floor(id / 10000) === 500) return { path: `Item/Pet/${pad(id, 7)}.img`, key: null };
   return dir ? { path: `Item/${dir}/${pad(Math.floor(id / 10000), 4)}.img`, key: pad(id, 8) } : null;
@@ -78,4 +83,17 @@ export function weaponMultiplier(weaponId) {
   const cat = Math.floor(weaponId / 10000) % 100;
   const t = [4.0, 4.4, 4.4, 4.0, 0, 0, 0, 3.6, 3.6, 0, 4.6, 4.8, 4.8, 5.0, 5.0, 3.4, 3.6, 3.6, 4.8, 3.6];
   return cat >= 30 && cat <= 49 ? t[cat - 30] || 0 : 0;
+}
+
+/** Equipment scrolls (204xxxx, incl. Clean Slate / Chaos 2049xxx): used by dropping them on an equip. */
+export const isScroll = (id) => Math.floor(id / 10000) === 204;
+/**
+ * Whether a scroll fits an equip, as Cosmic's ScrollHandler decides: 2049xxx (Clean Slate, Chaos) fit any,
+ * 20492xx (accessory) fits rings / pendants / belts, others match their 3rd-4th digits to the equip's category.
+ */
+export function scrollFits(scrollId, equipId) {
+  const sid = Math.floor(scrollId / 100);
+  if (Math.floor(scrollId / 1000) === 2049 && sid !== 20492) return true;
+  if (sid === 20492) return [11, 12, 13].includes(Math.floor(equipId / 10000) % 100);
+  return sid % 100 === Math.floor(equipId / 10000) % 100;
 }

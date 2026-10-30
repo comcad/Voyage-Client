@@ -45,6 +45,8 @@ export class CharacterLook {
     ]);
     const eq = await Promise.all(this.equipIds.map((id) => equipPath(id) && a.json(equipPath(id))));
     this.equips = eq.filter(Boolean);
+    // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
+    this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
     this.weapon = this.equips.find((e, i) => Math.floor(this.equipIds[i] / 10000) >= 130);
     this.hasCap = this.equipIds.some((id) => Math.floor(id / 10000) === 100);
   }
@@ -63,8 +65,11 @@ export class CharacterLook {
   standAction() { return this.weapon?.stand2 && !this.weapon?.stand1 ? 'stand2' : 'stand1'; }
   walkAction() { return this.weapon?.walk2 && !this.weapon?.walk1 ? 'walk2' : 'walk1'; }
 
-  /** Returns [{node, x, y, z}] in local coordinates (feet at 0,0, facing left). */
-  compose(action, frame) {
+  /**
+   * Returns [{node, x, y, z}] in local coordinates (feet at 0,0, facing left).
+   * expr = { name, frame }: a Face.img expression (smile, cry, blink...) in place of its default.
+   */
+  compose(action, frame, expr = null) {
     let bf = this.body?.[action]?.[frame];
     if (!bf) return [];
     const back = BACK_ACTIONS.has(action);
@@ -78,7 +83,10 @@ export class CharacterLook {
 
     add(bf);
     add(this.head?.[action]?.[frame] ?? (back ? this.head?.back : this.head?.front));
-    if (bf.face !== 0 && !back) add(this.face?.default);
+    if (bf.face !== 0 && !back) {
+      const ex = expr && this.face?.[expr.name], node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null);
+      add(node || this.face?.default);
+    }
     const hairFrame = this.hair?.[action]?.[frame] ?? this.hair?.default;
     add(hairFrame, (v) => {
       const z = v.z || '';
@@ -86,7 +94,16 @@ export class CharacterLook {
       if (back) return z.startsWith('back') && (this.hasCap ? z.includes('BelowCap') : !z.includes('BelowCap'));
       return !z.startsWith('back') && (!this.hasCap || z !== 'hairOverHead');
     });
-    for (const eq of this.equips) add(eq[action]?.[frame]);
+    for (const eq of this.equips) {
+      let node = eq[action]?.[frame];
+      // a face / eye accessory follows the face: its art for the expression (smile, cry...) or its default;
+      // like the face it isn't drawn from behind (on a ladder / rope)
+      if (!node && this.faceAcc?.has(eq) && !back && bf.face !== 0) {
+        const ex = expr && eq[expr.name];
+        node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null) ?? eq.default;
+      }
+      add(node);
+    }
 
     // anchor placement
     const anchors = new Map();

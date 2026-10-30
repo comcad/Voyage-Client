@@ -15,9 +15,14 @@ import { settings } from './settings.js';
  *   tombstone        Effect/Tomb.img fall (frames 0-11 drop, 12-19 land)
  */
 const SETS = { red: ['NoRed1', 'NoRed0'], crit: ['NoCri1', 'NoCri0'], violet: ['NoViolet1', 'NoViolet0'], blue: ['NoBlue1', 'NoBlue0'] };
-// digits overlap like the client's: advance per small digit, the big first digit a little wider
-const ADVANCE = [24, 20, 22, 22, 24, 23, 24, 22, 24, 24];
-const NUM_LIFE = 1.2;
+// damage numbers, as openms recovered the original: opaque for 400ms, fading over the next 600, rising 30px
+const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
+/** How long each further damage line waits before it shows (ms), per skill; the rest wait 120 per line. */
+function lineDelay(skillId, line) {
+  if ([5101004, 15101003, 5121007, 15111004].includes(skillId)) return 0;   // these all show at once
+  if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
+  return line * 120;
+}
 const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear' };
 
 export class WorldFx {
@@ -37,10 +42,14 @@ export class WorldFx {
   }
 
   // ---------------------------------------------------------------- triggers
-  /** values: one number per hit line (0 = MISS). kind: red (yours), blue (others'), violet (taken), crit. */
-  damage(target, values, kind = 'red') {
-    const top = target.box ? target.box().top : target.y - 60;
-    values.forEach((v, i) => this.nums.push({ v, kind, x: target.x, y: top - 4 - i * 30, t: -i * 0.08 }));
+  /**
+   * values: one number per hit line (0 = MISS). kind: red (yours), blue (others'), violet (taken), crit.
+   * Each line is placed when it shows, LINE_GAP above the last, over where the target is by then; a monster's
+   * 15px above its head, your own right at your head.
+   */
+  damage(target, values, kind = 'red', skillId = 0, crits = []) {
+    const lift = target.kind === 'Mob' ? 15 : 0;
+    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line) }));
   }
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */
@@ -58,8 +67,8 @@ export class WorldFx {
 
   // ---------------------------------------------------------------- frame
   update(dt) {
-    for (const n of this.nums) n.t += dt;
-    this.nums = this.nums.filter((n) => n.t < NUM_LIFE);
+    for (const n of this.nums) n.t += dt * 1000;
+    this.nums = this.nums.filter((n) => n.t < NUM_MS);
     for (const a of this.anims) a.anim.update(dt * 1000);
     this.anims = this.anims.filter((a) => !a.anim.done);
     for (const t of this.tombs) t.anim.update(dt * 1000);
@@ -111,26 +120,47 @@ export class WorldFx {
 
   drawNumber(ctx, n, cam) {
     if (n.t < 0) return;
-    const [bigK, smallK] = SETS[n.kind] || SETS.red, big = this.E[bigK], small = this.E[smallK];
-    const k = n.t / NUM_LIFE, rise = k * 36;
+    if (!n.glyphs && !this.layoutNumber(n)) return;
     ctx.save();
-    ctx.globalAlpha = k < 0.55 ? 1 : Math.max(0, 1 - (k - 0.55) / 0.45);
-    const x0 = n.x - cam.x, y = n.y - cam.y - rise;
-    if (!n.v) {                     // a zero hit shows the set's MISS sprite (red / violet carry one)
-      const miss = (n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0).Miss;
-      drawAt(ctx, (m) => this.assets.image(m), miss, x0, y, ctx.globalAlpha);
-      ctx.restore(); return;
+    ctx.globalAlpha = n.t <= NUM_OPAQUE ? 1 : (NUM_MS - n.t) / (NUM_MS - NUM_OPAQUE);
+    const x = Math.round(n.x - cam.x), y = Math.round(n.y - cam.y - (NUM_RISE * n.t) / NUM_MS);
+    for (const g of n.glyphs) {
+      if (g.clip) ctx.drawImage(g.img, 0, 0, g.clip, g.img.height, x + g.x, y + g.y, g.clip, g.img.height);
+      else ctx.drawImage(g.img, x + g.x, y + g.y);
     }
-    const digits = String(n.v).split('').map(Number);
-    const adv = digits.map((d, i) => ADVANCE[d] + (i === 0 ? 4 : 0));
-    let x = x0 - adv.reduce((s, a) => s + a, 0) / 2;
-    if (n.kind === 'crit' && this.E.NoCri1?.effect) drawAt(ctx, (m) => this.assets.image(m), this.E.NoCri1.effect, x + adv[0] / 2, y, ctx.globalAlpha);
-    digits.forEach((d, i) => {
-      const node = (i === 0 ? big : small)?.[d], img = node && this.assets.image(node);
-      if (img) { const o = node.origin || [img.width / 2, img.height]; ctx.drawImage(img, Math.round(x + adv[i] / 2 - o[0]), Math.round(y - o[1] + (i === 0 ? 0 : 3))); }
-      x += adv[i];
-    });
     ctx.restore();
+  }
+  /**
+   * Fixed once, when the number first shows (as the original builds its canvas): the first digit from the
+   * set's big row (NoRed1), the rest from the small (NoRed0); each starts 3/5 of the way across the one before
+   * (by its width less its origin), their bottoms alternating 4 and 1px up with a random extra pixel. A critical
+   * starts its digits 30px in, over NoCri1/effect cut to the number's width. MISS sits on the spot, centred.
+   */
+  layoutNumber(n) {
+    const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
+    const top = n.target.box ? n.target.box().top : n.target.y - 60;
+    n.x = n.target.x; n.y = top - n.lift - LINE_GAP * n.line;
+    if (!n.v) {
+      const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
+      if (!img) return false;
+      n.glyphs = [{ img, x: -Math.trunc(img.width / 2), y: -img.height }];
+      return true;
+    }
+    const crit = n.kind === 'crit', glyphs = [];
+    let width = crit ? 30 : 0, overlap = 0;
+    for (const [i, ch] of [...String(n.v)].entries()) {
+      const node = this.E[i === 0 ? bigK : smallK]?.[ch], img = im(node);
+      if (!img) return false;
+      const x = width - overlap;
+      glyphs.push({ img, x, y: 57 - (i % 2 === 0 ? 4 : 1) - Math.trunc(Math.random() * 2) - img.height });
+      width = x + img.width;
+      overlap = Math.trunc(((img.width - (node.origin?.[0] || 0)) * 3) / 5);
+    }
+    const fx = crit && im(this.E.NoCri1?.effect);
+    if (fx) glyphs.unshift({ img: fx, x: 0, y: 0, clip: Math.min(width, fx.width) });
+    for (const g of glyphs) { g.x -= Math.trunc(width / 2); g.y -= 47; }
+    n.glyphs = glyphs;
+    return true;
   }
 
   /** ChatBalloon.img/0: a 9-slice around the text with the arrow under it, pointing at the speaker. */
@@ -140,15 +170,18 @@ export class WorldFx {
     if (Object.values(p).some((v) => !v)) return false;
     ctx.save();
     ctx.font = '12px Arial, sans-serif';
+    // ChatBalloon.img/0 round the text: 12px lines on the white, 5px in from its left and 6px from its right, the
+    // arrow (origin 1, 0) laid over the bottom edge at the centre so the tail grows out of it, leaning left
     const lines = wrapText(ctx, text, 150, 12);
-    const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width)))), H = lines.length * 14;
+    const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * 12;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
     ctx.drawImage(p.c, x0, y0, W, H);
     ctx.drawImage(p.nw, x0 - 6, y0 - 6); ctx.drawImage(p.n, x0, y0 - 6, W, 6); ctx.drawImage(p.ne, x0 + W, y0 - 6);
     ctx.drawImage(p.w, x0 - 6, y0, 6, H); ctx.drawImage(p.e, x0 + W, y0, 6, H);
     ctx.drawImage(p.sw, x0 - 6, y0 + H); ctx.drawImage(p.s, x0, y0 + H, W, 6); ctx.drawImage(p.se, x0 + W, y0 + H);
-    ctx.drawImage(p.arrow, cx - 6, y0 + H + 5);
-    lines.forEach((l, i) => uiText(ctx, l, x0, y0 + i * 14, { color: '#000', size: 12 }));
+    const ao = B.arrow.origin || [0, 0];
+    ctx.drawImage(p.arrow, cx - ao[0] + 1, y0 + H - ao[1]);
+    lines.forEach((l, i) => uiText(ctx, l, x0 - 1, y0 + i * 12 + 2, { color: '#000', size: 12 }));
     ctx.restore();
     return true;
   }

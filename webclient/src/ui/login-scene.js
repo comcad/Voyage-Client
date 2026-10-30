@@ -427,7 +427,7 @@ export class LoginScene {
   // ------------------------------------------------------------------ world / channel
   worldSelect(server) {
     const WS = this.L.WorldSelect, C = this.L.Common;
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       let world = null, channel = 0;
       const tabX = 220, tabY = 118;                    // world tags hang from the scroll rod
       // WorldSelect/scroll unrolls over the scene's rolled-up scroll (signboard/2, top-left 171,101);
@@ -439,8 +439,10 @@ export class LoginScene {
       let chButtons = [];
       const go = async () => {
         if (!opened()) return;
-        const res = await this.charSelect(server, world, world.channels[channel]);
-        if (res) resolve(res); else this.setScreen(layer, 'world');
+        try {
+          const res = await this.charSelect(server, world, world.channels[channel]);
+          if (res) resolve(res); else this.setScreen(layer, 'world');
+        } catch (e) { reject(e); }
       };
       const openWorld = (w) => {
         if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; }
@@ -522,7 +524,15 @@ export class LoginScene {
       await this.assets.preload(lookCanvases(cl, ['stand1', 'walk1']));
       return cl;
     }));
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
+      // the buttons run outside session(): a lost connection or a server that never answers is handed to
+      // it through reject (back to the title with the can't-connect notice), and one click runs at a time
+      let busy = false;
+      const guard = (fn) => async () => {
+        if (busy) return;
+        busy = true;
+        try { await fn(); } catch (e) { reject(e); } finally { busy = false; }
+      };
       let page = 0, sel = list.chars.length ? 0 : -1;
       const perPage = 3;
       const shown = Math.min(list.slots, list.chars.length + 1); // characters plus the next free slot
@@ -561,6 +571,7 @@ export class LoginScene {
         this.s.close();
         resolve({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look });
       };
+      const start = guard(pick);
       const create = async () => {
         if (list.chars.length >= list.slots) { await this.notice(NOTICE.NO_MORE_CHARS); return; }
         const race = await this.raceSelect();
@@ -584,9 +595,9 @@ export class LoginScene {
         over: [new WzSprite(C.step[2], 0, 36), backBtn],
         buttons: [
           // cut from the scene signboard (top-left 572,153) at 17,18 / 17,54 / 17,103
-          this.button(CS.BtSelect, 589, 171, pick),
-          this.button(CS.BtNew, 589, 207, create),
-          this.button(CS.BtDelete, 589, 256, remove),
+          this.button(CS.BtSelect, 589, 171, start),
+          this.button(CS.BtNew, 589, 207, guard(create)),
+          this.button(CS.BtDelete, 589, 256, guard(remove)),
           backBtn,
           ...(shown > perPage ? [
             this.button(CS.pageL[0] && { normal: CS.pageL[0], mouseOver: CS.pageL[1] || CS.pageL[0] }, 205, 400, () => { page = Math.max(0, page - 1); }),
@@ -597,13 +608,13 @@ export class LoginScene {
         preload: [...glow.frames(), ...info.frames(), ...beam.frames(), ...sparkle.frames(), ...infoScroll.frames(),
           ...(ghost ? [...ghost.frames(), ...ghostShadow.frames()] : []),
           ...Object.values(CS.nameTag[0] || {}), ...Object.values(CS.nameTag[1] || {})],
-        onEnter: pick,
+        onEnter: start,
         onPointer: (mx, my) => {
           for (let i = 0; i < perPage; i++) {
             const idx = page * perPage + i;
             if (idx >= list.chars.length) break;
             if (mx > slotX(i) - 35 && mx < slotX(i) + 35 && my > footY - 85 && my < footY + 20) {
-              if (sel === idx && performance.now() - (this.lastCharClick || 0) < 400) pick();
+              if (sel === idx && performance.now() - (this.lastCharClick || 0) < 400) start();
               choose(idx); this.lastCharClick = performance.now();
             }
           }

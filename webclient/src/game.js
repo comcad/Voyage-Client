@@ -1,13 +1,13 @@
 import { GameMap, nameTag, Anim } from './map.js';
 import { Footholds, PHYS } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases } from './character.js';
-import { weaponMultiplier, itemIcon, mesoIcon, invType } from './data.js';
+import { weaponMultiplier, itemIcon, mesoIcon, invType, isScroll, scrollFits } from './data.js';
 import { stanceByte, STANCE_NAMES } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
 import { npcTalk, MessageBox, ShopWin, drawItemTip } from './ui/dialogs.js';
 import { npcQuestMenu } from './ui/quests-ui.js';
-import { SkillBook, skillMaxDamage, RANGED_WEAPONS } from './skills.js';
+import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
 import { WorldFx } from './effects.js';
 import { pad, frames } from './assets.js';
@@ -15,11 +15,24 @@ import { music, sfx } from './audio.js';
 import { StatusBar } from './ui/statusbar.js';
 import { WindowManager } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
+import { QuestAlarmWin } from './ui/questalarm.js';
+import { MonsterBookWin } from './ui/monsterbook.js';
+import { MessengerWin } from './ui/messenger.js';
+import { PartySearchWin } from './ui/partysearch.js';
+import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
+import { MegaphoneWin } from './ui/megaphone.js';
+import { notify } from './ui/notifier.js';
+import { TeleportWin } from './ui/teleport.js';
+import { DueyWin, dueyResult } from './ui/duey.js';
 import { UserListWin, PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
 import { TradeWin } from './ui/trade.js';
+import { PlayerShopWin } from './ui/playershop.js';
+import { uiText } from './ui/wzui.js';
+import { ShopBoards } from './shopboards.js';
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
 import { Pet, petLines } from './pets.js';
+import { Summon, PUPPET_RANGE } from './summons.js';
 import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
@@ -27,6 +40,14 @@ import { bridgeUrl } from './ui/login-ui.js';
 import { settings } from './settings.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
+// the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
+// and how long it takes to glide to a new focus height (s)
+const CAM_LIFT = 50, CAM_DEADBAND = 28, CAM_DAMPING = 100;   // the original camera filter (see updateCamera)
+const PET_LOOT_X = 75;   // how far to either side of a pet it reaches for items
+const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'You cannot do that while dead.', 6: 'You need a Shop Permit to open a shop.',
+  10: 'You cannot open a store this close to a portal.', 13: 'You cannot open a store this close to another one.',
+  15: 'You cannot open a shop here. Shops open in the Free Market rooms.', 16: 'You cannot open a shop here.',
+  17: 'You may not enter this store.', 18: 'The owner is tending to this store. Please try again later.' };
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 
 const QUEST_ERRORS = { 0x0a: 'You cannot do that quest right now.', 0x0b: 'You do not have enough mesos.', 0x0d: 'Unequip the item first.', 0x0e: 'You do not have the required items.', 0x0f: 'The quest has expired.' };
@@ -68,6 +89,37 @@ class Input {
 }
 
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
+/**
+ * Face expressions: the emotion number indexes this list (1 = hit). An expression loops its Face.img frames
+ * for EMOTE_TIME, then the face goes back to default - which blinks now and then, as the client's does.
+ */
+const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
+  'wink', 'pain', 'glitter', 'despair', 'love', 'shine', 'blaze', 'hum', 'bowing', 'hot', 'dam', 'qBlue'];
+const EMOTE_TIME = 3;
+function setExpression(ent, n) {
+  const name = EMOTES[n - 1];
+  if (name) ent.expr = { name, frame: 0, t: 0, left: EMOTE_TIME };
+}
+function stepExpression(ent, look, dt) {
+  let e = ent.expr;
+  if (!e) {
+    // idle: blink every few seconds
+    if ((ent.blinkT = (ent.blinkT ?? 2 + Math.random() * 4) - dt) > 0) return;
+    ent.blinkT = 2 + Math.random() * 4;
+    e = ent.expr = { name: 'blink', frame: 0, t: 0, left: Infinity, once: true };
+  }
+  const node = look?.face?.[e.name];
+  if (!node) { ent.expr = null; return; }
+  const frames = Object.keys(node).filter((k) => /^\d+$/.test(k)).length;
+  e.left -= dt; e.t += dt * 1000;
+  const delay = node[e.frame]?.delay || 500;
+  if (e.t >= delay && frames > 1) {
+    e.t -= delay; e.frame++;
+    if (e.frame >= frames) { if (e.once) { ent.expr = null; return; } e.frame = 0; }
+  }
+  if (e.left <= 0) ent.expr = null;
+}
+
 class RemotePlayer {
   constructor(d, look) {
     Object.assign(this, { id: d.id, name: d.name, level: d.level, job: d.job, x: d.x, y: d.y, guild: d.guild, emblem: d.emblem });
@@ -134,7 +186,7 @@ function mesoTiming(node, amount) {
 const DROP_HOP = 64, THROW_HOP = 93, PICKUP_TIME = 0.7;
 
 /** Chat line colours, as in the v83 chat log. */
-const CHAT_COLORS = { whisper: '#7cfc5a', buddy: '#ffb36b', party: '#ff9ed6', guild: '#d6a4ff', alliance: '#9fe6c2', find: '#ffe08a', notice: '#ff9e9e' };
+const CHAT_COLORS = { spouse: '#ff9ec7', whisper: '#7cfc5a', buddy: '#ffb36b', party: '#ff9ed6', guild: '#d6a4ff', alliance: '#9fe6c2', find: '#ffe08a', notice: '#ff9e9e' };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
 /** PacketCreator.partyStatusMessage codes */
 const PARTY_MESSAGES = {
@@ -175,7 +227,8 @@ export class Game {
       action: 'stand1', frame: 0, frameT: 0, attack: null, ignoreFh: null, ignoreT: 0, chat: null,
     };
     this.effects = [];
-    this.others = new Map(); this.drops = new Map(); this.lifeByOid = new Map(); this.pets = new Map();
+    this.others = new Map(); this.drops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
+    this.boards = new ShopBoards(this);
     this.queue = []; this.loading = false;
     this.fps = 0; this._frames = 0; this._fpsT = 0;
     this.moveBuf = []; this.moveT = 0; this.flushT = 0; this.mobT = 0;
@@ -216,6 +269,14 @@ export class Game {
     c.addEventListener('dblclick', (e) => {
       const p = at(e);
       if (wm.top(...p) || sb.contains(...p) || !this.net) return;
+      // your own chalkboard: put it away
+      const cr = this.player.chalk && this.player.chalkRect, wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
+      if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.net.closeChalkboard(); return; }
+      // a shop sign takes you into the shop
+      const signed = this.shopSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
+      if (signed && signed !== this.player) { this.net.pshopVisit(signed.box.oid); return; }
+      const stall = this.boards.at(p[0] + this.cam.x, p[1] + this.cam.y);
+      if (stall?.merchant && stall.merchant.owner !== this.player.id) { this.net.pshopVisit(stall.merchant.oid); return; }
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
       if (rp) this.requestCharInfo(rp.id);
     });
@@ -254,7 +315,7 @@ export class Game {
     this.inCashShop = true;
     const info = d.info;
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; }
-    this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear();
+    this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
     this.csWin = this.windows.show(new CashShopWin(this.windows, d));
@@ -329,6 +390,7 @@ export class Game {
   holdAction(a) { return this.keysFor(5, a).some((c) => this.input.is(c) || this.input.hit(c)); }
 
   bindKey(sc, type, action) {
+    if (type === 1 && this.skills && !this.skills.owns(action)) return;   // another job's skill has no key
     // a skill/item lives on one key only
     const changes = [];
     for (const [k, b] of Object.entries(this.keymap)) if (b.type === type && b.action === action && Number(k) !== sc) { delete this.keymap[k]; changes.push({ key: Number(k), type: 0, action: 0 }); }
@@ -337,6 +399,14 @@ export class Game {
     this.net?.changeKeymap(changes);
     this.keyBar?.render();
   }
+  /** Take other jobs' skills off the keys (and off the server's keymap, so they stay off). */
+  dropForeignSkillKeys() {
+    const changes = [];
+    for (const [k, b] of Object.entries(this.keymap)) {
+      if (b.type === 1 && !this.skills.owns(b.action)) { delete this.keymap[k]; changes.push({ key: Number(k), type: 0, action: 0 }); }
+    }
+    if (changes.length) { this.net?.changeKeymap(changes); this.keyBar?.render(); }
+  }
 
   /** Window / skill / item keys pressed this frame (type 4, 1, 2). Basic actions are polled in updatePlayer. */
   handleHotkeys() {
@@ -344,8 +414,193 @@ export class Game {
       const k = this.keymap[CODE_TO_SC[code]];
       if (!k) continue;
       if (k.type === 4) this.toggleMenu(k.action);
+      else if (k.type === 6) this.emote(k.action - 99);
+      else if (k.type === 8) this.runMacro(k.action);
       else if (k.type === 2) this.useItemById(k.action);
     }
+  }
+
+  /**
+   * A skill macro's key: its skills are cast one after another, each once the one before has finished
+   * (updatePlayer takes them from macroQueue); with SHOUT on, its name is said in the chat first.
+   */
+  runMacro(i) {
+    const m = this.macros?.[i];
+    const ids = (m?.skills || []).filter((id) => id && this.skills?.level(id));
+    if (!ids.length || this.macroQueue?.length) return;
+    this.macroQueue = ids;
+    if (m.shout && m.name) this.net?.chat(m.name);
+  }
+
+  /** A Shop Permit: name the shop, then the server opens its room (only in the Free Market rooms). */
+  async openShop(permit) {
+    if (this.playerShop || this.tradeWin) return;
+    const title = await this.windows.askText('Enter the title of your shop.', `${this.player.name}'s shop`, { max: 25, width: 200 });
+    if (title?.trim()) this.net?.pshopCreate(title.trim(), permit);
+  }
+
+  /** Family traffic: your info and the pedigree go to their windows; invitations and summons ask you. */
+  async onFamily(e) {
+    const say = (t) => this.hud?.message(t, CHAT_COLORS.notice), refresh = () => {
+      if (this.windows.isOpen('family')) this.net?.familyOpen();
+      const tree = this.windows.wins.familytree;
+      if (this.windows.isOpen('familytree') && tree.chart) tree.load(tree.chart.members.find((m) => m.id === tree.chart.self)?.name || this.player.name);
+    };
+    if (e.op === 'privileges') this.familyPrivileges = e.list;
+    else if (e.op === 'info') this.family = e.info;
+    else if (e.op === 'chart') this.windows.wins.familytree.setChart(e);
+    else if (e.op === 'result') { const t = familyResult(e.code, e.mesos); if (t) this.windows.notice(t); refresh(); }
+    else if (e.op === 'invite') {
+      sfx.play('UI/DlgNotice');
+      const ok = await notify(this.windows, 'family', e.name);
+      this.net?.familyAnswer(e.id, e.name, ok);
+    } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
+    else if (e.op === 'senior') { say(`You are now a junior of ${e.name}.`); this.net?.familyOpen(); refresh(); }
+    else if (e.op === 'rep') say(`You have gained ${e.gain} reputation${e.from ? ` from ${e.from}` : ''}.`);
+    else if (e.op === 'login') say(`[Family] ${e.name} has logged ${e.online ? 'in' : 'out'}.`);
+    else if (e.op === 'summon') {
+      sfx.play('UI/DlgNotice');
+      const ok = await notify(this.windows, 'familySummon', e.from);
+      this.net?.familySummonAnswer(e.family, ok);
+    }
+  }
+  async familyAddJunior() {
+    const name = (await this.windows.askText('Enter the name of the character you want as your junior.\n(They must be in this map, above level 10, and within 20 levels of you.)'))?.trim();
+    if (name) this.net?.familyAdd(name);
+  }
+
+  /** Maple Messenger traffic: an invitation asks you; the rest goes to the window (opened when someone joins). */
+  async onMessenger(e) {
+    const win = this.windows.wins.messenger;
+    if (e.op === 'invite') {
+      sfx.play('UI/DlgNotice');
+      if (await notify(this.windows, 'messenger', e.from)) win.accept(e.id);
+      else this.net?.messengerDecline(e.from);
+      return;
+    }
+    if (!win.active) return;
+    win.event(e);
+  }
+
+  /** A megaphone from the Cash tab: ask what to say (Megaphone, Super, Item, Triple and the Avatar messengers). */
+  async openMegaphone(slot, itemId) {
+    const kind = Math.floor(itemId / 1000) % 10, avatar = Math.floor(itemId / 10000) === 539;
+    if (!avatar && ![1, 2, 6, 7].includes(kind)) { this.notice('This megaphone cannot be used here.'); return; }
+    if (!avatar && kind === 1 && (this.stats?.level || 0) < 10) { this.windows.notice('You may not use this until you\'re level 10.'); return; }
+    const win = new MegaphoneWin(this.windows, Number(slot), itemId);
+    await this.assets.preload(win.frames());
+    this.windows.show(win);
+  }
+
+  /** Duey: talking to him sends the parcels waiting for you, which opens his window; results come back as codes. */
+  async onDuey(e) {
+    const win = this.dueyWin && this.windows.order.includes(this.dueyWin) ? this.dueyWin : null;
+    if (e.op === 'open') {
+      if (win) { win.setList(e.list); return; }
+      const w = new DueyWin(this.windows, e.list);
+      await this.assets.preload(w.frames());
+      this.dueyWin = this.windows.show(w);
+    } else if (e.op === 'gone') win?.gone(e.id);
+    else if (e.op === 'arrived') this.hud.message(e.from ? `A parcel from ${e.from} is waiting for you. Visit Duey to collect it.` : 'A parcel is waiting for you. Visit Duey to collect it.', '#ffe08a');
+    else if (e.op === 'result') { const t = dueyResult(e.code); if (t) this.windows.notice(t); }
+  }
+
+  async openRock(slot, itemId) {
+    if (this.windows.order.some((w) => w instanceof TeleportWin)) return;
+    const win = new TeleportWin(this.windows, Number(slot), itemId);
+    await this.assets.preload(win.frames());
+    this.windows.show(win);
+  }
+  /** A Chalkboard: write on it and hold it up (not in the Free Market rooms); double-click it to put it away. */
+  async openChalkboard(slot, itemId) {
+    if (this.player.chalk) { this.net?.closeChalkboard(); return; }
+    const text = (await this.windows.askText('What would you like to write on your chalkboard?', '', { max: 60, width: 220 }))?.trim();
+    if (text) this.net?.useChalkboard(Number(slot), itemId, text);
+  }
+  /**
+   * A chalkboard over a character's head: ChatBalloon.img/adboard/0 stretched round the text (white, up to
+   * four wrapped lines), its arrow pointing down at them. Remembers where it was drawn for double-clicks.
+   */
+  drawChalkboard(ctx, ent, sx, sy) {
+    const A = this.chalkArt;
+    if (!A) { if (!this.chalkLoading) { this.chalkLoading = true; this.assets.json('UI/ChatBalloon.img').then((cb) => { const a = cb?.adboard?.[0]; if (a) this.assets.preload(Object.values(a).filter((n) => n?._canvas)).then(() => { this.chalkArt = a; }); }); } return; }
+    const im = (k) => this.assets.image(A[k]);
+    ctx.save(); ctx.font = '12px Arial, sans-serif';
+    const lines = wrap(ctx, ent.chalk, 150).slice(0, 4);
+    const w = Math.max(70, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width)))), h = lines.length * 15;
+    const x = Math.round(sx - w / 2), y = Math.round(sy - 82 - h - 19);
+    const put = (k, px, py, pw, ph) => { const i = im(k); if (i) { if (pw) ctx.drawImage(i, px, py, pw, ph); else ctx.drawImage(i, px, py); } };
+    put('c', x, y, w, h);
+    put('n', x, y - 19, w, 19); put('s', x, y + h, w, 19); put('w', x - 18, y, 18, h); put('e', x + w, y, 18, h);
+    put('nw', x - 18, y - 19); put('ne', x + w, y - 19); put('sw', x - 18, y + h); put('se', x + w, y + h);
+    put('arrow', Math.round(sx - 7), y + h + 10);
+    lines.forEach((l, i) => uiText(ctx, l, sx, y + i * 15, { color: '#fff', size: 12, align: 'center' }));
+    ctx.restore();
+    ent.chalkRect = { x: x - 18 + this.cam.x, y: y - 19 + this.cam.y, w: w + 36, h: h + 38 };
+  }
+
+  /** A Hired Merchant: ask the server whether one may open here; merchantCheck carries on. */
+  openMerchant(itemId) {
+    if (this.playerShop || this.tradeWin) return;
+    this.merchantItem = itemId;
+    this.net?.merchantRequest();
+  }
+  async onMerchantCheck(code) {
+    if (code === 7) {
+      const title = await this.windows.askText('Enter the title of your store.', `${this.player.name}'s store`, { max: 25, width: 200 });
+      if (title?.trim()) this.net?.pshopCreate(title.trim(), this.merchantItem, 5);
+    } else if (code === 9) this.windows.notice('Fredrick in the Free Market Entrance is keeping items or mesos for you.\nCollect them before opening a new store.');
+    else if (code === 0x10) this.windows.notice('Your Hired Merchant is open in another channel.');
+    else this.windows.notice('You cannot open a Hired Merchant right now.');
+  }
+
+  /**
+   * FIND NPC: a bouncing arrow over that NPC for a few seconds - or, while it is off screen, one at the
+   * screen's edge pointing its way, with its name.
+   */
+  markNpc(ent, name) { this.npcMark = { ent, name, until: performance.now() + 8000 }; sfx.play('UI/BtMouseClick'); }
+  drawNpcMark(ctx, cam) {
+    const k = this.npcMark;
+    if (!k) return;
+    const now = performance.now();
+    if (now > k.until || !this.map.life.includes(k.ent)) { this.npcMark = null; return; }
+    // above the head - and above the quest bulb when the NPC wears one
+    const q = this.quests?.npcQuests(Number(k.ent.spawn?.id), this.textCtx());
+    const bulb = q && (q.start.length || q.complete.length || q.progress.length) ? 38 : 0;
+    const top = (k.ent.box ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
+    const sx = k.ent.x - cam.x, sy = top - cam.y;
+    // the arrow points down at (0, 8) from its own origin; turned for the edge pointer
+    const arrow = (x, y, angle) => {
+      ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.rotate(angle);
+      ctx.beginPath(); ctx.moveTo(-9, -22); ctx.lineTo(9, -22); ctx.lineTo(9, -14); ctx.lineTo(15, -14);
+      ctx.lineTo(0, 0); ctx.lineTo(-15, -14); ctx.lineTo(-9, -14); ctx.closePath();
+      ctx.fillStyle = '#ffd21e'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#7a4a00'; ctx.stroke();
+      ctx.restore();
+    };
+    if (sx >= 0 && sx <= VIEW_W && sy >= 0 && sy <= VIEW_H) { arrow(sx, sy - 6 - bob, 0); return; }
+    const right = sx > VIEW_W / 2, ex = right ? VIEW_W - 8 - bob : 8 + bob;
+    const ey = Math.max(90, Math.min(VIEW_H - 140, sy + 30));
+    arrow(ex, ey, right ? -Math.PI / 2 : Math.PI / 2);
+    if (k.name) uiText(ctx, k.name, right ? ex - 30 : ex + 30, ey - 7, { color: '#ffd21e', bold: true, size: 12, align: right ? 'right' : 'left', outline: '#3a2600' });
+  }
+
+  /** The shop sign over a character at canvas point (x, y), if any. */
+  shopSignAt(x, y) {
+    for (const ent of [this.player, ...this.others.values()]) {
+      const r = ent.signRect;
+      if (ent.box?.type === 4 && r && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return ent;
+    }
+    return null;
+  }
+
+  /** A face expression from its key (F1-F7 = 1 hit .. 7 stunned): shown here and sent to the map. */
+  emote(n) {
+    if (!EMOTES[n - 1] || this.player.dead) return;
+    const now = performance.now();
+    if (now - (this.lastEmote || 0) < 300) return;   // a held key repeats: once is enough
+    this.lastEmote = now;
+    setExpression(this.player, n);
+    this.net?.faceExpression(n);
   }
 
   /** Skill keys held down (repeat like the real client while held). */
@@ -369,6 +624,10 @@ export class Game {
     else if (m === MENU.KEYS) this.windows.toggle('keyconfig');
     else if (m === MENU.BUDDY) this.windows.toggle('userlist', 0);
     else if (m === MENU.PARTY) this.windows.toggle('userlist', 1);
+    else if (m === MENU.MONSTERBOOK) this.windows.toggle('monsterbook');
+    else if (m === MENU.MESSENGER) this.windows.toggle('messenger');
+    else if (m === MENU.PARTY_SEARCH) this.windows.toggle('partysearch');
+    else if (m === MENU.FAMILY) this.windows.toggle('family');
   }
 
   toggleSkills() {
@@ -429,7 +688,8 @@ export class Game {
     for (const pet of this.myPets()) {
       for (const d of this.drops.values()) {
         if (d.pickedBy || tried.has(d.oid) || !d.landed) continue;
-        if (Math.abs(d.x - pet.x) < 30 && Math.abs(d.y - pet.y) < 30 && (!d.owner || d.owner === this.player.id || d.type >= 2)) {
+        // within reach of the pet (it trails ~72px behind you, so items at your feet count)
+        if (Math.abs(d.x - pet.x) < PET_LOOT_X && Math.abs(d.y - pet.y) < 40 && (!d.owner || d.owner === this.player.id || d.type >= 2)) {
           tried.add(d.oid);
           this.net.petLoot(pet.uid, d.oid, Math.round(pet.x), Math.round(pet.y));
         }
@@ -456,22 +716,29 @@ export class Game {
     const wm = this.windows;
     wm.drawItemTip = drawItemTip;
     wm.notice = (text, opts) => new Promise((r) => wm.show(new MessageBox(wm, 'notice', text, r, opts)));
+    // another player asking something of you: the metal YesNo2 plate (preloaded, as it may not be in yet)
+    wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
+    wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new MessageBox(wm, 'number', text, r, { def, min, max })));
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new MessageBox(wm, 'text', text, r, { def, ...opts })));
-    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), worldmap: new WorldMapWin(wm) });
-    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'worldmap'].flatMap((k) => wm.wins[k].frames()));
+    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
+    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.partyHpMarks = true; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
+    if (wm.wins.questalarm.state.ids.length) wm.open('questalarm');   // and the Quest Helper, when it tracks something
     this.bindUiPointer();
     this.hud = new Hud(uiRoot, this);
     this.hud.update(this.stats);
     this.quests = new QuestBook(this.assets);
     await this.quests.load();
     this.quests.setState(info.quests);
+    this.monsterBook = info.book || { cover: 0, cards: {} };
+    if (this.net) this.net.selfName = info.stats?.name;   // the merchant room tells owner from visitor by name
     this.skills = new SkillBook(this.assets);
     await this.skills.load(info.stats.job, info.skills, info.cooldowns);
+    this.rocks = { regular: (info.rocks || []).slice(0, 5), vip: (info.rocks || []).slice(5, 15) };   // Teleport Rock maps
     this.keyBar = this.statusBar; // the quick slots (render() rebuilds them from the keymap)
     const later = (fn) => (...a) => (this.loading ? this.queue.push(() => fn(...a)) : fn(...a));
     const h = this.net.h;
@@ -496,6 +763,8 @@ export class Game {
       stats: (s, enable) => this.onStats(s, enable),
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
+      avatarMega: (a) => this.hud.megaphone([`${a.name} : ${a.lines.filter(Boolean).join(' ')}`], { bg: 'rgba(210, 46, 120, 0.9)', channel: a.channel, ear: a.ear }),
+      spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
       groupChat: (c) => this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff'),
       whisper: (w) => this.onWhisper(w),
       whisperResult: (r) => this.onWhisperResult(r),
@@ -504,7 +773,7 @@ export class Game {
       buddyChannel: (id, ch) => { const b = this.buddies.find((x) => x.id === id); if (b) b.channel = ch; },
       buddyCapacity: () => {},
       buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
-      buddyRequest: (b) => this.windows.confirm(`#b${b.name}#k wants to add you to their buddy list. Accept?`)
+      buddyRequest: (b) => notify(this.windows, 'buddy', b.name)
         .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
@@ -516,7 +785,7 @@ export class Game {
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         this.windows.open('inventory');
       },
-      tradeInvite: (name) => this.windows.confirm(`#b${name}#k has requested a trade. Accept?`)
+      tradeInvite: (name) => notify(this.windows, 'trade', name)
         .then((ok) => (ok ? this.net.tradeAccept() : this.net.tradeDecline())),
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
@@ -524,9 +793,35 @@ export class Game {
       tradeConfirm: () => this.tradeWin?.partnerConfirmed(),
       tradeChat: (text) => this.tradeWin?.say(text),
       tradeEnd: (result) => this.tradeWin?.ended(result),
+      // player shops
+      shopOpen: later(async (d) => {
+        this.playerShop?.end();
+        const win = new PlayerShopWin(this.windows, d);
+        await this.assets.preload(win.frames());      // its art the first time a shop opens
+        this.playerShop = this.windows.show(win);
+      }),
+      shopItems: later((items, mesos) => this.playerShop?.setItems(items, mesos)),
+      merchantCheck: later((code) => this.onMerchantCheck(code)),
+      messenger: later((e) => this.onMessenger(e)),
+      family: later((e) => this.onFamily(e)),
+      shopSold: later((i, qty, buyer) => this.playerShop?.soldUpdate(i, qty, buyer)),
+      shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
+      shopChat: later((slot, text) => this.playerShop?.say(text)),
+      shopLeft: later((slot) => this.playerShop?.left(slot)),
+      shopClosed: later((reason) => this.playerShop?.end(reason)),
+      shopError: later((code) => { this.playerShop?.end(); this.windows.notice(SHOP_ERRORS[code] || 'The shop could not be opened.'); }),
+      merchantSpawn: later((m) => this.boards.spawn(m)),
+      merchantUpdate: later((owner, info) => this.boards.update(owner, info)),
+      merchantRemove: later((owner) => this.boards.remove(owner)),
+      duey: later((e) => this.onDuey(e)),
+      chalkboard: later((id, text) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.chalk = text; }),
+      rocks: (vip, list) => { if (this.rocks) this.rocks[vip ? 'vip' : 'regular'] = list; },
+      rockError: () => this.windows.notice('The map could not be saved.'),
+      charBox: later((id, box) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.box = box; }),
       tradeError: (code) => { this.tradeWin?.ended(0); this.windows.notice(TRADE_ERRORS[code] || 'The trade could not be started.'); },
       charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i)); },
-      partyInvite: (p) => this.windows.confirm(`#b${p.name}#k has invited you to join their party. Accept?`)
+      // a Party Search invitation comes as "PS: <leader>"
+      partyInvite: (p) => (p.name.startsWith('PS: ') ? notify(this.windows, 'partySearch', p.name.slice(4)) : notify(this.windows, 'party', p.name))
         .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name))),
       partyMessage: (code, name) => { const t = PARTY_MESSAGES[code]; if (t) this.hud.message(t.replace('%s', name), CHAT_COLORS.notice); },
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
@@ -545,6 +840,30 @@ export class Game {
       movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
       playerLook: later((id, look) => this.updateOtherLook(id, look)),
       attack: later((a) => this.onRemoteAttack(a)),
+      expression: later((id, emote) => { const rp = this.others.get(id); if (rp) setExpression(rp, emote); }),
+      scrollEffect: later((e) => this.onScrollEffect(e)),
+      bookCard: later((id, count) => {
+        const b = this.monsterBook;
+        if (count > (b.cards[id] || 0)) { b.cards[id] = count; this.hud.message(`You have obtained a card: ${this.windows.itemName(id)} (${count}/5)`, '#9fe07a'); this.vfx?.play('MonsterBook', this.player); }
+        else this.hud.message('That card is already full in your Monster Book.', '#fff');
+      }),
+      bookCover: later((id) => { this.monsterBook.cover = id; }),
+      macros: later((list) => { this.macros = Array.from({ length: 5 }, (_, i) => list[i] || { name: '', shout: false, skills: [0, 0, 0] }); this.statusBar?.render(); }),
+      summonSpawn: later((d) => { this.summons.get(d.oid)?.die(); this.summons.set(d.oid, new Summon(this, d)); }),
+      summonRemove: later((owner, oid, animated) => { const sm = this.summons.get(oid); if (!sm) return; if (animated) sm.die(); else this.summons.delete(oid); }),
+      summonMove: later((owner, oid, moves) => this.summons.get(oid)?.applyMovement(moves)),
+      summonAttack: later((owner, oid, dir, hits) => {
+        const sm = this.summons.get(oid);
+        if (!sm || sm.mine) return;
+        sm.facingRight = !(dir & 4); sm.play('attack1');
+        this.after(sm.node?.attack1?.info?.attackAfter || 300, () => {
+          for (const h of hits) { const m = this.lifeByOid.get(h.mob); if (m) this.summonHit(sm, m, [h.dmg], false); }
+        });
+      }),
+      summonDamaged: later((owner, oid) => this.summons.get(oid)?.play('hit')),
+      summonSkill: later((owner, skill, stance) => {
+        for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
+      }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
       spawnMob: later((m) => this.spawnLife('Mob', m, false)),
       controlMob: later(async (m, aggro) => {
@@ -575,11 +894,11 @@ export class Game {
       storageMeso: (meso) => this.storageWin?.setMeso(meso),
       storageError: (code) => this.storageWin?.error(code),
       quest: (id, status, data) => this.onQuest(id, status, data),
-      keymap: (km) => { this.keymap = km; this.keyBar.render(); this.skillWin?.render(); },
+      keymap: (km) => { this.keymap = km; this.dropForeignSkillKeys(); this.keyBar.render(); this.skillWin?.render(); },
       skills: (list) => {
         for (const s of list) {
           const before = this.skills.level(s.id);
-          this.skills.levels[s.id] = { level: s.level, master: s.master, expiration: s.expiration };
+          this.skills.setLevel(s.id, s);
           if (s.level > before) this.hud.message(`${this.skills.name(s.id)} is now level ${s.level}.`, '#9fd3ff');
         }
         this.skillWin?.render(); this.keyBar.render();
@@ -588,10 +907,15 @@ export class Game {
       cooldown: (id, sec) => { this.skills.cooldowns[id] = sec ? Date.now() + sec * 1000 : 0; },
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
-        this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp });
+        this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes });
       },
       cancelBuff: (m1, m2) => { this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2))); },
-      foreignSkill: later((chrId, skillId) => { const rp = this.others.get(chrId); if (rp) this.playSkillEffect(skillId, rp); }),
+      foreignSkill: later((chrId, skillId) => {
+        const rp = this.others.get(chrId);
+        if (!rp) return;
+        if (TELEPORTS.has(skillId)) this.playTeleportEffect(rp.x, rp.y);   // its art is BasicEff's, not the skill's
+        else this.playSkillEffect(skillId, rp);
+      }),
       questResult: (r) => {
         if (!r.ok) this.hud.message(QUEST_ERRORS[r.mode] || 'The quest could not be updated.', '#ff8080');
       },
@@ -607,7 +931,7 @@ export class Game {
     const prevProgress = this.quests.started[id];
     this.quests.update(id, status, data);
     const name = this.quests.name(id);
-    if (status === 1 && before === 0) this.hud.message(`Quest started: ${name}`, '#9fe07a');
+    if (status === 1 && before === 0) { this.hud.message(`Quest started: ${name}`, '#9fe07a'); this.windows.wins.questalarm?.started(id); }
     else if (status === 2 && before !== 2) { this.hud.message(`Quest complete: ${name}`, '#ffe08a'); this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); }
     else if (status === 0 && before === 1) this.hud.message(`Quest forfeited: ${name}`, '#ff9e9e');
     else if (status === 1 && prevProgress !== data) {
@@ -618,7 +942,7 @@ export class Game {
 
   toggleQuests() {
     if (!this.quests) return;
-    this.windows.toggle(quest);
+    this.windows.toggle('quest');
   }
 
   itemCount(id) {
@@ -682,7 +1006,7 @@ export class Game {
       if (!current()) return;
       this.map = map;
       this.vfx?.mapChanged();
-      this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear();
+      this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       this.snapCamera();
@@ -756,7 +1080,9 @@ export class Game {
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
-    this.others.set(d.id, new RemotePlayer(d, look));
+    const rp = new RemotePlayer(d, look);
+    rp.box = d.box; rp.chalk = d.chalk;
+    this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
 
@@ -771,7 +1097,7 @@ export class Game {
     const ent = c.id === this.player.id ? this.player : this.others.get(c.id);
     const name = ent?.name || '?';
     if (ent) ent.chat = { text: c.text, t: 5 };
-    this.hud.message(`${name} : ${c.text}`, c.gm ? '#ffb3ff' : '#fff');
+    this.hud.message(`${name} : ${c.text}`, '#fff');      // general chat is white, a GM's too
   }
 
   /**
@@ -798,8 +1124,8 @@ export class Game {
       e.pendingHits = (e.pendingHits || 0) + 1;
       const land = () => {
         e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
-        this.damageNumbers(e, t.dmg, false);
-        this.playHitEffect(a.skill, e);
+        this.damageNumbers(e, t.dmg, false, a.skill, t.crit);
+        this.playHitEffect(a.skill, e, rp);
         if (--e.pendingHits <= 0) { if (e.queuedKill) this.finishKill(e); else this.releaseDrops(e); }
       };
       if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay, land);
@@ -924,12 +1250,95 @@ export class Game {
 
   useInventoryItem(tab, slot, it) {
     if (tab === 5 && it.pet) { this.net.spawnPet(slot); return; }        // summon / send the pet home
+    if (tab === 5 && Math.floor(it.id / 10000) === 514) { this.openShop(it.id); return; }      // a Shop Permit
+    if (tab === 5 && Math.floor(it.id / 10000) === 503) { this.openMerchant(it.id); return; }   // a Hired Merchant
+    if (tab === 5 && (Math.floor(it.id / 10000) === 507 || Math.floor(it.id / 10000) === 539)) { this.openMegaphone(slot, it.id); return; }
+    if (tab === 5 && Math.floor(it.id / 10000) === 504) { this.openRock(slot, it.id); return; }          // a Teleport Rock
+    if (tab === 5 && Math.floor(it.id / 10000) === 537) { this.openChalkboard(slot, it.id); return; }    // a Chalkboard
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
+    if (tab === 2 && isScroll(it.id)) {
+      // a scroll is put on an item, not used: pick it up and show what you wear
+      this.windows.startCarry({ kind: 'item', tab: 2, slot, id: it.id, sticky: true, x: -99, y: -99, at: 0 }, this.windows.icon(it.id));
+      this.windows.open('equip');
+      this.hud.message('Click the equipped item to use the scroll on.', '#fff');
+      return;
+    }
     if (tab === 2) this.net.useItem(slot, it.id);
     else if (tab === 1) {
       const dst = equipSlotFor(it.id);
       if (dst) this.net.moveItem(1, slot, dst, 1);
     }
+  }
+
+  /**
+   * Scroll an equip: worn ones (negative slot), or ones in the inventory with Legendary Spirit. Checked
+   * here as ScrollHandler would (fit, upgrades left) so a bad drop gets a message instead of nothing; with
+   * a White Scroll in the bag you are asked whether to use it too. The server answers with the new item
+   * (MODIFY_INVENTORY) and SHOW_SCROLL_EFFECT.
+   */
+  async useScroll(scrollSlot, equipSlot) {
+    const inv = this.inventory, scroll = inv?.[2]?.[scrollSlot];
+    const eq = equipSlot < 0 ? inv?.equipped?.[equipSlot] : inv?.[1]?.[equipSlot];
+    if (!scroll || !eq || !isScroll(scroll.id) || this.player.dead) return;
+    if (equipSlot > 0 && !(this.skills?.level(1003) > 0)) { this.notice('Scrolls can only be used on equipped items.'); return; }
+    const sid = scroll.id, modifier = Math.floor(sid / 1000) === 2049;
+    if (!scrollFits(sid, eq.id)) { this.notice('This scroll cannot be used on this item.'); return; }
+    if (!modifier && !(eq.slots > 0)) { this.notice('This item has no upgrades available.'); return; }
+    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && Math.floor(sid / 100) !== 20490;
+    const white = hasWhite && (await this.windows.confirm('Would you like to use a #bWhite Scroll#k too?\nIt keeps the upgrade slot if the scroll fails.'));
+    if (inv[2][scrollSlot] !== scroll) return;          // it moved while you were deciding
+    this.net?.useScroll(scrollSlot, equipSlot, white);
+  }
+
+  /**
+   * The most a summon may hit for, as Cosmic's SummonDamageHandler caps it (it flags anything above):
+   * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
+   * damage (5.4% from 438 up). Rolled at most 95% of that.
+   */
+  summonMaxDamage(id, lv) {
+    const ld = this.skills.levelData(id, lv) || {}, s = this.stats;
+    let max;
+    if (!ld.pad) {
+      const ti = (s.int || 0) + this.equipStat('int'), matk = Math.max(14, ti + this.equipStat('matk'));
+      max = Math.floor(((matk - ti + Math.floor(0.1996049769 * ti ** 1.290631341)) * 107) / 100) * 0.05 * (ld.mad || 0);
+    } else {
+      const base = this.maxDamage();
+      max = base * (base >= 438 ? 0.054 : 0.077) * ld.pad;
+    }
+    return Math.max(1, Math.floor(max * 0.95));
+  }
+
+  /** A summon's blow landing: the monster flinches, the numbers show and attack1's hit art plays on it. */
+  async summonHit(sm, mob, dmgs, mine) {
+    if (mine) {
+      if (--mob.pendingHits <= 0 && !mob.queuedKill) this.releaseDrops(mob);
+      const kill = mob.pendingHits <= 0 && mob.queuedKill;
+      mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x);
+      this.damageNumbers(mob, dmgs, true);
+      if (kill) this.finishKill(mob);
+    } else { mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x); this.damageNumbers(mob, dmgs, false); }
+    const node = sm.node?.attack1?.info?.hit;
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, x: mob.x, y: mob.y - (mob.node?._h || 40) / 2, flip: sm.facingRight });
+  }
+
+  /** SHOW_SCROLL_EFFECT: BasicEff Enchant Success / Failure over whoever scrolled, with its sound. */
+  async onScrollEffect(e) {
+    const ent = e.id === this.player.id ? this.player : this.others.get(e.id);
+    if (!ent) return;
+    sfx.play(e.success ? 'Game/EnchantSuccess' : 'Game/EnchantFailure');
+    const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Enchant?.[e.success ? 'Success' : 'Failure'];
+    if (node) {
+      const anim = new Anim(node, false);
+      await this.assets.preload(anim.frames);
+      this.fx.push({ anim, follow: ent, flip: false });
+    }
+    if (ent !== this.player) return;
+    this.hud.message(e.success ? 'The scroll lights up, and its mysterious power has been transferred to the item.'
+      : e.cursed ? 'The scroll lights up, but the item has been destroyed due to its overwhelming power.'
+        : 'The scroll lights up, but it seems the item has failed to be upgraded.', e.success ? '#9fe07a' : '#ff9e9e');
   }
 
   unequip(slot) {
@@ -952,17 +1361,22 @@ export class Game {
     if (m) { if (this.lastWhisperFrom) this.whisperTo(this.lastWhisperFrom, m[1]); else this.hud.message('There is no whisper to reply to.', CHAT_COLORS.notice); return; }
     m = text.match(/^\/find\s+(\S+)$/i);
     if (m) { this.net.find(m[1]); return; }
-    const target = this.statusBar?.chatTarget || 0;
-    if (target === 0 || text.startsWith('!')) { this.net.chat(text); if (target === 0) this.petCommandWord(text); return; }
-    if (target === 2 && !this.party) { this.hud.message('You are not in a party.', CHAT_COLORS.notice); return; }
-    if (target === 3 && !this.guild) { this.hud.message('You are not in a guild.', CHAT_COLORS.notice); return; }
-    if (target === 1) {
+    // the chat target from the drop-up list beside the chat line
+    const target = this.statusBar?.chatTarget || 'all', note = (t) => this.hud.message(t, CHAT_COLORS.notice);
+    if (target === 'all' || text.startsWith('!')) { this.net.chat(text); if (target === 'all') this.petCommandWord(text); return; }
+    if (target === 'whisper') { const to = this.statusBar.whisperTo; if (to) this.whisperTo(to, text); else note('Choose who to whisper to first.'); return; }
+    if (target === 'spouse') { this.net.spouseChat(text); return; }
+    const mode = { buddy: 0, group: 0, party: 1, guild: 2, alliance: 3 }[target];
+    if (mode === 1 && !this.party) { note('You are not in a party.'); return; }
+    if (mode >= 2 && !this.guild) { note('You are not in a guild.'); return; }
+    if (mode === 0) {
+      // buddy chat (and Group, which has no buddy-group choice yet) reaches the buddies online
       const ids = (this.buddies || []).filter((b) => b.channel >= 0).map((b) => b.id);
-      if (!ids.length) { this.hud.message('None of your buddies are online.', CHAT_COLORS.notice); return; }
+      if (!ids.length) { note('None of your buddies are online.'); return; }
       this.net.groupChat(0, text, ids);
-    } else this.net.groupChat(target - 1, text);
+    } else this.net.groupChat(mode, text);
     // the server only echoes group chat to the others, so show your own line here
-    this.hud.message(`${this.player.name} : ${text}`, CHAT_COLORS[GROUP_KEYS[target - 1]]);
+    this.hud.message(`${this.player.name} : ${text}`, CHAT_COLORS[GROUP_KEYS[mode]]);
   }
   /**
    * GUILD_OPERATION results: this.guild = { id, name, ranks[5], members[{ id, name, job, level, rank, online }],
@@ -976,14 +1390,13 @@ export class Game {
         this.windows.askText('Enter the name of the guild you would like to create.').then((n) => { if (n) this.net.guildOp(2, n.trim()); });
         break;
       case 'agreement':
-        this.windows.confirm(`#b${d.master}#k wants to found the guild #b${d.name}#k with you. Do you agree?`).then((ok) => this.net.guildAgree(ok));
+        notify(this.windows, 'guildFound', d.master).then((ok) => this.net.guildAgree(ok));
         break;
       case 'invite':
-        this.windows.confirm(`#b${d.from}#k has invited you to join a guild. Accept?`)
+        notify(this.windows, 'guild', d.from)
           .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from)));
         break;
       case 'info':
-        if (d.guild && !g) msg(`You are a member of the guild ${d.guild.name}.`);
         this.guild = d.guild;
         break;
       case 'join':
@@ -1030,6 +1443,7 @@ export class Game {
       const m = this.party.members.find((x) => x.id === p.leader);
       if (m) msg(`${m.name} is now the party leader.`);
     }
+    this.windows.wins.partysearch?.partyChanged();
   }
 
   whisperTo(name, text) {
@@ -1071,13 +1485,20 @@ export class Game {
   start() {
     let last = performance.now();
     const loop = (t) => {
+      // the next frame is booked first: an error in one frame must never stop the game for good
+      requestAnimationFrame(loop);
       const dt = Math.min((t - last) / 1000, 0.05);
       last = t;
-      if (this.map && !this.loading) { this.update(dt); this.render(); }
+      if (this.map && !this.loading) {
+        try { this.update(dt); this.render(); } catch (e) {
+          const key = String(e?.message);
+          if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
+          for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open
+        }
+      }
       this.input.endFrame();
       this._frames++; this._fpsT += dt;
       if (this._fpsT >= 1) { this.fps = this._frames; this._frames = 0; this._fpsT = 0; }
-      requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
   }
@@ -1090,8 +1511,10 @@ export class Game {
     this.vfx?.update(dt);
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (!this.dead) this.updatePlayer(dt);
-    for (const rp of this.others.values()) rp.update(dt);
+    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); }
+    stepExpression(this.player, this.look, dt);
     for (const pet of this.pets.values()) { pet.update(dt); pet.sync(dt); }
+    for (const [oid, sm] of this.summons) { sm.update(dt); if (sm.gone) this.summons.delete(oid); }
     if (this.net) this.petLoot(dt);
     if (this.player.chat && (this.player.chat.t -= dt) <= 0) this.player.chat = null;
     this.updateDrops(dt);
@@ -1099,7 +1522,7 @@ export class Game {
     this.runTimers(dt);
     this.loadAfterimage();
     this.handleHotkeys();
-    if (this.net) { this.syncMovement(dt); this.syncMobs(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
+    if (this.net) { this.syncMovement(dt); this.puppetAggro(dt); this.syncMobs(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
     this.updateCamera(dt);
     for (const e of this.effects) e.t += dt;
     this.effects = this.effects.filter((e) => e.t < 1.2);
@@ -1207,6 +1630,14 @@ export class Game {
       return;
     }
 
+    // a macro's next skill, once the last one's animation is over
+    if (this.macroQueue?.length && !p.attack) {
+      const id = this.macroQueue.shift();
+      this.skillKeyPressed = true;
+      const used = this.useSkill(id);
+      this.skillKeyPressed = false;
+      if (used) return;
+    }
     const skill = this.heldSkill();
     if (skill && this.skills) { if (this.useSkill(skill)) return; }
     if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
@@ -1234,8 +1665,10 @@ export class Game {
       if (dir) p.facingRight = dir > 0;
       if (this.hitAction(ACTION.JUMP)) {
         if (inp.is('down')) {
-          const below = fh.below(p.x, p.y + 1, 600, p.fh);
-          if (below) { p.ignoreFh = p.fh; p.ignoreT = 0.3; p.fh = null; p.vy = 0; p.vx = 0; }
+          const below = fh.below(p.x, p.y + 1, Infinity, p.fh);   // any floor under us, however far down
+          // a little hop first, then down through the floor: it stays ignored until we are well past it
+          if (below) { p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.vy = -PHYS.jump * 0.35; p.vx = 0; sfx.play('Game/Jump'); }
+          else if (!dir) action = 'prone';   // nothing to drop to: stay lying down
         } else {
           p.fh = null; p.vy = -PHYS.jump; p.vx = dir * PHYS.walk;
           sfx.play('Game/Jump');
@@ -1305,7 +1738,7 @@ export class Game {
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
     const sb = this.skills, lv = sb.level(id);
-    if (!lv) return false;
+    if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
     if (kind === 'special' && !this.skillKeyPressed) return false; // buffs fire once per key press
@@ -1352,21 +1785,27 @@ export class Game {
     const targets = this.findTargets(kind, skillId, lv, mobCount, p.attack);
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage()) : 25;
     const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
-    const out = targets.map((m) => ({
-      mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y),
-      dmg: Array.from({ length: lines }, roll),
-    }));
+    // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
+    const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
+    const out = targets.map((m) => {
+      const dmg = [], crits = [];
+      for (let i = 0; i < lines; i++) {
+        const c = !!crit && Math.random() * 100 < crit.rate, d = roll();
+        dmg.push(c ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
+      }
+      return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
+    });
     const projectile = kind === 'ranged' || (skillId && sb?.node(skillId)?.ball && kind !== 'melee') || skillId % 10000000 === 1000;
     for (const t of out) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight); this.damageNumbers(t.mob, t.dmg, true); this.playHitEffect(skillId, t.mob);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob);
           this.finishKill(t.mob);
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight); this.damageNumbers(t.mob, t.dmg, true); this.playHitEffect(skillId, t.mob);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob);
         if (t.mob.kind === 'Mob') t.mob.aggro = p;                // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -1559,7 +1998,12 @@ export class Game {
     this.fx.push({ anim, follow: ent, flip: ent.facingRight });
   }
 
-  async playHitEffect(id, mob) {
+  /**
+   * A skill's hit effect on what it struck, as the client does it (HeavenClient Mob::show_effect): on the
+   * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
+   * faces. Without a head point, the middle of its body.
+   */
+  async playHitEffect(id, mob, by = this.player) {
     if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
     if (mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
     const node = id ? await this.skills?.ensure(id) : null;
@@ -1567,7 +2011,10 @@ export class Game {
     if (!fx) return;
     const anim = new Anim(fx, false);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, x: mob.x, y: mob.y - (mob.node?._h || 40) / 2, flip: false });
+    const head = mob.node?.head;
+    const x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
+    const y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
+    this.fx.push({ anim, x, y, flip: !!by?.facingRight });
   }
 
   /** Projectile from `from` to `to` (mob or null = fly forward): skill ball, else the ammo's bullet animation. */
@@ -1621,9 +2068,37 @@ export class Game {
   }
 
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
-  damageNumbers(target, dmgs, mine) {
+  damageNumbers(target, dmgs, mine, skillId = 0, crits = []) {
     if (mine && target.kind === 'Mob') target.hpShownUntil = performance.now() + 5000;
-    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue');
+    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits);
+  }
+
+  /**
+   * Your Puppet: the monsters you control near it go after it, and one that runs into it hits it
+   * (DAMAGE_SUMMON; the server takes it down when its HP runs out). Out of range they come back to you.
+   */
+  puppetAggro(dt) {
+    let pp = null;
+    for (const sm of this.summons.values()) if (sm.mine && sm.puppet && !sm.dying) pp = sm;
+    for (const m of this.map.life) {
+      if (m.kind !== 'Mob' || !m.controlled || !m.alive || m.dying) continue;
+      const near = pp && (m.x - pp.x) ** 2 + (m.y - pp.y) ** 2 < PUPPET_RANGE ** 2;
+      if (near) m.aggro = pp;
+      else if (m.aggro instanceof Summon) m.aggro = this.player;
+    }
+    if (!pp || (pp.hitT -= dt) > 0) return;
+    const box = { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
+    for (const m of this.map.life) {
+      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || m.src.info?.bodyAttack === 0) continue;
+      const b = m.box();
+      if (b.right < box.left || b.left > box.right || b.bottom < box.top || b.top > box.bottom) continue;
+      const pad = m.src.info?.PADamage || 1, damage = Math.max(1, Math.round(pad * (0.85 + Math.random() * 0.15)));
+      this.net.damageSummon(pp.oid, damage, m.spawn.id);
+      pp.play('hit');
+      this.vfx?.damage(pp, [damage], 'violet');
+      pp.hitT = 1;
+      return;
+    }
   }
 
   checkTouchDamage(dt) {
@@ -1717,22 +2192,39 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ camera / render
+  /**
+   * The original client's follow (Shape2D's filter, as openms recovered it): the camera aims at a point
+   * CAM_LIFT above your feet. Each axis on its own: inside CAM_DEADBAND of that point it does not move at
+   * all; past it, it is left (k * d) / (ms * d + k) behind (k = CAM_DAMPING * 1000), so it creeps after
+   * small moves and closes long gaps fast. The point is filtered first and the map's edges applied after.
+   * Kept in fractions, drawn at whole pixels so sprites don't shimmer.
+   */
   updateCamera(dt) {
-    const p = this.player, c = this.cam;
-    const tx = p.x - VIEW_W / 2, ty = p.y - VIEW_H / 2 - 60;
-    const k = 1 - Math.exp(-dt * 8);
-    c.x += (tx - c.x) * k; c.y += (ty - c.y) * k;
-    this.clampCamera();
+    const p = this.player, f = (this.camF ??= { x: p.x, y: p.y - CAM_LIFT });
+    const ms = dt * 1000, k = CAM_DAMPING * 1000;
+    const axis = (from, to) => {
+      const d = Math.abs(to - from);
+      const left = d > CAM_DEADBAND ? (k * d) / (ms * d + k) : d;
+      return to < from ? to + left : to - left;
+    };
+    f.x = axis(f.x, p.x); f.y = axis(f.y, p.y - CAM_LIFT);
+    this.placeCamera();
   }
 
   snapCamera() {
     const p = this.player;
-    this.cam.x = p.x - VIEW_W / 2; this.cam.y = p.y - VIEW_H / 2 - 60;
-    this.clampCamera();
+    this.camF = { x: p.x, y: p.y - CAM_LIFT };
+    this.placeCamera();
+  }
+  /** Centre the view on the filtered point, held inside the map. */
+  placeCamera() {
+    const c = { x: Math.trunc(this.camF.x) - VIEW_W / 2, y: Math.trunc(this.camF.y) - VIEW_H / 2 };
+    this.clampCamera(c);
+    this.cam.x = Math.round(c.x); this.cam.y = Math.round(c.y);
   }
 
-  clampCamera() {
-    const c = this.cam, b = this.map.bounds;
+  clampCamera(c = this.cam) {
+    const b = this.map.bounds;
     c.x = b.right - b.left < VIEW_W ? (b.left + b.right - VIEW_W) / 2 : Math.max(b.left, Math.min(b.right - VIEW_W, c.x));
     c.y = b.bottom - b.top < VIEW_H ? (b.top + b.bottom - VIEW_H) / 2 : Math.max(b.top, Math.min(b.bottom - VIEW_H, c.y));
   }
@@ -1764,14 +2256,22 @@ export class Game {
     // Same rule as the official client: foothold page, kept while airborne, 7 on ladders/ropes.
     const playerLayer = p.ladder ? 7 : p.fh?.layer ?? this.lastLayer ?? 7;
     this.lastLayer = playerLayer;
+    // shop owners and their booths go down first: everyone else walks in front of a shop
+    const inShop = (e) => e.box?.type === 4;
     for (let l = 0; l < 8; l++) {
       map.drawLayer(ctx, cam, l);
       for (const e of map.life) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
-      if (l === 7) for (const rp of this.others.values()) this.drawChar(ctx, cam, rp, rp.look, false);
+      if (l === playerLayer) {
+        for (const m of this.boards.merchants.values()) this.boards.drawMerchant(ctx, cam, m);   // Hired Merchants, behind people
+        for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
+        if (inShop(p)) this.drawChar(ctx, cam, p, this.look, true);
+      }
+      if (l === 7) for (const rp of this.others.values()) if (!inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
       for (const pet of this.pets.values()) if (!pet.onBack && pet.layer() === l) pet.draw(ctx, cam);
-      if (l === playerLayer) this.drawChar(ctx, cam, p, this.look, true);
+      if (l === playerLayer && !inShop(p)) this.drawChar(ctx, cam, p, this.look, true);
     }
     for (const pet of this.pets.values()) if (pet.onBack) pet.draw(ctx, cam);   // riding on a climber's back
+    for (const sm of this.summons.values()) sm.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
     this.drawFx(ctx, cam);
@@ -1779,6 +2279,7 @@ export class Game {
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
     drawPartyHp(ctx, this, cam);
+    this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
 
     for (const e of this.effects) {
       if (e.t < 0) continue;
@@ -1793,13 +2294,15 @@ export class Game {
       ctx.restore();
     }
     this.vfx?.drawHud(ctx);
+    this.hud?.draw?.(ctx);              // what you gain, in the lower-right corner
+    this.hud?.drawBanner?.(ctx);        // the server's scrolling notice, under the bar and every window
     this.statusBar?.draw(ctx);
     this.windows?.draw(ctx);
     this.vfx?.drawBoss(ctx);
   }
 
   drawChar(ctx, cam, ent, look, local) {
-    const parts = look.compose(ent.action, ent.frame);
+    const parts = look.compose(ent.action, ent.frame, ent.expr);
     const sx = ent.x - cam.x, sy = ent.y - cam.y;
     // while protected after a hit, alternate gray and normal every 60ms, as the original does
     const blink = local && this.invincible > 0 && Math.floor(this.invincible / 0.06) % 2 === 0;
@@ -1808,10 +2311,15 @@ export class Game {
     if (blink) { ctx.save(); ctx.filter = 'grayscale(1) brightness(0.85)'; }
     drawParts(ctx, this.assets, parts, sx, sy + ghost, ent.facingRight, 1);
     if (blink) ctx.restore();
+    // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
+    if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
+    if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
     const guild = local ? this.guild?.name : ent.guild;
     if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);
   }
+
+
 
   drawDrops(ctx, cam) {
     for (const d of this.drops.values()) {
@@ -1888,9 +2396,17 @@ export function equippedIds(equipped) {
   return Object.values(bySlot);
 }
 
-function equipSlotFor(id) {
+/**
+ * Where an equip goes when worn: the character's slots (Equip window), and the pet's (its pet panel):
+ * the pet accessory at -114 (where Cosmic's CHAR_INFO reads it) and the pet ability items
+ * 1812000-1812007 (Meso Magnet, Item Pouch, Auto HP / MP, Wing Boots, Binocular, Magic Scales,
+ * Item Ignore) at -121 .. -128. Cosmic recognises those by id wherever they sit.
+ */
+export function equipSlotFor(id) {
   const cat = Math.floor(id / 10000);
-  const map = { 100: -1, 101: -2, 102: -3, 103: -4, 104: -5, 105: -5, 106: -6, 107: -7, 108: -8, 109: -10, 110: -9, 111: -12 };
+  const map = { 100: -1, 101: -2, 102: -3, 103: -4, 104: -5, 105: -5, 106: -6, 107: -7, 108: -8, 109: -10, 110: -9, 111: -12,
+    112: -17, 113: -50, 114: -49, 180: -114, 190: -18, 191: -19 };
   if (cat >= 130 && cat < 170) return -11;
+  if (id >= 1812000 && id <= 1812007) return -121 - (id - 1812000);
   return map[cat] ?? null;
 }

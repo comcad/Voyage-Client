@@ -28,6 +28,7 @@ export class UserListWin extends Win {
       [F.BtWhere, () => this.find()], [F.BtParty, () => this.inviteSelected()]], by);
     this.partyBtns = row([[P.BtCreate, () => this.g.net?.partyOp(1)], [P.BtInvite, () => this.invite()], [P.BtKick, () => this.kick()],
       [P.BtWithdraw, () => this.leave()], [P.BtChangeBoss, () => this.makeLeader()], [P.BtHP, () => { this.g.partyHpMarks = !this.g.partyHpMarks; }]], by);
+    this.partyBtns.push(this.button(P.BtSearch, 12, by + 22, () => this.mgr.toggle('partysearch')));
     const GI = U.Guild.GuildInfo;
     this.guildBtns = [...row([[GI.BtInvite, () => this.guildInvite()], [GI.BtKick, () => this.guildExpel()], [GI.BtUp, () => this.guildRank(-1)],
       [GI.BtDown, () => this.guildRank(1)]], by), ...row([[GI.BtWhisper, () => this.whisper()], [GI.BtWhere, () => this.find()],

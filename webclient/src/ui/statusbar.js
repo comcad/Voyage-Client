@@ -17,12 +17,23 @@ import { settings } from '../settings.js';
  *   GameMenu / ShortCut      dark interiors from y 22, x 5 / 4; 81x25 buttons every 26px
  */
 export const BAR_H = 71;
-const CHAT_TARGETS = ['All', 'Buddy', 'Party', 'Guild', 'Alliance'];
+// who the chat line talks to, in the order of the client's drop-up list (top to bottom, To All last)
+export const CHAT_TARGETS = [
+  { key: 'buddy', label: 'To a buddy' }, { key: 'group', label: 'To Group' }, { key: 'party', label: 'To the party' },
+  { key: 'guild', label: 'To the Guild' }, { key: 'alliance', label: 'To Alliance' }, { key: 'spouse', label: 'To Spouse' },
+  { key: 'whisper', label: 'Whisper' }, { key: 'all', label: 'To All' },
+];
+// the drop-up list over the target box: rows of 18 on the client's navy, the current one lit
+const TMENU = { x: 1, w: 92, row: 18, bg: '#315574', lit: '#569ab8', border: '#9aa3ab', inner: '#6d7d8a' };
 const GAUGE = { x: 216, y: 37 };
 const FILLS = { hp: { x: 2, w: 105 }, mp: { x: 110, w: 105 }, exp: { x: 223, w: 115 } };
 const FILL_Y = 15, FILL_H = 14;
 const CHAT = { x: 84, y: 9, w: 430, h: 18 };          // text field in the white strip, after the target box
-const CHAT_W = 566, CHAT_LINES = 6, LINE_H = 14;       // log above the bar, as wide as base/chat
+const CHAT_W = 566, CHAT_LINES = 6, LINE_H = 14;
+// the notice box (base/box, 42x19) right of the chat line, its pencil (base/iconMemo) in the right cell:
+// invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
+const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
+export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
 // quick slot keys: Shift Ins Home PgUp / Ctrl Del End PgDn (scancodes), labelled by StatusBar.img/key/0-7
 const QUICK_KEYS = [42, 82, 71, 73, 29, 83, 79, 81];
 const MENU_ITEMS = {
@@ -33,7 +44,7 @@ const MENU_ITEMS = {
 export class StatusBar {
   constructor(game, layer) {
     this.game = game; this.assets = game.assets; this.layer = layer;
-    this.y = 0; this.lines = []; this.menu = null; this.quickOpen = false; this.chatTarget = 0;
+    this.y = 0; this.lines = []; this.menu = null; this.quickOpen = false; this.chatTarget = 'all'; this.targetMenu = false;
     this.mouse = { x: -1, y: -1 }; this.hovered = null; this.quick = [];
   }
 
@@ -57,12 +68,15 @@ export class StatusBar {
       [S.StatKey, () => g.windows.toggle('stat')], [S.SkillKey, () => g.windows.toggle('skill')],
       [S.KeySet, () => g.windows.toggle('keyconfig')],
     ];
-    this.tabs = small.map(([node, fn], i) => this.btn(node, 599 + i * 29, () => y() + 6, fn));
-    this.quickBtn = this.btn(S.QuickSlot, 599 + 5 * 29, () => y() + 6, () => { this.quickOpen = !this.quickOpen; this.render(); });
-    this.quickBtnD = this.btn(S.QuickSlotD, 599 + 5 * 29, () => y() + 6, () => { this.quickOpen = false; });
+    // the hotkey tabs from x 614, every 30px (the client's own spacing), after the notice box
+    this.tabs = small.map(([node, fn], i) => this.btn(node, TABS_X + i * 30, () => y() + 6, fn));
+    this.quickBtn = this.btn(S.QuickSlot, TABS_X + 5 * 30, () => y() + 6, () => { this.quickOpen = !this.quickOpen; this.render(); });
+    this.quickBtnD = this.btn(S.QuickSlotD, TABS_X + 5 * 30, () => y() + 6, () => { this.quickOpen = false; });
     // chat line extras at the end of the white strip
-    this.whisperBtn = this.btn(S.BtWhisper, 518, () => y() + 9, () => this.focusChat('/w '));
-    this.claimBtn = this.btn(S.BtClaim, 534, () => y() + 9, () => g.notice('To report a player, please contact a GM.'));
+    // the chat log's size: Basic.img's "-" folds it to its last line, "+" opens it back to six
+    this.chatSmall = false;
+    this.chatMinBtn = this.btn(this.B.BtMin, 530, () => y() + 12, () => { this.chatSmall = true; });
+    this.chatMaxBtn = this.btn(this.B.BtMax, 530, () => y() + 12, () => { this.chatSmall = false; });
 
     this.chat = new TextField(this.layer, CHAT.x, 0, CHAT.w, CHAT.h, { max: 70, color: '#000' });
     this.chat.el.classList.add('chatinput');
@@ -76,9 +90,9 @@ export class StatusBar {
     });
 
     const menuFrames = Object.entries(MENU_ITEMS).flatMap(([w, list]) => [this.W[w].backgrnd, ...list.flatMap((b) => stateFrames(this.W[w][b]))]);
-    await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot,
+    await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
       S.gauge.bar, S.gauge.graduation, S.gauge.gray, ...canvases(S.number), ...canvases(S.key), ...canvases(this.B.LevelNo),
-      ...this.hpFlash.frames, ...this.mpFlash.frames, ...this.allButtons().flatMap((b) => b.frames()), ...menuFrames]);
+      ...this.hpFlash.frames, ...this.mpFlash.frames, ...this.allButtons().flatMap((b) => b.frames()), ...this.chatMaxBtn.frames(), ...menuFrames]);
     this.render();
   }
 
@@ -91,7 +105,7 @@ export class StatusBar {
 
   allButtons() {
     const list = [this.shopBtn, this.menuBtn, this.shortBtn, this.tradeBtn, ...this.tabs,
-      this.quickOpen ? this.quickBtnD : this.quickBtn, this.whisperBtn, this.claimBtn];
+      this.quickOpen ? this.quickBtnD : this.quickBtn, this.chatSmall ? this.chatMaxBtn : this.chatMinBtn];
     if (this.menu) list.push(...this.menu.buttons);
     return list.filter(Boolean);
   }
@@ -108,8 +122,9 @@ export class StatusBar {
   get typing() { return document.activeElement === this.chat?.el; }
 
   // ------------------------------------------------------------------ chat log
-  message(text, color = '#fff') {
-    this.lines.push({ text: String(text), color });
+  /** A chat log line; megaphones add a coloured bar (bg) and little images in front of the text (icons). */
+  message(text, color = '#fff', { bg = null, icons = null } = {}) {
+    this.lines.push({ text: String(text), color, bg, icons });
     if (this.lines.length > 80) this.lines.shift();
   }
 
@@ -149,8 +164,9 @@ export class StatusBar {
     const g = this.game;
     this.quick = await Promise.all(QUICK_KEYS.map(async (sc) => {
       const k = g.keymap?.[sc];
-      if (!k || (k.type !== 1 && k.type !== 2)) return null;
-      const node = k.type === 1 ? g.skills?.icon(k.action) : await itemIcon(this.assets, k.action);
+      if (!k || (k.type !== 1 && k.type !== 2 && k.type !== 8)) return null;
+      const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? g.windows.W.SkillMacro?.Macroicon?.[k.action]?.icon
+        : await itemIcon(this.assets, k.action);
       if (node) await this.assets.preload([node]);
       return { node, skill: k.type === 1 ? k.action : 0, item: k.type === 2 ? k.action : 0 };
     }));
@@ -165,6 +181,7 @@ export class StatusBar {
     const sc = QUICK_KEYS[row * 4 + col];
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
     else if (c.kind === 'item' && c.tab === 2) this.game.bindKey(sc, 2, c.id);
+    else if (c.kind === 'bind' && c.b.type === 8) this.game.bindKey(sc, 8, c.b.action);   // a skill macro
     else return;
     sfx.play('UI/DragEnd');
     this.render();
@@ -181,7 +198,13 @@ export class StatusBar {
     if (over && over !== this.hovered) sfx.play('UI/BtMouseOver');
     this.hovered = over;
     if (type === 'down') { for (const b of buttons) b.down = b === over; }
-    if (type === 'down' && !over && this.targetHit(x, y)) { this.chatTarget = (this.chatTarget + 1) % CHAT_TARGETS.length; sfx.play('UI/BtMouseClick'); }
+    // the chat target: the box opens the drop-up list, a row picks, anywhere else closes it
+    if (type === 'down' && this.targetMenu) {
+      const row = this.targetRowAt(x, y);
+      this.targetMenu = false;
+      if (row >= 0) { this.chooseTarget(CHAT_TARGETS[row].key); return true; }
+      if (this.targetHit(x, y)) { sfx.play('UI/BtMouseClick'); return true; }
+    } else if (type === 'down' && !over && this.targetHit(x, y)) { this.targetMenu = true; sfx.play('UI/BtMouseClick'); return true; }
     if (type === 'up') {
       const target = buttons.find((b) => b.down && b === over);
       for (const b of buttons) b.down = false;
@@ -192,11 +215,42 @@ export class StatusBar {
     return inside;
   }
 
-  /** Clicking the chat target box steps through All / Buddy / Party / Guild / Alliance. */
+  /** The chat target box ("To All") at the start of the white strip. */
   targetHit(x, y) { return x >= 1 && x < 82 && y >= this.y + 8 && y < this.y + 28; }
+  targetMenuTop() { return this.y + 8 - CHAT_TARGETS.length * TMENU.row - 2; }
+  targetRowAt(x, y) {
+    const top = this.targetMenuTop() + 1;
+    if (x < TMENU.x || x >= TMENU.x + TMENU.w || y < top || y >= top + CHAT_TARGETS.length * TMENU.row) return -1;
+    return Math.floor((y - top) / TMENU.row);
+  }
+  /** A target from the list; Whisper first asks who to (keeping the old target if you cancel). */
+  async chooseTarget(key) {
+    sfx.play('UI/BtMouseClick');
+    if (key === 'whisper') {
+      const name = (await this.game.windows.askText('Who would you like to whisper to?', this.whisperTo || ''))?.trim();
+      if (!name) return;
+      this.whisperTo = name;
+    }
+    this.chatTarget = key;
+    this.focusChat();
+  }
+  drawTargetMenu(ctx) {
+    const top = this.targetMenuTop(), h = CHAT_TARGETS.length * TMENU.row + 2, hover = this.targetRowAt(this.mouse?.x ?? -1, this.mouse?.y ?? -1);
+    ctx.save();
+    ctx.fillStyle = TMENU.border; ctx.fillRect(TMENU.x - 1, top - 1, TMENU.w + 2, h + 2);
+    ctx.fillStyle = TMENU.inner; ctx.fillRect(TMENU.x, top, TMENU.w, h);
+    ctx.fillStyle = TMENU.bg; ctx.fillRect(TMENU.x + 1, top + 1, TMENU.w - 2, h - 2);
+    CHAT_TARGETS.forEach((t, i) => {
+      const ry = top + 1 + i * TMENU.row;
+      if (i === hover || (hover < 0 && t.key === this.chatTarget)) { ctx.fillStyle = TMENU.lit; ctx.fillRect(TMENU.x + 1, ry, TMENU.w - 2, TMENU.row); }
+      uiText(ctx, t.label, TMENU.x + 7, ry + 3, { color: '#fff', size: 12 });
+    });
+    ctx.restore();
+  }
 
   contains(x, y) {
     if (y >= this.y) return true;
+    if (this.targetMenu && x < TMENU.x + TMENU.w + 1 && y >= this.targetMenuTop() - 1) return true;
     if (this.menu && x >= this.menu.x && x < this.menu.x + this.menu.bg._w && y >= this.menu.y) return true;
     if (this.quickOpen && x >= this.w - 151 && y >= this.y - 80) return true;
     return false;
@@ -222,7 +276,12 @@ export class StatusBar {
 
     // chat target box ("All") at the start of the white strip
     const tgt = img(S.base.chatTarget);
-    if (tgt) { ctx.drawImage(tgt, 1, y + 8); uiText(ctx, CHAT_TARGETS[this.chatTarget], 1 + 40, y + 11, { color: '#fff', size: 11, align: 'center' }); }
+    const label = CHAT_TARGETS.find((t) => t.key === this.chatTarget)?.label || 'To All';
+    if (tgt) { ctx.drawImage(tgt, 1, y + 8); uiText(ctx, label, 1 + 40, y + 11, { color: '#fff', size: 11, align: 'center' }); }
+    // the notice box and its pencil, where invitations come from
+    const box = img(S.base.box), memo = img(S.base.iconMemo);
+    if (box) ctx.drawImage(box, NOTICE_BOX.x, y + NOTICE_BOX.y);
+    if (memo) ctx.drawImage(memo, NOTICE_ICON.x, y + NOTICE_ICON.y);
 
     // LV. is part of backgrnd2 (x 10-29, rows 47-59); the digits follow it on the same rows.
     // Name and job sit in the panel right of the LV plate (plate ends at x 77)
@@ -257,6 +316,7 @@ export class StatusBar {
 
     for (const b of this.allButtons()) if (!this.menu?.buttons.includes(b)) b.draw(ctx, this.assets);
     if (this.quickOpen) this.drawQuickSlots(ctx);
+    if (this.targetMenu) this.drawTargetMenu(ctx);
     if (this.menu) {
       const m = this.menu, mbg = img(m.bg);
       if (mbg) ctx.drawImage(mbg, m.x, m.y);
@@ -266,16 +326,30 @@ export class StatusBar {
   }
 
   drawChatLog(ctx) {
-    const shown = this.lines.slice(-CHAT_LINES);
-    if (!shown.length && !this.typing) return;
-    const h = CHAT_LINES * LINE_H + 6, top = this.y - h;
+    const rows = this.chatSmall ? 1 : CHAT_LINES;
+    const shown = this.lines.slice(-rows);
+    // the log's panel is always there, empty or not, as in the client
+    const h = rows * LINE_H + 6, top = this.y - h;
     ctx.save();
     ctx.fillStyle = 'rgba(0,0,0,0.45)';
     ctx.fillRect(0, top, CHAT_W, h);
     const edge = this.assets.image(this.S.base.chat);
     if (edge) ctx.drawImage(edge, 0, top - edge.height);
-    shown.forEach((l, i) => uiText(ctx, l.text, 4, top + 3 + (CHAT_LINES - shown.length + i) * LINE_H,
-      { color: l.color, size: 12, outline: 'rgba(0,0,0,0.8)' }));
+    shown.forEach((l, i) => {
+      const y = top + 3 + (rows - shown.length + i) * LINE_H;
+      let x = 4;
+      if (l.bg) {
+        ctx.font = '12px Arial, sans-serif';
+        const w = (l.icons || []).reduce((s, n) => s + (n.text ? ctx.measureText(n.text).width + 2 : (this.assets.image(n)?.width || 0) + 2), 0) + ctx.measureText(l.text).width + 6;
+        ctx.fillStyle = l.bg; ctx.fillRect(2, y - 1, Math.min(CHAT_W - 4, w), LINE_H);
+      }
+      for (const n of l.icons || []) {
+        if (n.text) { uiText(ctx, n.text, x, y, { color: l.color, size: 12, bold: true }); ctx.font = 'bold 12px Arial, sans-serif'; x += ctx.measureText(n.text).width + 2; continue; }
+        const im = this.assets.image(n);
+        if (im) { ctx.drawImage(im, x, y); x += im.width + 2; }
+      }
+      uiText(ctx, l.text, x, y, l.bg ? { color: l.color, size: 12 } : { color: l.color, size: 12, outline: 'rgba(0,0,0,0.8)' });
+    });
     ctx.restore();
   }
 

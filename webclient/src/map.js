@@ -391,7 +391,8 @@ export class Life {
     const t = this.aggro;
     if (t) {
       const dx = t.x - this.x;
-      if (Math.abs(dx) > 8) { this.facingRight = dx > 0; this.setState('move'); } else this.setState('stand');
+      // a Puppet stops it a little short, up against it; a character it walks right up to
+      if (Math.abs(dx) > (t.reach || 8)) { this.facingRight = dx > 0; this.setState('move'); } else { this.facingRight = dx > 0; this.setState('stand'); }
       if (this.canJump && t.y < this.y - 40 && Math.abs(dx) < 120 && Math.random() < dt * 0.8) this.jump();
       return;
     }
