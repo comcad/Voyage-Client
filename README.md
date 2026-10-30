@@ -4,6 +4,7 @@
 A MapleStory **v83** (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)
 
 (ALPHA) Work in progress...
+<img width="2872" height="1602" alt="image" src="https://github.com/user-attachments/assets/a4522771-465b-47d4-8f5d-e5863c502d89" />
 
 
 ## Directories
