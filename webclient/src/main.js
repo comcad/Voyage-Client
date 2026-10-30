@@ -43,7 +43,7 @@ async function online(assets) {
   await assets.preload(lookCanvases(look, PRELOAD));
 
   const game = new Game($('game-canvas'), assets, look, hooks, net);
-  Object.assign(game, { server: pick.server, worldId: pick.world, channel: entered.channel ?? pick.channel, channelCount: pick.channels || 1 });
+  Object.assign(game, { server: pick.server, worldId: pick.world, channel: entered.channel ?? pick.channel, channelCount: pick.channels || 1, gm: !!pick.gm });
   if (new URLSearchParams(location.search).has('debug')) globalThis.maple = game; // inspect from the console
   await game.goOnline(entered, $('ui-root'));
   game.start();

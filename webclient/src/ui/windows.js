@@ -38,12 +38,12 @@ export class WindowManager {
   open(name) {
     const w = this.wins[name];
     if (!w) return null;
-    if (!this.order.includes(w)) { this.order.push(w); w.onOpen?.(); sfx.play('UI/MenuUp'); } else this.raise(w);
+    if (!this.order.includes(w)) { this.order.push(w); w.onOpen?.(); sfx.play(w.openSound || 'UI/MenuUp'); } else this.raise(w);
     return w;
   }
   close(w) {
     const i = this.order.indexOf(w);
-    if (i >= 0) { this.order.splice(i, 1); sfx.play('UI/MenuDown'); this.tip = null; w.onClose?.(); }
+    if (i >= 0) { this.order.splice(i, 1); sfx.play(w.closeSound || 'UI/MenuDown'); this.tip = null; w.onClose?.(); }
   }
   toggle(name, arg) {
     const w = this.wins[name];
@@ -546,6 +546,8 @@ class StatWin extends Win {
  */
 const MACRO_W = 207, MACRO_ROWS = 3;
 const emptyMacro = () => ({ name: '', shout: false, skills: [0, 0, 0] });
+const GM_TAB = 'gm';
+
 class SkillWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Skill;
@@ -633,10 +635,24 @@ class SkillWin extends Win {
     if (hit.icon) this.mgr.startCarry({ kind: 'bind', b: { type: 8, action: hit.row } }, this.M.Macroicon?.[hit.row]?.icon);
   }
   onOpen() { const b = this.books; this.book ??= b[b.length - 1]; }
-  get books() { return this.g.skills?.jobBookIds || []; }
-  get list() { return (this.g.skills?.bookSkills(this.book) || []).filter((id) => this.g.skills.maxLevel(id)); }
+  /**
+   * Your job's books, then for a GM (or anyone with a GM skill) one more tab, GM, holding the GM and Super GM
+   * books (900 / 910) together. There is no v83 label art for it, so its label is drawn as text.
+   */
+  get books() {
+    const sb = this.g.skills, jobs = sb?.jobBookIds || [];
+    const gm = this.g.gm || Object.entries(sb?.levels || {}).some(([id, s]) => id >= 9000000 && s.level > 0);
+    if (gm && sb) { sb.book(900); sb.book(910); }
+    return gm ? [...jobs, GM_TAB] : jobs;
+  }
+  get list() {
+    const sb = this.g.skills;
+    const ids = this.book === GM_TAB ? [...(sb?.bookSkills(900) || []), ...(sb?.bookSkills(910) || [])] : sb?.bookSkills(this.book) || [];
+    return ids.filter((id) => sb.maxLevel(id));
+  }
   get sp() {
     const g = this.g, b = this.book;
+    if (b === GM_TAB) return g.stats.sp || 0;
     if (b % 1000 === 0 || b === 2001) {
       const base = Math.floor(g.stats.job / 1000) * 1000;
       let used = 0;
@@ -646,6 +662,7 @@ class SkillWin extends Win {
     return g.stats.sp || 0;
   }
   canRaise(id) {
+    if (this.book === GM_TAB) return false;   // GM skills are granted, not bought with SP
     const sb = this.g.skills, req = sb.node(id)?.req;
     return this.sp > 0 && sb.level(id) < sb.maxLevel(id) && (!req || Object.entries(req).every(([r, lv]) => sb.level(Number(r)) >= lv));
   }
@@ -659,12 +676,19 @@ class SkillWin extends Win {
     const g = this.g, sb = g.skills, m = this.mgr;
     if (!sb || !g.stats) return;
     if (this.macroOpen) this.drawMacros(ctx);
-    this.tabRects = drawTabStrip(ctx, m, this.W.Tab, this.books.length, this.books.indexOf(this.book), 34 * this.books.length);
-    const book = sb.books[this.book], bi = book && !(book instanceof Promise) ? book.info?.icon : null;
+    const books = this.books, gi = books.indexOf(GM_TAB), sel = books.indexOf(this.book);
+    const labels = gi < 0 ? this.W.Tab : { enabled: { ...this.W.Tab.enabled, [gi]: null }, disabled: { ...this.W.Tab.disabled, [gi]: null } };
+    this.tabRects = drawTabStrip(ctx, m, labels, books.length, sel, 34 * books.length);
+    if (gi >= 0 && this.tabRects[gi]) {
+      const [tx, tw, ty] = this.tabRects[gi];
+      uiText(ctx, 'GM', tx + Math.trunc((tw - 8) / 2), ty + 5, { color: gi === sel ? '#fff' : '#9aa6b8', bold: true, size: 9, align: 'center' });
+    }
+    const bookId = this.book === GM_TAB ? 900 : this.book;
+    const book = sb.books[bookId], bi = book && !(book instanceof Promise) ? book.info?.icon : null;
     const bim = m.image(bi);
     if (bim) ctx.drawImage(bim, 6 + 4, 80 - 30);
     else if (bi) m.assets.preload([bi]);
-    this.text(ctx, sb.bookName(this.book), 103, 59, { color: '#fff', align: 'center', size: 12 });
+    this.text(ctx, this.book === GM_TAB ? 'GM' : sb.bookName(this.book), 103, 59, { color: '#fff', align: 'center', size: 12 });
     const list = this.list;
     this.first = Math.min(this.first, Math.max(0, list.length - 4));
     for (let i = 0; i < 4; i++) {

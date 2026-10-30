@@ -18,7 +18,7 @@ const SETS = { red: ['NoRed1', 'NoRed0'], crit: ['NoCri1', 'NoCri0'], violet: ['
 // damage numbers, as openms recovered the original: opaque for 400ms, fading over the next 600, rising 30px
 const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
 /** How long each further damage line waits before it shows (ms), per skill; the rest wait 120 per line. */
-function lineDelay(skillId, line) {
+export function lineDelay(skillId, line) {
   if ([5101004, 15101003, 5121007, 15111004].includes(skillId)) return 0;   // these all show at once
   if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
   return line * 120;
@@ -60,7 +60,8 @@ export class WorldFx {
     this.assets.preload(anim.frames);
     this.anims.push({ anim, ent });
   }
-  tomb(ent) { this.tombs.push({ anim: new Anim(this.T.fall, false), x: ent.x, y: ent.y }); }
+  /** A tombstone for `ent`: it lands where the ghost is (following the death knock-back), not where the blow fell. */
+  tomb(ent) { this.tombs.push({ anim: new Anim(this.T.fall, false), ent }); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
   mapChanged() { this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); }
@@ -110,12 +111,16 @@ export class WorldFx {
     }
     // level up / job change / quest clear, following their character
     for (const a of this.anims) drawAt(ctx, im, a.anim.node, a.ent.x - cam.x, a.ent.y - cam.y, a.anim.alpha);
-    // tombstones: drop from above during frames 0-11, then land
+    for (const n of this.nums) this.drawNumber(ctx, n, cam);
+  }
+  /** Tombstones (drawn behind the characters, so the ghost floats in front): drop from above during frames 0-11, then land. */
+  drawTombs(ctx, cam) {
+    const im = (n) => this.assets.image(n);
     for (const t of this.tombs) {
       const a = t.anim, fallMs = 12 * 80, at = Math.min(fallMs, a.i < 12 ? a.i * 80 + a.t : fallMs);
-      drawAt(ctx, im, a.node, t.x - cam.x, t.y - cam.y - 320 * (1 - at / fallMs), 1);
+      // +1: the stone's art sits a pixel left of the ghost's middle
+      drawAt(ctx, im, a.node, Math.round(t.ent.x) + 1 - cam.x, Math.round(t.ent.y) - cam.y - 320 * (1 - at / fallMs), 1);
     }
-    for (const n of this.nums) this.drawNumber(ctx, n, cam);
   }
 
   drawNumber(ctx, n, cam) {

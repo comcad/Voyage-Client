@@ -12,9 +12,10 @@ import { settings, saveSettings, MOB_INFO } from '../settings.js';
  * Channel: 436 wide; t (67) = title y 3-20 and the blue world bar y 27-53 (x 8-427, where world/<id>
  * sits), c (10, tiled) = the white list, s (36) = the grey button band (rows 7-29).
  * Channel cells are channel0 (68x20) with the ch/<n> label; channel1 marks the chosen one and
- * channel2 the channel you are on. 5 columns from x 24, every 80px; rows every 26px from y 62.
+ * channel2 the channel you are on. 6 columns from x 6, every 71px; rows every 22px from y 65; each label 8px in.
  */
-const COLS = 5, CELL_X = 24, CELL_DX = 80, CELL_Y = 62, CELL_DY = 26;
+// measured from the original window: six 68x20 channels a row, 3px apart, 6px in from the left, rows 2px apart
+const COLS = 6, CELL_X = 6, CELL_DX = 71, CELL_Y = 65, CELL_DY = 22;
 export class ChannelWin extends Win {
   constructor(mgr) {
     super(mgr, null, 0, 0);
@@ -28,13 +29,13 @@ export class ChannelWin extends Win {
   onOpen() {
     this.pick = this.g.channel ?? 0;
     const rows = Math.ceil(this.count / COLS);
-    this.tiles = Math.max(2, Math.ceil((CELL_Y - 67 + rows * CELL_DY + 4) / 10));
+    // the middle piece (10px) repeats down to the last row's bottom; two rows make the original's 143px window
+    this.tiles = Math.max(2, Math.ceil((CELL_Y + rows * CELL_DY - 2 - 67) / 10));
     this.w = 436; this.h = 67 + this.tiles * 10 + 36;
     this.x = Math.round((800 - this.w) / 2); this.y = Math.round((529 - this.h) / 2);
     const by = this.h - 36 + 9;
     this.cancel.x = 436 - 16 - 47; this.cancel.y = by;
     this.change.x = this.cancel.x - 6 - 91; this.change.y = by;
-    this.change.enabled = this.pick !== this.g.channel;
   }
   key(e) { if (e.key === 'Escape') this.mgr.close(this); else if (e.key === 'Enter') this.go(); }
   go() {
@@ -56,18 +57,18 @@ export class ChannelWin extends Win {
     for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 67 + i * 10);
     ctx.drawImage(s, 0, this.h - 36);
     const world = im(C.world?.[this.g.worldId ?? 0]);
-    if (world) ctx.drawImage(world, 16, 30 + Math.round((20 - world.height) / 2));
+    if (world) ctx.drawImage(world, 13, 30 + Math.round((20 - world.height) / 2));
     for (let i = 0; i < this.count; i++) {
       const x = CELL_X + (i % COLS) * CELL_DX, y = CELL_Y + Math.floor(i / COLS) * CELL_DY;
       const bg = im(i === this.g.channel ? C.channel2 : i === this.pick ? C.channel1 : C.channel0);
       if (bg) ctx.drawImage(bg, x, y);
       const label = im(C.ch?.[i]);
-      if (label) ctx.drawImage(label, x + 24, y + 5);
+      if (label) ctx.drawImage(label, x + 8, y + 5);   // left in the cell, past the selected one's arrow
     }
   }
   down(lx, ly) {
     const i = this.cellAt(lx, ly);
-    if (i >= 0) { this.pick = i; this.change.enabled = i !== this.g.channel; }
+    if (i >= 0) this.pick = i;   // CHANGE CHANNEL stays lit, as in the client; on your own channel it does nothing
   }
   dblclick(lx, ly) { const i = this.cellAt(lx, ly); if (i >= 0) { this.pick = i; this.go(); } }
 }

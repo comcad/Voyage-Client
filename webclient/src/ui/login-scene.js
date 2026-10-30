@@ -446,7 +446,7 @@ export class LoginScene {
       };
       const openWorld = (w) => {
         if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; }
-        world = w; channel = 0;
+        world = w; channel = 0; sfx.play('UI/WorldSelect');
         // four columns centred on the paper, rows from just under the header rule (y 52)
         chButtons = w.channels.map((c, i) => {
           const node = WS.channel[i] || WS.channel[0];
@@ -551,7 +551,7 @@ export class LoginScene {
       let infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
       const choose = (idx) => {
         if (idx === sel) return;
-        sel = idx; beam.anim.reset(); sparkle.anim.reset();
+        sel = idx; beam.anim.reset(); sparkle.anim.reset(); sfx.play('UI/CharSelect');
         infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
       };
       const pick = async () => {
@@ -569,7 +569,7 @@ export class LoginScene {
         if (res.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
         if (res.error) { await this.notice(res.error); return; }
         this.s.close();
-        resolve({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look });
+        resolve({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look, gm: !!this.account?.gm });
       };
       const start = guard(pick);
       const create = async () => {

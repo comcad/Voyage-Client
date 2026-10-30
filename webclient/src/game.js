@@ -1,15 +1,16 @@
 import { GameMap, nameTag, Anim } from './map.js';
-import { Footholds, PHYS } from './physics.js';
+import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases } from './character.js';
 import { weaponMultiplier, itemIcon, mesoIcon, invType, isScroll, scrollFits } from './data.js';
 import { stanceByte, STANCE_NAMES } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
-import { npcTalk, MessageBox, ShopWin, drawItemTip } from './ui/dialogs.js';
+import { npcTalk, MessageBox, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
 import { npcQuestMenu } from './ui/quests-ui.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
-import { WorldFx } from './effects.js';
+import { WorldFx, lineDelay } from './effects.js';
+import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
 import { StatusBar } from './ui/statusbar.js';
@@ -49,6 +50,8 @@ const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'Y
   15: 'You cannot open a shop here. Shops open in the Free Market rooms.', 16: 'You cannot open a shop here.',
   17: 'You may not enter this store.', 18: 'The owner is tending to this store. Please try again later.' };
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
+// the wait before you can teleport again: not in the skill's data nor recovered from the client, an estimate
+const TELEPORT_DELAY = 1000;
 
 const QUEST_ERRORS = { 0x0a: 'You cannot do that quest right now.', 0x0b: 'You do not have enough mesos.', 0x0d: 'Unequip the item first.', 0x0e: 'You do not have the required items.', 0x0f: 'The quest has expired.' };
 
@@ -95,10 +98,10 @@ class Input {
  */
 const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
   'wink', 'pain', 'glitter', 'despair', 'love', 'shine', 'blaze', 'hum', 'bowing', 'hot', 'dam', 'qBlue'];
-const EMOTE_TIME = 3;
-function setExpression(ent, n) {
+const EMOTE_TIME = 3, HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s (the client's)
+function setExpression(ent, n, time = EMOTE_TIME) {
   const name = EMOTES[n - 1];
-  if (name) ent.expr = { name, frame: 0, t: 0, left: EMOTE_TIME };
+  if (name) ent.expr = { name, frame: 0, t: 0, left: time };
 }
 function stepExpression(ent, look, dt) {
   let e = ent.expr;
@@ -155,13 +158,15 @@ class RemotePlayer {
       alert: 'alert', sit: 'sit', dead: 'dead', fly: 'fly',
     }[this.state] || look.standAction();
     if (!look.has(action)) action = look.standAction();
-    if (this.action !== action) { this.action = action; this.frame = 0; this.frameT = 0; }
+    if (this.action !== action) { this.action = action; this.frame = 0; this.frameT = 0; this.back = false; }
     const moving = !(action === 'ladder' || action === 'rope') || this.path;
     if (moving) this.frameT += dt * 1000;
     const k = this.attack && action === this.attack ? this.attackScale || 1 : 1;   // their weapon's speed
     while (this.frameT >= look.delay(action, this.frame) * k) {
       this.frameT -= look.delay(action, this.frame) * k;
-      if (++this.frame >= look.frameCount(action)) { this.frame = 0; if (this.attack) { this.attack = null; break; } }
+      const nx = look.nextFrame(action, this.frame, this.back);
+      this.frame = nx.frame; this.back = nx.back;
+      if (nx.wrapped && this.attack) { this.attack = null; break; }
     }
     if (this.chat && (this.chat.t -= dt) <= 0) this.chat = null;
   }
@@ -182,6 +187,11 @@ function mesoTiming(node, amount) {
   for (let i = 0; node[i]; i++) out[i] = { ...node[i], delay: delays[i] ?? delays[delays.length - 1] };
   return out;
 }
+// monster curses (Skill/MobSkill.img ids), as the server sends them
+const SEAL = 120, WEAKEN = 122, STUN = 123, SLOW = 126, REVERSE = 132;
+const MOB_DOOM = 0x10000;   // MonsterStatus.DOOM
+const FADE_MS = 600;   // map changes: the old map dims to black over this, the new one lights up over it
+const SLASH_BLASTS = new Set([1001005, 11001003]);   // reach out to their range once the swing has a target
 /** Drop hop heights (the original uses 100px for both) and the pickup's length; see updateDrops. */
 const DROP_HOP = 64, THROW_HOP = 93, PICKUP_TIME = 0.7;
 
@@ -213,10 +223,38 @@ const TRADE_ERRORS = { 2: 'The other character is already trading.', 4: 'You can
 const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
   14: 'You cannot add a GM to your buddy list.', 15: 'That character is not registered.' };
 
+/**
+ * At a fractional zoom (a high-density screen draws the 800x600 game at, say, 1.6x) pieces that meet in game
+ * pixels meet on fractional screen pixels, and the browser softens each image's edge there: faint lines between
+ * floor tiles and background pieces that shimmer as the camera moves. So every unrotated image is drawn with its
+ * edges rounded to whole screen pixels; two pieces that touch round to the same edge and close up.
+ */
+function snapToPixels(ctx) {
+  const draw = ctx.drawImage.bind(ctx);
+  ctx.drawImage = function (img, ...a) {
+    const m = ctx.getTransform();
+    if (m.b || m.c || (m.a === 1 && m.d === 1 && m.e === Math.round(m.e) && m.f === Math.round(m.f))) return draw(img, ...a);
+    let sx = 0, sy = 0, sw = img.width, sh = img.height, dx, dy, dw, dh;
+    if (a.length === 2) { [dx, dy] = a; dw = sw; dh = sh; }
+    else if (a.length === 4) [dx, dy, dw, dh] = a;
+    else [sx, sy, sw, sh, dx, dy, dw, dh] = a;
+    // the rectangle's corners on screen, rounded; a mirrored draw (negative scale) just swaps the ends
+    let x0 = Math.round(m.a * dx + m.e), x1 = Math.round(m.a * (dx + dw) + m.e);
+    let y0 = Math.round(m.d * dy + m.f), y1 = Math.round(m.d * (dy + dh) + m.f);
+    ctx.save();
+    ctx.setTransform(Math.sign(m.a) || 1, 0, 0, Math.sign(m.d) || 1, 0, 0);
+    if (m.a < 0) { x0 = -x0; x1 = -x1; }
+    if (m.d < 0) { y0 = -y0; y1 = -y1; }
+    draw(img, sx, sy, sw, sh, x0, y0, x1 - x0, y1 - y0);
+    ctx.restore();
+  };
+  return ctx;
+}
+
 export class Game {
   /** net: ChannelSession when playing online, null for the offline map viewer. */
   constructor(canvas, assets, look, hooks = {}, net = null) {
-    this.canvas = canvas; this.ctx = canvas.getContext('2d');
+    this.canvas = canvas; this.ctx = snapToPixels(canvas.getContext('2d'));
     canvas.width = VIEW_W; canvas.height = VIEW_H;
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
@@ -315,7 +353,7 @@ export class Game {
     this.inCashShop = true;
     const info = d.info;
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; }
-    this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear();
+    this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
     this.csWin = this.windows.show(new CashShopWin(this.windows, d));
@@ -352,6 +390,7 @@ export class Game {
       await loaded;
       if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
       else this.hud.message(`You are now in channel ${this.channel + 1}.`, '#9fd3ff');
+      if (this.stats.hp <= 0 && !this.dead) this.die();   // still dead after the switch
     } catch (e) {
       console.error(e);
       this.hooks.onLoading?.(false);
@@ -639,7 +678,8 @@ export class Game {
     const t = Math.floor(id / 1000000);
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
-    else if (slot && t === 2) this.net.useItem(Number(slot), id);
+    else if (slot && t === 2) { this.net.useItem(Number(slot), id); sfx.play(`Item/${pad(id, 8)}/Use`); }
+    else if (slot && t === 3 && Math.floor(id / 10000) === 301) this.sitChair(id);
   }
 
   // ------------------------------------------------------------------ pets
@@ -699,11 +739,22 @@ export class Game {
 
   weaponId() { return this.inventory?.equipped[-11]?.id || 0; }
   equipStat(key) { let v = 0; for (const it of Object.values(this.inventory?.equipped || {})) v += it[key] || 0; return v; }
+  /**
+   * Your Speed and Jump as fractions of the base walk / jump: 100 plus your equipment's plus the strongest buff
+   * (Haste, Nimble Feet, a speed potion...), held to 80-140 and 80-123 as the client does (openms, docs/skills.md).
+   */
+  moveStats() {
+    const now = Date.now(), buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b.until > now && b[k]).map((b) => b[k]));
+    const pct = (k, max) => Math.max(80, Math.min(max, 100 + this.equipStat(k) + buff(k))) / 100;
+    const slow = (this.diseases || []).find((d) => d.skill === SLOW && d.until > now);   // Slow: down to its x%
+    return { speed: slow ? Math.min(pct('speed', 140), (slow.x || 80) / 100) : pct('speed', 140), jump: pct('jump', 123) };
+  }
 
   // ------------------------------------------------------------------ online wiring
   /** Hook a ChannelSession's events to this game. `entered` is the result of session.enter(). */
   async goOnline(entered, uiRoot) {
     const info = entered.info;
+    sfx.play('Game/GameIn');
     this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
@@ -827,6 +878,22 @@ export class Game {
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
       chat: later((c) => this.onChat(c)),
       spawnPlayer: later((d) => this.spawnPlayer(d)),
+      mistSpawn: later((d) => this.addMist(d)),
+      mistRemove: later((oid) => this.mists?.delete(oid)),
+      doorSpawn: later((d) => {
+        this.addDoor(d.owner, d.x, d.y, false, d.launched);
+      }),
+      doorRemove: later((owner) => this.doors?.delete(owner)),
+      townPortal: later((from, to, pos) => {
+        // a Mystic Door's record, pointing at its other end. Out in the field (to = this map's town) SPAWN_DOOR
+        // draws the door; in town the door stands on the town's door portal (type 6) - the first one for you alone
+        if (from === 999999999 || !pos) { for (const [k, d] of this.doors || []) if (d.town) this.doors.delete(k); return; }
+        if (from !== this.map?.id || to === this.map.info?.returnMap) return;
+        const tp = this.map.portals.find((q) => q.pt === 6);
+        if (tp) this.addDoor('town', tp.x, tp.y, true, true, to);
+      }),
+      showChair: later((id, itemId) => { const rp = this.others.get(id); if (rp) rp.chair = itemId; if (itemId) this.chairArt(itemId); }),
+      cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
       removePlayer: later((id) => { this.others.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
       petSpawn: later((d) => this.addPet(d)),
       petRemove: later((owner, slot, hunger) => {
@@ -844,7 +911,7 @@ export class Game {
       scrollEffect: later((e) => this.onScrollEffect(e)),
       bookCard: later((id, count) => {
         const b = this.monsterBook;
-        if (count > (b.cards[id] || 0)) { b.cards[id] = count; this.hud.message(`You have obtained a card: ${this.windows.itemName(id)} (${count}/5)`, '#9fe07a'); this.vfx?.play('MonsterBook', this.player); }
+        if (count > (b.cards[id] || 0)) { b.cards[id] = count; sfx.play('Game/mCardGet'); this.hud.message(`You have obtained a card: ${this.windows.itemName(id)} (${count}/5)`, '#9fe07a'); this.vfx?.play('MonsterBook', this.player); }
         else this.hud.message('That card is already full in your Monster Book.', '#fff');
       }),
       bookCover: later((id) => { this.monsterBook.cover = id; }),
@@ -869,10 +936,28 @@ export class Game {
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
         if (e && !e.pending) e.controlled = true; else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
+        if (e && !e.pending && m.statuses) this.applyMobStatus(e, m.statuses);   // what it was already under
         if (aggro && e && !e.pending) e.aggro = this.player;     // the server wants it after us
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
-      moveMob: later((oid, start, moves) => { const e = this.lifeByOid.get(oid); if (e && !e.pending && !e.controlled) e.applyMovement(start, moves); }),
+      reactorSpawn: later((d) => this.spawnReactor(d)),
+      mobSkillOffer: later((oid, skill, level) => { const e = this.lifeByOid.get(oid); if (e && !e.pending && e.controlled && skill) e.nextSkill = { skill, level }; }),
+      disease: later((d) => this.onDisease(d)),
+      healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
+      foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
+      foreignCancel: later((id, m1, m2) => { const rp = this.others.get(id); if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2))); }),
+      mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
+      mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
+      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.setState(d.state); }),
+      reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
+      moveMob: later((oid, start, moves, act, skill, level) => {
+        const e = this.lifeByOid.get(oid);
+        if (!e || e.pending || e.controlled) return;
+        e.applyMovement(start, moves);
+        // activity (12 + attack) * 2 + facing: its controller made it attack
+        if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }
+        else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
+      }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
       mobHp: later((oid, pct) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { e.hp = Math.round((e.maxHp * pct) / 100); e.hpShownUntil = performance.now() + 5000; } }),
       bossHp: later((d) => this.vfx?.bossHp(d)),
@@ -907,9 +992,16 @@ export class Game {
       cooldown: (id, sec) => { this.skills.cooldowns[id] = sec ? Date.now() + sec * 1000 : 0; },
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
-        this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes });
+        this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump });
       },
-      cancelBuff: (m1, m2) => { this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2))); },
+      cancelBuff: (m1, m2) => {
+        this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
+        this.diseases = (this.diseases || []).filter((d) => !((d.m1 & m1) || (d.m2 & m2)));
+      },
+      affected: later((chrId, skillId) => {
+        const ent = chrId === null ? this.player : this.others.get(chrId);
+        if (ent) this.playSkillEffect(skillId, ent, false, 'affected');
+      }),
       foreignSkill: later((chrId, skillId) => {
         const rp = this.others.get(chrId);
         if (!rp) return;
@@ -924,6 +1016,8 @@ export class Game {
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
     await loaded;
+    // logged off (or dropped) while dead: the server kept the 0 HP, so come back as the ghost, still to be revived
+    if (this.stats.hp <= 0 && !this.dead) this.die();
   }
 
   onQuest(id, status, data) {
@@ -982,11 +1076,14 @@ export class Game {
   async die() {
     this.dead = true;
     const p = this.player;
-    p.action = 'dead'; p.frame = 0; p.frameT = 0; p.attack = null;   // the character turns into its ghost
+    p.action = 'dead'; p.frame = 0; p.frameT = 0; p.attack = null; p.seat = null;   // the character turns into its ghost
     // the tombstone drops onto the body first, then the client asks
     this.vfx?.tomb(this.player); sfx.play('Game/Tombstone');
     await new Promise((r) => setTimeout(r, 1500));
-    await this.windows.notice('You have died. You will return to the nearest town.', { y: 90 }); // high, clear of the ghost
+    await new Promise((done) => {   // the client's own death notice (UIWindow.img/Notice/0), high and clear of the ghost
+      const w = new DeathNotice(this.windows, done);
+      this.assets.preload(w.frames()).then(() => this.windows.show(w));
+    });
     this.net.respawn();
   }
 
@@ -999,14 +1096,23 @@ export class Game {
     const seq = this.loadSeq = (this.loadSeq || 0) + 1;
     const current = () => seq === this.loadSeq;
     this.loading = true; this.loadingId = id;
-    this.hooks.onLoading?.(true, `Loading map ${id}...`);
+    // the old map fades to black while the new one loads; the loading screen only shows if that takes a while
+    this.fadeOut();
+    const fadeStart = this.fade.t0;
+    let status = `Loading map ${id}...`, slow = false;
+    const slowTimer = setTimeout(() => { if (current()) { slow = true; this.hooks.onLoading?.(true, status); } }, 1500);
     try {
       const map = new GameMap(this.assets, id);
-      await map.load((s) => current() && this.hooks.onLoading?.(true, s), { life: !this.net });
+      await Promise.all([
+        map.load((s) => { status = s; if (slow && current()) this.hooks.onLoading?.(true, s); }, { life: !this.net }),
+        new Promise((r) => setTimeout(r, Math.max(0, FADE_MS - (performance.now() - fadeStart)))),
+      ]);
       if (!current()) return;
       this.map = map;
+      this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
-      this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear();
+      this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
+      this.doors?.clear(); this.mists?.clear();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       this.snapCamera();
@@ -1019,8 +1125,10 @@ export class Game {
       console.error(e);
       if (current()) this.hooks.onError?.(e.message);
     } finally {
+      clearTimeout(slowTimer);
       if (!current()) return; // eslint-disable-line no-unsafe-finally
       this.loading = false;
+      if (this.fade?.dir === 'out') this.fade = { dir: 'in', t0: performance.now() };   // a failed load still lights up again
       this.hooks.onLoading?.(false);
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
@@ -1031,7 +1139,7 @@ export class Game {
 
   placeAt(x, y) {
     const p = this.player;
-    p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.ladder = null;
+    p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.ladder = null; p.seat = null;
     p.fh = this.map.fh.below(p.x, p.y, 400);
     if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
     this.moveBuf = []; this.lastSent = null;
@@ -1040,15 +1148,21 @@ export class Game {
   // ------------------------------------------------------------------ server entities
   async spawnLife(kind, d, controlled) {
     const map = this.map;
-    const entry = { pending: true };
+    // a new spawn is followed straight away by its control packet (not marked new): keep the mark across both
+    const entry = { pending: true, newSpawn: d.newSpawn || !!this.lifeByOid.get(d.oid)?.newSpawn };
     this.lifeByOid.set(d.oid, entry);
     const spawn = kind === 'Npc'
-      ? { id: d.id, oid: d.oid, x: d.x, cy: d.y, f: d.facingRight ? 0 : 1, fh: d.fh, rx0: d.rx0, rx1: d.rx1 }
+      ? { id: d.id, oid: d.oid, x: d.x, cy: d.y, f: d.facingRight ? 1 : 0, fh: d.fh, rx0: d.rx0, rx1: d.rx1 }
       : { id: d.id, oid: d.oid, x: d.x, cy: d.y, f: d.stance & 1 ? 0 : 1, fh: d.fh, rx0: -Infinity, rx1: Infinity };
     const e = await map.createLife(kind, spawn);
     if (!e || this.map !== map || this.lifeByOid.get(d.oid) !== entry) return;
     if (kind === 'Mob') { e.y = d.y; e.facingRight = !(d.stance & 1); }
     e.controlled = controlled;
+    if (kind === 'Mob') {
+      e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
+      e.onSkill = (m, s) => this.mobSkillStart(m, s);
+    }
+    if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`); }
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
   }
@@ -1076,12 +1190,14 @@ export class Game {
   }
 
   async spawnPlayer(d) {
+    if (d.id === this.player?.id) return;   // the server can spawn you to yourself (a job change): you're already here
     const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, equips: visibleEquips(d.look) });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
-    rp.box = d.box; rp.chalk = d.chalk;
+    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0;
+    if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
@@ -1125,8 +1241,8 @@ export class Game {
       const land = () => {
         e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
         this.damageNumbers(e, t.dmg, false, a.skill, t.crit);
-        this.playHitEffect(a.skill, e, rp);
-        if (--e.pendingHits <= 0) { if (e.queuedKill) this.finishKill(e); else this.releaseDrops(e); }
+        this.playHitEffect(a.skill, e, rp, t.dmg);
+        if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
       };
       if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay, land);
     }
@@ -1135,6 +1251,8 @@ export class Game {
   onPlayerDamaged(d) {
     const rp = this.others.get(d.id);
     if (rp) this.vfx?.damage(rp, [d.damage], 'violet');
+    if (rp && d.damage > 0) setExpression(rp, 1, HIT_FACE_TIME);
+    if (rp && d.from >= 0 && d.mobId) sfx.play(`Mob/${pad(d.mobId, 7)}/CharDam${d.from + 1}`);
   }
 
   /** Drops a monster let go of while our blow was still on its way: they come out as it dies. */
@@ -1255,6 +1373,7 @@ export class Game {
     if (tab === 5 && (Math.floor(it.id / 10000) === 507 || Math.floor(it.id / 10000) === 539)) { this.openMegaphone(slot, it.id); return; }
     if (tab === 5 && Math.floor(it.id / 10000) === 504) { this.openRock(slot, it.id); return; }          // a Teleport Rock
     if (tab === 5 && Math.floor(it.id / 10000) === 537) { this.openChalkboard(slot, it.id); return; }    // a Chalkboard
+    if (tab === 3 && Math.floor(it.id / 10000) === 301) { this.sitChair(it.id); return; }        // a chair
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
     if (tab === 2 && isScroll(it.id)) {
       // a scroll is put on an item, not used: pick it up and show what you wear
@@ -1263,7 +1382,7 @@ export class Game {
       this.hud.message('Click the equipped item to use the scroll on.', '#fff');
       return;
     }
-    if (tab === 2) this.net.useItem(slot, it.id);
+    if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
       const dst = equipSlotFor(it.id);
       if (dst) this.net.moveItem(1, slot, dst, 1);
@@ -1506,11 +1625,15 @@ export class Game {
   update(dt) {
     if (this.inCashShop) { this.windows?.update(dt); return; }   // the shop screen is all there is
     this.map.update(dt);
+    this.map.updateHidden(this.player.x, this.player.y);
     this.statusBar?.update(dt);
     this.windows?.update(dt);
     this.vfx?.update(dt);
     this.map.life = this.map.life.filter((e) => !e.removed);
-    if (!this.dead) this.updatePlayer(dt);
+    if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
+    this.updateDiseases(dt);
+    if (this.net) this.touchReactors();
+    if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
     for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
     for (const pet of this.pets.values()) { pet.update(dt); pet.sync(dt); }
@@ -1532,15 +1655,27 @@ export class Game {
    * Natural regeneration is client-driven in v83 (HEAL_OVER_TIME). Cosmic rejects heals faster than
    * 1.5s apart and autobans HP heals above 77 * map recovery * 1.5, so stay at the classic +10 HP / 10s.
    */
+  /**
+   * Natural recovery, as the client does it (openms, docs/offline-combat.md): HP and MP on their own 10s timers.
+   * HP only while you keep still, standing or sitting (moving, attacking or the alert pose start it over), and it
+   * shows as a blue number over you; MP goes on through anything and shows no number. A map's info/recovery
+   * multiplies both.
+   */
   regen(dt) {
-    this.regenT = (this.regenT || 0) + dt;
-    if (this.regenT < 10 || this.dead || !this.stats) return;
-    this.regenT = 0;
-    const s = this.stats;
+    const p = this.player, s = this.stats;
+    if (this.dead || !s) { this.hpRegenT = this.mpRegenT = 0; return; }
+    const still = p.fh && !p.attack && p.x === this.regenX && p.y === this.regenY && /^(stand|sit)/.test(p.action || '');
+    this.regenX = p.x; this.regenY = p.y;
+    this.hpRegenT = still ? (this.hpRegenT || 0) + dt : 0;
+    this.mpRegenT = (this.mpRegenT || 0) + dt;
+    const k = Number(this.map?.info?.recovery) || 1;
     const maxHp = this.maxHpShown(), maxMp = this.maxMpShown();   // the server heals up to the same buffed max
-    const hp = s.hp < maxHp ? Math.min(10, maxHp - s.hp) : 0;
-    const mp = s.mp < maxMp ? Math.min(3 + Math.floor(s.int / 10), 100, maxMp - s.mp) : 0;
-    if (hp || mp) this.net.healOverTime(hp, mp);
+    let hp = 0, mp = 0;
+    if (this.hpRegenT >= 10) { this.hpRegenT = 0; hp = s.hp < maxHp ? Math.min(Math.trunc(10 * k), maxHp - s.hp) : 0; }
+    if (this.mpRegenT >= 10) { this.mpRegenT = 0; mp = s.mp < maxMp ? Math.min(Math.trunc((3 + Math.floor(s.int / 10)) * k), 100, maxMp - s.mp) : 0; }
+    if (!hp && !mp) return;
+    this.net.healOverTime(hp, mp);
+    if (hp) this.vfx?.damage(p, [hp], 'blue');
   }
 
   /**
@@ -1597,7 +1732,17 @@ export class Game {
 
   updatePlayer(dt) {
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
-    const dir = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
+    let dir = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
+    if (this.hasDisease(REVERSE)) dir = -dir;
+    // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
+    if (this.hasDisease(STUN)) {
+      if (p.ladder) { this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
+      if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
+      else { fh.fall(p, dt, p.ignoreFh); if (p.fh) p.vx = 0; }
+      this.advanceFrame(p.fh ? look.standAction() : 'jump', dt);
+      return;
+    }
+    const ms = this.moveStats(), WALK = PHYS.walk * ms.speed, JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
@@ -1608,8 +1753,8 @@ export class Game {
       const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
       p.y += v * PHYS.climb * dt;
       action = l.l ? 'ladder' : 'rope';
-      if (this.hitAction(ACTION.JUMP) && dir) {
-        p.ladder = null; p.vy = -PHYS.jump * 0.55; p.vx = dir * PHYS.walk; p.facingRight = dir > 0;
+      if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
+        p.ladder = null; p.vy = -JUMP * 0.5; p.vx = dir * WALK * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
         p.regrabT = 0.35;              // jumping off with up still held must not catch the same rope again
         sfx.play('Game/Jump');
       } else if (p.y < l.y1) {
@@ -1630,6 +1775,16 @@ export class Game {
       return;
     }
 
+    // seated (a map seat or a chair): moving, jumping, attacking or a skill stands you up; otherwise you stay put
+    if (p.seat) {
+      if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.heldSkill() || this.macroQueue?.length) this.standUp();
+      else {
+        if (this.hitAction(ACTION.PICKUP) && this.net) this.tryPickup();
+        this.advanceFrame('sit', dt);
+        return;
+      }
+    } else if (this.hitAction(ACTION.SIT) && this.trySit()) { this.advanceFrame('sit', dt); return; }
+
     // a macro's next skill, once the last one's animation is over
     if (this.macroQueue?.length && !p.attack) {
       const id = this.macroQueue.shift();
@@ -1644,6 +1799,7 @@ export class Game {
     if (this.hitAction(ACTION.PICKUP) && this.net) this.tryPickup();
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
+    if (inp.hit('up') && p.fh && this.useDoorAt(p)) return;
     if (p.fh && this.portalCooldown <= 0) {
       const portal = map.portalAt(p.x, p.y);
       // touch portals fire once on entry, not every frame you stand in them
@@ -1663,29 +1819,40 @@ export class Game {
 
     if (p.fh) {
       if (dir) p.facingRight = dir > 0;
-      if (this.hitAction(ACTION.JUMP)) {
+      // holding jump keeps jumping: each landing jumps again (a down-jump still needs its own press)
+      if (!this.hasDisease(WEAKEN) && (this.hitAction(ACTION.JUMP) || (this.holdAction(ACTION.JUMP) && !inp.is('down')))) {   // Weakness: no jumping
         if (inp.is('down')) {
           const below = fh.below(p.x, p.y + 1, Infinity, p.fh);   // any floor under us, however far down
           // a little hop first, then down through the floor: it stays ignored until we are well past it
-          if (below) { p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.vy = -PHYS.jump * 0.35; p.vx = 0; sfx.play('Game/Jump'); }
+          if (below) { p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump'); }
           else if (!dir) action = 'prone';   // nothing to drop to: stay lying down
         } else {
-          p.fh = null; p.vy = -PHYS.jump; p.vx = dir * PHYS.walk;
+          // the client's jump: a direction adds 0.8 of the walk speed to what you already had, up to the walk speed
+          p.vx ||= 0;
+          if (dir * p.vx < WALK * 0.8) p.vx += dir * WALK * 0.8;
+          if (dir * p.vx > WALK) p.vx = dir * WALK;
+          p.fh = null; p.vy = -JUMP;
           sfx.play('Game/Jump');
         }
-      } else if (inp.is('down') && !dir) {
-        action = 'prone';
-      } else if (dir) {
-        if (fh.walk(p, dir * PHYS.walk * dt) === 'edge') { p.vx = dir * PHYS.walk; p.vy = 0; }
-        action = look.walkAction();
+      } else {
+        // walking speeds up and slows down rather than starting and stopping dead (moved by the step's average speed)
+        const v0 = p.vx || 0;
+        p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel, WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
+        const dx = ((v0 + p.vx) / 2) * dt;
+        if (dx) { const r = fh.walk(p, dx); if (r === 'edge') p.vy = 0; else if (r === 'wall') p.vx = 0; }
+        if (inp.is('down') && !dir) action = 'prone';
+        else if (dir) action = look.walkAction();
       }
     }
     if (!p.fh) {
+      p.vx ||= 0;
       if (dir) {
         p.facingRight = dir > 0;
-        p.vx = Math.max(-PHYS.walk, Math.min(PHYS.walk, p.vx + dir * PHYS.walk * PHYS.airControl * dt * 4));
-      }
+        p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
+      } else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
       fh.fall(p, dt, p.ignoreFh);
+      // landing keeps half the speed when you hold the same way (or nothing) and stops you holding the other way
+      if (p.fh) p.vx = dir * p.vx >= 0 ? p.vx * 0.5 : 0;
       action = p.fh ? look.standAction() : 'jump';
     }
     action ??= look.standAction();
@@ -1696,18 +1863,41 @@ export class Game {
     this.advanceFrame(action, dt);
   }
 
+  /**
+   * Through a portal, as the client does (openms, docs/ingame-portals.md): within the map you are moved at once,
+   * BasicEff's Teleport sparkling where you left and where you land, the camera gliding across, and can go again
+   * after 600ms; to another map the screen starts fading to black and another request waits 500ms. A request the
+   * server turns down (no new map within a few seconds) fades back in.
+   */
   usePortal(portal) {
     const map = this.map;
-    this.portalCooldown = 1;
     sfx.play('Game/Portal');
-    if (portal.tm === map.id) {
+    if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
+      this.portalCooldown = 0.6;
       const from = { x: Math.round(this.player.x), y: Math.round(this.player.y) };
       const t = map.spawnPortal(portal.tn);
+      this.playTeleportEffect(from.x, from.y);
       this.placeAtPortal(t);
+      this.playTeleportEffect(this.player.x, this.player.y);
       this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
-    } else if (!this.net) this.changeMap(portal.tm, { portal: portal.tn });
+      return;
+    }
+    this.portalCooldown = 0.5;
+    this.fadeOut();
+    this.after(3000, () => { if (this.fade?.dir === 'out' && !this.loading && this.map === map) this.fade = { dir: 'in', t0: performance.now() }; });
+    if (!this.net) this.changeMap(portal.tm, { portal: portal.tn });
     else if (portal.script) this.net.scriptPortal(portal.pn);
     else this.net.enterPortal(portal.pn);
+  }
+  /** Map changes go dark over 600ms and light up over 600ms on the new map (the client's global brightness fade). */
+  fadeOut() { if (this.fade?.dir !== 'out') this.fade = { dir: 'out', t0: performance.now() }; }
+  get darkness() {
+    const f = this.fade;
+    if (!f) return 0;
+    const k = (performance.now() - f.t0) / FADE_MS;
+    if (f.dir === 'out') return Math.min(1, k);
+    if (k >= 1) { this.fade = null; return 0; }
+    return 1 - k;
   }
 
   grab(l) {
@@ -1718,14 +1908,15 @@ export class Game {
   advanceFrame(action, dt) {
     const p = this.player, look = this.look;
     if (!look.has(action)) action = look.standAction();
-    if (p.action !== action) { p.action = action; p.frame = 0; p.frameT = 0; }
+    if (p.action !== action) { p.action = action; p.frame = 0; p.frameT = 0; p.back = false; }
     p.frameT += dt * 1000;
     let finished = false;
     const k = p.attack && action === p.attack ? p.attackScale || 1 : 1;   // attacks run at the weapon's speed
     while (p.frameT >= look.delay(action, p.frame) * k) {
       p.frameT -= look.delay(action, p.frame) * k;
-      p.frame++;
-      if (p.frame >= look.frameCount(action)) { p.frame = 0; finished = true; }
+      const nx = look.nextFrame(action, p.frame, p.back);
+      p.frame = nx.frame; p.back = nx.back;
+      if (nx.wrapped) finished = true;
     }
     return finished;
   }
@@ -1737,11 +1928,14 @@ export class Game {
 
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
+    if (this.hasDisease(SEAL)) return false;   // sealed by a monster: no skills until it wears off
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
-    if (kind === 'special' && !this.skillKeyPressed) return false; // buffs fire once per key press
+    // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
+    if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
+    if (TELEPORTS.has(id) && performance.now() - (this.lastTeleport || 0) < TELEPORT_DELAY) return false;
     return this.attack(id, kind);
   }
 
@@ -1783,10 +1977,14 @@ export class Game {
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
     const lines = ld?.fixdamage ? 1 : ld?.attackCount || ld?.bulletCount || 1;
     const targets = this.findTargets(kind, skillId, lv, mobCount, p.attack);
+    const swingAction = p.attack;
+    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, swingAction));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage()) : 25;
     const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
+    // the weapon's info/knockback: the chance of a strong recoil
+    const knockback = Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0));
     const out = targets.map((m) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
@@ -1801,11 +1999,11 @@ export class Game {
       const land = () => {
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob);
-          this.finishKill(t.mob);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          this.after(lineDelay(skillId, t.dmg.length - 1), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
         if (t.mob.kind === 'Mob') t.mob.aggro = p;                // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -1885,16 +2083,161 @@ export class Game {
     return true;
   }
 
+  // ------------------------------------------------------------------ mists
+  /**
+   * A mist over a box of the map: the skill's `tile` clouds (a monster's from MobSkill.img/<skill>/level/<n>), each
+   * pulsing on its own. How the client spreads them was not recovered: here one cloud per 90x70 cell (about a
+   * cloud's size), a random one of the eight, nudged a little and started at a random point of its pulse.
+   */
+  async addMist(d) {
+    this.mists ??= new Map();
+    const node = d.kind === 0 ? (await this.mobSkillLevel(d.skill, d.level))?.tile : (await this.skills?.ensure(d.skill))?.tile;
+    const kinds = Object.keys(node || {}).filter((k) => /^\d+$/.test(k)).map((k) => node[k]);
+    if (!kinds.length) return;
+    const w = d.right - d.left, h = d.bottom - d.top, cols = Math.max(1, Math.round(w / 90)), rows = Math.max(1, Math.round(h / 70));
+    const tiles = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const anim = new Anim(kinds[Math.floor(Math.random() * kinds.length)], true);
+        anim.update(Math.random() * 1500);
+        tiles.push({ anim, x: d.left + (c + 0.5) * (w / cols) + (Math.random() - 0.5) * 20, y: d.top + (r + 0.5) * (h / rows) + (Math.random() - 0.5) * 16 });
+      }
+    }
+    await this.assets.preload(tiles.flatMap((t) => t.anim.frames));
+    this.mists.set(d.oid, { ...d, tiles });
+  }
+  drawMists(ctx, cam) {
+    for (const m of this.mists?.values() || []) {
+      for (const t of m.tiles) {
+        const n = t.anim.node, img = n && this.assets.image(n);
+        if (!img) continue;
+        const o = n.origin || [0, 0];
+        ctx.save(); ctx.globalAlpha *= t.anim.alpha;
+        ctx.drawImage(img, Math.round(t.x - o[0] - cam.x), Math.round(t.y - o[1] - cam.y));
+        ctx.restore();
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------ Mystic Door
+  /**
+   * A Mystic Door's end on this map (Skill/231.img/skill/2311002): out in the field the pulsing mDoor, in town the
+   * opening cDoor (openms's pairing). One just opened can't be used for 3s (Cosmic's deployment).
+   */
+  async addDoor(key, x, y, town, launched, to = 0) {
+    this.doors ??= new Map();
+    const d = { owner: key === 'town' ? this.player.id : key, x, y, town, to, readyAt: performance.now() + (launched ? 0 : 3000), anim: null };
+    this.doors.set(key, d);
+    const sk = await this.skills?.ensure(2311002);
+    const node = sk?.[town ? 'cDoor' : 'mDoor'];
+    if (!node) return;
+    const anim = new Anim(node, !town);
+    if (town) anim.holdLast = true;
+    await this.assets.preload(anim.frames);
+    d.anim = anim;
+  }
+  /** Up within 20px across and 50px up or down of a door takes you through it (to town, or back out). */
+  useDoorAt(p) {
+    for (const d of this.doors?.values() || []) {
+      if (Math.abs(p.x - d.x) >= 20 || Math.abs(p.y - d.y) >= 50) continue;
+      if (performance.now() < d.readyAt) return true;
+      this.net?.useDoor(d.owner, d.town);
+      return true;
+    }
+    return false;
+  }
+  drawDoors(ctx, cam) {
+    for (const d of this.doors?.values() || []) {
+      const n = d.anim?.node, img = n && this.assets.image(n);
+      if (!img) continue;
+      const o = n.origin || [0, 0];
+      ctx.save(); ctx.globalAlpha *= d.anim.alpha;
+      ctx.drawImage(img, Math.round(d.x - o[0] - cam.x), Math.round(d.y - o[1] - cam.y));
+      ctx.restore();
+    }
+  }
+
+  // ------------------------------------------------------------------ sitting
+  /** Sitting needs you standing still on the ground (the client's check), and 200ms since the last try. */
+  canSit() {
+    const p = this.player;
+    if (!p.fh || p.ladder || p.attack || p.seat || this.dead || Math.abs(p.vx || 0) > 1) return false;
+    if (performance.now() - (this.lastSit || 0) < 200) return false;
+    this.lastSit = performance.now();
+    return true;
+  }
+  /** The Sit key: the map's first seat within 10px across and 30px up or down; you move onto it. */
+  trySit() {
+    const p = this.player;
+    if (!this.canSit()) return false;
+    const hit = Object.entries(this.map.data?.seat || {}).find(([, s]) => p.x >= s[0] - 10 && p.x < s[0] + 10 && Math.abs(p.y - s[1]) <= 30);
+    if (!hit) return false;
+    const [id, [x, y]] = hit;
+    p.seat = { id: Number(id), item: 0 }; p.x = x; p.y = y; p.vx = 0;
+    this.net?.cancelChair(Number(id));
+    return true;
+  }
+  /** A chair item (double-clicked, or on a key): you sit where you stand, the chair under you. Again stands you up. */
+  sitChair(itemId) {
+    const p = this.player;
+    if (p.seat) { this.standUp(); return; }
+    if (!this.canSit()) return;
+    p.seat = { id: null, item: itemId }; p.vx = 0;
+    this.chairArt(itemId);
+    this.net?.useChair(itemId);
+  }
+  /** Off the seat or chair; tell is false when the server already stood you up. */
+  standUp(tell = true) {
+    const p = this.player;
+    if (!p.seat) return;
+    p.seat = null;
+    if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
+    if (tell) this.net?.cancelChair(-1);
+  }
+  /** Item/Install/0301.img/<id>/effect: the chair's picture (loaded once per chair). */
+  chairArt(id) {
+    this.chairs ??= new Map();
+    if (!this.chairs.has(id)) {
+      this.chairs.set(id, null);
+      this.assets.json('Item/Install/0301.img').then(async (img) => {
+        const node = img?.[pad(id, 8)]?.effect;
+        if (!node) return;
+        const anim = new Anim(node, true);
+        await this.assets.preload(anim.frames);
+        this.chairs.set(id, anim);
+      });
+    }
+    return this.chairs.get(id);
+  }
+  /**
+   * The chair behind its sitter, flipped with them. Its art is anchored with its bottom on their feet (openms's
+   * reading: the canvas's height less its origin lifts every chair onto the floor; not a recovered rule).
+   */
+  drawChair(ctx, id, sx, sy, facingRight) {
+    const anim = this.chairArt(id);
+    if (!anim?.frames.length) return;
+    const total = anim.frames.reduce((t, f) => t + (f.delay || 100), 0);
+    let t = performance.now() % total, n = anim.frames[0];
+    for (const f of anim.frames) { if (t < (f.delay || 100)) { n = f; break; } t -= f.delay || 100; }
+    const img = this.assets.image(n);
+    if (!img) return;
+    const ox = n.origin?.[0] || 0, top = Math.round(sy - img.height);
+    if (!facingRight) { ctx.drawImage(img, Math.round(sx - ox), top); return; }
+    ctx.save(); ctx.translate(Math.round(sx + ox), top); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
+  }
+
   /**
    * Teleport: jump up to `range` px in the held direction (Up/Down for vertical) onto a foothold,
-   * only while standing on one.
+   * only while standing on one and holding a direction.
    * The new position reaches the server through the normal movement sync; SPECIAL_MOVE charges the MP.
    */
   teleport(id, lv) {
     const p = this.player, fh = this.map.fh, inp = this.input;
     if (!p.fh) return false;               // only from the ground: not mid-jump, falling or on a ladder / rope
     const dist = this.skills.levelData(id, lv)?.range || 130;
-    const dy = inp.is('up') ? -1 : inp.is('down') ? 1 : 0;
+    const dy = inp.is('up') ? -1 : inp.is('down') ? 1 : 0, dx = inp.is('left') ? -1 : inp.is('right') ? 1 : 0;
+    if (!dx && !dy) return false;          // only with a direction held: no MP spent, nothing happens
+    if (performance.now() - (this.lastTeleport || 0) < TELEPORT_DELAY) return false;
     let tx = p.x, land = null;
     if (dy) {
       // up / down: the farthest platform under your x within range, above or below the one you stand on
@@ -1905,12 +2248,12 @@ export class Game {
         if (d > 5 && d <= dist && (bestY === null || d > (bestY - p.y) * dy)) { land = f; bestY = fy; }
       }
     } else {
-      tx = p.x + (p.facingRight ? 1 : -1) * dist;
+      tx = p.x + dx * dist;
       land = fh.below(tx, p.y - 40, 200);
     }
     if (!land) return false;
-    // BasicEff Teleport plays where you left and where you arrive
-    this.playTeleportEffect(p.x, p.y);
+    // the skill has no art of its own: BasicEff Teleport plays once, where you arrive
+    this.lastTeleport = performance.now();
     p.x = tx; p.y = Footholds.yAt(land, tx); p.fh = land; p.vx = 0; p.vy = 0; p.ladder = null;
     this.playTeleportEffect(p.x, p.y);
     sfx.play(`Skill/${pad(id, 7)}/Use`);
@@ -1942,21 +2285,61 @@ export class Game {
     return !!this.ammoItem();
   }
 
-  /** Mobs inside the skill's lt/rb box (or a default reach), nearest first. */
-  findTargets(kind, skillId, lv, count, action = null) {
+  /** The box an attack reaches: the skill's lt/rb, else the swing's afterimage box, else a default per kind. */
+  attackBox(kind, skillId, lv, action) {
     const p = this.player;
     // a swing reaches as far as its afterimage's box (lt/rb), as in the client
     const swing = kind === 'melee' && action ? this.afterimage?.[this.afterimageLevel()]?.[action] : null;
-    const r = skillId && this.skills.range(skillId, lv) || (swing?.lt && swing?.rb ? swing : null) || ({
+    const r = (!SLASH_BLASTS.has(skillId) && skillId && this.skills.range(skillId, lv)) || (swing?.lt && swing?.rb ? swing : null) || ({
       melee: { lt: [-90, -70], rb: [10, 5] }, ranged: { lt: [-420, -80], rb: [0, 10] }, magic: { lt: [-330, -80], rb: [0, 10] },
     })[kind];
     const [x1, x2] = p.facingRight ? [p.x - r.rb[0], p.x - r.lt[0]] : [p.x + r.lt[0], p.x + r.rb[0]];
-    const top = p.y + r.lt[1], bottom = p.y + r.rb[1];
-    return this.map.life
-      .filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined)
-      .filter((m) => { const b = m.box(); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; })
-      .sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x))
-      .slice(0, count);
+    return { x1, x2, top: p.y + r.lt[1], bottom: p.y + r.rb[1] };
+  }
+
+  // ------------------------------------------------------------------ reactors
+  async spawnReactor(d) {
+    (this.reactors ??= new Map());
+    const map = this.map, img = await loadReactorImg(this.assets, d.id);
+    if (!img || this.map !== map) return;
+    const r = new Reactor(d, img, map);
+    await this.assets.preload(r.frames());
+    if (this.map === map) this.reactors.set(d.oid, r);
+  }
+  /** Reactors an attack's box reaches when it lands: each gets one hit, whatever the number of damage lines. */
+  hitReactors(kind, skillId, lv, action) {
+    if (!this.reactors?.size) return;
+    const p = this.player, b = this.attackBox(kind, skillId, lv, action);
+    const stance = (p.facingRight ? 1 : 0) + (p.fh ? 2 : 0);
+    for (const r of this.reactors.values()) {
+      const box = r.hittable && r.box();
+      if (!box || box.right < b.x1 || box.left > b.x2 || box.bottom < b.top || box.top > b.bottom) continue;
+      this.net.damageReactor(r.oid, (Math.round(p.x) << 16) | (Math.round(p.y) & 0xffff), stance, skillId || 0);
+    }
+  }
+  /** Touch reactors hear when you walk onto them and off them again. */
+  touchReactors() {
+    if (!this.reactors?.size) return;
+    const pb = this.playerBody();
+    for (const r of this.reactors.values()) {
+      if (!r.touch || r.gone) continue;
+      const box = r.box();
+      const inside = !!box && box.right >= pb.left && box.left <= pb.right && box.bottom >= pb.top && box.top <= pb.bottom;
+      if (inside !== r.touching) { r.touching = inside; this.net.touchReactor(r.oid, inside); }
+    }
+  }
+
+  /** Mobs inside the skill's lt/rb box (or a default reach), nearest first. */
+  findTargets(kind, skillId, lv, count, action = null) {
+    const p = this.player;
+    let { x1, x2, top, bottom } = this.attackBox(kind, skillId, lv, action);
+    // a monster is in it when its body (now or a frame ago) overlaps the box (openms, docs/hitboxes.md)
+    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
+    const inside = (m) => { const b = m.hitBox(true); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; };
+    // Slash Blast: only once something is inside the ordinary swing does it reach out to its range in front of you
+    const reach = SLASH_BLASTS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
+    if (reach && mobs.some(inside)) { if (p.facingRight) x2 = Math.max(x2, p.x + reach); else x1 = Math.min(x1, p.x - reach); }
+    return mobs.filter(inside).sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x)).slice(0, count);
   }
 
   talkToNearestNpc() {
@@ -1987,11 +2370,14 @@ export class Game {
     sfx.play(`Weapon/${look.weapon?.info?.sfx || 'barehands'}/Attack`);
   }
 
-  /** swing: fall back to the weapon's swing when the skill has no Use sound (most physical attacks). */
-  async playSkillEffect(id, ent, swing = false) {
-    sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
+  /**
+   * swing: fall back to the weapon's swing when the skill has no Use sound (most physical attacks).
+   * branch: 'effect' when cast, 'affected' on whoever a party buff reached (no sound: the caster's played).
+   */
+  async playSkillEffect(id, ent, swing = false, branch = 'effect') {
+    if (branch === 'effect') sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
     const node = await this.skills?.ensure(id);
-    const fx = Game.fxNode(node?.effect);
+    const fx = Game.fxNode(node?.[branch] || (branch === 'effect' ? node?.effect0 : null));
     if (!fx) return;
     const anim = new Anim(fx, false);
     await this.assets.preload(anim.frames);
@@ -2003,18 +2389,21 @@ export class Game {
    * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
    * faces. Without a head point, the middle of its body.
    */
-  async playHitEffect(id, mob, by = this.player) {
-    if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
-    if (mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
+  async playHitEffect(id, mob, by = this.player, dmgs = [1]) {
     const node = id ? await this.skills?.ensure(id) : null;
     const fx = Game.fxNode(node?.hit);
-    if (!fx) return;
-    const anim = new Anim(fx, false);
-    await this.assets.preload(anim.frames);
-    const head = mob.node?.head;
-    const x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
-    const y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
-    this.fx.push({ anim, x, y, flip: !!by?.facingRight });
+    if (fx) await this.assets.preload(new Anim(fx, false).frames);
+    // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
+    // Seven's two stars twice... (a miss makes no monster damage sound)
+    dmgs.forEach((d, line) => this.after(lineDelay(id, line), () => {
+      if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
+      if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
+      if (!fx) return;
+      const head = mob.node?.head;
+      const x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
+      const y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
+      this.fx.push({ anim: new Anim(fx, false), x, y, flip: !!by?.facingRight });
+    }));
   }
 
   /** Projectile from `from` to `to` (mob or null = fly forward): skill ball, else the ammo's bullet animation. */
@@ -2035,6 +2424,8 @@ export class Game {
 
   updateFx(dt) {
     for (const f of this.fx) f.anim.update(dt * 1000);
+    for (const d of this.doors?.values() || []) d.anim?.update(dt * 1000);
+    for (const m of this.mists?.values() || []) for (const t of m.tiles) t.anim.update(dt * 1000);
     this.fx = this.fx.filter((f) => !f.anim.done);
     for (const s of this.shots) {
       s.t += dt; s.anim?.update(dt * 1000);
@@ -2090,7 +2481,7 @@ export class Game {
     const box = { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || m.src.info?.bodyAttack === 0) continue;
-      const b = m.box();
+      const b = m.hitBox();
       if (b.right < box.left || b.left > box.right || b.bottom < box.top || b.top > box.bottom) continue;
       const pad = m.src.info?.PADamage || 1, damage = Math.max(1, Math.round(pad * (0.85 + Math.random() * 0.15)));
       this.net.damageSummon(pp.oid, damage, m.spawn.id);
@@ -2110,19 +2501,162 @@ export class Game {
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
-      const b = m.box();
+      const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
-      const pad = m.src.info?.PADamage || 1;
-      let wdef = 0; for (const it of Object.values(this.inventory.equipped)) wdef += it.wdef || 0;
-      const damage = Math.max(1, Math.round(pad * (0.85 + Math.random() * 0.15) - wdef * 0.5));
-      const fromRight = m.x > p.x;
-      this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0 });
-      this.vfx?.damage(p, [damage], 'violet');
-      p.fh = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
-      p.attack = null;
-      this.invincible = HIT_PROTECTION;
+      this.hurtBy(m, m.src.info?.PADamage || 1, false, -1);
       return;
     }
+  }
+  /** The receiver monster attacks are tested against: 44x65 standing, 46x31 lying down. */
+  playerBody() {
+    const p = this.player, prone = p.action === 'prone' || p.action === 'proneStab';
+    return prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
+  }
+  /**
+   * Monster `m` hurts you: `power` is its PADamage (MADamage when magic), less half your weapon (magic) defence.
+   * `from` is the attack index (-1 for touching it): the server applies that attack's extras (MP burn, disease).
+   */
+  hurtBy(m, power, magic, from) {
+    const p = this.player;
+    let def = 0; for (const it of Object.values(this.inventory.equipped)) def += (magic ? it.mdef : it.wdef) || 0;
+    const damage = Math.max(1, Math.round(power * (0.85 + Math.random() * 0.15) - def * 0.5));
+    const fromRight = m.x > p.x;
+    this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+    this.vfx?.damage(p, [damage], 'violet');
+    if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
+    setExpression(p, 1, HIT_FACE_TIME);
+    this.standUp();
+    p.fh = null; p.ladder = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
+    p.attack = null;
+    this.invincible = HIT_PROTECTION;
+  }
+
+  /**
+   * A status on a monster: the art of the skill behind it - a player skill's `mob` animation (Poison Breath's
+   * bubbles, a stun's stars), or a monster skill's `mob` animation and `icon` (its own attack / defence up...).
+   */
+  async applyMobStatus(m, s) {
+    const low = s.source & 0xffff, high = s.source >>> 16, mobSkill = s.source > 0 && low >= 100 && low <= 200 && high > 0 && high < 256;
+    let node = null, icon = null, doom = null;
+    const frames = (n) => n && Object.keys(n).some((k) => /^\d+$/.test(k));
+    if (mobSkill) { const lv = await this.mobSkillLevel(low, high); node = lv?.mob; icon = lv?.mob?.icon || null; }
+    else if (s.source > 0) {
+      const sk = await this.skills?.ensure(s.source);
+      node = sk?.mob;
+      // Doom: the puff (mob) plays once at its feet, then it is the Blue Snail (Mob 0100101 - the client's
+      // template for it) walking at that snail's speed, with the skill's pulsing mark (mob0) over its head
+      if (s.second & MOB_DOOM) {
+        const snail = await this.assets.json('Mob/0100101.img');
+        if (snail) doom = { stand: new Anim(snail.stand, true), move: new Anim(snail.move, true), speed: Number(snail.info?.speed) || 0,
+          mark: frames(sk?.mob0) ? new Anim(sk.mob0, true) : null };
+      }
+    }
+    const anim = frames(node) ? new Anim(node, !doom) : null;
+    if (anim) await this.assets.preload(anim.frames);
+    if (doom) await this.assets.preload([doom.stand, doom.move, doom.mark].filter(Boolean).flatMap((a) => a.frames));
+    if (icon) await this.assets.preload([icon]);
+    m.addStatus(s.first, s.second, s.source, { anim, icon, doom, value: s.value });
+  }
+
+  /** Skill/MobSkill.img/<skill>/level/<level>: a monster skill's art (effect on the caster, affected on the cursed). */
+  async mobSkillLevel(skill, level) {
+    this.mobSkillImg ??= this.assets.json('Skill/MobSkill.img');
+    return (await this.mobSkillImg)?.[skill]?.level?.[level] || null;
+  }
+  /** A monster casts: its effect plays on it; if we control it, the server hears the cast and applies the skill. */
+  async mobSkillStart(m, s) {
+    if (m.controlled && this.net && m.oid != null) {
+      const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
+      this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
+        (20 + (s.action || 1)) * 2 + facing, s.skill, s.level);
+      m.lastSent = { x, y, state: m.state, facingRight: m.facingRight };
+    }
+    const lv = await this.mobSkillLevel(s.skill, s.level), fx = lv?.effect && Game.fxNode(lv.effect);
+    if (fx) this.after(Number(s.effectAfter) || 0, async () => {
+      const anim = new Anim(fx, false); await this.assets.preload(anim.frames); this.fx.push({ anim, follow: m });
+    });
+  }
+  /**
+   * A monster's curse on you (Seal, Darkness, Weakness, Stun, Curse, Poison, Slow, Reverse...): its affected
+   * animation loops over you (or at your feet) until it wears off or the server lifts it. While it lasts, Stun
+   * holds you still, Seal stops skills, Weakness stops jumping, Slow takes your speed down to its x% and Reverse
+   * swaps left and right.
+   */
+  async onDisease(d) {
+    const lv = await this.mobSkillLevel(d.skill, d.level), node = lv?.affected;
+    const anim = node ? new Anim(node, true) : null;
+    if (anim) await this.assets.preload(anim.frames);
+    this.diseases = (this.diseases || []).filter((x) => x.skill !== d.skill);
+    this.diseases.push({ ...d, x: lv?.x, until: Date.now() + d.duration, anim, head: Number(node?.pos) === 1 });
+  }
+  /** Another player's curse: its affected animation loops over them too, until the server lifts it. */
+  async onForeignDisease(id, d) {
+    const rp = this.others.get(id);
+    if (!rp) return;
+    const lv = await this.mobSkillLevel(d.skill, d.level), node = lv?.affected;
+    const anim = node ? new Anim(node, true) : null;
+    if (anim) await this.assets.preload(anim.frames);
+    rp.diseases = (rp.diseases || []).filter((x) => x.skill !== d.skill);
+    rp.diseases.push({ ...d, until: Date.now() + (Number(lv?.time) || 30) * 1000, anim, head: Number(node?.pos) === 1 });
+  }
+  hasDisease(skill) { return (this.diseases || []).some((d) => d.skill === skill && d.until > Date.now()); }
+  updateDiseases(dt) {
+    const now = Date.now();
+    for (const ent of [this, ...this.others.values()]) {
+      if (!ent.diseases?.length) continue;
+      ent.diseases = ent.diseases.filter((d) => d.until > now);
+      for (const d of ent.diseases) d.anim?.update(dt * 1000);
+    }
+  }
+  drawDiseases(ctx, cam, p = this.player, list = this.diseases) {
+    for (const d of list || []) {
+      const n = d.anim?.node, img = n && this.assets.image(n);
+      if (!img) continue;
+      const o = n.origin || [0, 0], y = d.head ? p.y - 65 : p.y;
+      ctx.drawImage(img, Math.round(p.x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+    }
+  }
+
+  /** A monster starts an attack: its sound and effect; if we control it, the server hears which attack it was. */
+  mobAttackStart(m, a, spots) {
+    sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/Attack${a.n}`);
+    // an area attack marks the spots that will erupt with its areaWarning, on the ground of each
+    const warn = spots && a.info.areaWarning && Game.fxNode(a.info.areaWarning);
+    if (warn) {
+      const frames = new Anim(warn, false).frames;
+      this.assets.preload(frames).then(() => { for (const q of spots) this.fx.push({ anim: new Anim(warn, false), x: q.x, y: q.y, flip: false }); });
+    }
+    const fx = a.info.effect && Game.fxNode(a.info.effect);
+    if (fx) this.after(Number(a.info.effectAfter) || 0, async () => {
+      const anim = new Anim(fx, false); await this.assets.preload(anim.frames); this.fx.push({ anim, follow: m });
+    });
+    if (!m.controlled || !this.net || m.oid == null) return;
+    const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
+    this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing);
+    m.lastSent = { x, y, state: m.state, facingRight: m.facingRight };
+  }
+  /**
+   * Its attack lands (attackAfter into it): if you are in reach then, it hurts you - straight away, or for a ball
+   * (type 2) when the ball, flying from its start point, reaches you. Whoever controls the monster, each client
+   * checks itself, as in the original.
+   */
+  mobAttackLand(m, a, spots) {
+    const p = this.player;
+    if (!this.net || this.dead || !this.stats || !m.alive || this.invincible > 0 || !m.reaches(a, this.playerBody(), spots)) return;
+    const magic = !!a.info.magic;
+    const power = Number(magic ? a.info.MADamage ?? m.src.info?.MADamage : a.info.PADamage ?? m.src.info?.PADamage) || 1;
+    const land = () => {
+      if (this.dead || this.invincible > 0) return;
+      this.hurtBy(m, power, magic, a.index);
+      const hit = a.info.hit && Game.fxNode(a.info.hit);
+      if (hit) { const anim = new Anim(hit, false); this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p })); }
+    };
+    const ball = a.type === 2 && a.info.ball && Game.fxNode(a.info.ball);
+    if (!ball) { land(); return; }
+    const q = m.attackReach(a), anim = new Anim(ball, true);
+    this.assets.preload(anim.frames);
+    const tx = p.x, ty = p.y - 32;
+    this.shots.push({ anim, sx: q.sx, sy: q.sy, tx, ty, t: 0, dur: Math.min(0.6, Math.max(0.1, Math.hypot(tx - q.sx, ty - q.sy) / 600)), flip: tx > q.sx, onHit: land });
   }
 
   /** Pick up the item you are standing on: your feet within its width, on the same ground. */
@@ -2139,6 +2673,8 @@ export class Game {
 
   handleClicks() {
     for (const c of this.input.clicks) {
+      // a double-click on a window (or the status bar) is the window's, never the NPC behind it
+      if (this.windows?.top(c.x, c.y) || this.statusBar?.contains?.(c.x, c.y)) continue;
       const wx = c.x + Math.round(this.cam.x), wy = c.y + Math.round(this.cam.y);
       for (const e of this.map.life) {
         if (e.kind !== 'Npc' || e.oid === null) continue;
@@ -2152,7 +2688,8 @@ export class Game {
   currentStance() {
     const p = this.player;
     let st = 'stand';
-    if (p.ladder) st = p.ladder.l ? 'ladder' : 'rope';
+    if (p.seat) st = 'sit';
+    else if (p.ladder) st = p.ladder.l ? 'ladder' : 'rope';
     else if (!p.fh) st = 'jump';
     else if (p.action === 'prone') st = 'prone';
     else if (p.action.startsWith('walk')) st = 'walk';
@@ -2184,7 +2721,11 @@ export class Game {
       if (!m.controlled || m.kind !== 'Mob' || m.dying || m.oid === null) continue;
       const ls = m.lastSent;
       const x = Math.round(m.x), y = Math.round(m.y);
-      if (ls.x === x && ls.y === y && ls.state === m.state && ls.facingRight === m.facingRight) continue;
+      // a monster with skills reports in every 2s even standing still: the server offers its next skill in reply
+      const quiet = ls.x === x && ls.y === y && ls.state === m.state && ls.facingRight === m.facingRight;
+      m.reportT = (m.reportT || 0) + 0.5;
+      if (quiet && !(m.mobSkills?.length && m.reportT >= 2)) continue;
+      m.reportT = 0;
       const stance = ((m.state === 'move' ? 1 : m.state === 'fly' ? 6 : 2) << 1) | (m.facingRight ? 0 : 1);
       this.net.moveMob(m.oid, { x: Math.round(ls.x), y: Math.round(ls.y) }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance, duration: 500 }]);
       m.lastSent = { x, y, state: m.state, facingRight: m.facingRight };
@@ -2261,14 +2802,18 @@ export class Game {
     for (let l = 0; l < 8; l++) {
       map.drawLayer(ctx, cam, l);
       for (const e of map.life) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
+      if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
+      if (l === playerLayer) this.drawDoors(ctx, cam);
+      if (l === playerLayer) this.vfx?.drawTombs(ctx, cam);   // behind every character, so a ghost floats in front of its stone
       if (l === playerLayer) {
         for (const m of this.boards.merchants.values()) this.boards.drawMerchant(ctx, cam, m);   // Hired Merchants, behind people
         for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
         if (inShop(p)) this.drawChar(ctx, cam, p, this.look, true);
       }
-      if (l === 7) for (const rp of this.others.values()) if (!inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
+      if (l === 7) for (const rp of this.others.values()) if (!inShop(rp)) { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); }
       for (const pet of this.pets.values()) if (!pet.onBack && pet.layer() === l) pet.draw(ctx, cam);
-      if (l === playerLayer && !inShop(p)) this.drawChar(ctx, cam, p, this.look, true);
+      if (l === playerLayer && !inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); }
+      if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
     for (const pet of this.pets.values()) if (pet.onBack) pet.draw(ctx, cam);   // riding on a climber's back
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
@@ -2299,17 +2844,23 @@ export class Game {
     this.statusBar?.draw(ctx);
     this.windows?.draw(ctx);
     this.vfx?.drawBoss(ctx);
+    const dark = this.darkness;
+    if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
   }
 
   drawChar(ctx, cam, ent, look, local) {
     const parts = look.compose(ent.action, ent.frame, ent.expr);
     const sx = ent.x - cam.x, sy = ent.y - cam.y;
+    const chair = local ? ent.seat?.item : ent.action === 'sit' && ent.chair;
+    if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight);
     // while protected after a hit, alternate gray and normal every 60ms, as the original does
     const blink = local && this.invincible > 0 && Math.floor(this.invincible / 0.06) % 2 === 0;
-    // dead: the ghost (body action "dead") hovers over the tombstone, bobbing slowly
-    const ghost = ent.action === 'dead' ? -24 + Math.round(Math.sin(performance.now() / 450) * 3) : 0;
-    if (blink) { ctx.save(); ctx.filter = 'grayscale(1) brightness(0.85)'; }
-    drawParts(ctx, this.assets, parts, sx, sy + ghost, ent.facingRight, 1);
+    // dead: the ghost (body action "dead") hovers over the tombstone, drifting smoothly round a small circle
+    // (not snapped to whole game pixels, so it glides instead of stepping)
+    const dead = ent.action === 'dead', t = performance.now() / 700;
+    const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
+    if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
+    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);

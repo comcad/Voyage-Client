@@ -11,6 +11,8 @@ import { pad, frames } from './assets.js';
  */
 
 export const RANGED_WEAPONS = new Set([145, 146, 147, 149]); // bow, crossbow, claw, gun
+/** Buffs that look like attacks in their data: the White Knight / Paladin charges and Soul Arrow. */
+const NOT_ATTACKS = new Set([1211003, 1211004, 1211005, 1211006, 1211007, 1211008, 1221003, 1221004, 3101004, 3201004]);
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
 
 /** Skill books for a job: 112 -> [0, 100, 110, 111, 112], 2112 -> [2000, 2100, 2110, 2111, 2112]. */
@@ -105,9 +107,12 @@ export class SkillBook {
     if (!n || !ld) return 'passive';
     // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
-    if (ld.mad && !ld.time) return 'magic';
-    const attack = ld.damage || ld.fixdamage || ld.attackCount || ld.bulletCount;
-    if (attack && !ld.time) {
+    // an attack has power (damage, magic, a projectile's x...); one that also lasts a while (a stun, a poison, a
+    // freeze) is still an attack when it has targets - only heals, summons and the buffs below are not
+    const targets = ld.mobCount || ld.attackCount || ld.bulletCount || n.ball;
+    const power = ld.damage || ld.mad || ld.fixdamage || ld.attackCount || ld.bulletCount || (ld.x && n.ball);
+    if (power && (targets || !ld.time) && !ld.hp && !n.summon && !NOT_ATTACKS.has(id)) {
+      if (ld.mad) return 'magic';
       const cat = weaponCat(weaponId);
       if (n.weapon === 47 || ld.bulletCount || (n.ball && RANGED_WEAPONS.has(cat))) return 'ranged';
       return 'melee';

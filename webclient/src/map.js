@@ -19,6 +19,7 @@ export class Anim {
   constructor(node, loop = true) {
     this.frames = isCanvas(node) ? [node] : frames(node).filter(isCanvas);
     this.loop = loop; this.i = 0; this.t = 0; this.done = false;
+    this.defaultDelay = 100;   // for frames without a delay (an NPC's is 180, set by Life)
     this.blend = !!node?.blend; // additive ("lighter") blending, used by some UI effects
     const last = this.frames[this.frames.length - 1];
     // only fades hold: plain looping animations often omit delay and rely on the default
@@ -29,7 +30,7 @@ export class Anim {
     const f = this.node;
     if (!f || (f.a0 === undefined && f.a1 === undefined)) return 1;
     const a0 = f.a0 ?? 255, a1 = f.a1 ?? a0;
-    const k = Math.min(1, this.t / (f.delay || 100));
+    const k = Math.min(1, this.t / (f.delay || this.defaultDelay));
     return Math.max(0, Math.min(1, (a0 + (a1 - a0) * k) / 255));
   }
   update(dtMs) {
@@ -37,9 +38,9 @@ export class Anim {
     // one-frame swing trail or death), a looping one just stays
     if (this.done || (this.frames.length < 2 && this.loop) || !this.frames.length) return;
     this.t += dtMs;
-    while (this.t >= (this.node.delay || 100)) {
+    while (this.t >= (this.node.delay || this.defaultDelay)) {
       if (this.holdLast && this.i === this.frames.length - 1) { this.t = 0; return; }
-      this.t -= this.node.delay || 100;
+      this.t -= this.node.delay || this.defaultDelay;
       if (this.i + 1 < this.frames.length) this.i++;
       else if (this.loop) this.i = 0;
       else { this.done = true; return; }
@@ -65,6 +66,7 @@ export class GameMap {
     const name = strings?.[Number(spawn.id)]?.name || '';
     const fh = this.fh.get(spawn.fh) || this.fh.below(spawn.x, spawn.cy - 5, 60);
     const e = new Life(kind, spawn, src, name, fh, this.fh);
+    if (kind === 'Npc' && src.info?.MapleTV) e.tv = mapleTV(await a.json('UI/MapleTV.img'), src.info);
     await a.preload(e.allFrames());
     return e;
   }
@@ -132,9 +134,18 @@ export class GameMap {
       }
     }
 
+    // MapHelper.img/portal/game (openms, docs/ingame-portals.md): pv loops on types 2, 4 and 7; hidden portals
+    // (10, 11) show only while you are near, from ph (type 11 starts and ends with psh but continues with ph)
+    const g = helper?.portal?.game;
     for (const [k, p] of Object.entries(data.portal || {})) {
-      const anim = p.pt === 2 ? new Anim(helper?.portal?.game?.pv) : null;
-      this.portals.push({ ...p, idx: Number(k), anim });
+      const anim = [2, 4, 7].includes(p.pt) ? new Anim(g?.pv) : null;
+      let hidden = null;
+      if (p.pt === 10 || p.pt === 11) {
+        const ph = g?.ph?.[p.image || 'default'] || g?.ph?.default, psh = g?.psh?.[p.image || 'default'] || g?.psh?.default;
+        const ends = p.pt === 11 ? psh : ph;
+        hidden = { start: ends?.portalStart, cont: ph?.portalContinue, exit: ends?.portalExit };
+      }
+      this.portals.push({ ...p, idx: Number(k), anim, hidden });
     }
 
     onStatus?.('Loading images...');
@@ -147,6 +158,7 @@ export class GameMap {
     for (const l of this.layers) { for (const o of l.objs) out.push(...o.anim.frames); for (const t of l.tiles) out.push(t.node); }
     for (const e of this.life) out.push(...e.allFrames());
     for (const p of this.portals) if (p.anim) out.push(...p.anim.frames);
+    for (const p of this.portals) if (p.hidden) for (const n of Object.values(p.hidden)) out.push(...new Anim(n).frames);
     if (this.data?.miniMap?.canvas) out.push(this.data.miniMap.canvas);
     return out;
   }
@@ -159,8 +171,23 @@ export class GameMap {
     return this.portals.find((p) => p.idx === idx) || this.spawnPortal(null);
   }
 
+  /** The portal Up takes you through: the client's [x-20, x+20) x [y-50, y+50) round your feet, last listed first. */
   portalAt(x, y) {
-    return this.portals.find((p) => p.pt !== 0 && (p.tm !== 999999999 || p.script) && Math.abs(p.x - x) < 30 && y - p.y < 40 && p.y - y < 80);
+    x = Math.trunc(x); y = Math.trunc(y);
+    return this.portals.findLast((p) => p.pt !== 0 && p.pt !== 6 && (p.tm !== 999999999 || p.script)
+      && x >= p.x - 20 && x < p.x + 20 && y >= p.y - 50 && y < p.y + 50);
+  }
+  /**
+   * Hidden portals show while you are within [x-100, x+100) x [y-50, y+50) of one: portalStart, then portalContinue
+   * looping; walking off plays portalExit (a Start still running is not reversed).
+   */
+  updateHidden(x, y) {
+    const near = this.portals.find((p) => p.hidden && x >= p.x - 100 && x < p.x + 100 && y >= p.y - 50 && y < p.y + 50) || null;
+    if (near === this.shownHidden) return;
+    const old = this.shownHidden;
+    if (old) { old.anim = new Anim(old.hidden.exit, false); old.phase = 'exit'; }
+    if (near) { near.anim = new Anim(near.hidden.start, false); near.phase = 'start'; }
+    this.shownHidden = near;
   }
 
   ladderAt(x, y, up) {
@@ -173,7 +200,11 @@ export class GameMap {
     this.scroll += dt;
     for (const b of this.backs) b.anim.update(ms);
     for (const l of this.layers) for (const o of l.objs) o.anim.update(ms);
-    for (const p of this.portals) p.anim?.update(ms);
+    for (const p of this.portals) {
+      p.anim?.update(ms);
+      if (p.phase === 'start' && p.anim.done) { p.anim = new Anim(p.hidden.cont); p.phase = 'cont'; }
+      else if (p.phase === 'exit' && p.anim.done) { p.anim = null; p.phase = null; }
+    }
     for (const e of this.life) e.update(dt);
   }
 
@@ -258,13 +289,29 @@ function findMapName(strMap, id) {
   return String(id);
 }
 
+// MonsterStatus bits (second mask) that hold a monster still
+const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
+
+/**
+ * A Maple TV NPC (info/MapleTV) is only the cabinet; the client fills its screens from UI/MapleTV.img: the top one
+ * shows TVbasic (the MapleStory banner) while no message is on, the bottom one an ad from TVmedia, picked once
+ * and looped.
+ */
+function mapleTV(ui, info) {
+  const ads = Object.values(ui?.TVmedia || {});
+  return {
+    msg: { x: Number(info.MapleTVmsgX) || 0, y: Number(info.MapleTVmsgY) || 0, anim: new Anim(ui?.TVbasic, true) },
+    ad: { x: Number(info.MapleTVadX) || 0, y: Number(info.MapleTVadY) || 0, anim: new Anim(ads[Math.floor(Math.random() * ads.length)], true) },
+  };
+}
+
 /** NPC or monster placed by the map's `life` list. */
 export class Life {
   constructor(kind, spawn, src, name, fh, footholds) {
     this.kind = kind; this.spawn = spawn; this.src = src; this.name = name;
     this.footholds = footholds;
     this.x = spawn.x; this.y = fh ? Footholds.yAt(fh, spawn.x) : spawn.cy; this.fh = fh;
-    this.facingRight = kind === 'Npc' ? !spawn.f : !!spawn.f;
+    this.facingRight = !!spawn.f;   // f=1 mirrors the art, for NPCs and monsters alike
     this.maxHp = src.info?.maxHP || 1; this.hp = this.maxHp;
     // Mob speed, as the client does it (Journey's Mob): a force of (speed + 100) / 1000 per 8ms tick
     // against ground friction settles at 7.5x that, i.e. (speed + 100) * 0.78 px/s at our walk speed;
@@ -276,7 +323,24 @@ export class Life {
     this.canMove = kind === 'Mob' && (this.flying ? this.flySpeed > 0 : !!src.move && this.speed > 0);
     this.canJump = kind === 'Mob' && !!src.jump;
     this.anims = {};
-    for (const k of ['stand', 'move', 'jump', 'hit1', 'die1', 'fly']) if (src[k]) this.anims[k] = new Anim(src[k], k !== 'die1' && k !== 'hit1');
+    for (const k of ['stand', 'move', 'jump', 'hit1', 'die1', 'fly', 'regen']) if (src[k]) this.anims[k] = new Anim(src[k], !['die1', 'hit1', 'regen'].includes(k));
+    if (kind === 'Npc') for (const a of Object.values(this.anims)) a.defaultDelay = 180;   // the client's NPC frame default
+    // its attacks (attack1, attack2...): a reach box (type 0), a start point and radius (1, a shot; 2, a ball), or
+    // a row of spots that erupt after a warning (3 on the ground, 4 at a set height - the bosses' area attacks)
+    this.attacks = [];
+    for (let n = 1; kind === 'Mob' && src[`attack${n}`]; n++) {
+      const node = src[`attack${n}`], info = node.info || {}, type = Number(info.type ?? 0);
+      this.anims[`attack${n}`] = new Anim(node, false);
+      if (type <= 4 && info.range) this.attacks.push({ n, index: n - 1, info, type });
+    }
+    this.attackT = 1 + Math.random() * 2;
+    // its skills (info/skill: skill, level, which skillN animation, effectAfter); the server offers one at a time
+    this.mobSkills = Object.values(src.info?.skill || {}).filter((s) => s?.skill);
+    for (let n = 1; kind === 'Mob' && src[`skill${n}`]; n++) this.anims[`skill${n}`] = new Anim(src[`skill${n}`], false);
+    this.nextSkill = null;
+    // statuses on it (MonsterStatus masks) and, per skill that caused them, that skill's mob art and icon
+    this.status = { first: 0, second: 0 };
+    this.statusArt = new Map();
     this.state = this.anims.stand ? 'stand' : this.anims.fly ? 'fly' : Object.keys(this.anims)[0];
     this.timer = 1 + Math.random() * 3;
     this.aggro = null;        // the character it chases once hit (or told to by the server)
@@ -318,7 +382,7 @@ export class Life {
   /** KILL_MONSTER: play the death animation then disappear. */
   kill() { this.setState('die1'); this.dying = true; if (!this.anims.die1) this.removed = true; }
 
-  allFrames() { return Object.values(this.anims).flatMap((a) => a.frames); }
+  allFrames() { return [...Object.values(this.anims), ...(this.tv ? [this.tv.msg.anim, this.tv.ad.anim] : [])].flatMap((a) => a.frames); }
   get alive() { return this.state !== 'die1' && this.respawnTimer <= 0; }
   get node() { return this.anims[this.state]?.node; }
 
@@ -329,30 +393,63 @@ export class Life {
 
   /**
    * A blow. As in the original, a monster only flinches (hit1) and recoils when the damage reaches its
-   * `pushed` threshold; the recoil slides it back along its floor from 130px/s, braking at 400px/s^2.
+   * `pushed` threshold; the recoil slides it back along its floor from 130px/s, braking at 400px/s^2 - or, for a
+   * strong recoil (the weapon's knockback chance), from 300px/s braking at 200px/s^2. One already reeling from a
+   * hit takes the damage but doesn't react again until its hit1 has played out.
    */
-  hit(dmg, fromRight) {
+  hit(dmg, fromRight, strong = false) {
     if (!this.alive || this.kind !== 'Mob') return;
     this.hp -= dmg;
     if (this.online) this.hp = Math.max(0, this.hp); // the server decides death (KILL_MONSTER)
     else if (this.hp <= 0) { this.setState('die1'); return; }
     if (dmg < (this.src.info?.pushed ?? 1)) return;
+    if (this.state === 'hit1' && this.hitTimer > 0) return;
+    if (this.attacking) return;   // a monster mid-attack keeps its attack pose (the client's)
     this.facingRight = fromRight;
     if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
     // fromRight: the blow came from the right, so it slides away to the left
-    if (this.fh && !this.flying && (this.controlled || !this.online)) this.recoil = (fromRight ? -1 : 1) * 130;
+    if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
   }
   /** Slide back after a blow, braking to a stop; a floor's edge or a wall stops it. */
   recoilStep(dt) {
-    const v = this.recoil, slowed = Math.sign(v) * Math.max(0, Math.abs(v) - 400 * dt);
+    const v = this.recoil, slowed = Math.sign(v) * Math.max(0, Math.abs(v) - (this.recoilBrake || 400) * dt);
     const fh = this.fh, x = this.x, y = this.y;
     if (this.footholds.walk(this, ((v + slowed) / 2) * dt) !== 'ok') { this.fh = fh; this.x = x; this.y = y; this.recoil = 0; return; }
     this.recoil = slowed;
   }
 
+  /**
+   * A monster that has just spawned (not one already here when you arrived): its own regen animation if it has
+   * one, otherwise a fade from invisible to solid over 800ms (the client's, openms docs/ingame-life.md).
+   */
+  appear() {
+    if (this.anims.regen) this.setState('regen');
+    else this.fadeInAt = performance.now();
+  }
   update(dt) {
+    this.prevX = this.x; this.prevY = this.y;
+    if (this.tv) { this.tv.msg.anim.update(dt * 1000); this.tv.ad.anim.update(dt * 1000); }
     const anim = this.anims[this.state];
-    anim?.update(dt * 1000);
+    if (!this.frozen) anim?.update(dt * 1000);   // frozen solid: its picture stops too
+    for (const e of this.statusArt.values()) {
+      e.anim?.update(dt * 1000);
+      if (e.doom) for (const a of [e.doom.stand, e.doom.move, e.doom.mark]) a?.update(dt * 1000);
+    }
+    if (this.state === 'regen') { if (anim.done) this.setState(this.flying ? 'fly' : 'stand'); return; }
+    if (this.attacking) {
+      const at = this.attacking;
+      at.t += dt * 1000;
+      if (!at.landed && at.t >= (Number(at.a.info.attackAfter) || 0)) { at.landed = true; this.onAttackLand?.(this, at.a, at.spots); }
+      const posing = this.state.startsWith('attack') || this.state.startsWith('skill');
+      if (posing && (!anim || anim.done)) {
+        this.setState(this.flying ? 'fly' : 'stand');
+        // an area attack's spots erupt on its own clock (attackAfter), even after the monster has finished its pose
+        if (at.a.type >= 3 && !at.landed) return;
+        if (!at.landed) this.onAttackLand?.(this, at.a, at.spots);
+        this.attacking = null;
+      } else if (!posing && at.landed) this.attacking = null;
+      return;
+    }
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
       if (this.recoil && this.fh) this.recoilStep(dt);
@@ -360,6 +457,7 @@ export class Life {
       if (this.path) { this._replay(dt); return; }
       if (!this.controlled) return;
     }
+    if (this.held) return;
     if (this.respawnTimer > 0) {
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) {
@@ -371,6 +469,7 @@ export class Life {
     }
     if (this.state === 'die1') { if (anim?.done) this.respawnTimer = 6; return; }
     if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
+    if ((this.fh || this.flying) && this.tryAttack(dt)) return;
     if (!this.canMove) return;
     if (this.flying) { this.flyStep(dt); return; }
     if (!this.fh) {                                   // mid-jump (or knocked off a ledge)
@@ -387,6 +486,131 @@ export class Life {
    * if it has a jump). Once something has hit it, it turns to follow that character instead,
    * stopping at its platform's edges rather than walking off.
    */
+  /** Where attack `a` reaches, facing as it does now: its box, or (types 1 and 2) its start point and radius. */
+  attackReach(a) {
+    const r = a.info.range, s = this.facingRight ? -1 : 1;
+    if (a.type === 0) {
+      const x1 = this.x + s * r.lt[0], x2 = this.x + s * r.rb[0];
+      return { box: { left: Math.min(x1, x2), right: Math.max(x1, x2), top: this.y + r.lt[1], bottom: this.y + r.rb[1] } };
+    }
+    return { sx: this.x + s * (r.sp?.[0] || 0), sy: this.y + (r.sp?.[1] || 0), r: r.r || 0 };
+  }
+  /**
+   * An area attack's spots: `areaCount` boxes side by side, each as wide as its lt/rb, numbered from `start` (so
+   * start -6 with 12 spots runs from six to the left to five to the right; mirrored as it faces). Type 3 spots sit on
+   * the ground under them, type 4 at its own height. `pick` of them (attackCount, chosen at random) erupt, or all.
+   */
+  areaSpots(a, pick = false) {
+    const r = a.info.range, w = r.rb[0] - r.lt[0], s = this.facingRight ? -1 : 1, spots = [];
+    for (let i = 0; i < (r.areaCount || 1); i++) {
+      const col = (r.start || 0) + i;
+      const x1 = this.x + s * (r.lt[0] + col * w), x2 = this.x + s * (r.rb[0] + col * w);
+      let base = this.y;
+      if (a.type === 3) { const f = this.footholds?.below((x1 + x2) / 2, this.y - 60, 400); if (f) base = Footholds.yAt(f, (x1 + x2) / 2); }
+      spots.push({ left: Math.min(x1, x2), right: Math.max(x1, x2), top: base + r.lt[1], bottom: base + r.rb[1], x: (x1 + x2) / 2, y: base });
+    }
+    if (!pick) return spots;
+    for (let i = spots.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [spots[i], spots[j]] = [spots[j], spots[i]]; }
+    return spots.slice(0, Math.max(1, r.attackCount || 1));
+  }
+  /** Whether attack `a` reaches a body (a box): overlapping its reach, or its middle within the radius in front. */
+  reaches(a, body, spots = null) {
+    if (a.type >= 3) return (spots || this.areaSpots(a)).some((q) => q.right >= body.left && q.left <= body.right && q.bottom >= body.top && q.top <= body.bottom);
+    const q = this.attackReach(a);
+    if (q.box) return q.box.right >= body.left && q.box.left <= body.right && q.box.bottom >= body.top && q.box.top <= body.bottom;
+    const cx = (body.left + body.right) / 2, cy = (body.top + body.bottom) / 2;
+    return (cx - this.x) * (this.facingRight ? 1 : -1) >= -10 && Math.hypot(cx - q.sx, cy - q.sy) <= q.r;
+  }
+  /**
+   * Statuses (CMob's temporary stats): `first` / `second` are MonsterStatus mask bits, all from skill `source`,
+   * whose art (`anim` looping on it, an `icon` for a monster's own buff) shows while any of them lasts.
+   */
+  addStatus(first, second, source, art = {}) {
+    this.status.first |= first; this.status.second |= second;
+    const e = this.statusArt.get(source) || { first: 0, second: 0 };
+    e.first |= first; e.second |= second; Object.assign(e, art);
+    this.statusArt.set(source, e);
+  }
+  removeStatus(first, second) {
+    this.status.first &= ~first; this.status.second &= ~second;
+    for (const [src, e] of this.statusArt) { e.first &= ~first; e.second &= ~second; if (!e.first && !e.second) this.statusArt.delete(src); }
+  }
+  /** Its statuses' art over its head (poison bubbles, stun stars...), and its own buffs' icons in a row above. */
+  drawStatus(ctx, cam, assets, node) {
+    if (!this.statusArt.size) return;
+    const head = node?.head, o = node?.origin || [0, 0];
+    const hx = this.x + (head ? (this.facingRight ? -head[0] : head[0]) : 0) - cam.x;
+    const hy = this.y + (head ? head[1] : -o[1]) - cam.y;
+    const icons = [];
+    for (const e of this.statusArt.values()) {
+      // a one-shot animation (Doom's puff) is gone once played; Doom's puff is at the feet, everything else over the head
+      const n = e.anim?.done ? null : e.anim?.node, img = n && assets.image(n);
+      const [ax, ay] = e.doom ? [this.x - cam.x, this.y - cam.y] : [hx, hy];
+      if (img) { const no = n.origin || [0, 0]; ctx.drawImage(img, Math.round(ax - no[0]), Math.round(ay - no[1])); }
+      const m = this.doomArt === e.doom && e.doom?.mark?.node, mark = m && assets.image(m);
+      if (mark) {
+        const mo = m.origin || [0, 0];
+        ctx.save(); ctx.globalAlpha *= e.doom.mark.alpha;
+        ctx.drawImage(mark, Math.round(hx - mo[0]), Math.round(hy - mo[1]));
+        ctx.restore();
+      }
+      const icon = e.icon && assets.image(e.icon);
+      if (icon) icons.push(icon);
+    }
+    let x = Math.round(this.x - cam.x - (icons.length * 26) / 2);
+    const y = Math.round(this.y - cam.y - o[1] - 34);
+    for (const icon of icons) { ctx.drawImage(icon, x, y); x += 26; }
+  }
+  /** Its speed now: a Speed status (Slow's negative value) is added to its own speed stat before the conversion. */
+  get walkSpeed() {
+    let mod = 0;
+    if (this.status.second & MOB_SPEED) for (const e of this.statusArt.values()) if (e.second & MOB_SPEED) mod = e.value || 0;
+    const doom = this.doomArt;
+    return Math.max(0, doom ? (doom.speed + 100) * 0.78 : this.speed + mod * 0.78);
+  }
+  /** Doomed: once the puff has played, it is drawn (and walks) as the Blue Snail. */
+  get doomArt() { for (const e of this.statusArt.values()) if (e.doom && (!e.anim || e.anim.done)) return e.doom; return null; }
+  /** Frozen, stunned or caught in a Shadow Web: it can't move or attack until that wears off. */
+  get held() { return !!(this.status.second & (MOB_STUN | MOB_FREEZE | MOB_WEB)); }
+  get frozen() { return !!(this.status.second & MOB_FREEZE); }
+
+  /** Cast monster skill `skill` at `level`: its skillN animation (if it has one), then the server applies it. */
+  playSkill(skill, level) {
+    const entry = this.mobSkills.find((s) => s.skill === skill && (s.level === level || !level)) || { skill, level, action: 1 };
+    const anim = this.anims[`skill${entry.action || 1}`];
+    this.recoil = 0;
+    if (anim) { this.setState(`skill${entry.action || 1}`); anim.reset(); this.attacking = { a: { info: { attackAfter: Infinity } }, t: 0, landed: true }; }
+    this.onSkill?.(this, entry);
+  }
+  /** Start attack number `index` (0 = attack1): its animation plays, and at its attackAfter it lands. */
+  playAttack(index) {
+    const a = this.attacks.find((x) => x.index === index) || { n: index + 1, index, info: this.src[`attack${index + 1}`]?.info || {}, type: 0 };
+    if (!this.anims[`attack${a.n}`]) return;
+    this.recoil = 0;
+    this.setState(`attack${a.n}`); this.anims[`attack${a.n}`].reset();
+    this.attacking = { a, t: 0, landed: false, spots: a.type >= 3 ? this.areaSpots(a, true) : null };
+    this.onAttack?.(this, a, this.attacking.spots);
+  }
+
+  /**
+   * Going after someone it can reach: now and then (a few seconds apart) it attacks, turning to face them. Whether
+   * they are still in reach when it lands is checked then. True when it started one.
+   */
+  tryAttack(dt) {
+    const t = this.aggro;
+    // a skill the server has offered goes first, once it has someone to go after
+    if (t && !t.reach && this.nextSkill) { const s = this.nextSkill; this.nextSkill = null; this.playSkill(s.skill, s.level); return true; }
+    if (!t || t.reach || !this.attacks.length || (this.attackT -= dt) > 0) return false;
+    const body = { left: t.x - 22, right: t.x + 22, top: t.y - 65, bottom: t.y };
+    const facing = this.facingRight;
+    this.facingRight = t.x > this.x;
+    const usable = this.attacks.filter((a) => this.reaches(a, body));
+    if (!usable.length) { this.facingRight = facing; this.attackT = 0.3; return false; }
+    this.attackT = 2.5 + Math.random() * 2;
+    this.playAttack(usable[Math.floor(Math.random() * usable.length)].index);
+    return true;
+  }
+
   think(dt) {
     const t = this.aggro;
     if (t) {
@@ -406,11 +630,11 @@ export class Life {
   }
   jump() {
     if (!this.fh) return;
-    this.fh = null; this.vy = -420; this.vx = (this.facingRight ? 1 : -1) * this.speed;
+    this.fh = null; this.vy = -420; this.vx = (this.facingRight ? 1 : -1) * this.walkSpeed;
     this.setState(this.anims.jump ? 'jump' : 'move');
   }
   walkStep(dt) {
-    const dx = (this.facingRight ? 1 : -1) * this.speed * dt;
+    const dx = (this.facingRight ? 1 : -1) * this.walkSpeed * dt;
     const fh = this.fh, x = this.x, y = this.y;
     const res = this.footholds.walk(this, dx);
     const s = this.spawn;
@@ -441,18 +665,30 @@ export class Life {
 
   draw(ctx, cam, assets) {
     if (this.respawnTimer > 0) return;
-    const node = this.node;
+    const doomArt = this.doomArt, doom = doomArt?.[this.state === 'move' ? 'move' : 'stand']?.node;
+    const node = doom && assets.image(doom) ? doom : this.node;
     const img = assets.image(node);
     if (!img) return;
     const o = node.origin || [0, 0];
     const sx = Math.round(this.x - cam.x), sy = Math.round(this.y - cam.y);
     ctx.save();
+    if (this.fadeInAt !== undefined) {
+      const k = (performance.now() - this.fadeInAt) / 800;
+      if (k >= 1) delete this.fadeInAt; else ctx.globalAlpha *= Math.max(0, k);
+    }
     ctx.translate(sx, sy);
     if (this.facingRight) ctx.scale(-1, 1);
+    if (this.frozen) ctx.filter = 'sepia(1) hue-rotate(170deg) saturate(2.5) brightness(1.05)';   // iced over
     ctx.drawImage(img, -o[0], -o[1]);
     ctx.restore();
+    this.drawStatus(ctx, cam, assets, node);
+    // a Maple TV's two screens, their top-left corners at info/MapleTVmsg and MapleTVad from its feet
+    for (const s of this.tv ? [this.tv.msg, this.tv.ad] : []) {
+      const scr = assets.image(s.anim.node);
+      if (scr) ctx.drawImage(scr, sx + s.x, sy + s.y);
+    }
 
-    if (this.name && (this.kind === 'Npc')) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
+    if (this.name && this.kind === 'Npc' && !Number(this.src.info?.hideName)) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
     if (this.kind === 'Mob' && this.hp < this.maxHp && this.state !== 'die1') {
       const w = 50, top = sy - o[1] - 10;
       ctx.fillStyle = '#000'; ctx.fillRect(sx - w / 2 - 1, top - 1, w + 2, 6);
@@ -466,6 +702,22 @@ export class Life {
     const w = n?._w || 40, h = n?._h || 40;
     const left = this.facingRight ? this.x + o[0] - w : this.x - o[0];
     return { left, right: left + w, top: this.y - o[1], bottom: this.y - o[1] + h };
+  }
+  /**
+   * The body attacks and touches test against (the client's mob receiver): the frame's own lt/rb, which can be
+   * far from the picture's size, mirrored when it faces right; a frame without one falls back to the picture.
+   * withPrevious adds where it stood last frame, as target selection does, so one step can't carry it out of a swing.
+   */
+  hitBox(withPrevious = false) {
+    const n = this.node;
+    if (!n?.lt || !n?.rb) return this.box();
+    const at = (x, y) => (this.facingRight
+      ? { left: x - n.rb[0], right: x - n.lt[0], top: y + n.lt[1], bottom: y + n.rb[1] }
+      : { left: x + n.lt[0], right: x + n.rb[0], top: y + n.lt[1], bottom: y + n.rb[1] });
+    const b = at(this.x, this.y);
+    if (!withPrevious || this.prevX === undefined) return b;
+    const p = at(this.prevX, this.prevY);
+    return { left: Math.min(b.left, p.left), right: Math.max(b.right, p.right), top: Math.min(b.top, p.top), bottom: Math.max(b.bottom, p.bottom) };
   }
 }
 

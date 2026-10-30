@@ -1,4 +1,5 @@
 import { frames } from './assets.js';
+import { sfx } from './audio.js';
 import { Footholds, PHYS } from './physics.js';
 import { nameTag } from './map.js';
 import { allCanvases } from './ui/windows.js';
@@ -35,8 +36,9 @@ export class Pet {
 
   // ---------------------------------------------------------------- behaviour
   /** Play an action for a while (a command's answer, eating...), then go back to walking / standing. */
-  play(act, seconds = 2.5) { if (this.data?.[act]) { this.override = { act, t: seconds }; this.frame = 0; this.frameT = 0; } }
-  say(text, seconds = 4) { if (text) this.chat = { text, t: seconds }; }
+  /** Sound/Pet.img/<pet>/<action>: its cry, love, sleep... play with the action; its chat line with what it says. */
+  play(act, seconds = 2.5) { if (this.data?.[act]) { this.override = { act, t: seconds }; this.frame = 0; this.frameT = 0; sfx.play(`Pet/${this.id}/${act}`); } }
+  say(text, seconds = 4) { if (text) { this.chat = { text, t: seconds }; sfx.play(`Pet/${this.id}/chat`); } }
 
   update(dt) {
     if (this.mine) this.follow(dt); else this.replay(dt);

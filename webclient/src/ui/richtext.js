@@ -68,7 +68,7 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
     else if (code === 'm') put(String(ref.map(id)));
     else if (code === 'c') put(String(ref.count(id)));
     else if (code === 'i' || code === 'v') icon(ref.icon(id));
-    else if (code === 'L') { opt = id; if (x > line.x0) newLine(); line.opt = id; line.x0 = bullet; x = Math.max(x, bullet); if (bullet) line.h = lineH + 12; }
+    else if (code === 'L') { opt = id; if (x > line.x0) newLine(); line.opt = id; line.x0 = bullet; x = Math.max(x, bullet); }
     else if (code === 'l') { opt = null; }
   }
   // drop trailing empty lines, then stack the lines
