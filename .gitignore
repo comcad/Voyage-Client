@@ -19,3 +19,4 @@ __pycache__/
 *.log
 nohup.out
 *.bak-loading
+*.bak-heartbeat

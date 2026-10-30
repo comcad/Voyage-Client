@@ -40,6 +40,54 @@ const CHARGE_SKILLS = new Set([22121000, 22151001, 2121001, 2221001, 2321001, 52
  * Channel server session. Decodes in-game packets into calls on `handler`
  * (methods named after the event, all optional) and exposes typed senders.
  */
+/** A shop / mini-game sign over a character (addAnnounceBox / updatePlayerShopBoxInfo). 0 = none. */
+function readBox(r) {
+  const type = r.ubyte();
+  if (!type) return null;
+  const box = { type, oid: r.int(), title: r.string() };
+  if (type === 4) { r.ubyte(); box.permit = r.ubyte(); box.players = r.ubyte(); box.max = r.ubyte(); r.ubyte(); }
+  else { box.locked = r.bool(); r.ubyte(); box.players = r.ubyte(); box.max = r.ubyte(); r.ubyte(); }
+  return box;
+}
+/** The stock: per item its bundles left, how many in a bundle, the bundle's price and the item itself. */
+function readShopItems(r) {
+  return Array.from({ length: r.ubyte() }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) }));
+}
+/**
+ * ROOM type 5 (getHiredMerchant): your slot, the merchant item, visitors, notes, the owner's name - then, for the
+ * owner only, opening time, sales and stored mesos - the title, and the stock (an empty one adds a 0 byte).
+ */
+function readMerchantRoom(r, selfName) {
+  r.ubyte();
+  const slot = r.short(), itemId = r.int(); r.string();
+  const people = [];
+  for (let s = r.ubyte(); s !== 0xFF; s = r.ubyte()) people.push({ slot: s, look: readCharLook(r), name: r.string() });
+  for (let n = r.short(); n > 0; n--) { r.string(); r.ubyte(); }
+  const owner = r.string(), mine = owner === selfName, sold = [];
+  let firstTime = false;
+  if (mine) {
+    r.short(); r.short(); firstTime = r.bool();
+    for (let n = r.ubyte(); n > 0; n--) sold.push({ id: r.int(), qty: r.short(), mesos: r.int(), buyer: r.string() });
+    r.int();
+  }
+  const title = r.string(); r.ubyte();
+  const mesos = r.int();            // the owner: what the merchant has earned; a visitor: their own
+  const n = r.ubyte();
+  const items = n ? Array.from({ length: n }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) })) : (r.ubyte(), []);
+  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, mesos, sold, people, title, items };
+}
+/** ROOM type 4 (getPlayerShop): max visitors, your slot (0 owner), sales so far, owner and visitors, title, stock. */
+function readShopRoom(r) {
+  r.ubyte();
+  const slot = r.ubyte(), sold = [];
+  for (let n = r.ubyte(); n > 0; n--) sold.push({ id: r.int(), qty: r.short(), mesos: r.int(), buyer: r.string() });
+  const people = [{ slot: 0, look: readCharLook(r), name: r.string() }];
+  for (let s = r.ubyte(); s !== 0xFF; s = r.ubyte()) people.push({ slot: s, look: readCharLook(r), name: r.string() });
+  const title = r.string();
+  r.ubyte();
+  return { slot, sold, people, title, items: readShopItems(r) };
+}
+
 export class ChannelSession {
   constructor(transport, handler = {}) {
     this.conn = new Connection(transport);
@@ -172,12 +220,62 @@ export class ChannelSession {
       else if (mode === 5) this.emit('status', { type: 'meso', amount: r.int() });
     });
 
+    // SERVERMESSAGE: 0 notice, 1 pop-up, 2 Megaphone, 3 Super Megaphone (+ channel, whisper ear), 4 the scrolling
+    // header, 5 pink, 6 light blue, 7 an NPC's, 8 Item Megaphone (+ channel, ear, the item), 10 Triple Megaphone
+    // (+ more lines, channels, ear)
     on(S.SERVERMESSAGE, (r) => {
       const type = r.ubyte();
       if (type === 4) r.ubyte();
-      const msg = r.string();
-      this.emit('notice', { type, msg });
+      const n = { type, msg: r.string() };
+      try {
+        if (type === 3) { n.channel = r.ubyte() + 1; n.ear = r.bool(); }
+        else if (type === 8) { n.channel = r.ubyte() + 1; n.ear = r.bool(); if (r.ubyte()) n.item = readItem(r, false); }
+        else if (type === 10) {
+          n.lines = [n.msg];
+          for (let k = r.ubyte(); k > 1; k--) n.lines.push(r.string());
+          n.channel = r.ubyte() + 1; r.skip(9); n.ear = r.bool();
+        }
+      } catch { /* an older server's shorter form: the text alone */ }
+      this.emit('notice', n);
     });
+    // SPOUSE_CHAT: a line between husband and wife (5: from whom, 5, the text), echoed to both
+    on(S.SPOUSE_CHAT, (r) => { const mode = r.ubyte(); const from = mode === 5 ? r.string() : ''; r.ubyte(); this.emit('spouseChat', from, r.string()); });
+    // PARCEL (Duey): 8 the parcels waiting for you (opens Duey), 0x17 one was taken or deleted, 0x19 / 0x1B a parcel
+    // arrived for you, anything else a result code (0x12 sent, 0x0A not enough mesos, 0x0C no such character...)
+    on(S.PARCEL, (r) => {
+      const op = r.ubyte();
+      if (op === 8) {
+        r.ubyte();
+        const list = [];
+        for (let n = r.ubyte(); n > 0; n--) {
+          const p = { id: r.int(), sender: r.paddedString(13), mesos: r.int(), sent: r.long() };
+          const hasMsg = r.int(); const msg = r.paddedString(200); p.message = hasMsg ? msg : '';
+          r.ubyte();
+          if (r.ubyte()) p.item = readItem(r, false);
+          list.push(p);
+        }
+        this.emit('duey', { op: 'open', list });
+      } else if (op === 0x17 && r.available >= 5) this.emit('duey', { op: 'gone', id: r.int() });
+      else if (op === 0x19) this.emit('duey', { op: 'arrived', from: r.string(), quick: r.bool() });
+      else if (op === 0x1B) this.emit('duey', { op: 'arrived', quick: r.bool() });
+      else this.emit('duey', { op: 'result', code: op });
+    });
+    // CHALKBOARD: someone holds up a chalkboard (1, its text) or puts it away (0)
+    on(S.CHALKBOARD, (r) => { const id = r.int(); this.emit('chalkboard', id, r.ubyte() ? r.string() : null); });
+    // MAP_TRANSFER_RESULT: your Teleport Rock list after saving (3) or deleting (2) a map - VIP (10 maps) or not (5)
+    on(S.MAP_TRANSFER_RESULT, (r) => {
+      const mode = r.ubyte();
+      if (mode !== 2 && mode !== 3) { this.emit('rockError', mode); return; }
+      const vip = r.bool();
+      this.emit('rocks', vip, Array.from({ length: vip ? 10 : 5 }, () => r.int()));
+    });
+    // Avatar Megaphone (539xxxx): who, their four lines, channel, whisper ear, their look; cleared ten seconds on
+    on(S.SET_AVATAR_MEGAPHONE, (r) => {
+      const itemId = r.int(), name = r.string(), lines = [r.string(), r.string(), r.string(), r.string()];
+      const channel = r.int() + 1, ear = r.bool();
+      this.emit('avatarMega', { itemId, name, lines, channel, ear, look: readCharLook(r) });
+    });
+    on(S.CLEAR_AVATAR_MEGAPHONE, () => this.emit('avatarMegaClear'));
 
     on(S.CHATTEXT, (r) => this.emit('chat', { id: r.int(), gm: r.bool(), text: r.string(), show: r.ubyte() }));
     // ---- buddy list (CWvsContext::OnFriendResult)
@@ -254,12 +352,84 @@ export class ChannelSession {
       else this.emit('partyMessage', op, r.available >= 2 ? r.string() : '');
     });
     on(S.UPDATE_PARTYMEMBER_HP, (r) => this.emit('partyHp', r.int(), r.int(), r.int()));
-    // ---- trading (PLAYER_INTERACTION; only the trade room's sub-ops are read here)
+    // Hired Merchants on the map (spawnHiredMerchantBox / updateHiredMerchantBox / removeHiredMerchantBox)
+    on(S.SPAWN_HIRED_MERCHANT, (r) => {
+      const owner = r.int(), itemId = r.int(), x = r.short(), y = r.short(); r.short();
+      const name = r.string(); r.ubyte();
+      const oid = r.int(), title = r.string(), permit = r.ubyte(), players = r.ubyte(), max = r.ubyte();
+      this.emit('merchantSpawn', { owner, itemId, x, y, name, oid, title, permit, players, max });
+    });
+    on(S.UPDATE_HIRED_MERCHANT, (r) => {
+      const owner = r.int(); r.ubyte();
+      const oid = r.int(), title = r.string(), permit = r.ubyte(), players = r.ubyte(), max = r.ubyte();
+      this.emit('merchantUpdate', owner, { oid, title, permit, players, max });
+    });
+    on(S.DESTROY_HIRED_MERCHANT, (r) => this.emit('merchantRemove', r.int()));
+    // UPDATE_CHAR_BOX: a character's shop / game sign changed (type 0 = taken down)
+    // ---- Family (Cosmic PacketCreator getFamilyInfo / showPedigree / loadFamily / sendFamily*)
+    // FAMILY_PRIVILEGE_LIST (at login): per privilege its type, reputation cost, uses allowed, name and description
+    on(S.FAMILY_PRIVILEGE_LIST, (r) => this.emit('family', { op: 'privileges', list: Array.from({ length: r.int() }, () => ({ type: r.ubyte(), cost: r.int(), limit: r.int(), name: r.string(), desc: r.string() })) }));
+    // FAMILY_INFO_RESULT: your reputation (now, all-time, today), juniors (have / allowed), the leader, family name and precepts, uses per privilege
+    on(S.FAMILY_INFO_RESULT, (r) => {
+      const f = { rep: r.int(), totalRep: r.int(), todayRep: r.int(), juniors: r.short(), maxJuniors: r.short() };
+      r.short();
+      Object.assign(f, { leader: r.int(), name: r.string(), message: r.string(), used: {} });
+      for (let n = r.int(); n > 0; n--) f.used[r.int()] = r.int();
+      this.emit('family', { op: 'info', info: f });
+    });
+    // FAMILY_CHART_RESULT (the pedigree): whose it is, its members (id, senior id, job, level, online, reputation..., channel, name),
+    // then counts (-1 = members in all, 0 = seniors above, else that member's juniors in all), privileges used, the Add flag
+    on(S.FAMILY_CHART_RESULT, (r) => {
+      const self = r.int(), members = [];
+      for (let n = r.int(); n > 0; n--) {
+        const m = { id: r.int(), senior: r.int(), job: r.short(), level: r.ubyte(), online: r.bool(), rep: r.int(), totalRep: r.int(), toSenior: r.int(), todayRep: r.int(), channel: r.int(), minutes: r.int() };
+        m.name = r.string();
+        members.push(m);
+      }
+      const counts = {};
+      for (let n = r.int(); n > 0; n--) counts[r.int()] = r.int();
+      for (let n = r.int(); n > 0; n--) { r.int(); r.int(); }
+      this.emit('family', { op: 'chart', self, members, counts, canAdd: r.available >= 2 ? r.short() !== 0 : true });
+    });
+    on(S.FAMILY_RESULT, (r) => this.emit('family', { op: 'result', code: r.int(), mesos: r.int() }));
+    on(S.FAMILY_JOIN_REQUEST, (r) => this.emit('family', { op: 'invite', id: r.int(), name: r.string() }));
+    on(S.FAMILY_JOIN_REQUEST_RESULT, (r) => this.emit('family', { op: 'joined', ok: r.bool(), name: r.string() }));
+    on(S.FAMILY_JOIN_ACCEPTED, (r) => this.emit('family', { op: 'senior', name: r.string() }));
+    on(S.FAMILY_REP_GAIN, (r) => this.emit('family', { op: 'rep', gain: r.int(), from: r.string() }));
+    on(S.FAMILY_NOTIFY_LOGIN_OR_LOGOUT, (r) => this.emit('family', { op: 'login', online: r.bool(), name: r.string() }));
+    on(S.FAMILY_SUMMON_REQUEST, (r) => this.emit('family', { op: 'summon', from: r.string(), family: r.string() }));
+    // MESSENGER: 0 someone is in a spot (spot, look, name, channel), 1 your own spot, 2 a spot emptied,
+    // 3 an invitation (from, messenger id), 4 your invitation went out (name, 1) or found no one (name, 0),
+    // 5 it was declined (name), 6 a line of chat ("name : text"), 7 someone's look changed
+    on(S.MESSENGER, (r) => {
+      const op = r.ubyte();
+      if (op === 0 || op === 7) { const pos = r.ubyte(), look = readCharLook(r); this.emit('messenger', { op: op === 0 ? 'add' : 'update', pos, look, name: r.string(), channel: r.ubyte() }); }
+      else if (op === 1) this.emit('messenger', { op: 'join', pos: r.ubyte() });
+      else if (op === 2) this.emit('messenger', { op: 'remove', pos: r.ubyte() });
+      else if (op === 3) { const from = r.string(); r.ubyte(); this.emit('messenger', { op: 'invite', from, id: r.int() }); }
+      else if (op === 4) { const name = r.string(); this.emit('messenger', { op: 'invited', name, ok: r.ubyte() === 1 }); }
+      else if (op === 5) this.emit('messenger', { op: 'declined', name: r.string() });
+      else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
+    });
+    // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
+    on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => this.emit('merchantCheck', r.ubyte(), r.available ? r.ubyte() : 0));
+    on(S.UPDATE_CHAR_BOX, (r) => { const id = r.int(); this.emit('charBox', id, readBox(r)); });
+    // ---- trading and player shops (PLAYER_INTERACTION): the room type the last ROOM opened decides
+    // what the shared VISIT / EXIT / CHAT ops mean (3 trade, 4 player shop)
     on(S.PLAYER_INTERACTION, (r) => {
       const op = r.ubyte();
+      if ((this.roomType === 4 || this.roomType === 5) && this.shopOp(op, r)) return;
       if (op === 5) {                                     // ROOM
         const type = r.ubyte();
-        if (type === 0) { this.emit('tradeError', r.ubyte()); return; }
+        if (type === 0) {
+          const shop = this.roomType === 4 || this.roomType === 5 || this.shopPending;
+          this.shopPending = false;
+          this.emit(shop ? 'shopError' : 'tradeError', r.ubyte());
+          return;
+        }
+        this.roomType = type; this.shopPending = false;
+        if (type === 4) { this.emit('shopOpen', readShopRoom(r)); return; }
+        if (type === 5) { this.emit('shopOpen', readMerchantRoom(r, this.selfName)); return; }
         if (type !== 3) return;
         r.ubyte();
         const me = r.ubyte();
@@ -325,7 +495,13 @@ export class ChannelSession {
       r.short(); r.ubyte();
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets });
+      let box = null;
+      let chalk = null;
+      if (r.available >= 13) {
+        r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
+        if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
+      }
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // ---- pets: SPAWN_PET (summon / send home), MOVE_PET, PET_CHAT, PET_COMMAND (0 command answer, 1 food answer)
@@ -354,8 +530,10 @@ export class ChannelSession {
       const targets = [];
       for (let i = 0; i < (nd >> 4); i++) {
         const oid = r.int(); r.ubyte();
-        const dmg = []; for (let j = 0; j < (nd & 0xf); j++) dmg.push(r.int());
-        targets.push({ oid, dmg });
+        // Cosmic sets a critical hit's top bit before passing it on (damage - 2^31)
+        const dmg = [], crit = [];
+        for (let j = 0; j < (nd & 0xf); j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
+        targets.push({ oid, dmg, crit });
       }
       this.emit('attack', { kind, id, skill, skillLevel, display, direction, stance, speed, projectile, targets });
     };
@@ -378,6 +556,7 @@ export class ChannelSession {
     on(S.COOLDOWN, (r) => this.emit('cooldown', r.int(), r.short()));
     // GIVE_BUFF: two 64-bit masks, then (short value, int source, int duration) per set bit
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
+    const SHARP_EYES = [3121002, 3221002];
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -404,9 +583,36 @@ export class ChannelSession {
         if (hbHp) b.hbHp = values[0];
         if (hbMp) b.hbMp = values[hbHp ? 1 : 0];
       }
+      // Sharp Eyes' one stat is (critical rate << 8 | critical damage)
+      if (pick === normal && SHARP_EYES.includes(normal.source)) { r.pos = start; const v = r.short(); b.sharpEyes = { rate: v >> 8, dmg: v & 0xff }; }
       this.emit('buff', b);
     });
     on(S.CANCEL_BUFF, (r) => this.emit('cancelBuff', r.long(), r.long()));
+    // monster book: a card gained (not full, card id, its count now) and the cover set
+    on(S.MONSTER_BOOK_SET_CARD, (r) => { const fresh = r.bool(); this.emit('bookCard', r.int(), r.int(), fresh); });
+    on(S.MONSTER_BOOK_SET_COVER, (r) => this.emit('bookCover', r.int()));
+    // MACRO_SYS_DATA_INIT: the saved skill macros, in order: name, shout, three skill ids
+    on(S.MACRO_SYS_DATA_INIT, (r) => this.emit('macros', Array.from({ length: r.ubyte() }, () => ({ name: r.string(), shout: r.bool(), skills: [r.int(), r.int(), r.int()] }))));
+    // ---- summons (Cosmic PacketCreator.spawnSummon / removeSummon / moveSummon / summonAttack / damageSummon / summonSkill)
+    on(S.SPAWN_SPECIAL_MAPOBJECT, (r) => {
+      const d = { owner: r.int(), oid: r.int(), skill: r.int() };
+      r.ubyte(); d.level = r.ubyte();
+      const at = r.pos2(); d.x = at.x; d.y = at.y;
+      d.stance = r.ubyte(); r.short(); d.moveType = r.ubyte(); d.canAttack = r.bool(); d.animated = !r.bool();
+      this.emit('summonSpawn', d);
+    });
+    on(S.REMOVE_SPECIAL_MAPOBJECT, (r) => this.emit('summonRemove', r.int(), r.int(), r.ubyte() === 4));
+    on(S.MOVE_SUMMON, (r) => { const owner = r.int(), oid = r.int(); r.pos2(); this.emit('summonMove', owner, oid, readMovement(r)); });
+    on(S.SUMMON_ATTACK, (r) => {
+      const owner = r.int(), oid = r.int(); r.ubyte();
+      const dir = r.ubyte(), n = r.ubyte();
+      const hits = Array.from({ length: n }, () => { const mob = r.int(); r.ubyte(); return { mob, dmg: r.int() }; });
+      this.emit('summonAttack', owner, oid, dir, hits);
+    });
+    on(S.DAMAGE_SUMMON, (r) => { const owner = r.int(), oid = r.int(); r.ubyte(); this.emit('summonDamaged', owner, oid, r.int()); });
+    on(S.SUMMON_SKILL, (r) => this.emit('summonSkill', r.int(), r.int(), r.ubyte()));
+    // SHOW_SCROLL_EFFECT: who, success, cursed (the item was destroyed), Legendary Spirit, White Scroll
+    on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.bool(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
     on(S.SHOW_FOREIGN_EFFECT, (r) => {
       const id = r.int(), effect = r.ubyte();
       if (effect === 1 && r.available >= 4) this.emit('foreignSkill', id, r.int());
@@ -605,6 +811,8 @@ export class ChannelSession {
   }
 
   chat(text) { this.send(new PacketWriter(C.GENERAL_CHAT).string(text).byte(0)); }
+  /** FACE_EXPRESSION: 1 hit .. 7 stunned (F1-F7); higher ones need their cash emotion item */
+  faceExpression(emote) { this.send(new PacketWriter(C.FACE_EXPRESSION).int(emote)); }
   /** type: 0 buddy (recipients = buddy ids), 1 party, 2 guild, 3 alliance */
   groupChat(type, text, recipients = []) {
     const w = new PacketWriter(C.MULTI_CHAT).byte(type).byte(recipients.length);
@@ -623,6 +831,93 @@ export class ChannelSession {
     if (typeof arg === 'string') w.string(arg); else if (arg !== undefined) w.int(arg);
     this.send(w);
   }
+  /** Player shop room ops (Cosmic PlayerShop / PacketCreator.getPlayerShop*). Returns whether it was one. */
+  shopOp(op, r) {
+    if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
+    if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0); return true; }           // REAL_CLOSE_MERCHANT: the owner's room closed
+    if (op === 0x1A) { this.emit('shopSold', r.ubyte(), r.short(), r.string()); return true; } // UPDATE_PLAYERSHOP: sold (owner)
+    if (op === 4) { const slot = r.ubyte(), look = readCharLook(r); this.emit('shopVisitor', slot, r.string(), look); return true; }
+    if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('shopChat', slot, r.string()); return true; }
+    if (op === 0x0A) {                                                   // a visitor left, or the shop closed on you
+      // getPlayerShopRemoveVisitor: short slot (slot, 0); shopErrorMessage: type, reason (non-zero); nothing: you left.
+      // A merchant's hiredMerchantVisitorLeave is a single byte slot.
+      if (this.roomType === 5 && r.available === 1) { this.emit('shopLeft', r.ubyte()); return true; }
+      const a = r.available >= 1 ? r.ubyte() : 0, b = r.available >= 1 ? r.ubyte() : 0;
+      if (a && !b) this.emit('shopLeft', a);
+      else { this.roomType = 0; this.emit('shopClosed', b); }
+      return true;
+    }
+    return false;
+  }
+  /** CREATE type 4 (a Shop Permit) or 5 (a Hired Merchant): the title and the item that opens it */
+  pshopCreate(title, itemId, type = 4) { this.shopPending = true; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
+  pshopVisit(oid) { this.shopPending = true; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
+  pshopOpenStore() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0B).byte(1)); }
+  /** ADD_ITEM: inventory tab, slot, how many bundles, how many in each, the price of one bundle */
+  pshopPut(tab, slot, bundles, perBundle, price) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x16).byte(tab).short(slot).short(bundles).short(perBundle).int(price)); }
+  pshopRemove(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1B).short(index)); }
+  pshopBuy(index, bundles) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x17).byte(index).short(bundles)); }
+  pshopExit() { this.roomType = 0; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
+  // ---- your Hired Merchant: HIRED_MERCHANT_REQUEST asks whether one may open here (ENTRUSTED_SHOP_CHECK_RESULT answers);
+  // in its room TAKE_ITEM_BACK 0x26, MERCHANT_ORGANIZE 0x28 (collect the mesos, drop sold-out rows), CLOSE_MERCHANT 0x29
+  // (close it, the stock back to you), MAINTENANCE_OFF 0x27 (leave and reopen it)
+  // ---- Family
+  familyOpen() { this.send(new PacketWriter(C.OPEN_FAMILY)); }
+  familyChart(name) { this.send(new PacketWriter(C.OPEN_FAMILY_PEDIGREE).string(name)); }
+  familyAdd(name) { this.send(new PacketWriter(C.ADD_FAMILY).string(name)); }
+  familyAnswer(inviterId, name, accept) { this.send(new PacketWriter(C.ACCEPT_FAMILY).int(inviterId).string(name).byte(accept ? 1 : 0)); }
+  /** SEPARATE_FAMILY_BY_SENIOR: let a junior of yours go; SEPARATE_FAMILY_BY_JUNIOR: leave your senior */
+  familyDropJunior(id) { this.send(new PacketWriter(C.SEPARATE_FAMILY_BY_SENIOR).int(id)); }
+  familyLeaveSenior() { this.send(new PacketWriter(C.SEPARATE_FAMILY_BY_JUNIOR)); }
+  /** USE_FAMILY: a privilege by index (Family Reunion / Summon Family name the member) */
+  familyUse(index, name) { const w = new PacketWriter(C.USE_FAMILY).int(index); if (name) w.string(name); this.send(w); }
+  familyPrecepts(text) { this.send(new PacketWriter(C.CHANGE_FAMILY_MESSAGE).string(text)); }
+  familySummonAnswer(family, accept) { this.send(new PacketWriter(C.FAMILY_SUMMON_RESPONSE).string(family).byte(accept ? 1 : 0)); }
+  /**
+   * USE_CASH_ITEM for the megaphones: slot, item, then by kind - Megaphone: text; Super: text, ear;
+   * Item: text, ear, an item or not (inventory type, slot); Triple: line count, lines, ear; Avatar (539): four lines, ear
+   */
+  useMegaphone(slot, itemId, { text = '', lines = null, ear = false, item = null } = {}) {
+    const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId), kind = Math.floor(itemId / 1000) % 10;
+    if (Math.floor(itemId / 10000) === 539) { for (let i = 0; i < 4; i++) w.string(lines?.[i] || ''); w.byte(ear ? 1 : 0); }
+    else if (kind === 1) w.string(text);
+    else if (kind === 2) w.string(text).byte(ear ? 1 : 0);
+    else if (kind === 6) { w.string(text).byte(ear ? 1 : 0).byte(item ? 1 : 0); if (item) w.int(item.tab).int(item.slot); }
+    else if (kind === 7) { const ls = (lines || [text]).filter(Boolean).slice(0, 3); w.byte(ls.length); for (const l of ls) w.string(l); w.byte(ear ? 1 : 0); }
+    this.send(w);
+  }
+  /** SPOUSE_CHAT: to your husband or wife (the server finds them; the first string is ignored) */
+  spouseChat(text) { this.send(new PacketWriter(C.SPOUSE_CHAT).string('').string(text)); }
+  /** DUEY_ACTION: 2 send (an item and / or mesos to a character), 4 take a parcel, 5 delete one, 7 close Duey */
+  dueySend({ tab = 0, slot = 0, qty = 0, mesos = 0, to }) {
+    this.send(new PacketWriter(C.DUEY_ACTION).byte(2).byte(tab).short(slot).short(qty).int(mesos).string(to).byte(0));
+  }
+  dueyTake(id) { this.send(new PacketWriter(C.DUEY_ACTION).byte(4).int(id)); }
+  dueyDelete(id) { this.send(new PacketWriter(C.DUEY_ACTION).byte(5).int(id)); }
+  dueyClose() { this.send(new PacketWriter(C.DUEY_ACTION).byte(7)); }
+  /** A Chalkboard (537xxxx): its text; CLOSE_CHALKBOARD puts it away. */
+  useChalkboard(slot, itemId, text) { this.send(new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId).string(text)); }
+  closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
+  /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
+  rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
+  rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
+  /** USE_CASH_ITEM for a Teleport Rock (504xxxx): 0 then a map, or 1 then a character to chase (VIP rocks only) */
+  useRock(slot, itemId, { mapId, name }) {
+    const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId);
+    if (name) w.byte(1).string(name); else w.byte(0).int(mapId);
+    this.send(w);
+  }
+  /** MESSENGER: 0 open one (id 0) or accept an invitation (its id), 2 leave, 3 invite, 5 decline, 6 chat ("name : text") */
+  messengerJoin(id = 0) { this.send(new PacketWriter(C.MESSENGER).byte(0).int(id)); }
+  messengerLeave() { this.send(new PacketWriter(C.MESSENGER).byte(2)); }
+  messengerInvite(name) { this.send(new PacketWriter(C.MESSENGER).byte(3).string(name)); }
+  messengerDecline(from) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from)); }
+  messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
+  merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
+  merchantTakeBack(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x26).short(index)); }
+  merchantOrganize() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x28)); }
+  merchantClose() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x29)); }
+  merchantLeave() { this.roomType = 0; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x27)); }
   /** PLAYER_INTERACTION: 0 create (type 3 = trade), 2 invite, 3 decline, 4 visit, 6 chat, 0xA exit, 0xF item, 0x10 meso, 0x11 confirm */
   tradeStart(cid) {
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3));
@@ -646,6 +941,9 @@ export class ChannelSession {
   guildEmblem(e) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0F).short(e.bg).byte(e.bgColor).short(e.logo).byte(e.logoColor)); }
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
   guildDeny(from) { this.send(new PacketWriter(C.DENY_GUILD_REQUEST).byte(0).string(from)); }
+  /** PARTY_SEARCH_START: level range, how many members, the job bits; PARTY_SEARCH_UPDATE ends the search */
+  partySearchStart(min, max, members, jobs) { this.send(new PacketWriter(C.PARTY_SEARCH_START).int(min).int(max).int(members).int(jobs)); }
+  partySearchStop() { this.send(new PacketWriter(C.PARTY_SEARCH_UPDATE)); }
   partyDeny(name) { this.send(new PacketWriter(C.DENY_PARTY_REQUEST).byte(0).string(name)); }
   pickup(oid, pos) { this.send(new PacketWriter(C.ITEM_PICKUP).int(Date.now() | 0).byte(0).pos(pos).int(oid)); }
   /** The Cash Shop: entering is a bare ENTER_CASHSHOP, leaving a bare CHANGE_MAP (the server answers with a channel change) */
@@ -686,6 +984,34 @@ export class ChannelSession {
   distributeAp(stat) { this.send(new PacketWriter(C.DISTRIBUTE_AP).int(Date.now() | 0).int(stat)); }
   distributeSp(skillId) { this.send(new PacketWriter(C.DISTRIBUTE_SP).int(Date.now() | 0).int(skillId)); }
   useItem(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
+  /** MONSTER_BOOK_COVER: a card you own as the book's cover (0 releases it). */
+  bookCover(cardId) { this.send(new PacketWriter(C.MONSTER_BOOK_COVER).int(cardId)); }
+  /** SKILL_MACRO: all five macros (empty ones too, so each keeps its place). */
+  skillMacros(list) {
+    const w = new PacketWriter(C.SKILL_MACRO).byte(list.length);
+    for (const m of list) w.string(m.name || '').byte(m.shout ? 1 : 0).int(m.skills[0] || 0).int(m.skills[1] || 0).int(m.skills[2] || 0);
+    this.send(w);
+  }
+  /** MOVE_SUMMON: the summon's oid, where it started, the steps (only yours). */
+  /** DAMAGE_SUMMON: a monster ran into your summon (the Puppet): oid, -1, the damage, the monster's id */
+  damageSummon(oid, damage, mobId) { this.send(new PacketWriter(C.DAMAGE_SUMMON).int(oid).byte(-1).int(damage).int(Number(mobId) || 0)); }
+  moveSummon(oid, start, moves) { const w = new PacketWriter(C.MOVE_SUMMON).int(oid).pos(start); writeMovement(w, moves); this.send(w); }
+  /**
+   * SUMMON_ATTACK (SummonDamageHandler): oid, tick, direction, count, the summon's / first mob's position, then per
+   * monster: oid, its id + 4 unread bytes, where it is now and next, the hit delay (ms) and the damage.
+   */
+  summonAttack(s, hits, delay) {
+    const w = new PacketWriter(C.SUMMON_ATTACK).int(s.oid).int(Date.now() | 0).byte(s.facingRight ? 0 : 4).byte(hits.length);
+    const sx = Math.round(s.x), sy = Math.round(s.y);
+    w.short(sx).short(sy).short(sx).short(sy);
+    for (const { mob, dmg } of hits) {
+      const at = { x: Math.round(mob.x), y: Math.round(mob.y) };
+      w.int(mob.oid).int(Number(mob.spawn?.id) || 0).int(0).pos(at).pos(at).short(delay).int(dmg);
+    }
+    this.send(w);
+  }
+  /** USE_UPGRADE_SCROLL: the scroll's USE slot, the equip's slot (negative = worn), 2 = also use a White Scroll */
+  useScroll(scrollSlot, equipSlot, white) { this.send(new PacketWriter(C.USE_UPGRADE_SCROLL).int(Date.now() | 0).short(scrollSlot).short(equipSlot).short(white ? 2 : 0)); }
   moveItem(inv, from, to, qty = 1) { this.send(new PacketWriter(C.ITEM_MOVE).int(Date.now() | 0).byte(inv).short(from).short(to).short(qty)); }
   healOverTime(hp, mp) { this.send(new PacketWriter(C.HEAL_OVER_TIME).zero(8).short(hp).short(mp).byte(0)); }
   changeChannel(ch) { this.send(new PacketWriter(C.CHANGE_CHANNEL).byte(ch).int(Date.now() | 0)); }

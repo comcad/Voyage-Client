@@ -42,7 +42,12 @@ export class SkillBook {
   }
 
   setLevels(skills) {
-    for (const [id, s] of Object.entries(skills || {})) this.levels[id] = { level: s.level, master: s.master || 0, expiration: s.expiration };
+    for (const [id, s] of Object.entries(skills || {})) this.setLevel(id, s);
+  }
+  /** A skill you have from outside your job's books (another job's, a GM's) still needs its book to be usable. */
+  setLevel(id, s) {
+    this.levels[id] = { level: s.level, master: s.master || 0, expiration: s.expiration };
+    if (s.level > 0) this.book(Math.floor(id / 10000));
   }
 
   async loadJob(job) {
@@ -64,6 +69,11 @@ export class SkillBook {
   async ensure(id) { await this.book(Math.floor(id / 10000)); return this.node(id); }
 
   level(id) { return this.levels[id]?.level || 0; }
+  /** Only your own job's books (and the GM books, which only a GM has levels in) can be used. */
+  owns(id) {
+    const b = Math.floor(id / 10000);
+    return !!this.jobBookIds?.includes(b) || b === 900 || b === 910;
+  }
   levelData(id, lv = this.level(id)) { return this.node(id)?.level?.[lv] || null; }
   maxLevel(id) {
     const max = Object.keys(this.node(id)?.level || {}).length; // level keys are "1".."N"
@@ -133,6 +143,24 @@ export class SkillBook {
  * Max damage per line, mirroring the server checks in AbstractDealDamageHandler.parseDamage
  * (client-side numbers must stay below calcDmgMax * 1.5 or Cosmic flags the character).
  */
+/**
+ * Your critical chance and extra damage (percentage points on top of the skill's own damage%), v83 style:
+ * Critical Shot with a bow or crossbow, Critical Throw with a claw (and their Cygnus copies), plus Sharp Eyes
+ * from yourself or a party member. A critical hit does (skill damage% + extra)% instead of the skill's damage%.
+ */
+const CRIT_SKILLS = { 145: [3000001, 13000000], 146: [3000001, 13000000], 147: [4100001, 14100001] };
+export function critical(game, weaponCat) {
+  const sb = game.skills;
+  let rate = 0, dmg = 0;
+  for (const id of CRIT_SKILLS[weaponCat] || []) {
+    const ld = sb.owns(id) && sb.levelData(id);
+    if (ld) { rate += ld.prop || 0; dmg += (ld.damage || 100) - 100; }
+  }
+  const se = game.buffs?.find((b) => b.sharpEyes && b.until > Date.now())?.sharpEyes;
+  if (se) { rate += se.rate; dmg += se.dmg; }
+  return rate > 0 ? { rate, dmg } : null;
+}
+
 export function skillMaxDamage(game, id, lv, kind) {
   const s = game.stats;
   const ld = id ? game.skills.levelData(id, lv) : null;

@@ -1,7 +1,7 @@
 import { isCanvas } from '../assets.js';
-import { EXP, jobName, itemIcon, itemName, itemInfo, invType } from '../data.js';
+import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll } from '../data.js';
 import { sfx } from '../audio.js';
-import { WzButton, uiText, wrapText } from './wzui.js';
+import { WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { richText, drawRich } from './richtext.js';
 
 /**
@@ -43,7 +43,7 @@ export class WindowManager {
   }
   close(w) {
     const i = this.order.indexOf(w);
-    if (i >= 0) { this.order.splice(i, 1); sfx.play('UI/MenuDown'); this.tip = null; }
+    if (i >= 0) { this.order.splice(i, 1); sfx.play('UI/MenuDown'); this.tip = null; w.onClose?.(); }
   }
   toggle(name, arg) {
     const w = this.wins[name];
@@ -217,7 +217,15 @@ export class WindowManager {
   update(dt) { for (const w of this.order) for (const b of w.buttons) b.update(dt * 1000); }
 
   draw(ctx) {
-    for (const w of this.order) w.draw(ctx);
+    for (const w of this.order) {
+      try { w.draw(ctx); } catch (e) {
+        // a window that throws mid-draw would leave saves / clips open and blank everything after it:
+        // report it once, put the canvas back and go on with the rest
+        if (!w.drawFailed) { w.drawFailed = true; console.error(`${w.constructor.name} failed to draw`, e); }
+        for (let i = 0; i < 32; i++) ctx.restore();   // surplus restores are no-ops; this unwinds whatever it left open
+        this.game.fitBacking?.();
+      }
+    }
     if (this.carry?.node) {
       ctx.globalAlpha = 0.7; this.drawIcon(ctx, this.carry.node, this.mouse.x - 16, this.mouse.y - 16); ctx.globalAlpha = 1;
     }
@@ -371,6 +379,7 @@ class InventoryWin extends Win {
   drop(lx, ly, c) {
     if (c.kind !== 'item') return;
     const to = this.slotAt(lx, ly);
+    if (c.tab === 2 && isScroll(c.id) && this.tab === 1 && to && this.g.inventory[1][to]) { this.g.useScroll(c.slot, to); return; }
     if (c.tab === this.tab && to && to !== c.slot) { this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1); sfx.play('UI/DragEnd'); }
     else if (c.tab === 'equip' && this.tab === 1) this.g.unequip(c.slot);
   }
@@ -405,18 +414,52 @@ const EQUIP_CELLS = {
   [-8]: [0, 4], [-6]: [1, 4], [-50]: [2, 4], [-15]: [3, 4], [-16]: [4, 4], [-7]: [2, 5],
   [-18]: [0, 6], [-19]: [1, 6], [-20]: [2, 6], [-14]: [3, 6],
 };
+/**
+ * Equip.img pet (177x181), opened beside the window by BtPetEquipShow: a 4-column grid of 33px cells from
+ * (13, 12), labelled HP POC / PET HP / MP POC / PET MP, ITEM POC / MESO MAG, ITEM IGNORE / PICK UP / POS /
+ * PET EQUIP, MOVE UP / PET RING x2. Slots as equipSlotFor gives them.
+ */
+const PET_CELLS = {
+  [-123]: [0, 0], [-124]: [2, 0], [-122]: [0, 1], [-121]: [1, 1],
+  [-128]: [0, 2], [-127]: [1, 2], [-126]: [2, 2], [-114]: [3, 2], [-125]: [0, 3],
+};
+const PET_X = 175;
 class EquipWin extends Win {
-  constructor(mgr) { super(mgr, mgr.W.Equip.backgrnd, 420, 90); }
+  constructor(mgr) {
+    super(mgr, mgr.W.Equip.backgrnd, 420, 90);
+    const E = mgr.W.Equip;
+    this.closePinned = true; this.closeBtn.x = 175 - 17;
+    this.petOpen = false;
+    this.petShow = this.button(E.BtPetEquipShow, 175 - 60, 283, () => this.togglePet());
+    this.petHide = this.button(E.BtPetEquipHide, 175 - 60, 283, () => this.togglePet());
+    this.togglePet(false);
+  }
+  frames() { return [...super.frames(), this.mgr.W.Equip.pet]; }
+  togglePet(open = !this.petOpen) {
+    this.petOpen = open;
+    this.w = open ? PET_X + 177 : 175;
+    this.petShow.visible = !open; this.petHide.visible = open;
+  }
   slotAt(lx, ly) {
+    if (this.petOpen && lx >= PET_X) {
+      const c = Math.floor((lx - PET_X - 13) / 33), r = Math.floor((ly - 12) / 33);
+      return Number(Object.entries(PET_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0;
+    }
     const c = Math.floor((lx - 5) / 33), r = Math.floor((ly - 35) / 33);
     return Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0;
   }
   body(ctx) {
     const eq = this.g.inventory?.equipped || {}, m = this.mgr;
-    for (const [slot, [c, r]] of Object.entries(EQUIP_CELLS)) {
+    const cells = [...Object.entries(EQUIP_CELLS).map(([s, [c, r]]) => [s, 5 + c * 33, 35 + r * 33])];
+    if (this.petOpen) {
+      const panel = m.image(m.W.Equip.pet);
+      if (panel) ctx.drawImage(panel, PET_X, 0);
+      cells.push(...Object.entries(PET_CELLS).map(([s, [c, r]]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
+    }
+    for (const [slot, x, y] of cells) {
       const it = eq[slot];
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === Number(slot))) continue;
-      m.drawIcon(ctx, m.icon(it.id), 5 + c * 33, 35 + r * 33);
+      m.drawIcon(ctx, m.icon(it.id), x, y);
     }
   }
   down(lx, ly) {
@@ -424,7 +467,11 @@ class EquipWin extends Win {
     if (it) this.mgr.startCarry({ kind: 'item', tab: 'equip', slot, id: it.id }, this.mgr.icon(it.id));
   }
   dblclick(lx, ly) { const slot = this.slotAt(lx, ly); if (slot && this.g.inventory?.equipped?.[slot]) this.g.unequip(slot); }
-  drop(lx, ly, c) { if (c.kind === 'item' && c.tab === 1) this.g.useInventoryItem(1, c.slot, this.g.inventory[1][c.slot]); }
+  drop(lx, ly, c) {
+    if (c.kind !== 'item') return;
+    if (c.tab === 2 && isScroll(c.id)) { const slot = this.slotAt(lx, ly); if (slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
+    if (c.tab === 1) this.g.useInventoryItem(1, c.slot, this.g.inventory[1][c.slot]);
+  }
   tooltip(lx, ly) { const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.equipped?.[slot]; return it ? { item: it } : null; }
 }
 
@@ -487,14 +534,104 @@ class StatWin extends Win {
  * with the job name bar x 40-167 y 52-78, list y 88-256 (four 141x35 rows, skill0 / skill1 when
  * selected, every 40px from y 93), SKILL POINT box x 82-111 y 264-278.
  */
+/**
+ * The Skill Macro editor (UIWindow.img/SkillMacro, 207x289), attached to the skill window's right side
+ * by its MACRO button (Basic.img/BtMacro at 120,265), laid out as openms recovered it: three of the five
+ * macros show at a time (rows at y 56 + 45n, scrollbar at 185,54): macroslot (skill cells 1-2-3 at x 20 +
+ * 37n) and macroslot1 holding the macro's own icon (Macroicon/<n>, x 146), macroslot2 behind the chosen
+ * one. Below line02 sits macroname: its icon (22,200), the name field (59,215, 12 letters) and the SHOUT
+ * SKILL NAME check box (166,241). Save (BtOK2 154,265) sends SKILL_MACRO; Cancel (BtCancel2 103,265)
+ * drops the edits. Skills are dragged in from the list; right-click empties a cell; the macro icon is
+ * dragged onto a key (key type 8) or a quick slot.
+ */
+const MACRO_W = 207, MACRO_ROWS = 3;
+const emptyMacro = () => ({ name: '', shout: false, skills: [0, 0, 0] });
 class SkillWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Skill;
     super(mgr, W.backgrnd, 200, 90);
     this.W = W; this.first = 0; this.sel = null;
     this.spUp = [0, 1, 2, 3].map((i) => this.button(W.BtSpUp, 9 + 141 - 16, 93 + i * 40 + 20, () => this.raise(i)));
+    this.skillW = this.w; this.closePinned = true; this.closeBtn.x = this.skillW - 17;
+    this.M = mgr.W.SkillMacro; this.mSel = -1; this.mFirst = 0;
+    this.button(mgr.B.BtMacro, 120, 265, () => this.toggleMacro());
+    this.mSave = this.button(mgr.B.BtOK2, this.skillW + 154, 265, () => this.saveMacros());
+    this.mCancel = this.button(mgr.B.BtCancel2, this.skillW + 103, 265, () => { this.draft = null; this.toggleMacro(false); });
+    this.toggleMacro(false);
   }
-  frames() { return [...super.frames(), this.W.skill0, this.W.skill1, ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled)]; }
+  frames() {
+    const M = this.M;
+    return [...super.frames(), this.W.skill0, this.W.skill1, ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled),
+      M.backgrnd, M.macroslot, M.macroslot1, M.macroslot2, M.macroname, M.line01, M.line02, ...allCanvases(M.Macroicon), ...allCanvases(this.mgr.B.CheckBox)];
+  }
+
+  // ---------------------------------------------------------------- skill macros
+  toggleMacro(open = !this.macroOpen) {
+    this.macroOpen = open;
+    this.w = this.skillW + (open ? MACRO_W : 0);
+    this.mSave.visible = this.mCancel.visible = open;
+    if (open) { this.draft = (this.g.macros || []).map((m) => ({ ...m, skills: [...m.skills] })); this.mSel = Math.max(0, this.mSel); }
+    while (open && this.draft.length < 5) this.draft.push(emptyMacro());
+    if (open && !this.nameField) {
+      this.nameField = new TextField(this.g.statusBar.layer, 0, 0, 117, 16, { max: 12, color: '#000' });
+      this.nameField.el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') this.nameField.el.blur(); });
+      this.nameField.el.addEventListener('input', () => { const m = this.draft?.[this.mSel]; if (m) m.name = this.nameField.value; });
+    }
+    if (this.nameField) { this.nameField.show(open); if (open) this.nameField.value = this.draft[this.mSel]?.name || ''; }
+  }
+  onClose() { this.nameField?.show(false); this.macroOpen && this.toggleMacro(false); }
+  saveMacros() {
+    const list = this.draft || [];
+    this.g.macros = list.map((m) => ({ ...m, skills: [...m.skills] }));
+    this.g.net?.skillMacros(list);
+    this.g.statusBar?.render();
+    this.toggleMacro(false);
+  }
+  /** Which macro row / part is under (lx, ly): { row, slot 0-2 } or { row, icon: true }. */
+  macroAt(lx, ly) {
+    const x = lx - this.skillW;
+    for (let r = 0; r < MACRO_ROWS; r++) {
+      const y = 56 + 45 * r, row = this.mFirst + r;
+      if (ly < y - 3 || ly >= y + 35) continue;
+      if (x >= 143 && x < 181) return { row, icon: true };
+      for (let s = 0; s < 3; s++) if (x >= 18 + 37 * s && x < 18 + 37 * s + 35) return { row, slot: s };
+    }
+    return null;
+  }
+  drawMacros(ctx) {
+    const M = this.M, m = this.mgr, im = (n) => m.image(n), sb = this.g.skills, X = this.skillW;
+    const bg = im(M.backgrnd);
+    if (bg) ctx.drawImage(bg, X, 0);
+    for (const [k, x, y] of [['line01', 17, 49], ['line02', 7, 190], ['macroname', 17, 195]]) { const i = im(M[k]); if (i) ctx.drawImage(i, X + x, y); }
+    for (let r = 0; r < MACRO_ROWS; r++) {
+      const row = this.mFirst + r, y = 56 + 45 * r, mac = this.draft[row];
+      if (row === this.mSel) { const s = im(M.macroslot2); if (s) ctx.drawImage(s, X + 15, y - 5); }
+      for (const [k, x] of [['macroslot', 17], ['macroslot1', 143]]) { const i = im(M[k]); if (i) ctx.drawImage(i, X + x, y - 3); }
+      const icon = im(M.Macroicon?.[row]?.icon);
+      if (icon) ctx.drawImage(icon, X + 146, y);
+      mac?.skills.forEach((id, s) => { if (id) m.drawIcon(ctx, sb?.icon(id), X + 20 + 37 * s, y); });
+    }
+    this.scrollbar(ctx, X + 185, 54, 125, this.mFirst, 5, MACRO_ROWS);
+    const sel = this.draft[this.mSel];
+    if (sel) {
+      const icon = im(M.Macroicon?.[this.mSel]?.icon);
+      if (icon) ctx.drawImage(icon, X + 22, 200);
+      const box = im(m.B.CheckBox[sel.shout ? 1 : 0]);
+      if (box) ctx.drawImage(box, X + 166, 241);
+    }
+    const f = this.nameField;
+    if (f) { f.rect.x = this.x + X + 59; f.rect.y = this.y + 215; f.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / 800); }
+  }
+  macroDown(lx, ly) {
+    const X = this.skillW;
+    const s = this.scrollClick(lx, ly, X + 185, 54, 125, this.mFirst, 5, MACRO_ROWS);
+    if (s !== null) { this.mFirst = s; return; }
+    if (lx - X >= 42 && lx - X < 178 && ly >= 239 && ly < 255 && this.draft[this.mSel]) { this.draft[this.mSel].shout = !this.draft[this.mSel].shout; return; }
+    const hit = this.macroAt(lx, ly);
+    if (!hit) return;
+    if (hit.row !== this.mSel) { this.mSel = hit.row; if (this.nameField) this.nameField.value = this.draft[hit.row].name; }
+    if (hit.icon) this.mgr.startCarry({ kind: 'bind', b: { type: 8, action: hit.row } }, this.M.Macroicon?.[hit.row]?.icon);
+  }
   onOpen() { const b = this.books; this.book ??= b[b.length - 1]; }
   get books() { return this.g.skills?.jobBookIds || []; }
   get list() { return (this.g.skills?.bookSkills(this.book) || []).filter((id) => this.g.skills.maxLevel(id)); }
@@ -521,6 +658,7 @@ class SkillWin extends Win {
   body(ctx) {
     const g = this.g, sb = g.skills, m = this.mgr;
     if (!sb || !g.stats) return;
+    if (this.macroOpen) this.drawMacros(ctx);
     this.tabRects = drawTabStrip(ctx, m, this.W.Tab, this.books.length, this.books.indexOf(this.book), 34 * this.books.length);
     const book = sb.books[this.book], bi = book && !(book instanceof Promise) ? book.info?.icon : null;
     const bim = m.image(bi);
@@ -546,6 +684,7 @@ class SkillWin extends Win {
     this.text(ctx, this.sp, 97, 266, { align: 'center' });
   }
   down(lx, ly) {
+    if (this.macroOpen && lx >= this.skillW) { this.macroDown(lx, ly); return; }
     const hit = tabAt(this.tabRects, lx, ly);
     if (hit >= 0) { if (this.book !== this.books[hit]) { this.book = this.books[hit]; this.first = 0; sfx.play('UI/Tab'); } return; }
     const s = this.scrollClick(lx, ly, 154, 92, 160, this.first, this.list.length, 4);
@@ -558,7 +697,19 @@ class SkillWin extends Win {
     // only learned, usable skills can be dragged onto a key
     if (lx < 9 + 36 && sb.level(id) && sb.kind(id, this.g.weaponId()) !== 'passive') this.mgr.startCarry({ kind: 'skill', id }, sb.icon(id));
   }
-  wheel(dy) { this.first = Math.max(0, Math.min(this.list.length - 4, this.first + Math.sign(dy))); }
+  wheel(dy) {
+    if (this.macroOpen && this.mgr.mouse.x - this.x >= this.skillW) { this.mFirst = Math.max(0, Math.min(5 - MACRO_ROWS, this.mFirst + Math.sign(dy))); return; }
+    this.first = Math.max(0, Math.min(this.list.length - 4, this.first + Math.sign(dy)));
+  }
+  /** A skill dropped on a macro's cell goes into it (attack and buff skills only, as in the client). */
+  drop(lx, ly, c) {
+    const hit = this.macroOpen && c.kind === 'skill' && this.macroAt(lx, ly);
+    if (!hit || hit.icon) return;
+    this.draft[hit.row].skills[hit.slot] = c.id; this.mSel = hit.row;
+    if (this.nameField) this.nameField.value = this.draft[hit.row].name;
+    sfx.play('UI/DragEnd');
+  }
+  rclick(lx, ly) { const hit = this.macroOpen && this.macroAt(lx, ly); if (hit && !hit.icon) this.draft[hit.row].skills[hit.slot] = 0; }
   tooltip(lx, ly) {
     const r = this.rowAt(lx, ly);
     if (r < 0 || lx > 9 + 36) return null;
@@ -573,25 +724,44 @@ class SkillWin extends Win {
 /**
  * Quest.img backgrnd 245x396 (list): title y 3-22, tab strip y 25-42 (Tab Available / In Progress /
  * Complete), list area y 46-370, bottom band y 371-392. backgrnd2 305x396 is the detail panel
- * opened to its right: blue name box x 16-285 y 26-124, text body from y 130, bottom band y 371-392.
+ * opened to its right: blue name box x 16-285 y 26-124 (the NPC's portrait in its right part, past the
+ * divider at x 196), text body from y 130, bottom band y 371-392 with FIND NPC (BtMarkNpc).
+ * The list is grouped by area (Etc/QuestCategory: Maple Island, Victoria Island, Party Quest...) under
+ * headers you fold with their box; a quest you have not looked at yet wears the NEW badge (icon5), one
+ * you have the yellow ! (icon0) - grey (icon1) while in progress and not yet done. An empty tab shows notice0-2.
  */
-const QTAB_X = [10, 62, 120];
-const QROW_Y = 50, QROW_H = 18, QROWS = 17;
+const QROW_Y = 50, QROW_H = 22, QROWS = 14, QFONT = 12;
+const QDETAIL = { x: 14, y: 132, w: 270, h: 234, line: 18 };
 class QuestWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Quest;
     super(mgr, W.backgrnd, 140, 60);
-    this.W = W; this.tab = 1; this.first = 0; this.sel = null; this.lines = []; this.dfirst = 0;
-    this.giveup = this.button(W.BtGiveup, 245 + 305 - 57 - 12, 373, () => {
+    this.W = W; this.tab = 0; this.first = 0; this.sel = null; this.lines = []; this.dfirst = 0;
+    this.folded = [new Set(), new Set(), new Set()];
+    const band = 245, by = 373;
+    this.findBtn = this.button(W.BtMarkNpc, band + 305 - 81 - 14, by, () => this.findNpc());
+    this.giveup = this.button(W.BtGiveup, this.findBtn.x - 57 - 4, by, () => {
       const id = this.sel;
       if (id) mgr.confirm(`Are you sure you want to give up the quest #b${this.g.quests.name(id)}#k?`).then((ok) => { if (ok) { this.g.net?.questAction(3, id); this.sel = null; } });
     });
+    // Quest Helper: add or take off the chosen quest (BtAlert, left of GIVE UP)
+    this.alert = this.button(W.BtAlert, this.giveup.x - 86 - 4, by, () => { if (this.sel) mgr.wins.questalarm?.track(this.sel); });
+    this.hideBtn = this.button(mgr.B.BtClose, band + 305 - 17, 6, () => { this.sel = null; });
+    for (const b of [this.findBtn, this.giveup, this.alert, this.hideBtn]) b.visible = false;
     const a = mgr.assets;
     Promise.all(['Mob', 'Npc', 'Map'].map((k) => a.json(`String/${k}.img`))).then(([mob, npc, map]) => { this.str = { mob, npc, map }; });
+    a.json('Etc/QuestCategory.img').then((c) => { this.areas = c || {}; });
+    a.json('Etc/NpcLocation.img').then((l) => { this.npcMaps = l || {}; });
+    this.portraits = new Map();
   }
-  frames() { return [...super.frames(), this.W.backgrnd2, this.W.icon0, this.W.icon1, this.W.icon2?.[0], ...allCanvases(this.W.Tab)].filter(isCanvas); }
+  frames() {
+    const W = this.W;
+    return [...super.frames(), W.backgrnd2, W.icon0, W.icon1, ...allCanvases(W.icon5), W.notice0, W.notice1, W.notice2, ...allCanvases(W.Tab)].filter(isCanvas);
+  }
   get wide() { return this.sel ? this.w + 305 : this.w; }
   contains(x, y) { return x >= this.x && x < this.x + this.wide && y >= this.y && y < this.y + this.h; }
+
+  // ---------------------------------------------------------------- what is listed
   ids() {
     const book = this.g.quests;
     if (!book) return [];
@@ -599,35 +769,76 @@ class QuestWin extends Win {
     const src = this.tab === 1 ? book.started : book.completed;
     return Object.keys(src).map(Number).filter((id) => book.info[id]);
   }
+  areaName(code) { const n = this.areas?.[code]; return n && n !== 'empty' ? n : 'Etc.'; }
+  /** The rows shown: per area (in area order) a header, then its quests unless folded. */
+  rows() {
+    const book = this.g.quests, groups = new Map();
+    for (const id of this.ids()) {
+      const area = Number(book.info[id]?.area) || 0;
+      if (!groups.has(area)) groups.set(area, []);
+      groups.get(area).push(id);
+    }
+    const out = [], folded = this.folded[this.tab];
+    for (const area of [...groups.keys()].sort((x, y) => x - y)) {
+      const list = groups.get(area);
+      out.push({ head: area, count: list.length });
+      if (!folded.has(area)) for (const id of list) out.push({ id });
+    }
+    return out;
+  }
+  // quests you have looked at lose their NEW badge (kept per character)
+  get seenKey() { return `maple.questSeen.${this.g.player?.id}`; }
+  get seen() {
+    if (this._seen?.key !== this.seenKey) {
+      let ids = [];
+      try { ids = JSON.parse(localStorage.getItem(this.seenKey) || '[]'); } catch { /* storage off */ }
+      this._seen = { key: this.seenKey, ids: new Set(ids) };
+    }
+    return this._seen.ids;
+  }
+  markSeen(id) {
+    if (this.seen.has(id)) return;
+    this.seen.add(id);
+    try { localStorage.setItem(this.seenKey, JSON.stringify([...this.seen])); } catch { /* storage off */ }
+  }
+
   rowAt(lx, ly) {
     if (lx < 6 || lx > 228 || ly < QROW_Y) return -1;
     const i = Math.floor((ly - QROW_Y) / QROW_H);
-    return i < QROWS && this.first + i < this.ids().length ? this.first + i : -1;
+    return i < QROWS && this.first + i < this.rows().length ? this.first + i : -1;
   }
   select(id) {
     this.sel = id; this.dfirst = 0;
-    this.giveup.visible = this.g.quests.status(id) === 1;
+    this.markSeen(id);
     this.layoutDetail();
+    this.portrait(this.questNpc(id));
   }
-  /** The detail text: the quest's own text for its phase, then requirements and rewards. */
+  /** The NPC a quest is about now: who starts it, or who finishes it once it is under way. */
+  questNpc(id) {
+    const c = this.g.quests.check[id] || {}, st = this.g.quests.status(id);
+    return Number((st === 0 ? c['0']?.npc : c['1']?.npc || c['0']?.npc)) || null;
+  }
+  async portrait(npcId) {
+    if (!npcId || this.portraits.has(npcId)) return;
+    this.portraits.set(npcId, null);
+    const a = this.mgr.assets;
+    let node = await a.json(`Npc/${String(npcId).padStart(7, '0')}.img`);
+    if (node?.info?.link) node = await a.json(`Npc/${String(node.info.link).padStart(7, '0')}.img`);
+    const f = node?.stand?.[0] || node?.stand?.['0'];
+    if (f) { await a.preload([f]); this.portraits.set(npcId, f); }
+  }
+  /** The detail text: the quest's own words for where you are with it (grey), and while it is under way what is left. */
   layoutDetail() {
     const g = this.g, book = g.quests, id = this.sel, st = book.status(id);
     const ctx = document.createElement('canvas').getContext('2d');
     let text = String(book.info[id]?.[String(st === 0 ? 0 : st === 1 ? 1 : 2)] || '');
-    if (st !== 2) {
+    if (st === 1) {
       const req = book.requirements(id), reqs = [];
-      if (req.npc) reqs.push(`Talk to #b#p${req.npc}##k`);
       for (const m of req.mobs) reqs.push(`#o${m.id}#: ${Math.min(m.have, m.need)} / ${m.need}`);
-      for (const it of req.items) reqs.push(`#t${it.id}#: ${g.itemCount(it.id)} / ${it.count ?? 1}`);
-      if (reqs.length) text += `\n\n#eRequirements#n\n${reqs.join('\n')}`;
+      for (const it of req.items) if ((it.count ?? 1) > 0) reqs.push(`#t${it.id}#: ${g.itemCount(it.id)} / ${it.count ?? 1}`);
+      if (reqs.length) text += `\n\n${reqs.join('\n')}`;
     }
-    const rw = book.rewards(id), out = [];
-    if (rw.exp) out.push(`${rw.exp} EXP`);
-    if (rw.meso) out.push(`${rw.meso} mesos`);
-    if (rw.fame) out.push(`${rw.fame} fame`);
-    for (const it of rw.items) out.push(`#t${it.id}#${it.count > 1 ? ` x${it.count}` : ''}`);
-    if (out.length) text += `\n\n#eRewards#n\n${out.join('\n')}`;
-    this.lines = richText(ctx, text, 268, this.ref());
+    this.lines = richText(ctx, text, QDETAIL.w, this.ref(), { base: '#6b6b6b', size: QFONT, lineH: QDETAIL.line });
     this.laidOut = this.mgr.namesVersion;
   }
   ref() {
@@ -638,52 +849,116 @@ class QuestWin extends Win {
       npc: (id) => s.npc?.[id]?.name || `NPC ${id}`, map: (id) => mapName(id), count: (id) => this.g.itemCount(id), icon: (id) => m.icon(id),
     };
   }
+  /** FIND NPC: point at the NPC if it is here, else say where it lives. */
+  findNpc() {
+    const npc = this.questNpc(this.sel), g = this.g;
+    if (!npc) return;
+    const name = this.ref().npc(npc);
+    const here = g.map?.life.find((e) => e.kind === 'Npc' && Number(e.spawn.id) === npc);
+    if (here) { g.markNpc(here, name); return; }
+    const maps = Object.values(this.npcMaps?.[npc] || {}).map((id) => this.ref().map(id)).filter((n) => typeof n === 'string');
+    this.mgr.notice(maps.length ? `${name} is in ${[...new Set(maps)].join(', ')}.` : `${name} is not in this map.`);
+  }
+
+  // ---------------------------------------------------------------- frame
+  draw(ctx) {
+    const st = this.sel ? this.g.quests.status(this.sel) : -1;
+    this.giveup.visible = this.alert.visible = st === 1;
+    this.findBtn.visible = !!this.sel && st !== 2 && !!this.questNpc(this.sel);
+    this.hideBtn.visible = !!this.sel;
+    super.draw(ctx);
+  }
   body(ctx) {
     const m = this.mgr, book = this.g.quests;
     if (!book) return;
-    for (let t = 0; t < 3; t++) {
-      const im = m.image(this.W.Tab[t === this.tab ? 'enabled' : 'disabled'][t]);
-      if (im) ctx.drawImage(im, QTAB_X[t], 29);
-    }
-    const ids = this.ids(), qctx = this.g.textCtx();
-    this.first = Math.min(this.first, Math.max(0, ids.length - QROWS));
+    // the Basic tab strip under the labels: three tabs over the left 200px, as in the client
+    this.tabRects = drawTabStrip(ctx, m, this.W.Tab, 3, this.tab, 200, 24);
+    const rows = this.rows(), qctx = this.g.textCtx(), now = performance.now();
+    this.first = Math.min(this.first, Math.max(0, rows.length - QROWS));
     for (let i = 0; i < QROWS; i++) {
-      const id = ids[this.first + i];
-      if (id === undefined) break;
+      const r = rows[this.first + i];
+      if (!r) break;
       const y = QROW_Y + i * QROW_H;
-      if (id === this.sel) { ctx.fillStyle = '#4f7fc4'; ctx.fillRect(24, y, 202, 15); }
-      const ready = this.tab === 1 && book.canComplete(id, qctx);
-      const icon = m.image(this.tab === 0 ? this.W.icon0 : ready ? this.W.icon2?.[0] : this.W.icon1);
-      if (icon) ctx.drawImage(icon, 8, y);
-      this.text(ctx, book.name(id), 26, y + 1, { color: id === this.sel ? '#fff' : '#000' });
+      if (r.head !== undefined) {
+        // the area's band with its fold box
+        ctx.fillStyle = '#a3b4cd'; ctx.fillRect(8, y + 1, 218, QROW_H - 3);
+        ctx.fillStyle = '#fff'; ctx.fillRect(12, y + 4, 13, 13);
+        ctx.fillStyle = '#3d6fb6'; ctx.fillRect(13, y + 5, 11, 11);
+        ctx.fillStyle = '#fff'; ctx.fillRect(15, y + 10, 7, 1.6);
+        if (this.folded[this.tab].has(r.head)) ctx.fillRect(17.7, y + 7, 1.6, 7);
+        uiText(ctx, `${this.areaName(r.head)} (${r.count})`, 31, y + 3, { color: '#fff', size: QFONT });
+        continue;
+      }
+      const id = r.id, name = book.name(id);
+      if (id === this.sel) {
+        ctx.font = `${QFONT}px Arial, sans-serif`;
+        ctx.fillStyle = '#3b5d96'; ctx.fillRect(30, y + 1, Math.min(196, ctx.measureText(name).width + 8), QROW_H - 3);
+      }
+      let icon;
+      if (this.tab === 0) icon = this.seen.has(id) ? this.W.icon0 : this.W.icon5?.[Math.floor(now / 150) % 5];
+      else if (this.tab === 1) icon = book.canComplete(id, qctx) ? this.W.icon0 : this.W.icon1;
+      else icon = this.W.icon1;
+      const ic = m.image(icon);
+      if (ic) ctx.drawImage(ic, 10, y + 4);
+      ctx.save(); ctx.beginPath(); ctx.rect(30, y, 196, QROW_H); ctx.clip();
+      uiText(ctx, name, 34, y + 3, { color: id === this.sel ? '#fff' : '#000', size: QFONT });
+      ctx.restore();
     }
-    if (!ids.length) this.text(ctx, 'There are no quests here.', 122, 60, { align: 'center', color: '#777' });
-    this.scrollbar(ctx, 229, 46, 324, this.first, ids.length, QROWS);
+    if (!rows.length) { const n = m.image(this.W[`notice${this.tab}`]); if (n) ctx.drawImage(n, Math.round((245 - n.width) / 2), 60); }
+    this.scrollbar(ctx, 229, 46, 324, this.first, rows.length, QROWS);
     if (this.sel) this.drawDetail(ctx);
   }
   drawDetail(ctx) {
     if (this.laidOut !== this.mgr.namesVersion || (!this.laidStr && this.str)) { this.laidStr = !!this.str; this.layoutDetail(); }
-    const bg = this.mgr.image(this.W.backgrnd2);
+    const bg = this.mgr.image(this.W.backgrnd2), book = this.g.quests;
     ctx.save(); ctx.translate(this.w, 0);
     if (bg) ctx.drawImage(bg, 0, 0);
-    uiText(ctx, this.g.quests.name(this.sel), 30, 40, { color: '#fff', bold: true, size: 12 });
+    // the green bullet and the name, cut with ".." to fit before the divider
+    ctx.fillStyle = '#d9f7c6'; ctx.beginPath(); ctx.arc(24, 47, 4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#4dbb2b'; ctx.beginPath(); ctx.arc(24, 47, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.font = 'bold 13px Arial, sans-serif';
+    let name = book.name(this.sel);
+    if (ctx.measureText(name).width > 160) { while (name.length > 1 && ctx.measureText(`${name}..`).width > 160) name = name.slice(0, -1); name = `${name.trimEnd()}..`; }
+    uiText(ctx, name, 33, 39, { color: '#fff', bold: true, size: 13 });
+    // the NPC it is about, standing in the box's right part
+    const f = this.portraits.get(this.questNpc(this.sel)), pi = f && this.mgr.image(f);
+    if (pi) {
+      const o = f.origin || [pi.width / 2, pi.height];
+      ctx.save(); ctx.beginPath(); ctx.rect(198, 28, 86, 94); ctx.clip();
+      ctx.drawImage(pi, Math.round(241 - o[0]), Math.round(116 - o[1]));
+      ctx.restore();
+    }
     // the body scrolls a few lines at a time (wheel over the panel)
-    ctx.save(); ctx.beginPath(); ctx.rect(10, 128, 290, 240); ctx.clip();
+    ctx.save(); ctx.beginPath(); ctx.rect(10, 128, 270, QDETAIL.h); ctx.clip();
     const top = this.lines.lines[this.dfirst]?.y || 0;
-    drawRich(ctx, this.lines, 16, 132 - top, { drawIcon: (n, x, y) => this.mgr.drawIcon(ctx, n, x, y) });
+    drawRich(ctx, this.lines, QDETAIL.x, QDETAIL.y - top, { size: QFONT, drawIcon: (n, x, y) => this.mgr.drawIcon(ctx, n, x, y) });
     ctx.restore();
+    this.scrollbar(ctx, 285, 128, 240, this.dfirst, this.lines.lines.length, Math.floor(QDETAIL.h / QDETAIL.line));
     ctx.restore();
   }
   down(lx, ly) {
-    for (let t = 0; t < 3; t++) if (lx >= QTAB_X[t] - 2 && lx < QTAB_X[t] + 52 && ly >= 25 && ly < 43) { this.tab = t; this.first = 0; this.sel = null; sfx.play('UI/Tab'); return; }
-    const s = this.scrollClick(lx, ly, 229, 46, 324, this.first, this.ids().length, QROWS);
+    const t = tabAt(this.tabRects, lx, ly);
+    if (t >= 0) { if (t !== this.tab) { this.tab = t; this.first = 0; this.sel = null; sfx.play('UI/Tab'); } return; }
+    if (lx >= this.w) {
+      const n = this.lines.lines.length, vis = Math.floor(QDETAIL.h / QDETAIL.line);
+      const s = this.scrollClick(lx - this.w, ly, 285, 128, 240, this.dfirst, n, vis);
+      if (s !== null) this.dfirst = s;
+      return;
+    }
+    const rows = this.rows();
+    const s = this.scrollClick(lx, ly, 229, 46, 324, this.first, rows.length, QROWS);
     if (s !== null) { this.first = s; return; }
-    const r = this.rowAt(lx, ly);
-    if (r >= 0) this.select(this.ids()[r]);
+    const i = this.rowAt(lx, ly), r = rows[i];
+    if (!r) return;
+    if (r.head !== undefined) {
+      const f = this.folded[this.tab];
+      if (f.has(r.head)) f.delete(r.head); else f.add(r.head);
+      sfx.play('UI/BtMouseClick');
+    } else this.select(r.id);
   }
   wheel(dy) {
-    if (this.mgr.mouse.x - this.x >= this.w && this.sel) this.dfirst = Math.max(0, Math.min(this.lines.lines.length - 10, this.dfirst + Math.sign(dy) * 2));
-    else this.first = Math.max(0, Math.min(this.ids().length - QROWS, this.first + Math.sign(dy)));
+    if (this.mgr.mouse.x - this.x >= this.w && this.sel) this.dfirst = Math.max(0, Math.min(this.lines.lines.length - Math.floor(QDETAIL.h / QDETAIL.line), this.dfirst + Math.sign(dy)));
+    else this.first = Math.max(0, Math.min(this.rows().length - QROWS, this.first + Math.sign(dy)));
   }
 }
 
@@ -874,6 +1149,7 @@ class KeyConfigWin extends Win {
     if (!b) return null;
     if (b.type === 1) return this.g.skills?.icon(b.action) || null;
     if (b.type === 2) return this.mgr.icon(b.action);
+    if (b.type === 8) return this.mgr.W.SkillMacro?.Macroicon?.[b.action]?.icon || null;
     return this.W.icon[b.action] || null;
   }
   palette() {

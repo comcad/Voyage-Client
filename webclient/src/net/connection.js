@@ -96,17 +96,32 @@ export class Connection {
   close() { this.t.close(); }
 }
 
-/** Browser transport: a binary WebSocket to the bridge, which relays to Cosmic's TCP port. */
+/**
+ * Browser transport: a binary WebSocket to the bridge, which relays to Cosmic's TCP port. The bridge
+ * sends a text 'hb' every 10s; once one has come, SILENCE ms without any frame means the link died
+ * without a close (a dropped tunnel or network) and the transport reports itself closed.
+ */
+const SILENCE = 30000;
 export function wsTransport(url) {
   const ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
+  let seen = 0, done = false, watch = null;
+  const closed = () => {
+    if (done) return;
+    done = true; clearInterval(watch);
+    t.onClose?.();
+  };
   const t = {
-    send: (d) => ws.send(d),
-    close: () => ws.close(),
+    send: (d) => ws.readyState === WebSocket.OPEN && ws.send(d),
+    close: () => { ws.close(); closed(); },
     onData: null, onClose: null,
   };
-  ws.onmessage = (e) => t.onData?.(new Uint8Array(e.data));
-  ws.onclose = () => t.onClose?.();
-  ws.onerror = () => t.onClose?.();
+  ws.onmessage = (e) => {
+    if (typeof e.data === 'string') { if (!watch) watch = setInterval(() => { if (performance.now() - seen > SILENCE) { ws.close(); closed(); } }, 5000); }
+    else t.onData?.(new Uint8Array(e.data));
+    seen = performance.now();
+  };
+  ws.onclose = closed;
+  ws.onerror = closed;
   return t;
 }
