@@ -30,6 +30,15 @@ const BACK_ACTIONS = new Set(['ladder', 'rope']);
 
 const PING_PONG = new Set(['stand1', 'stand2', 'alert']);
 
+/** Basic attack poses by weapon info/attack; one is picked at random. */
+const ATTACK_POSES = {
+  1: ['stabO1', 'stabO2', 'swingO1', 'swingO2', 'swingO3'],
+  2: ['stabT1', 'stabT2', 'swingT2', 'swingP1', 'swingP2'],
+  5: ['stabO1', 'stabO2', 'swingT1', 'swingT2', 'swingT3'],
+  6: ['swingO1', 'swingO2'],
+  7: ['swingO1', 'swingO2'],
+};
+
 export class CharacterLook {
   constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [] } = {}) {
     this.assets = assets;
@@ -82,7 +91,8 @@ export class CharacterLook {
 
   /** Attack animation for the equipped weapon (weapon.img/info/attack -> body action). */
   attackAction() {
-    const options = ['swingO1', 'swingO2', 'swingO3', 'stabO1'].filter((a) => this.has(a) && (!this.weapon || this.weapon[a]));
+    const poses = ATTACK_POSES[this.weapon?.info?.attack] || ['swingO1', 'swingO2', 'swingO3', 'stabO1'];
+    const options = poses.filter((a) => this.has(a) && (!this.weapon || this.weapon[a]));
     return options[Math.floor(Math.random() * options.length)] || 'swingO1';
   }
   standAction() { return this.weapon?.stand2 && !this.weapon?.stand1 ? 'stand2' : 'stand1'; }

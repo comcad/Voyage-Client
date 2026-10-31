@@ -185,6 +185,8 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/** ms between a melee attack's hits on successive monsters, nearest first. */
+const HIT_WAVE = 60;
 /** Meso piles animate on fixed timings (the client overrides the WZ): four 80ms frames below 100, four 200ms below 1000, the bag 4000/120/120/120. */
 function mesoTiming(node, amount) {
   const delays = amount < 100 ? [80, 80, 80, 80] : amount < 1000 ? [200, 200, 200, 200] : [4000, 120, 120, 120];
@@ -1247,7 +1249,7 @@ export class Game {
       delay *= rp.attackScale;
     }
     const shoots = rp && (a.kind === 'ranged' || (a.kind === 'magic' && a.skill));
-    for (const t of a.targets) {
+    for (const [i, t] of a.targets.entries()) {
       const e = this.lifeByOid.get(t.oid);
       if (!e || e.pending) continue;
       e.pendingHits = (e.pendingHits || 0) + 1;
@@ -1257,7 +1259,7 @@ export class Game {
         this.playHitEffect(a.skill, e, rp, t.dmg);
         if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
       };
-      if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay, land);
+      if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + i * HIT_WAVE, land);
     }
   }
 
@@ -1368,9 +1370,9 @@ export class Game {
   }
 
   /** Character.calculateMaxBaseDamage, so damage stays inside the server's sanity checks. */
-  maxDamage() {
+  maxDamage(pose = null) {
     const s = this.stats, weapon = this.inventory?.equipped[-11];
-    const mult = weaponMultiplier(weapon?.id);
+    const mult = weaponMultiplier(weapon?.id, pose);
     if (!mult) return 1;
     const cat = Math.floor(weapon.id / 10000) % 100;
     let main = s.str, sec = s.dex;
@@ -1798,17 +1800,20 @@ export class Game {
       }
     } else if (this.hitAction(ACTION.SIT) && this.trySit()) { this.advanceFrame('sit', dt); return; }
 
-    // a macro's next skill, once the last one's animation is over
-    if (this.macroQueue?.length && !p.attack) {
-      const id = this.macroQueue.shift();
-      this.skillKeyPressed = true;
-      const used = this.useSkill(id);
-      this.skillKeyPressed = false;
-      if (used) return;
+    // wait out an attack cut short by a hit
+    if (performance.now() >= (this.attackLock || 0)) {
+      // a macro's next skill, once the last one's animation is over
+      if (this.macroQueue?.length && !p.attack) {
+        const id = this.macroQueue.shift();
+        this.skillKeyPressed = true;
+        const used = this.useSkill(id);
+        this.skillKeyPressed = false;
+        if (used) return;
+      }
+      const skill = this.heldSkill();
+      if (skill && this.skills) { if (this.useSkill(skill)) return; }
+      if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     }
-    const skill = this.heldSkill();
-    if (skill && this.skills) { if (this.useSkill(skill)) return; }
-    if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     if (this.hitAction(ACTION.PICKUP) && this.net) this.tryPickup();
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
@@ -1992,7 +1997,7 @@ export class Game {
     const targets = this.findTargets(kind, skillId, lv, mobCount, p.attack);
     const swingAction = p.attack;
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, swingAction));
-    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage()) : 25;
+    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(p.attack)) : 25;
     const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
@@ -2007,7 +2012,7 @@ export class Game {
       return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
     });
     const projectile = kind === 'ranged' || (skillId && sb?.node(skillId)?.ball && kind !== 'melee') || skillId % 10000000 === 1000;
-    for (const t of out) {
+    for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
@@ -2021,7 +2026,7 @@ export class Game {
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
       if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? this.ammoItem() : 0, land));
-      else this.after(hitDelay, land);
+      else this.after(hitDelay + i * HIT_WAVE, land);
     }
     if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
     this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack), facingLeft: !p.facingRight, speed: this.attackSpeed() });
@@ -2633,6 +2638,10 @@ export class Game {
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
     p.fh = null; p.ladder = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
+    if (p.attack) {   // a hit doesn't shorten the attack delay
+      const k = p.attackScale || 1, n = this.look.frameCount(p.attack);
+      this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);
+    }
     p.attack = null;
     this.invincible = HIT_PROTECTION;
   }
