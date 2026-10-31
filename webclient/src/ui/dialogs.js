@@ -61,6 +61,7 @@ export class NpcDialog extends Win {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.U = U; this.d = d; this.done = done; this.modal = true;
+    this.closeSound = null;   // answering a line only makes the button's click
     this.quest = d.type === 12;
     const F = this.quest ? { t: U.it, c: U.ic, s: U.is } : { t: U.t, c: U.c, s: U.s };
     this.F = F;
@@ -162,7 +163,7 @@ export class NpcDialog extends Win {
 
 /** Shows a server NPC_TALK and resolves with { action, sel } once the player answers. */
 export function npcTalk(mgr, d) {
-  return new Promise((resolve) => mgr.show(new NpcDialog(mgr, d, resolve)));
+  return new Promise((resolve) => mgr.show(new NpcDialog(mgr, d, resolve), null));   // opens without the dialog alert
 }
 
 /**
