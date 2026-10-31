@@ -1,12 +1,10 @@
+
 <table>
   <tr>
-    <td><img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="100" height="100" alt="Voyage Logo"></td>
-    <td><h2>Voyage Client</h2></td>
+    <td align="center"><img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="100" height="100" alt="Voyage Logo"></td>
+    <td><h2>Voyage Client</h2><p>A MapleStory <strong>v83</strong> (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)</p></td>
   </tr>
 </table>
-
-
-A MapleStory **v83** (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)
 
 (ALPHA) Work in progress...
 <img width="2872" height="1602" alt="image" src="https://github.com/user-attachments/assets/a4522771-465b-47d4-8f5d-e5863c502d89" />
