@@ -1798,17 +1798,20 @@ export class Game {
       }
     } else if (this.hitAction(ACTION.SIT) && this.trySit()) { this.advanceFrame('sit', dt); return; }
 
-    // a macro's next skill, once the last one's animation is over
-    if (this.macroQueue?.length && !p.attack) {
-      const id = this.macroQueue.shift();
-      this.skillKeyPressed = true;
-      const used = this.useSkill(id);
-      this.skillKeyPressed = false;
-      if (used) return;
+    // wait out an attack cut short by a hit
+    if (performance.now() >= (this.attackLock || 0)) {
+      // a macro's next skill, once the last one's animation is over
+      if (this.macroQueue?.length && !p.attack) {
+        const id = this.macroQueue.shift();
+        this.skillKeyPressed = true;
+        const used = this.useSkill(id);
+        this.skillKeyPressed = false;
+        if (used) return;
+      }
+      const skill = this.heldSkill();
+      if (skill && this.skills) { if (this.useSkill(skill)) return; }
+      if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     }
-    const skill = this.heldSkill();
-    if (skill && this.skills) { if (this.useSkill(skill)) return; }
-    if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     if (this.hitAction(ACTION.PICKUP) && this.net) this.tryPickup();
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
@@ -2633,6 +2636,10 @@ export class Game {
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
     p.fh = null; p.ladder = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
+    if (p.attack) {   // a hit doesn't shorten the attack delay
+      const k = p.attackScale || 1, n = this.look.frameCount(p.attack);
+      this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);
+    }
     p.attack = null;
     this.invincible = HIT_PROTECTION;
   }
