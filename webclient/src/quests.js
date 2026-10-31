@@ -93,6 +93,8 @@ export class QuestBook {
     for (const it of list(c.item)) if (ctx.itemCount(it.id) < (it.count ?? 1)) return false;
     for (const m of this.mobProgress(id)) if (m.have < m.need) return false;
     for (const q of list(c.quest)) if (this.status(q.id) !== (q.state ?? 2)) return false;
+    if (c.questComplete && Object.keys(this.completed).length < c.questComplete) return false;   // quests completed in all
+    if (c.mbmin && (ctx.bookCards ?? 0) < c.mbmin) return false;                                // different Monster Book cards
     return this.infoexMet(id, c);
   }
   /** infoex: the record kept under infoNumber (the quest itself without one) must read the value, e.g. "20" maps explored. */
