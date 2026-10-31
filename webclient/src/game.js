@@ -78,7 +78,12 @@ class Input {
       if (!this.down.has(k)) this.pressed.add(k);
       this.down.add(k);
     });
-    addEventListener('keyup', (e) => { const k = map(e); if (k) this.down.delete(k); });
+    addEventListener('keyup', (e) => {
+      const k = map(e); if (!k) return;
+      this.down.delete(k);
+      // Firefox opens its menu bar on Alt's (or F10's) keyup, so a game key's release is ours too
+      if (!(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) e.preventDefault();
+    });
     addEventListener('blur', () => this.down.clear());
     // NPCs open on a double-click, as in the client
     canvas.addEventListener('dblclick', (e) => {
