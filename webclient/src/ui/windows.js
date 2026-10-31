@@ -43,7 +43,7 @@ export class WindowManager {
   }
   close(w) {
     const i = this.order.indexOf(w);
-    if (i >= 0) { this.order.splice(i, 1); sfx.play(w.closeSound || 'UI/MenuDown'); this.tip = null; w.onClose?.(); }
+    if (i >= 0) { this.order.splice(i, 1); const s = w.closeSound ?? 'UI/MenuDown'; if (s) sfx.play(s); this.tip = null; w.onClose?.(); }   // closeSound null: closes silently
   }
   toggle(name, arg) {
     const w = this.wins[name];
@@ -59,7 +59,7 @@ export class WindowManager {
     this.order = keep;
   }
   /** A transient window (dialog, shop) on top of everything. */
-  show(w) { this.order.push(w); sfx.play('UI/DlgNotice'); return w; }
+  show(w, sound = 'UI/DlgNotice') { this.order.push(w); if (sound) sfx.play(sound); return w; }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
     // Escape puts back an item held by a click
