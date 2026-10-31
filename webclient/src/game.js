@@ -185,6 +185,8 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/** ms between a melee attack's hits on successive monsters, nearest first. */
+const HIT_WAVE = 60;
 /** Meso piles animate on fixed timings (the client overrides the WZ): four 80ms frames below 100, four 200ms below 1000, the bag 4000/120/120/120. */
 function mesoTiming(node, amount) {
   const delays = amount < 100 ? [80, 80, 80, 80] : amount < 1000 ? [200, 200, 200, 200] : [4000, 120, 120, 120];
@@ -1247,7 +1249,7 @@ export class Game {
       delay *= rp.attackScale;
     }
     const shoots = rp && (a.kind === 'ranged' || (a.kind === 'magic' && a.skill));
-    for (const t of a.targets) {
+    for (const [i, t] of a.targets.entries()) {
       const e = this.lifeByOid.get(t.oid);
       if (!e || e.pending) continue;
       e.pendingHits = (e.pendingHits || 0) + 1;
@@ -1257,7 +1259,7 @@ export class Game {
         this.playHitEffect(a.skill, e, rp, t.dmg);
         if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
       };
-      if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay, land);
+      if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + i * HIT_WAVE, land);
     }
   }
 
@@ -2010,7 +2012,7 @@ export class Game {
       return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
     });
     const projectile = kind === 'ranged' || (skillId && sb?.node(skillId)?.ball && kind !== 'melee') || skillId % 10000000 === 1000;
-    for (const t of out) {
+    for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
@@ -2024,7 +2026,7 @@ export class Game {
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
       if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? this.ammoItem() : 0, land));
-      else this.after(hitDelay, land);
+      else this.after(hitDelay + i * HIT_WAVE, land);
     }
     if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
     this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack), facingLeft: !p.facingRight, speed: this.attackSpeed() });
