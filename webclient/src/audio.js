@@ -24,8 +24,8 @@ class Music {
     this.applyVolume();
     this.el.muted = load('maple.bgmMute') === '1';
     this.current = null;
-    this.blocked = false;
-    const unlock = () => { if (this.blocked) this.el.play().then(() => { this.blocked = false; }).catch(() => {}); };
+    // resume on any gesture: Firefox autoplays the silent start of a fade-in, then pauses it unrefused
+    const unlock = () => { if (this.current && this.el.src && this.el.paused) this.el.play().catch(() => {}); };
     addEventListener('pointerdown', unlock);
     addEventListener('keydown', unlock);
   }
@@ -68,10 +68,10 @@ class Music {
     if (this.current !== bgm) return;
     // the old track fades out, the new one fades in
     if (!this.el.paused && this.el.src) { await this.fade(0); if (this.current !== bgm) return; }
-    if (!ok) { this.el.pause(); return; }
+    if (!ok) { this.el.pause(); this.el.removeAttribute('src'); return; }
     this.el.src = url;
     this.fadeK = 0; this.applyVolume();
-    this.el.play().then(() => { this.blocked = false; }).catch(() => { this.blocked = true; });
+    this.el.play().catch(() => {});
     this.fade(1);
   }
 
