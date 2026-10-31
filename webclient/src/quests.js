@@ -75,14 +75,14 @@ export class QuestBook {
       if (q.state === 2 ? have !== 2 : q.state === 1 ? have !== 1 : have !== 0) return false;
     }
     for (const it of list(c.item)) {
-      const n = ctx.itemCount(it.id);
-      if (it.count === 0 ? n > 0 : n < (it.count ?? 1)) return false; // count 0 = must not have it
+      const n = ctx.itemCount(it.id), need = it.count ?? 0;
+      if (need > 0 ? n < need : n > 0) return false; // count 0 or none = must not have it (as the server reads it)
     }
     if (c.end && /^\d{10}$/.test(String(c.end))) {
       const e = String(c.end); const end = new Date(+e.slice(0, 4), +e.slice(4, 6) - 1, +e.slice(6, 8), +e.slice(8, 10));
       if (Date.now() > end.getTime()) return false;
     }
-    return true;
+    return this.infoexMet(id, c);
   }
 
   canComplete(id, ctx, npcId) {
@@ -93,7 +93,22 @@ export class QuestBook {
     for (const it of list(c.item)) if (ctx.itemCount(it.id) < (it.count ?? 1)) return false;
     for (const m of this.mobProgress(id)) if (m.have < m.need) return false;
     for (const q of list(c.quest)) if (this.status(q.id) !== (q.state ?? 2)) return false;
-    return true;
+    if (c.questComplete && Object.keys(this.completed).length < c.questComplete) return false;   // quests completed in all
+    if (c.mbmin && (ctx.bookCards ?? 0) < c.mbmin) return false;                                // different Monster Book cards
+    return this.infoexMet(id, c);
+  }
+  /** infoex: the record kept under infoNumber (the quest itself without one) must read the value, e.g. "20" maps explored. */
+  infoexMet(id, c) {
+    const ix = list(c.infoex);
+    return !ix.length || ix.some((e) => (this.started[c.infoNumber || id] ?? '') === String(e.value));
+  }
+  /** What a started quest still lacks, named as its Say.img stop lines are keyed: item, mob, quest, info (null: nothing). */
+  missing(id, ctx) {
+    const c = this.check[id]?.['1'] || {};
+    if (list(c.item).some((it) => ctx.itemCount(it.id) < (it.count ?? 1))) return 'item';
+    if (this.mobProgress(id).some((m) => m.have < m.need)) return 'mob';
+    if (list(c.quest).some((q) => this.status(q.id) !== (q.state ?? 2))) return 'quest';
+    return this.infoexMet(id, c) ? null : 'info';
   }
 
   /** What an NPC can do quest-wise right now. */

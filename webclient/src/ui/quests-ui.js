@@ -7,8 +7,8 @@ export function localDialog(game, npcId, text, buttons) {
 
 /**
  * Clicking an NPC that has quests: choose between its script and its quests, in the client's sections,
- * each under its UtilDlgEx title: list3 "QUEST THAT CAN BE COMPLETED", list0 "QUEST IN PROGRESS",
- * list1 "QUEST AVAILABLE", list2 "ETC" (talking to the NPC).
+ * each under its UtilDlgEx title: list1 "QUEST AVAILABLE" first, as in the client, then list3 "QUEST THAT CAN BE
+ * COMPLETED", list0 "QUEST IN PROGRESS", list2 "ETC" (talking to the NPC).
  */
 const HEAD = (n) => ({ header: `UI/UIWindow.img/UtilDlgEx/list${n}` });
 /**
@@ -25,9 +25,9 @@ export async function npcQuestMenu(game, npc, q) {
   const book = game.quests;
   const section = (n, rows) => (rows.length ? [HEAD(n), ...rows] : []);
   const choices = [
+    ...section(1, q.start.map((id) => ({ start: id, label: `#d${book.name(id)}#k` }))),
     ...section(3, q.complete.map((id) => ({ complete: id, label: `#d${book.name(id)}#k` }))),
     ...section(0, q.progress.map((id) => ({ progress: id, label: `#d${book.name(id)} (In Progress)#k` }))),
-    ...section(1, q.start.map((id) => ({ start: id, label: `#d${book.name(id)}#k` }))),
     ...(await talkSection(game, npc))];
   // it opens with the NPC's own greeting (String/Npc.img d0), as the client does
   const greet = game.windows.strings.npc?.[npc.spawn.id]?.d0 || `What would you like to do with #b${npc.name}#k?`;
@@ -77,7 +77,9 @@ export async function completeQuest(game, npc, id) {
 }
 
 async function progressTalk(game, npc, id) {
-  const d = game.quests.dialogue(id, '1');
-  const stop = d.stop?.item?.[0] || d.stop?.mob?.[0] || d.stop?.[0] || game.quests.info[id]?.['1'] || 'You have not finished yet.';
-  await localDialog(game, npc.spawn.id, String(stop), ['OK']);
+  // as the client does: the stop line for what is still missing, else the quest's general one, else the NPC's own (d0)
+  const stop = game.quests.dialogue(id, '1').stop || {}, why = game.quests.missing(id, game.textCtx());
+  const line = (why && stop[why]?.[0]) || stop.default?.[0] || stop[0]
+    || game.windows.strings.npc?.[npc.spawn.id]?.d0 || 'You have not finished yet.';
+  await localDialog(game, npc.spawn.id, String(line), ['OK']);
 }

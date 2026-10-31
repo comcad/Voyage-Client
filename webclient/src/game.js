@@ -1051,7 +1051,10 @@ export class Game {
   }
 
   /** Context for quest checks and NPC text (#c item counts). */
-  textCtx() { return { stats: this.stats, meso: this.meso, itemCount: (id) => this.itemCount(id) }; }
+  textCtx() {
+    const bookCards = Object.values(this.monsterBook?.cards || {}).filter((n) => n > 0).length;
+    return { stats: this.stats, meso: this.meso, itemCount: (id) => this.itemCount(id), bookCards };
+  }
 
   /** Click on an NPC: offer its quests first when it has any (as the v83 client does), else run its script. */
   interactNpc(npc) {

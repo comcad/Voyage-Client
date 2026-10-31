@@ -9,7 +9,7 @@ import { settings } from './settings.js';
  *   damage numbers   Effect/BasicEff NoRed / NoCri / NoViolet / NoBlue (1 = big first digit, 0 = the rest)
  *   character fx     BasicEff LevelUp / JobChanged / QuestClear, anchored at the feet
  *   chat balloons    UI/ChatBalloon.img/0 (9-slice + arrow)
- *   quest icons      UI/UIWindow.img/QuestIcon (0 bulb: quest to start, 2 book: quest to hand in)
+ *   quest icons      UI/UIWindow.img/QuestIcon (2 book: quest to hand in, 0 bulb: quest to start, 1 bubble: in progress)
  *   boss HP          UI/UIWindow.img/MobGage (icon frame, [ track ], Gage/<colour> fill)
  *   buffs            skill / item icons at the top right, shaded clockwise as they run out
  *   tombstone        Effect/Tomb.img fall (frames 0-11 drop, 12-19 land)
@@ -36,8 +36,8 @@ export class WorldFx {
     [this.E, this.T, this.CB, this.W] = await Promise.all([
       a.json('Effect/BasicEff.img'), a.json('Effect/Tomb.img'), a.json('UI/ChatBalloon.img'), a.json('UI/UIWindow.img')]);
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
-    this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]);
-    await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...this.bulb.frames, ...this.book.frames,
+    this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
+    await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
       ...deep(this.W.MobGage, 3), ...canvases(this.T.fall)].filter(isCanvas));
   }
 
@@ -73,8 +73,8 @@ export class WorldFx {
     for (const a of this.anims) a.anim.update(dt * 1000);
     this.anims = this.anims.filter((a) => !a.anim.done);
     for (const t of this.tombs) t.anim.update(dt * 1000);
-    this.bulb?.update(dt * 1000); this.book?.update(dt * 1000);
-    // which NPCs have quests to start / hand in (refreshed every second)
+    this.bulb?.update(dt * 1000); this.book?.update(dt * 1000); this.bubble?.update(dt * 1000);
+    // which NPCs have quests to hand in / start / in progress, in that order of priority (refreshed every second)
     if ((this.questT -= dt) <= 0 && this.game.quests && this.game.map) {
       this.questT = 1;
       const ctx = this.game.textCtx();
@@ -82,7 +82,8 @@ export class WorldFx {
       for (const e of this.game.map.life) {
         if (e.kind !== 'Npc') continue;
         const q = this.game.quests.npcQuests(Number(e.spawn.id), ctx);
-        if (q.complete.length) this.questIcons.set(e, this.book); else if (q.start.length) this.questIcons.set(e, this.bulb);
+        const icon = q.complete.length ? this.book : q.start.length ? this.bulb : q.progress.length ? this.bubble : null;
+        if (icon) this.questIcons.set(e, icon);
       }
     }
   }
