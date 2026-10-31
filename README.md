@@ -1,5 +1,10 @@
+<table>
+  <tr>
+    <td><img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="100" height="100" alt="Voyage Logo"></td>
+    <td><h2>Voyage Client</h2></td>
+  </tr>
+</table>
 
-# Voyage Client
 
 A MapleStory **v83** (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)
 
