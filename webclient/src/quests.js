@@ -82,7 +82,7 @@ export class QuestBook {
       const e = String(c.end); const end = new Date(+e.slice(0, 4), +e.slice(4, 6) - 1, +e.slice(6, 8), +e.slice(8, 10));
       if (Date.now() > end.getTime()) return false;
     }
-    return true;
+    return this.infoexMet(id, c);
   }
 
   canComplete(id, ctx, npcId) {
