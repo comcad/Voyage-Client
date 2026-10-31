@@ -43,6 +43,8 @@ const RACES = {
 const DELETE_NOTICE = { 0x14: 42, 0x16: 34, 0x1A: 'This character has a pending world transfer.', 0x1D: 'Leave your family before deleting this character.', 0x09: 25 };
 // world (0, stepY) appears here on screen, so the scene sits inside the book's page
 const VIEW_X = 385, VIEW_Y = 330;
+// world tags (filled or empty) hanging from the world select rod: 15 of them, one under each of its strings (27px apart)
+const WORLD_TAGS = 15, TAG_STEP = 27;
 
 // Login.img/Notice/text/<n> (pre-rendered messages)
 export const NOTICE = {
@@ -121,7 +123,7 @@ export class LoginScene {
       const target = this.buttons().find((b) => b.down && b.enabled && b.hit(this.mouse.x, this.mouse.y));
       for (const b of this.buttons()) b.down = false;
       this.hover();
-      if (target) { sfx.play('UI/BtMouseClick'); target.onClick?.(); }
+      if (target) { sfx.play(target.sound || 'UI/BtMouseClick'); target.onClick?.(); }   // a button may have its own click sound
     });
     addEventListener('keydown', (e) => {
       const top = this.topLayer();
@@ -429,7 +431,7 @@ export class LoginScene {
     const WS = this.L.WorldSelect, C = this.L.Common;
     return new Promise((resolve, reject) => {
       let world = null, channel = 0;
-      const tabX = 220, tabY = 118;                    // world tags hang from the scroll rod
+      const tabX = 245, tabY = 118;                    // the first tag hangs from the rod's third string past the scroll's left end
       // WorldSelect/scroll unrolls over the scene's rolled-up scroll (signboard/2, top-left 171,101);
       // chBackgrn is that scroll's paper: 38,146 into the open frame
       const roll = { x: 171, y: 101 };
@@ -445,8 +447,8 @@ export class LoginScene {
         } catch (e) { reject(e); }
       };
       const openWorld = (w) => {
-        if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; }
-        world = w; channel = 0; sfx.play('UI/WorldSelect');
+        if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; sfx.play('UI/RollDown'); }
+        world = w; channel = 0;
         // four columns centred on the paper, rows from just under the header rule (y 52)
         chButtons = w.channels.map((c, i) => {
           const node = WS.channel[i] || WS.channel[0];
@@ -455,7 +457,7 @@ export class LoginScene {
             if (channel !== i) select.anim.reset();
             channel = i; b.lastClick = performance.now();
           });
-          b.load = c.load;
+          b.load = c.load; b.sound = 'UI/WorldSelect';
           return b;
         });
         this.assets.preload([...chButtons.flatMap((b) => b.frames()), WS.channel.chgauge, ...select.frames()]).then(() => this.hover());
@@ -465,16 +467,19 @@ export class LoginScene {
         world = null; closing = true;
         scroll = new WzSprite(WS.scroll[1], roll.x, roll.y, { loop: false });
       };
-      const worldButtons = this.worlds.map((w, i) => this.button(WS.BtWorld[w.id] || WS.BtWorld[0], tabX + i * 30, tabY, () => openWorld(w)));
+      const worldButtons = this.worlds.map((w, i) => this.button(WS.BtWorld[w.id] || WS.BtWorld[0], tabX + i * TAG_STEP, tabY, () => openWorld(w)));
+      // places no world takes hang an empty plank (BtWorld/e), as in the client
+      const blanks = Array.from({ length: Math.max(0, WORLD_TAGS - this.worlds.length) },
+        (_, i) => new WzSprite(WS.BtWorld.e.normal, tabX + (this.worlds.length + i) * TAG_STEP, tabY));
       const goBtn = this.button(WS.BtGoworld, win.x + 331, win.y + 6, go);
       const exitBtn = this.button(C.BtExit, 12, 520, () => { this.s.close(); location.reload(); });
       const select = new WzSprite(WS.channel.chSelect, 0, 0, { loop: false }); // swirls in once per selection
       const layer = {
         // channel window buttons only exist once the scroll is open
         get buttons() { return opened() ? [...worldButtons, exitBtn, ...chButtons, goBtn] : [...worldButtons, exitBtn]; },
-        sprites: [],
+        sprites: blanks,
         over: [new WzSprite(C.step[1], 0, 36), exitBtn],
-        preload: [WS.chBackgrn, goBtn.frames(), ...Object.values(WS.world).filter((n) => n?._canvas),
+        preload: [WS.chBackgrn, goBtn.frames(), ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
           ...new WzSprite(WS.scroll[0]).frames(), ...new WzSprite(WS.scroll[1]).frames()].flat(),
         onEnter: go,
         onEscape: closeWorld,
@@ -507,8 +512,8 @@ export class LoginScene {
           if (sb) { select.x = sb.x + 18; select.y = sb.y + 8; select.draw(ctx, this.assets); }
         },
       };
-      this.setScreen(layer, 'world');
-      if (this.worlds.length === 1) openWorld(this.worlds[0]);
+      sfx.play('UI/ScrollUp');   // the whoosh as the camera leaves the title for world select
+      this.setScreen(layer, 'world');   // no world is open until one is clicked
     });
   }
 
@@ -550,8 +555,9 @@ export class LoginScene {
       const scrollAt = { x: 104, y: 120 };
       let infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
       const choose = (idx) => {
+        sfx.play('UI/CharSelect');   // every click on a character, even the one already selected
         if (idx === sel) return;
-        sel = idx; beam.anim.reset(); sparkle.anim.reset(); sfx.play('UI/CharSelect');
+        sel = idx; beam.anim.reset(); sparkle.anim.reset();
         infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
       };
       const pick = async () => {
@@ -621,7 +627,10 @@ export class LoginScene {
         },
         update: (dt) => {
           glow.update(dt * 1000); beam.update(dt * 1000); sparkle.update(dt * 1000); ghost?.update(dt * 1000);
-          if (this.camY === this.camTarget) infoScroll.update(dt * 1000); // unroll once the camera has arrived
+          if (this.camY === this.camTarget) { // unroll once the camera has arrived
+            if (sel >= 0 && !infoScroll.rolled) { infoScroll.rolled = true; sfx.play('UI/RollDown'); }
+            infoScroll.update(dt * 1000);
+          }
           list.chars.forEach((c, i) => {
             const a = anim[i], look = looks[i];
             const act = i === sel ? 'walk1' : 'stand1';
@@ -652,7 +661,7 @@ export class LoginScene {
           uiText(ctx, `${world.name} - Channel ${channel.id + 1}`, 118, 104, { color: '#fff', bold: true, outline: '#3a2200' });
         },
       };
-      this.setScreen(layer, 'char');
+      this.setScreen(layer, 'char').then(() => { if (sel >= 0) sfx.play('UI/CharSelect'); });   // the first character is selected on arrival
     });
   }
 

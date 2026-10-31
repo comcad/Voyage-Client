@@ -356,6 +356,7 @@ export class Game {
     this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
+    music.play('BgmUI/ShopBgm');
     this.csWin = this.windows.show(new CashShopWin(this.windows, d));
   }
   /** The status bar's chat line is a page element over the canvas: hide it while the shop screen is up. */
