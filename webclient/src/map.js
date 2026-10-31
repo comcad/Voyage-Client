@@ -67,6 +67,7 @@ export class GameMap {
     const fh = this.fh.get(spawn.fh) || this.fh.below(spawn.x, spawn.cy - 5, 60);
     const e = new Life(kind, spawn, src, name, fh, this.fh);
     if (kind === 'Npc' && src.info?.MapleTV) e.tv = mapleTV(await a.json('UI/MapleTV.img'), src.info);
+    if (kind === 'Npc') e.lines = npcLines(src, strings?.[Number(spawn.id)]);
     await a.preload(e.allFrames());
     return e;
   }
@@ -305,6 +306,14 @@ function mapleTV(ui, info) {
   };
 }
 
+/** The lines an NPC says over its head: String/Npc.img entries named by info/speak, else by its actions' speak. */
+function npcLines(src, str) {
+  const keys = (n) => Object.values(n?.speak || {});
+  let ks = keys(src.info);
+  if (!ks.length) ks = Object.entries(src).filter(([k, v]) => k !== 'info' && !v?.special).flatMap(([, v]) => keys(v));
+  return [...new Set(ks)].map((k) => str?.[k]).filter((t) => typeof t === 'string' && t.trim());
+}
+
 /** NPC or monster placed by the map's `life` list. */
 export class Life {
   constructor(kind, spawn, src, name, fh, footholds) {
@@ -324,6 +333,11 @@ export class Life {
     this.canJump = kind === 'Mob' && !!src.jump;
     this.anims = {};
     for (const k of ['stand', 'move', 'jump', 'hit1', 'die1', 'fly', 'regen']) if (src[k]) this.anims[k] = new Anim(src[k], !['die1', 'hit1', 'regen'].includes(k));
+    // an NPC's other actions (say, eye...) play now and then; `special` ones are left to scripts
+    this.actions = kind === 'Npc' ? Object.keys(src).filter((k) => !['info', 'stand', 'move'].includes(k) && !src[k]?.special && frames(src[k]).some(isCanvas)) : [];
+    for (const k of this.actions) this.anims[k] = new Anim(src[k], false);
+    this.lines = [];
+    this.idleT = 2 + Math.random() * 4; this.walkT = Math.random() * 9; this.talkT = Math.random() * 5;
     if (kind === 'Npc') for (const a of Object.values(this.anims)) a.defaultDelay = 180;   // the client's NPC frame default
     // its attacks (attack1, attack2...): a reach box (type 0), a start point and radius (1, a shot; 2, a ball), or
     // a row of spots that erupt after a warning (3 on the ground, 4 at a set height - the bosses' area attacks)
@@ -436,6 +450,7 @@ export class Life {
       if (e.doom) for (const a of [e.doom.stand, e.doom.move, e.doom.mark]) a?.update(dt * 1000);
     }
     if (this.state === 'regen') { if (anim.done) this.setState(this.flying ? 'fly' : 'stand'); return; }
+    if (this.kind === 'Npc') { this.npcStep(dt); return; }
     if (this.attacking) {
       const at = this.attacking;
       at.t += dt * 1000;
@@ -609,6 +624,32 @@ export class Life {
     this.attackT = 2.5 + Math.random() * 2;
     this.playAttack(usable[Math.floor(Math.random() * usable.length)].index);
     return true;
+  }
+
+  /** An NPC idles: a line every 5-10s (each up for 5s), an action now and then, and short walks within rx0-rx1. */
+  npcStep(dt) {
+    if (this.chat && (this.chat.t -= dt) <= 0) { this.chat = null; this.talkT = Math.random() * 5; }
+    else if (!this.chat && this.lines.length && (this.talkT -= dt) <= 0) this.chat = { text: this.lines[Math.floor(Math.random() * this.lines.length)], t: 5 };
+    this.walkT -= dt;
+    if (this.walkTo !== undefined) { this.npcWalk(dt); return; }
+    if (this.state !== 'stand') { if (this.anims[this.state]?.done !== false) this.setState('stand'); return; }
+    if ((this.idleT -= dt) > 0) return;
+    this.idleT = 2 + Math.random() * 4;
+    const s = this.spawn;
+    if (this.anims.move && this.fh && s.rx1 > s.rx0 && this.walkT <= 0) {
+      this.walkT = 3 + Math.random() * 7;
+      const d = (Math.random() < 0.5 ? -1 : 1) * (25 + Math.random() * 75), to = Math.max(s.rx0, Math.min(s.rx1, this.x + d));
+      if (Math.abs(to - this.x) < 5) return;
+      this.walkTo = to; this.facingRight = to > this.x; this.setState('move');
+      return;
+    }
+    if (this.actions.length) this.setState(this.actions[Math.floor(Math.random() * this.actions.length)]);
+  }
+  npcWalk(dt) {
+    const left = this.walkTo - this.x, fh = this.fh, x = this.x, y = this.y;
+    const res = this.footholds.walk(this, Math.sign(left) * Math.min(Math.abs(left), this.speed * dt));
+    if (res !== 'ok') { this.fh = fh; this.x = x; this.y = y; }
+    if (res !== 'ok' || Math.abs(this.walkTo - this.x) < 0.5) { this.walkTo = undefined; this.setState('stand'); }
   }
 
   think(dt) {

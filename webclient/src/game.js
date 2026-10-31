@@ -3011,6 +3011,12 @@ export class Game {
   drawBalloons(ctx, cam) {
     // pets talk from just over their heads, without a name in front
     for (const pet of this.pets.values()) if (pet.chat) this.vfx?.drawBalloon(ctx, cam, { x: pet.x, y: pet.y + 44 }, pet.chat.text);
+    // NPCs: the arrow just over the head; not while a quest icon is there
+    for (const e of this.map.life) {
+      if (!e.chat || this.vfx?.questIcons.has(e)) continue;
+      const top = e.anims.stand?.frames[0]?.origin?.[1] ?? 80;
+      this.vfx?.drawBalloon(ctx, cam, { x: e.x, y: e.y - top + 77 }, e.chat.text, 'npc');
+    }
     const list = [this.player, ...this.others.values()].filter((e) => e.chat);
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
     for (const e of list) {
