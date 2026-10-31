@@ -77,7 +77,9 @@ export async function completeQuest(game, npc, id) {
 }
 
 async function progressTalk(game, npc, id) {
-  const d = game.quests.dialogue(id, '1');
-  const stop = d.stop?.item?.[0] || d.stop?.mob?.[0] || d.stop?.[0] || game.quests.info[id]?.['1'] || 'You have not finished yet.';
-  await localDialog(game, npc.spawn.id, String(stop), ['OK']);
+  // as the client does: the stop line for what is still missing, else the quest's general one, else the NPC's own (d0)
+  const stop = game.quests.dialogue(id, '1').stop || {}, why = game.quests.missing(id, game.textCtx());
+  const line = (why && stop[why]?.[0]) || stop.default?.[0] || stop[0]
+    || game.windows.strings.npc?.[npc.spawn.id]?.d0 || 'You have not finished yet.';
+  await localDialog(game, npc.spawn.id, String(line), ['OK']);
 }

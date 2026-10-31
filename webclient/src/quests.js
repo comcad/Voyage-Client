@@ -93,10 +93,20 @@ export class QuestBook {
     for (const it of list(c.item)) if (ctx.itemCount(it.id) < (it.count ?? 1)) return false;
     for (const m of this.mobProgress(id)) if (m.have < m.need) return false;
     for (const q of list(c.quest)) if (this.status(q.id) !== (q.state ?? 2)) return false;
-    // infoex: the record kept under infoNumber (the quest itself without one) must read the value, e.g. "20" maps explored
+    return this.infoexMet(id, c);
+  }
+  /** infoex: the record kept under infoNumber (the quest itself without one) must read the value, e.g. "20" maps explored. */
+  infoexMet(id, c) {
     const ix = list(c.infoex);
-    if (ix.length && !ix.some((e) => (this.started[c.infoNumber || id] ?? '') === String(e.value))) return false;
-    return true;
+    return !ix.length || ix.some((e) => (this.started[c.infoNumber || id] ?? '') === String(e.value));
+  }
+  /** What a started quest still lacks, named as its Say.img stop lines are keyed: item, mob, quest, info (null: nothing). */
+  missing(id, ctx) {
+    const c = this.check[id]?.['1'] || {};
+    if (list(c.item).some((it) => ctx.itemCount(it.id) < (it.count ?? 1))) return 'item';
+    if (this.mobProgress(id).some((m) => m.have < m.need)) return 'mob';
+    if (list(c.quest).some((q) => this.status(q.id) !== (q.state ?? 2))) return 'quest';
+    return this.infoexMet(id, c) ? null : 'info';
   }
 
   /** What an NPC can do quest-wise right now. */
