@@ -121,7 +121,7 @@ export class LoginScene {
       const target = this.buttons().find((b) => b.down && b.enabled && b.hit(this.mouse.x, this.mouse.y));
       for (const b of this.buttons()) b.down = false;
       this.hover();
-      if (target) { sfx.play('UI/BtMouseClick'); target.onClick?.(); }
+      if (target) { sfx.play(target.sound || 'UI/BtMouseClick'); target.onClick?.(); }   // a button may have its own click sound
     });
     addEventListener('keydown', (e) => {
       const top = this.topLayer();
@@ -455,7 +455,7 @@ export class LoginScene {
             if (channel !== i) select.anim.reset();
             channel = i; b.lastClick = performance.now();
           });
-          b.load = c.load;
+          b.load = c.load; b.sound = 'UI/WorldSelect';
           return b;
         });
         this.assets.preload([...chButtons.flatMap((b) => b.frames()), WS.channel.chgauge, ...select.frames()]).then(() => this.hover());
@@ -507,6 +507,7 @@ export class LoginScene {
           if (sb) { select.x = sb.x + 18; select.y = sb.y + 8; select.draw(ctx, this.assets); }
         },
       };
+      sfx.play('UI/ScrollUp');   // the whoosh as the camera leaves the title for world select
       this.setScreen(layer, 'world');
       if (this.worlds.length === 1) openWorld(this.worlds[0]);
     });
@@ -550,8 +551,9 @@ export class LoginScene {
       const scrollAt = { x: 104, y: 120 };
       let infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
       const choose = (idx) => {
+        sfx.play('UI/CharSelect');   // every click on a character, even the one already selected
         if (idx === sel) return;
-        sel = idx; beam.anim.reset(); sparkle.anim.reset(); sfx.play('UI/CharSelect');
+        sel = idx; beam.anim.reset(); sparkle.anim.reset();
         infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
       };
       const pick = async () => {
