@@ -64,12 +64,6 @@ the relay defaults in `server.js`).
 Open `http://localhost:3000`, log in, pick a channel, pick a character.
 
 
-## Protocol notes
-
-- SET_FIELD must be followed by PLAYER_MAP_TRANSFER (not PLAYER_ENTER_MAP).
-- Sending fixdamage with wrong values autobans the character — the client only
-  sends what the server expects.
-
 ## Community
 
 Join the Discord: [discord.gg/SCVxm6tB4g](https://discord.gg/SCVxm6tB4g)
