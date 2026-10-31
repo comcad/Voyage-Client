@@ -1368,9 +1368,9 @@ export class Game {
   }
 
   /** Character.calculateMaxBaseDamage, so damage stays inside the server's sanity checks. */
-  maxDamage() {
+  maxDamage(pose = null) {
     const s = this.stats, weapon = this.inventory?.equipped[-11];
-    const mult = weaponMultiplier(weapon?.id);
+    const mult = weaponMultiplier(weapon?.id, pose);
     if (!mult) return 1;
     const cat = Math.floor(weapon.id / 10000) % 100;
     let main = s.str, sec = s.dex;
@@ -1992,7 +1992,7 @@ export class Game {
     const targets = this.findTargets(kind, skillId, lv, mobCount, p.attack);
     const swingAction = p.attack;
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, swingAction));
-    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage()) : 25;
+    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(p.attack)) : 25;
     const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
