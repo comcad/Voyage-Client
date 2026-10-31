@@ -445,8 +445,8 @@ export class LoginScene {
         } catch (e) { reject(e); }
       };
       const openWorld = (w) => {
-        if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; }
-        world = w; channel = 0; sfx.play('UI/WorldSelect');
+        if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; sfx.play('UI/RollDown'); }
+        world = w; channel = 0;
         // four columns centred on the paper, rows from just under the header rule (y 52)
         chButtons = w.channels.map((c, i) => {
           const node = WS.channel[i] || WS.channel[0];
@@ -508,8 +508,7 @@ export class LoginScene {
         },
       };
       sfx.play('UI/ScrollUp');   // the whoosh as the camera leaves the title for world select
-      this.setScreen(layer, 'world');
-      if (this.worlds.length === 1) openWorld(this.worlds[0]);
+      this.setScreen(layer, 'world');   // no world is open until one is clicked
     });
   }
 
@@ -623,7 +622,10 @@ export class LoginScene {
         },
         update: (dt) => {
           glow.update(dt * 1000); beam.update(dt * 1000); sparkle.update(dt * 1000); ghost?.update(dt * 1000);
-          if (this.camY === this.camTarget) infoScroll.update(dt * 1000); // unroll once the camera has arrived
+          if (this.camY === this.camTarget) { // unroll once the camera has arrived
+            if (sel >= 0 && !infoScroll.rolled) { infoScroll.rolled = true; sfx.play('UI/RollDown'); }
+            infoScroll.update(dt * 1000);
+          }
           list.chars.forEach((c, i) => {
             const a = anim[i], look = looks[i];
             const act = i === sel ? 'walk1' : 'stand1';
@@ -654,7 +656,7 @@ export class LoginScene {
           uiText(ctx, `${world.name} - Channel ${channel.id + 1}`, 118, 104, { color: '#fff', bold: true, outline: '#3a2200' });
         },
       };
-      this.setScreen(layer, 'char');
+      this.setScreen(layer, 'char').then(() => { if (sel >= 0) sfx.play('UI/CharSelect'); });   // the first character is selected on arrival
     });
   }
 
