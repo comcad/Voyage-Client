@@ -37,7 +37,7 @@ export class WorldFx {
       a.json('Effect/BasicEff.img'), a.json('Effect/Tomb.img'), a.json('UI/ChatBalloon.img'), a.json('UI/UIWindow.img')]);
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
     this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
-    await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
+    await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
       ...deep(this.W.MobGage, 3), ...canvases(this.T.fall)].filter(isCanvas));
   }
 
@@ -169,17 +169,19 @@ export class WorldFx {
     return true;
   }
 
-  /** ChatBalloon.img/0: a 9-slice around the text with the arrow under it, pointing at the speaker. */
-  drawBalloon(ctx, cam, ent, text) {
-    const B = this.CB?.[0], im = (n) => this.assets.image(n);
+  /** ChatBalloon.img/0 (or /npc): a 9-slice around the text with the arrow under it, pointing at the speaker. */
+  drawBalloon(ctx, cam, ent, text, style = '0') {
+    const B = this.CB?.[style], im = (n) => this.assets.image(n);
     const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
     if (Object.values(p).some((v) => !v)) return false;
     ctx.save();
     ctx.font = '12px Arial, sans-serif';
     // ChatBalloon.img/0 round the text: 12px lines on the white, 5px in from its left and 6px from its right, the
     // arrow (origin 1, 0) laid over the bottom edge at the centre so the tail grows out of it, leaning left
-    const lines = wrapText(ctx, text, 150, 12);
-    const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * 12;
+    // an NPC's: centred 14px lines wrapped at 89px, in its clr (dark red)
+    const npc = style === 'npc', lh = npc ? 14 : 12;
+    const lines = wrapText(ctx, text, npc ? 89 : 150, 12);
+    const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
     ctx.drawImage(p.c, x0, y0, W, H);
     ctx.drawImage(p.nw, x0 - 6, y0 - 6); ctx.drawImage(p.n, x0, y0 - 6, W, 6); ctx.drawImage(p.ne, x0 + W, y0 - 6);
@@ -187,7 +189,9 @@ export class WorldFx {
     ctx.drawImage(p.sw, x0 - 6, y0 + H); ctx.drawImage(p.s, x0, y0 + H, W, 6); ctx.drawImage(p.se, x0 + W, y0 + H);
     const ao = B.arrow.origin || [0, 0];
     ctx.drawImage(p.arrow, cx - ao[0] + 1, y0 + H - ao[1]);
-    lines.forEach((l, i) => uiText(ctx, l, x0 - 1, y0 + i * 12 + 2, { color: '#000', size: 12 }));
+    const color = `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+    if (npc) lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
+    else lines.forEach((l, i) => uiText(ctx, l, x0 - 1, y0 + i * 12 + 2, { color, size: 12 }));
     ctx.restore();
     return true;
   }
