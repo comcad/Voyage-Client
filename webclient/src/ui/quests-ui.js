@@ -7,8 +7,8 @@ export function localDialog(game, npcId, text, buttons) {
 
 /**
  * Clicking an NPC that has quests: choose between its script and its quests, in the client's sections,
- * each under its UtilDlgEx title: list3 "QUEST THAT CAN BE COMPLETED", list0 "QUEST IN PROGRESS",
- * list1 "QUEST AVAILABLE", list2 "ETC" (talking to the NPC).
+ * each under its UtilDlgEx title: list1 "QUEST AVAILABLE" first, as in the client, then list3 "QUEST THAT CAN BE
+ * COMPLETED", list0 "QUEST IN PROGRESS", list2 "ETC" (talking to the NPC).
  */
 const HEAD = (n) => ({ header: `UI/UIWindow.img/UtilDlgEx/list${n}` });
 /**
@@ -25,9 +25,9 @@ export async function npcQuestMenu(game, npc, q) {
   const book = game.quests;
   const section = (n, rows) => (rows.length ? [HEAD(n), ...rows] : []);
   const choices = [
+    ...section(1, q.start.map((id) => ({ start: id, label: `#d${book.name(id)}#k` }))),
     ...section(3, q.complete.map((id) => ({ complete: id, label: `#d${book.name(id)}#k` }))),
     ...section(0, q.progress.map((id) => ({ progress: id, label: `#d${book.name(id)} (In Progress)#k` }))),
-    ...section(1, q.start.map((id) => ({ start: id, label: `#d${book.name(id)}#k` }))),
     ...(await talkSection(game, npc))];
   // it opens with the NPC's own greeting (String/Npc.img d0), as the client does
   const greet = game.windows.strings.npc?.[npc.spawn.id]?.d0 || `What would you like to do with #b${npc.name}#k?`;
