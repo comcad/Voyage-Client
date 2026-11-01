@@ -411,13 +411,13 @@ export class Life {
    * Play its path: each point is where it is at the end of that point's time, in that pose and facing, and it glides
    * there in a straight line. A path more than a second behind plays faster until it has caught up.
    */
-  _replay(dt) {
+  _replay(dt, keepPose = false) {
     const p = this.path;
     const left = pathLeft(p);
-    p.t += dt * 1000 * (left > 1000 ? left / 1000 : 1);
+    p.t += dt * 1000 * (left > 1000 && !this.controlled ? left / 1000 : 1);   // one we control plays its own plan in real time
     while (p.i < p.steps.length) {
       const s = p.steps[p.i];
-      this.takePose(s);
+      if (!keepPose) this.takePose(s);
       if (p.t < s.duration) {
         const k = p.t / s.duration;
         this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k;
@@ -496,26 +496,32 @@ export class Life {
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.controlled) this.path = null;
     if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
-    if (this.controlled && this.online) this.sendRecoil();
+    if (this.controlled && this.online) this.planHit((this.hitTimer || 0) * 1000);
   }
   /**
-   * One we control was stopped by a blow: the server hears at once where it is and how it slides back (as the
-   * client sends a monster's movement when a blow lands), so everyone else stops it there too instead of walking
-   * on along the path it had and snapping back when the next one comes.
+   * One we control was struck: as the client does, it plans its next stretch there and then - the blow's slide, then
+   * standing in its hit pose until that is over, then its own movement until at least a second is planned (1.65s at
+   * most, ending on the ground) - sends it with the hit action (those watching drop what they were still playing and
+   * take this) and plays it itself, so everyone sees the same thing.
    */
-  sendRecoil() {
-    // first the blow's push (a type 2 element: no time, just the speed it sets off at), so those watching set off
-    // backwards from where it stands instead of carrying on the way it was walking
-    const sim = Object.create(this), start = { x: Math.round(this.x), y: Math.round(this.y) };
-    const moves = this.recoil ? [{ cmd: 2, rx: Math.round(this.recoil), ry: 0, stance: this.stance, duration: 0 }] : [];
-    for (let t = 0; sim.recoil && sim.fh && t < 1000; t += 30) {
-      const px = sim.x;
-      sim.recoilStep(0.03);
-      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), last = moves[moves.length - 1];
-      if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
-      else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
+  planHit(hitMs) {
+    const sim = Object.create(this), moves = [], start = { x: Math.round(this.x), y: Math.round(this.y) };
+    sim.setState = function (st) { if (this.anims[st]) this.state = st; };
+    for (let t = 0; t < 1650; t += 30) {
+      if (t >= 1000 && (sim.fh || sim.flying)) break;
+      const px = sim.x, py = sim.y;
+      if (sim.recoil && sim.fh) sim.recoilStep(0.03);
+      else if (t < hitMs) { /* standing in its hit pose */ }
+      else { if (sim.state === 'hit1') sim.setState(sim.flying ? 'fly' : 'stand'); sim.step(0.03); }
+      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), vy = Math.round((sim.y - py) / 0.03);
+      const fh = sim.fh?.id || 0, stance = sim.stance, last = moves[moves.length - 1];
+      if (last && last.fh === fh && last.stance === stance && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
+        Object.assign(last, { x, y, vx, vy }); last.duration += 30;
+      } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance, duration: 30 });
     }
-    if (!moves.some((m) => m.cmd === 0)) moves.push({ cmd: 0, ...start, vx: 0, vy: 0, fh: this.fh?.id || 0, stance: this.stance, duration: 30 });
+    for (const k of Object.keys(sim)) if (!PLAYED.has(k) && k !== 'recoil') this[k] = sim[k];
+    this.recoil = 0;   // the plan carries the slide now
+    this.path = { steps: moves, i: 0, t: 0, fromX: this.x, fromY: this.y };
     this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
   }
   /** One we control being pulled (Rush, Monster Magnet): the server hears its whole slide at once, as with a blow. */
@@ -524,7 +530,7 @@ export class Life {
     if (!this.controlled || !this.online) return;
     this.path = null;
     const sim = Object.create(this), start = { x: Math.round(this.x), y: Math.round(this.y) };
-    const moves = [{ cmd: 2, rx: Math.sign(pull.x - this.x) * 1000, ry: 0, stance: this.stance, duration: 0 }];
+    const moves = [];
     for (let t = 0; sim.pull && t < 2000; t += 30) {
       const px = sim.x;
       sim.pullStep(0.03);
@@ -532,7 +538,7 @@ export class Life {
       if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
       else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
     }
-    if (moves.length > 1) this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
+    if (moves.length) this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
   }
   /** Drawn in by Monster Magnet: toward pull.x at 1000px/s until within pull.stop of it; a floor's edge or a wall stops it. */
   pullStep(dt) {
@@ -590,7 +596,12 @@ export class Life {
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
       if (this.recoil && this.fh) this.recoilStep(dt);
-      if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
+      if (this.state === 'hit1') {
+        this.hitTimer -= dt;
+        if (this.controlled && this.path) this._replay(dt, true);   // its planned slide, keeping the hit pose
+        if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand');
+        return;
+      }
       if (!this.controlled) { if (this.path) this._replay(dt); return; }
     }
     if (this.held) { this.path = null; return; }
