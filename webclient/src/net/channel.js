@@ -665,7 +665,7 @@ export class ChannelSession {
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 0 || effect === 8 || effect === 9) this.emit('foreignEffect', id, effect); // level up / job change / quest clear
     });
-    on(S.SKILL_EFFECT, (r) => this.emit('foreignSkill', r.int(), r.int()));
+    on(S.SKILL_EFFECT, (r) => this.emit('foreignCharge', r.int(), r.int()));   // charging / winding up a skill
     // your own effects; 2 = a party member's buff (Bless, Haste, Holy Symbol...) reached you
     // and 0x0a = HP you recovered (a blue number over you)
     on(S.SHOW_ITEM_GAIN_INCHAT, (r) => {
@@ -683,7 +683,7 @@ export class ChannelSession {
       if (skill >= 100 && skill <= 200 && level > 0 && level < 256) this.emit('foreignDisease', id, { m1, m2, skill, level });
     });
     on(S.CANCEL_FOREIGN_BUFF, (r) => { const id = r.int(); this.emit('foreignCancel', id, r.long(), r.long()); });
-    on(S.CANCEL_SKILL_EFFECT, () => {});
+    on(S.CANCEL_SKILL_EFFECT, (r) => this.emit('foreignSkillCancel', r.int()));
     on(S.DAMAGE_PLAYER, (r) => {
       const id = r.int(), from = r.byte();
       if (from === -3) r.int();
@@ -857,10 +857,10 @@ export class ChannelSession {
    * Attack packets (AbstractDealDamageHandler.parseDamage). kind: melee | ranged | magic.
    * targets: [{oid, x, y, dmg:[...]}]; stance = body action id; facingLeft -> direction bit.
    */
-  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0 }) {
+  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0 }) {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
-    if (CHARGE_SKILLS.has(skill)) w.int(0); // keydown skills carry a charge value
+    if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
     w.zero(8).byte(display).byte(facingLeft ? 0x80 : 0).byte(stance);
     if (kind === 'ranged') {
       w.byte(0).byte(speed).byte(0).byte(facingLeft ? 0x80 : 0).zero(7);
@@ -883,6 +883,14 @@ export class ChannelSession {
     const w = new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level);
     if (pos) w.pos(pos).byte(0);
     this.send(w);
+  }
+  /** Heal: which party members it reaches (one bit per party slot), then a delay. */
+  heal(skillId, level, mask) {
+    this.send(new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level).byte(mask).short(0));
+  }
+  /** A skill starting to charge or wind up (Monster Magnet, Big Bang, Explosion...): its pose, which way you face, speed. */
+  skillEffect(skillId, level, action, facingLeft, speed) {
+    this.send(new PacketWriter(C.SKILL_EFFECT).int(skillId).byte(level).short((action & 0x7fff) | (facingLeft ? 0x8000 : 0)).byte(speed));
   }
   /** Monster Magnet: the monsters it reached and whether each was caught, then which way you face. */
   magnet(skillId, level, mobs, facingLeft) {
