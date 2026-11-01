@@ -489,6 +489,39 @@ export class Life {
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.controlled) this.path = null;
     if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
+    if (this.controlled && this.online) this.sendRecoil();
+  }
+  /**
+   * One we control was stopped by a blow: the server hears at once where it is and how it slides back (as the
+   * client sends a monster's movement when a blow lands), so everyone else stops it there too instead of walking
+   * on along the path it had and snapping back when the next one comes.
+   */
+  sendRecoil() {
+    const sim = Object.create(this), moves = [], start = { x: Math.round(this.x), y: Math.round(this.y) };
+    for (let t = 0; sim.recoil && sim.fh && t < 1000; t += 30) {
+      const px = sim.x;
+      sim.recoilStep(0.03);
+      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), last = moves[moves.length - 1];
+      if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
+      else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
+    }
+    if (!moves.length) moves.push({ cmd: 0, ...start, vx: 0, vy: 0, fh: this.fh?.id || 0, stance: this.stance, duration: 30 });
+    this.onPath?.(this, start, moves);
+  }
+  /** One we control being pulled (Rush, Monster Magnet): the server hears its whole slide at once, as with a blow. */
+  startPull(pull) {
+    this.pull = pull;
+    if (!this.controlled || !this.online) return;
+    this.path = null;
+    const sim = Object.create(this), moves = [], start = { x: Math.round(this.x), y: Math.round(this.y) };
+    for (let t = 0; sim.pull && t < 2000; t += 30) {
+      const px = sim.x;
+      sim.pullStep(0.03);
+      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), last = moves[moves.length - 1];
+      if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
+      else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
+    }
+    if (moves.length) this.onPath?.(this, start, moves);
   }
   /** Drawn in by Monster Magnet: toward pull.x at 1000px/s until within pull.stop of it; a floor's edge or a wall stops it. */
   pullStep(dt) {

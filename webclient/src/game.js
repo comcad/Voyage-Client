@@ -2610,7 +2610,7 @@ export class Game {
     this.rush = { steps: [{ type: 0, v, ms: 90 }, { type: 2, v, ms: 180 }], acc: 0 };
     this.rushLock = performance.now() + RUSH_LOCK;
     const reach = -(ld?.lt?.[0] || 0);
-    for (const m of mobs) if (!m.src?.info?.boss) m.pull = { x: p.x + dir * (Math.floor(Math.random() * 20) + reach + 35), stop: 0 };
+    for (const m of mobs) if (!m.src?.info?.boss) m.startPull({ x: p.x + dir * (Math.floor(Math.random() * 20) + reach + 35), stop: 0 });
   }
   /** The floor nearest (x, y) within `reach` px up or down. */
   floorNear(x, y, reach) {
@@ -2800,7 +2800,7 @@ export class Game {
     };
     const reached = this.liveMobs().filter((m) => !m.src?.info?.damagedByMob && reaches(m)).slice(0, n);   // escorted monsters can't be caught
     const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
-    for (const [m, ok] of caught) if (ok) m.pull = { x: p.x, stop: (m.node?._w || 40) + 45 };
+    for (const [m, ok] of caught) if (ok) m.startPull({ x: p.x, stop: (m.node?._w || 40) + 45 });
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
     this.playSkillEffect(id, p);
   }
