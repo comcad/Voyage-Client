@@ -365,7 +365,7 @@ export class StatusBar {
         const o = q.node.origin || [0, 32];
         ctx.drawImage(icon, cx + 14 - 16 - o[0], cy + 12 - 16 + 32 - o[1]);
         if (q.item) this.number(ctx, String(this.game.itemCount(q.item)), cx + 22, cy + 17);
-        const left = q.skill ? this.game.skills?.cooling(q.skill) : 0;
+        const left = q.skill ? this.game.skills?.cooldownLeft(q.skill) : 0;
         if (left > 0) {
           ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(cx, cy, 28, 25);
           this.number(ctx, String(Math.ceil(left / 1000)), cx + 14, cy + 9);

@@ -169,7 +169,10 @@ export class SkillBook {
     return !w || cat === w;
   }
 
-  cooling(id) { return Math.max(0, (this.cooldowns[id] || 0) - Date.now()); }
+  /** A skill stays unusable from the server's cooldown until the server says it is over, whatever the clock says. */
+  cooling(id) { return id in this.cooldowns; }
+  /** Milliseconds left on a cooldown by the clock, for its countdown. */
+  cooldownLeft(id) { return id in this.cooldowns ? Math.max(0, this.cooldowns[id] - Date.now()) : 0; }
 
   /** Body action for a skill: Skill.wz `action` (random pick), else null (use the weapon's default). */
   action(id) {

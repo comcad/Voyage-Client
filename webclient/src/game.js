@@ -1170,7 +1170,7 @@ export class Game {
         this.skillWin?.render(); this.keyBar.render();
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
-      cooldown: (id, sec) => { this.skills.cooldowns[id] = sec ? Date.now() + sec * 1000 : 0; },
+      cooldown: (id, sec) => { if (sec) this.skills.cooldowns[id] = Date.now() + sec * 1000; else delete this.skills.cooldowns[id]; },
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
@@ -2265,7 +2265,7 @@ export class Game {
     const lv = skillId ? sb.level(skillId) : 0;
     const ld = skillId ? sb.levelData(skillId, lv) : null;
     if (skillId && this.net) {
-      if (sb.cooling(skillId)) return false;
+      if (sb.cooling(skillId)) { this.notice('You may not use the skill yet.'); return false; }
       if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
       if ((ld?.hpCon || 0) >= this.stats.hp) { this.notice('Not enough HP.'); return false; }
       if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) { this.notice("You don't have enough HP to use this skill."); return false; }
