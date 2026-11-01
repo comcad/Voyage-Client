@@ -522,9 +522,10 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
   const ic = mgr.icon(it.id);
   if (ic) mgr.drawIcon(ctx, ic, x + 11, cy + 3);
   if (equip && T) {
-    // requirement lines: label + value in Can (met, white) or Cannot (red) sprites
+    // requirement lines: label + value in Can (met, white) or Cannot (red) sprites, against what equipping it would see
+    const have = g.equipStats?.(it.id) || s;
     reqRows.forEach(([sprite, key, stat], i) => {
-      const need = info?.[key] || 0, ok = (s[stat] ?? 0) >= need;
+      const need = info?.[key] || 0, ok = (have[stat] ?? 0) >= need;
       const set = ok ? T.Can : T.Cannot;
       const label = mgr.image(set[sprite]);
       if (label) ctx.drawImage(label, x + 56, cy + i * 9);
