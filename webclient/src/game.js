@@ -1,7 +1,7 @@
 import { GameMap, nameTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases } from './character.js';
-import { weaponMultiplier, itemIcon, mesoIcon, invType, isScroll, scrollFits } from './data.js';
+import { weaponMultiplier, itemIcon, mesoIcon, invType, isScroll, scrollFits, ACTIONS } from './data.js';
 import { stanceByte, STANCE_NAMES } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
@@ -185,6 +185,8 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/** How far in front a bow, crossbow, claw or gun swings rather than shoots. */
+const CLOSE_REACH = 65;
 /** ms between a melee attack's hits on successive monsters, nearest first. */
 const HIT_WAVE = 60;
 /** Meso piles animate on fixed timings (the client overrides the WZ): four 80ms frames below 100, four 200ms below 1000, the bag 4000/120/120/120. */
@@ -1372,12 +1374,12 @@ export class Game {
   /** Character.calculateMaxBaseDamage, so damage stays inside the server's sanity checks. */
   maxDamage(pose = null) {
     const s = this.stats, weapon = this.inventory?.equipped[-11];
-    const mult = weaponMultiplier(weapon?.id, pose);
+    const cat = Math.floor((weapon?.id || 0) / 10000) % 100, thiefDagger = cat === 33 && Math.floor(s.job / 100) === 4;
+    const mult = thiefDagger ? 3.6 : weaponMultiplier(weapon?.id, pose);   // a thief's dagger counts for less
     if (!mult) return 1;
-    const cat = Math.floor(weapon.id / 10000) % 100;
     let main = s.str, sec = s.dex;
     if (cat === 45 || cat === 46 || cat === 49) { main = s.dex; sec = s.str; }
-    else if (cat === 47 || (cat === 33 && Math.floor(s.job / 100) === 4)) { main = s.luk; sec = s.dex + s.str; }
+    else if (cat === 47 || thiefDagger) { main = s.luk; sec = s.dex + s.str; }
     return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
   }
 
@@ -1940,9 +1942,13 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ combat
-  /** Body action ids in attack packets = order of actions in Character/00002000.img. */
-  actionId(name) { const i = this.look.actionList().indexOf(name); return i < 0 ? 0 : i; }
-  actionName(id) { return this.look.actionList()[id] || 'swingO1'; }
+  /** An action's id in attack packets; a claw's throws have their own ids (24-26) though drawn as swingO1-3. */
+  actionId(name, thrown = false) {
+    const t = thrown ? ['swingO1', 'swingO2', 'swingO3'].indexOf(name) : -1;
+    if (t >= 0) return 24 + t;
+    const i = ACTIONS.indexOf(name); return i < 0 ? 0 : i;
+  }
+  actionName(id) { return ACTIONS[id] || 'swingO1'; }
 
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
@@ -1977,12 +1983,19 @@ export class Game {
       if ((ld?.hpCon || 0) >= this.stats.hp) { this.notice('Not enough HP.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
+    // a bow, crossbow, claw or gun swings instead of shooting when a monster is within its swing (65px in front at
+    // most), or when it has nothing to shoot
+    let swing = null, reach = Infinity;
+    if (kind === 'ranged' && !skillId) {
+      const s = this.look.attackAction(), empty = this.net && !this.hasAmmo(0);
+      if (empty || this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length) { kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; }
+    }
     if (kind === 'ranged' && this.net && !this.hasAmmo(skillId)) {
       this.notice(wcat === 147 ? 'You have no throwing stars.' : wcat === 149 ? 'You have no bullets.' : 'You have no arrows.');
       return false;
     }
 
-    const action = prone ? 'proneStab' : (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
+    const action = prone ? 'proneStab' : swing || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
     p.attack = this.look.has(action) ? action : this.look.attackAction();
     p.frame = 0; p.frameT = 0; p.action = p.attack;
     p.attackScale = this.attackScale();
@@ -1994,7 +2007,7 @@ export class Game {
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
     const lines = ld?.fixdamage ? 1 : ld?.attackCount || ld?.bulletCount || 1;
-    const targets = this.findTargets(kind, skillId, lv, mobCount, p.attack);
+    const targets = this.findTargets(kind, skillId, lv, mobCount, p.attack, reach);
     const swingAction = p.attack;
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, swingAction));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(p.attack)) : 25;
@@ -2029,7 +2042,7 @@ export class Game {
       else this.after(hitDelay + i * HIT_WAVE, land);
     }
     if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
-    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack), facingLeft: !p.facingRight, speed: this.attackSpeed() });
+    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack, kind === 'ranged'), facingLeft: !p.facingRight, speed: this.attackSpeed() });
     return true;
   }
 
@@ -2085,8 +2098,7 @@ export class Game {
   }
 
   defaultAttackAction(kind) {
-    if (kind === 'ranged') for (const a of ['shoot1', 'shoot2', 'shootF']) if (this.look.weapon?.[a]) return a;
-    return this.look.attackAction();
+    return (kind === 'ranged' && this.look.shootAction()) || this.look.attackAction();
   }
 
   /** Buffs and other SPECIAL_MOVE skills. */
@@ -2441,9 +2453,11 @@ export class Game {
   }
 
   /** Mobs inside the skill's lt/rb box (or a default reach), nearest first. */
-  findTargets(kind, skillId, lv, count, action = null) {
+  findTargets(kind, skillId, lv, count, action = null, maxReach = Infinity) {
     const p = this.player;
     let { x1, x2, top, bottom } = this.attackBox(kind, skillId, lv, action);
+    // maxReach: how far in front it goes at most (a ranged weapon's swing)
+    if (p.facingRight) x2 = Math.max(x1 + 1, Math.min(x2, p.x + maxReach)); else x1 = Math.min(x2 - 1, Math.max(x1, p.x - maxReach));
     // a monster is in it when its body (now or a frame ago) overlaps the box (openms, docs/hitboxes.md)
     const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
     const inside = (m) => { const b = m.hitBox(true); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; };

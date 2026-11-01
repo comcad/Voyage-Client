@@ -30,14 +30,23 @@ const BACK_ACTIONS = new Set(['ladder', 'rope']);
 
 const PING_PONG = new Set(['stand1', 'stand2', 'alert']);
 
-/** Basic attack poses by weapon info/attack; one is picked at random. */
+/**
+ * Basic attack poses by weapon info/attack, one picked at random: 1 one-handed, 2 spear / polearm, 3 bow, 4 crossbow,
+ * 5 two-handed, 6 wand / staff, 7 claw, 8 knuckle, 9 gun. A bow, crossbow, claw or gun swings like this at a monster
+ * right in front of it (or with nothing to shoot), and otherwise shoots with its SHOOT_POSES.
+ */
 const ATTACK_POSES = {
-  1: ['stabO1', 'stabO2', 'swingO1', 'swingO2', 'swingO3'],
-  2: ['stabT1', 'stabT2', 'swingT2', 'swingP1', 'swingP2'],
-  5: ['stabO1', 'stabO2', 'swingT1', 'swingT2', 'swingT3'],
-  6: ['swingO1', 'swingO2'],
-  7: ['swingO1', 'swingO2'],
+  1: ['swingO1', 'swingO2', 'swingO3', 'stabO1', 'stabO2'],
+  2: ['swingT2', 'swingP1', 'swingP2', 'stabT1', 'stabT2'],
+  3: ['swingT1', 'swingT3'],
+  4: ['swingT1', 'stabT1'],
+  5: ['swingT1', 'swingT2', 'swingT3', 'stabO1', 'stabO2'],
+  6: ['swingO2'],
+  7: ['stabO1', 'stabO2'],
+  8: ['stabO1', 'stabO2'],
+  9: ['swingT1', 'swingT2', 'swingT2'],
 };
+const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
 
 export class CharacterLook {
   constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [] } = {}) {
@@ -71,7 +80,7 @@ export class CharacterLook {
   /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */
   exprReady(n) { return !!n && (isCanvas(n) ? !!this.assets.image(n) : Object.values(n).filter(isCanvas).every((c) => this.assets.image(c))); }
   has(action) { return !!this.body?.[action]?.[0]; }
-  /** Body actions in WZ order; the index is the action id used in attack packets. */
+  /** Body actions in WZ order (attack packets number them by ACTIONS instead). */
   actionList() { return (this._actions ??= Object.keys(this.body || {}).filter((k) => k !== 'info')); }
   frameCount(action) { return frames(this.body?.[action]).length; }
   /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms. */
@@ -95,6 +104,11 @@ export class CharacterLook {
     const options = poses.filter((a) => this.has(a) && (!this.weapon || this.weapon[a]));
     return options[Math.floor(Math.random() * options.length)] || 'swingO1';
   }
+  /** Shooting pose for a bow, crossbow, claw or gun (null for anything else). */
+  shootAction() {
+    const options = (SHOOT_POSES[this.weapon?.info?.attack] || []).filter((a) => this.has(a));
+    return options[Math.floor(Math.random() * options.length)] || null;
+  }
   standAction() { return this.weapon?.stand2 && !this.weapon?.stand1 ? 'stand2' : 'stand1'; }
   walkAction() { return this.weapon?.walk2 && !this.weapon?.walk1 ? 'walk2' : 'walk1'; }
 
@@ -105,6 +119,9 @@ export class CharacterLook {
   compose(action, frame, expr = null) {
     let bf = this.body?.[action]?.[frame];
     if (!bf) return [];
+    // a frame that points at another pose's frame (alert2, shot, brandish1...) draws that one, moved and maybe mirrored
+    const ref = bf.action && this.body[bf.action]?.[bf.frame] ? bf : null;
+    if (ref) { action = ref.action; frame = ref.frame; bf = this.body[action][frame]; }
     const back = BACK_ACTIONS.has(action);
     const parts = [];
     const add = (container, filter) => {
@@ -173,8 +190,11 @@ export class CharacterLook {
       const o = node.origin || [0, 0];
       out.push({ node, x: pos[0] - o[0], y: pos[1] - o[1], z: ZINDEX?.get(node.z) ?? 60 });
     }
+    if (ref?.move) for (const o of out) { o.x += ref.move[0]; o.y += ref.move[1]; }
     // zmap lists front-most first, so draw highest index first
-    return out.sort((a, b) => b.z - a.z);
+    out.sort((a, b) => b.z - a.z);
+    if (ref?.flip) out.flip = true;
+    return out;
   }
 }
 
@@ -182,7 +202,7 @@ export class CharacterLook {
 export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true) {
   ctx.save();
   ctx.translate(whole ? Math.round(x) : x, whole ? Math.round(y) : y);
-  if (facingRight) ctx.scale(-1, 1);
+  if (facingRight !== !!parts.flip) ctx.scale(-1, 1);
   if (alpha !== 1) ctx.globalAlpha = alpha;
   for (const p of parts) {
     const img = assets.image(p.node);
