@@ -302,11 +302,6 @@ function findMapName(strMap, id) {
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
 /** A monster AI wait: `base` + up to `spread` ms, counted in 90ms units of its 30ms ticks (so a third as long). */
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
-/**
- * The action a knock-back or pull goes out with: hit (6) << 1. With an action, those watching drop the path they
- * were still playing and take this one at once; without one it would only queue up behind it.
- */
-const HIT_ACTION = 6 << 1;
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
 /** How much of a path is still to play, in ms. */
 const pathLeft = (p) => p.steps.slice(p.i).reduce((t, s) => t + s.duration, 0) - p.t;
@@ -400,8 +395,9 @@ export class Life {
    */
   applyMovement(start, moves, act = -1) {
     const steps = moves.filter((m) => m.x !== undefined).map((m) => ({ ...m, duration: Math.max(0, m.duration || 0) }));
-    // a path with an action (a blow, an attack, a skill) replaces what was still to play, from where it is now
-    if (act >= 0 && this.path) this.path = null;
+    // a path with an action (an attack, a skill) or one starting with a blow's push replaces what was still to play,
+    // from where it is now
+    if ((act >= 0 || moves[0]?.cmd === 2) && this.path) this.path = null;
     if (!steps.length) return;
     const p = this.path || (this.path = { steps: [], i: 0, t: 0, fromX: this.x, fromY: this.y });
     p.steps = p.steps.slice(p.i).concat(steps); p.i = 0;
@@ -411,13 +407,13 @@ export class Life {
    * Play its path: each point is where it is at the end of that point's time, in that pose and facing, and it glides
    * there in a straight line. A path more than a second behind plays faster until it has caught up.
    */
-  _replay(dt) {
+  _replay(dt, keepPose = false) {
     const p = this.path;
     const left = pathLeft(p);
-    p.t += dt * 1000 * (left > 1000 ? left / 1000 : 1);
+    p.t += dt * 1000 * (left > 1000 && !this.controlled ? left / 1000 : 1);   // one we control plays its own plan in real time
     while (p.i < p.steps.length) {
       const s = p.steps[p.i];
-      this.takePose(s);
+      if (!keepPose) this.takePose(s);
       if (p.t < s.duration) {
         const k = p.t / s.duration;
         this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k;
@@ -485,6 +481,7 @@ export class Life {
    */
   hit(dmg, fromRight, strong = false) {
     if (!this.alive || this.kind !== 'Mob') return;
+    const stanceBefore = this.stance;
     this.hp -= dmg;
     if (this.online) this.hp = Math.max(0, this.hp); // the server decides death (KILL_MONSTER)
     else if (this.hp <= 0) { this.setState('die1'); return; }
@@ -496,24 +493,40 @@ export class Life {
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.controlled) this.path = null;
     if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
-    if (this.controlled && this.online) this.sendRecoil();
+    if (this.controlled && this.online) this.planHit((this.hitTimer || 0) * 1000, stanceBefore);
   }
   /**
-   * One we control was stopped by a blow: the server hears at once where it is and how it slides back (as the
-   * client sends a monster's movement when a blow lands), so everyone else stops it there too instead of walking
-   * on along the path it had and snapping back when the next one comes.
+   * One we control was struck: what the client sends then, element for element - the blow's push (type 2: no time,
+   * the speed it sets off at), 300ms of sliding back, standing for the rest of its hit pose, then its own movement
+   * until at least a second is planned (1.65s at most, ending on the ground) - in the stance it had before the blow.
+   * It then plays that same plan itself, so everyone sees one thing.
    */
-  sendRecoil() {
-    const sim = Object.create(this), moves = [], start = { x: Math.round(this.x), y: Math.round(this.y) };
-    for (let t = 0; sim.recoil && sim.fh && t < 1000; t += 30) {
-      const px = sim.x;
-      sim.recoilStep(0.03);
-      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), last = moves[moves.length - 1];
-      if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
-      else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
+  planHit(hitMs, stance) {
+    const sim = Object.create(this), start = { x: Math.round(this.x), y: Math.round(this.y) };
+    sim.setState = function (st) { if (this.anims[st]) this.state = st; };
+    const moves = [], hold = Math.max(300, hitMs);
+    if (sim.recoil) moves.push({ cmd: 2, rx: Math.round(sim.recoil), ry: 0, stance, duration: 0 });
+    const add = (px, py, st, t) => {
+      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), vy = Math.round((sim.y - py) / 0.03);
+      const fh = sim.fh?.id || 0, last = moves[moves.length - 1], phase = t < 300 ? 0 : t < hold ? 1 : 2;
+      if (last && last.cmd === 0 && last.phase === phase && last.fh === fh && last.stance === st && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
+        Object.assign(last, { x, y, vx, vy }); last.duration += 30;
+      } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance: st, duration: 30, phase });
+    };
+    for (let t = 0; t < 1650; t += 30) {
+      if (t >= 1000 && (sim.fh || sim.flying)) break;
+      const px = sim.x, py = sim.y;
+      if (t < 300) { if (sim.recoil && sim.fh) sim.recoilStep(0.03); add(px, py, stance, t); continue; }
+      if (t < hold) { add(px, py, stance, t); continue; }
+      if (sim.state === 'hit1') sim.setState(sim.flying ? 'fly' : 'stand');
+      sim.step(0.03); add(px, py, sim.stance, t);
     }
-    if (!moves.length) moves.push({ cmd: 0, ...start, vx: 0, vy: 0, fh: this.fh?.id || 0, stance: this.stance, duration: 30 });
-    this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
+    // the slide ends where it got to in 300ms; standing, it no longer moves
+    for (const m of moves) { if (m.phase === 1) { m.vx = 0; m.vy = 0; } delete m.phase; }
+    for (const k of Object.keys(sim)) if (!PLAYED.has(k) && k !== 'recoil') this[k] = sim[k];
+    this.recoil = 0;   // the plan carries the slide
+    this.path = { steps: moves.filter((m) => m.cmd === 0), i: 0, t: 0, fromX: this.x, fromY: this.y };
+    this.onPath?.(this, start, moves);
   }
   /** One we control being pulled (Rush, Monster Magnet): the server hears its whole slide at once, as with a blow. */
   startPull(pull) {
@@ -529,7 +542,7 @@ export class Life {
       if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
       else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
     }
-    if (moves.length) this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
+    if (moves.length) this.onPath?.(this, start, moves);
   }
   /** Drawn in by Monster Magnet: toward pull.x at 1000px/s until within pull.stop of it; a floor's edge or a wall stops it. */
   pullStep(dt) {
@@ -587,7 +600,12 @@ export class Life {
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
       if (this.recoil && this.fh) this.recoilStep(dt);
-      if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
+      if (this.state === 'hit1') {
+        this.hitTimer -= dt;
+        if (this.controlled && this.path) this._replay(dt, true);   // its planned slide, keeping the hit pose
+        if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand');
+        return;
+      }
       if (!this.controlled) { if (this.path) this._replay(dt); return; }
     }
     if (this.held) { this.path = null; return; }
