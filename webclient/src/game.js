@@ -189,6 +189,11 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
 /**
+ * Power Stance (Hero, Paladin, Dark Knight) and Freeze Standing (Aran): a hit that would throw you back doesn't at the
+ * buff's % chance (its prop), and the skill's effect plays; not on maps that forbid movement skills.
+ */
+const STANCES = { 112: 1121002, 122: 1221002, 132: 1321002, 2112: 21121003 };
+/**
  * Skills that can only be used standing on the ground: Dragon Roar, Assassinate, Boomerang Step, Rush, Demolition,
  * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh and the Aran
  * swings and charges.
@@ -1219,7 +1224,7 @@ export class Game {
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
-          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior, combo: b.combo });
+          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance });
       },
       cancelBuff: (m1, m2) => {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
@@ -3630,6 +3635,16 @@ export class Game {
       return;
     }
   }
+  /** Power Stance's roll on a hit that would throw you back (see STANCES): true when you stand firm. */
+  holdsStance() {
+    const now = Date.now(), b = (this.buffs || []).find((x) => (x.stance || Object.values(STANCES).includes(x.source)) && x.until > now);
+    if (!b || ((this.map?.info?.fieldLimit || 0) & 2)) return false;
+    const rate = Math.max(0, Math.min(100, b.stance ?? this.skills.levelData(b.source)?.prop ?? 0));
+    if (Math.floor(Math.random() * 100) >= rate) return false;
+    const id = STANCES[this.stats?.job] || b.source;
+    if (id) this.playSkillEffect(id, this.player, false);
+    return true;
+  }
   /** The receiver monster attacks are tested against: 44x65 standing, 46x31 lying down. */
   playerBody() {
     const p = this.player, prone = p.action === 'prone' || p.action === 'proneStab';
@@ -3653,6 +3668,7 @@ export class Game {
     // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
     // monster you're thrown back less, and falling onto it only slows your fall
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    if (knock && this.holdsStance()) knock = 0;
     if (knock) {
       p.fh = null; p.ladder = null;
       p.vx = impact(p.vx || 0, knock * KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
