@@ -25,9 +25,14 @@ const PROCS = new Set([1000002, 1100002, 1100003, 1200002, 1200003, 1300002, 130
   1220010, 1320006, 1320009]);
 /** Attacks that look like buffs in their data (Panic). */
 const MELEE_SKILLS = new Set([1111003, 1111004, 11111002]);
+/** Spells that look like buffs in their data: Cold Beam, Paralyze, Poison Mist, Flame Gear. */
+const MAGIC_SKILLS = new Set([2201004, 2121006, 2111003, 12111005]);
 /** Shots that need no ammo: Soul Blade, Shark Wave. */
 export const NO_AMMO_SHOTS = new Set([11101004, 15111007]);
-/** Weapons (category % 100) a skill needs where its data doesn't say: 30/40 swords, 31/41 axes, 32/42 blunt, 43 spear, 44 polearm. */
+/**
+ * Weapons (category % 100) a skill needs where its data doesn't say: 30/40 swords, 31/41 axes, 32/42 blunt, 43 spear,
+ * 44 polearm, 37 wand, 38 staff.
+ */
 const SKILL_WEAPONS = {
   1101004: [30, 40], 1101005: [31, 41], 1201004: [30, 40], 1201005: [32, 42], 1301004: [43], 1301005: [44], 11101001: [30, 40],
   1111003: [30, 40], 1111005: [30, 40], 1111004: [31, 41], 1111006: [31, 41], 11111002: [30, 40], 11111003: [30, 40],
@@ -35,6 +40,7 @@ const SKILL_WEAPONS = {
   1321003: [43, 44], 1311005: [43, 44], 1311006: [43, 44],
   1211003: [30, 40], 1211005: [30, 40], 1211007: [30, 40], 1221003: [30, 40], 11101002: [30, 40], 11111007: [30, 40],
   1211004: [32, 42], 1211006: [32, 42], 1211008: [32, 42], 1221004: [32, 42],
+  2111005: [37, 38], 2211005: [37, 38], 12101004: [37, 38], 12101005: [37, 38],
 };
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
 
@@ -129,6 +135,7 @@ export class SkillBook {
     const n = this.node(id), ld = n?.level?.[1];
     if (!n || !ld || PROCS.has(id)) return 'passive';
     if (MELEE_SKILLS.has(id)) return 'melee';
+    if (MAGIC_SKILLS.has(id)) return 'magic';
     if (NO_AMMO_SHOTS.has(id)) return 'ranged';
     // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
@@ -200,6 +207,11 @@ export function skillMaxDamage(game, id, lv, kind) {
   if (ld?.fixdamage) return ld.fixdamage;
   if (kind === 'magic') {
     const tm = Math.min(2000, s.int + game.equipStat('matk'));
+    // Heal on the undead: (4.8 x INT + 4 x LUK) x magic / 1000, scaled by its heal %
+    if (id === 2301002) {
+      const int = s.int + game.equipStat('int'), luk = s.luk + game.equipStat('luk');
+      return Math.max(1, Math.floor((((int * 4.8 + luk * 4) * tm) / 1000) * (ld?.hp || 100) / 100));
+    }
     const base = ((tm * tm) / 1000 + tm) / 30 + s.int / 200;
     return Math.max(1, Math.floor(base * (ld?.mad || 1)));
   }

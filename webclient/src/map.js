@@ -396,8 +396,11 @@ export class Life {
     }
   }
 
-  /** KILL_MONSTER: play the death animation then disappear. */
-  kill() { this.setState('die1'); this.dying = true; if (!this.anims.die1) this.removed = true; }
+  /** KILL_MONSTER: its statuses end (a frozen one thaws) and it plays its death animation, then disappears. */
+  kill() {
+    this.status = { first: 0, second: 0 }; this.statusArt.clear();
+    this.setState('die1'); this.dying = true; if (!this.anims.die1) this.removed = true;
+  }
 
   allFrames() { return [...Object.values(this.anims), ...(this.tv ? [this.tv.msg.anim, this.tv.ad.anim] : [])].flatMap((a) => a.frames); }
   get alive() { return this.state !== 'die1' && this.respawnTimer <= 0; }
@@ -454,7 +457,7 @@ export class Life {
     this.prevX = this.x; this.prevY = this.y;
     if (this.tv) { this.tv.msg.anim.update(dt * 1000); this.tv.ad.anim.update(dt * 1000); }
     const anim = this.anims[this.state];
-    if (!this.frozen) anim?.update(dt * 1000);   // frozen solid: its picture stops too
+    if (!this.frozen || this.state === 'die1') anim?.update(dt * 1000);   // frozen solid: its picture stops too
     for (const e of this.statusArt.values()) {
       e.anim?.update(dt * 1000);
       if (e.doom) for (const a of [e.doom.stand, e.doom.move, e.doom.mark]) a?.update(dt * 1000);
@@ -552,6 +555,7 @@ export class Life {
    * whose art (`anim` looping on it, an `icon` for a monster's own buff) shows while any of them lasts.
    */
   addStatus(first, second, source, art = {}) {
+    if (this.state === 'die1') return;   // a status that arrives after it died doesn't take
     this.status.first |= first; this.status.second |= second;
     const e = this.statusArt.get(source) || { first: 0, second: 0 };
     e.first |= first; e.second |= second; Object.assign(e, art);
