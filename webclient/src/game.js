@@ -954,6 +954,7 @@ export class Game {
   }
 
   weaponId() { return this.inventory?.equipped[-11]?.id || 0; }
+  weaponOf(who) { return who === this.player ? this.weaponId() : who?.look?.weaponId?.() || 0; }
   equipStat(key) { let v = 0; for (const it of Object.values(this.inventory?.equipped || {})) v += it[key] || 0; return v; }
   /**
    * Your Speed and Jump as fractions of the base walk / jump: 100 plus your equipment's plus the strongest buff
@@ -1510,9 +1511,9 @@ export class Game {
         e.pendingHits = (e.pendingHits || 0) + 1;
         const land = () => {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
-          this.damageNumbers(e, t.dmg, false, a.skill, t.crit);
+          this.damageNumbers(e, t.dmg, false, a.skill, t.crit, this.weaponOf(rp));
           this.playHitEffect(a.skill, e, rp, t.dmg);
-          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
+          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, this.weaponOf(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
         };
         const planned = plan?.targets.find((p) => p.mob === e);
         if (planned) this.after(delay + planned.delay, land);
@@ -2405,11 +2406,11 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
-          this.after(lineDelay(skillId, t.dmg.length - 1), () => this.finishKill(t.mob));   // it dies after its last line lands
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, this.weaponId()); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          this.after(lineDelay(skillId, t.dmg.length - 1, this.weaponId()), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, this.weaponId()); this.playHitEffect(skillId, t.mob, p, t.dmg);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -3523,7 +3524,7 @@ export class Game {
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
     // Seven's two stars twice... (a miss makes no monster damage sound)
-    dmgs.forEach((d, line) => this.after(lineDelay(id, line), () => {
+    dmgs.forEach((d, line) => this.after(lineDelay(id, line, this.weaponOf(by)), () => {
       if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
       if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
       if (!fx) return;
@@ -3588,9 +3589,9 @@ export class Game {
   }
 
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
-  damageNumbers(target, dmgs, mine, skillId = 0, crits = []) {
+  damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0) {
     if (mine && target.kind === 'Mob') target.hpShownUntil = performance.now() + 5000;
-    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits);
+    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits, weaponId);
   }
 
   /**

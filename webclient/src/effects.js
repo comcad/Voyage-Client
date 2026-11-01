@@ -17,10 +17,17 @@ import { settings } from './settings.js';
 const SETS = { red: ['NoRed1', 'NoRed0'], crit: ['NoCri1', 'NoCri0'], violet: ['NoViolet1', 'NoViolet0'], blue: ['NoBlue1', 'NoBlue0'] };
 // damage numbers, as openms recovered the original: opaque for 400ms, fading over the next 600, rising 30px
 const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
-/** How long each further damage line waits before it shows (ms), per skill; the rest wait 120 per line. */
-export function lineDelay(skillId, line) {
+/**
+ * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish's blows are
+ * 80ms late, its second a further 160 (240 with a two-handed weapon) on top.
+ */
+export function lineDelay(skillId, line, weaponId = 0) {
   if ([5101004, 15101003, 5121007, 15111004].includes(skillId)) return 0;   // these all show at once
   if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
+  if (skillId === 1121008 || skillId === 11111004) {
+    const twoHanded = [140, 141].includes(Math.floor(weaponId / 10000));
+    return 80 * (line + 1) + line * 120 + (line ? (twoHanded ? 160 : 80) : 0);
+  }
   return line * 120;
 }
 const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear' };
@@ -47,9 +54,9 @@ export class WorldFx {
    * Each line is placed when it shows, LINE_GAP above the last, over where the target is by then; a monster's
    * 15px above its head, your own right at your head.
    */
-  damage(target, values, kind = 'red', skillId = 0, crits = []) {
+  damage(target, values, kind = 'red', skillId = 0, crits = [], weaponId = 0) {
     const lift = target.kind === 'Mob' ? 15 : 0;
-    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line) }));
+    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line, weaponId) }));
   }
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */

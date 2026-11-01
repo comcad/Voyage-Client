@@ -125,6 +125,7 @@ export class CharacterLook {
     const options = (SHOOT_POSES[this.weapon?.info?.attack] || []).filter((a) => this.has(a));
     return options[Math.floor(Math.random() * options.length)] || null;
   }
+  weaponId() { return this.equipIds.find((id) => id >= 1300000 && id < 1700000) || 0; }
   standAction() { return this.weapon?.stand2 && !this.weapon?.stand1 ? 'stand2' : 'stand1'; }
   walkAction() { return this.weapon?.walk2 && !this.weapon?.walk1 ? 'walk2' : 'walk1'; }
 
