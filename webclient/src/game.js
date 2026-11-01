@@ -317,6 +317,8 @@ const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007;
+const HEROS_WILLS = new Set([1121011, 1221012, 1321010, 2121008, 2221008, 2321009, 3121009, 3221008, 4121009, 4221008, 5121008,
+  5221010, 21121008]);
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
 const SHADOW_PARTNERS = [4111002, 14111000], SP_MASK = 0x400000000000000n, NO_PARTNER = new Set([4121003, 14101006]);
@@ -2016,13 +2018,21 @@ export class Game {
     if (this.dead || !s || this.hidden()) { this.hpRegenT = this.mpRegenT = 0; return; }
     const still = p.fh && !p.attack && p.x === this.regenX && p.y === this.regenY && /^(stand|sit)/.test(p.action || '');
     this.regenX = p.x; this.regenY = p.y;
-    this.hpRegenT = still ? (this.hpRegenT || 0) + dt : 0;
+    // Endure: more HP and MP a tick, and HP on a ladder or rope every its time seconds
+    const endure = [4100002, 4200001].map((id) => this.skills?.level(id) && this.skills.levelData(id)).find(Boolean) || null;
+    const climbing = !!p.ladder && !!endure;
+    this.hpRegenT = still || climbing ? (this.hpRegenT || 0) + dt : 0;
     this.mpRegenT = (this.mpRegenT || 0) + dt;
     const k = Number(this.map?.info?.recovery) || 1;
     const maxHp = this.maxHpShown(), maxMp = this.maxMpShown();   // the server heals up to the same buffed max
     let hp = 0, mp = 0;
-    if (this.hpRegenT >= 10) { this.hpRegenT = 0; hp = s.hp < maxHp ? Math.min(Math.trunc(10 * k), maxHp - s.hp) : 0; }
-    if (this.mpRegenT >= 10) { this.mpRegenT = 0; mp = s.mp < maxMp ? Math.min(Math.trunc((3 + Math.floor(s.int / 10)) * k), 100, maxMp - s.mp) : 0; }
+    const mage = Math.floor(((s.job || 0) % 1000) / 100) === 2;
+    if (this.hpRegenT >= (climbing ? endure.time || 10 : 10)) { this.hpRegenT = 0; hp = s.hp < maxHp ? Math.min(Math.trunc((10 + (endure?.hp || 0)) * k), maxHp - s.hp) : 0; }
+    if (this.mpRegenT >= 10) {
+      this.mpRegenT = 0;
+      const tick = mage ? 3 + Math.floor(s.int / 10) : 3 + (endure?.mp || 0);   // INT counts for a magician only
+      mp = s.mp < maxMp ? Math.min(Math.trunc(tick * k), 100, maxMp - s.mp) : 0;
+    }
     if (!hp && !mp) return;
     this.net.healOverTime(hp, mp);
     if (hp) this.vfx?.damage(p, [hp], 'blue');
@@ -2086,6 +2096,8 @@ export class Game {
     if (this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
+      const hw = this.heldSkill();   // Hero's Will still goes
+      if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
       if (p.ladder) { this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
       if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
       else { fh.fall(p, dt, p.ignoreFh); if (p.fh) p.vx = 0; }
@@ -2312,7 +2324,7 @@ export class Game {
 
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
-    if (this.hasDisease(SEAL)) return false;   // sealed by a monster: no skills until it wears off
+    if (this.hasDisease(SEAL) && !HEROS_WILLS.has(id)) return false;   // sealed by a monster: only Hero's Will
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
