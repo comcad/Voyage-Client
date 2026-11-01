@@ -57,12 +57,17 @@ export class CharacterLook {
 
   async load() {
     const a = this.assets;
-    [this.body, this.head, this.face, this.hair] = await Promise.all([
+    let base;
+    [this.body, this.head, this.face, this.hair, base] = await Promise.all([
       a.json(`Character/${pad(2000 + this.skin, 8)}.img`),
       a.json(`Character/${pad(12000 + this.skin, 8)}.img`),
       a.json(`Character/Face/${pad(this.faceId, 8)}.img`),
       a.json(`Character/Hair/${pad(this.hairId, 8)}.img`),
+      this.skin ? a.json('Character/00002000.img') : null,
     ]);
+    // only the first skin's body has the skill poses (alert2, somersault, brandish1...): frames pointing at the basic
+    // poses, which every skin has, so another skin takes them from there and draws them in its own colour
+    if (base && this.body) this.body = { ...base, ...this.body };
     const eq = await Promise.all(this.equipIds.map((id) => equipPath(id) && a.json(equipPath(id))));
     this.equips = eq.filter(Boolean);
     // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
@@ -119,7 +124,8 @@ export class CharacterLook {
   compose(action, frame, expr = null) {
     let bf = this.body?.[action]?.[frame];
     if (!bf) return [];
-    // a frame that points at another pose's frame (alert2, shot, brandish1...) draws that one, moved and maybe mirrored
+    // a frame that points at another pose's frame (alert2, shot, brandish1...) draws that one, turned clockwise about
+    // the feet, maybe mirrored, then moved (drawParts does it)
     const ref = bf.action && this.body[bf.action]?.[bf.frame] ? bf : null;
     if (ref) { action = ref.action; frame = ref.frame; bf = this.body[action][frame]; }
     const back = BACK_ACTIONS.has(action);
@@ -190,10 +196,11 @@ export class CharacterLook {
       const o = node.origin || [0, 0];
       out.push({ node, x: pos[0] - o[0], y: pos[1] - o[1], z: ZINDEX?.get(node.z) ?? 60 });
     }
-    if (ref?.move) for (const o of out) { o.x += ref.move[0]; o.y += ref.move[1]; }
     // zmap lists front-most first, so draw highest index first
     out.sort((a, b) => b.z - a.z);
     if (ref?.flip) out.flip = true;
+    if (ref?.move) out.move = [Number(ref.move[0]) || 0, Number(ref.move[1]) || 0];
+    if (ref?.rotate) out.rotate = Number(ref.rotate) || 0;
     return out;
   }
 }
@@ -202,7 +209,10 @@ export class CharacterLook {
 export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true) {
   ctx.save();
   ctx.translate(whole ? Math.round(x) : x, whole ? Math.round(y) : y);
-  if (facingRight !== !!parts.flip) ctx.scale(-1, 1);
+  if (facingRight) ctx.scale(-1, 1);
+  if (parts.move) ctx.translate(parts.move[0], parts.move[1]);
+  if (parts.flip) ctx.scale(-1, 1);
+  if (parts.rotate) ctx.rotate((parts.rotate * Math.PI) / 180);
   if (alpha !== 1) ctx.globalAlpha = alpha;
   for (const p of parts) {
     const img = assets.image(p.node);
