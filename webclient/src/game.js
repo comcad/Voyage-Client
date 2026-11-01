@@ -207,8 +207,20 @@ const CLOSE_REACH = 65;
 const NO_CLOSE_SWING = new Set([3100001, 3110001, 3111004, 3200001, 3210001, 3211004, 4121003, 4221003, 5121002, 5201006,
   5211004, 5211005, 5221007, 5221008, 11101004, 13101002, 13101005, 13111000, 14101006, 15111006, 15111007, 21100004,
   21110004, 21120006]);
-/** ms between a melee attack's hits on successive monsters, nearest first. */
-const HIT_WAVE = 60;
+/**
+ * How long after the first monster each of the others is hit (i: its place in the order), in ms. A melee attack
+ * goes 70ms apart up to 280ms (Band of Thieves: the rest all at 280ms); a spell without a projectile 50ms apart, or
+ * all at once for Meteor Shower, Blizzard and Genesis. Another player's spell lands all at once, but Thunder Bolt
+ * and Heal 50ms apart.
+ */
+const BAND_OF_THIEVES = 4211004, SPARK = 15111006;
+const MAGIC_AT_ONCE = new Set([2121007, 2221007, 2321008, 12111003]);
+const REMOTE_MAGIC_WAVE = new Set([2201005, 2301002]);
+function hitWave(i, kind, skillId, remote = false) {
+  if (kind === 'magic') return (remote ? REMOTE_MAGIC_WAVE.has(skillId) : !MAGIC_AT_ONCE.has(skillId)) ? i * 50 : 0;
+  if (skillId === BAND_OF_THIEVES && !remote) return i ? 280 : 0;
+  return Math.min(i * 70, 280);
+}
 /** Meso piles animate on fixed timings (the client overrides the WZ): four 80ms frames below 100, four 200ms below 1000, the bag 4000/120/120/120. */
 function mesoTiming(node, amount) {
   const delays = amount < 100 ? [80, 80, 80, 80] : amount < 1000 ? [200, 200, 200, 200] : [4000, 120, 120, 120];
@@ -1270,22 +1282,32 @@ export class Game {
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
       rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
       if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
-      delay = rp.look.attackDelay(rp.attack);
-      delay *= rp.attackScale;
+      delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
     }
-    const shoots = rp && (a.kind === 'ranged' || (a.kind === 'magic' && a.skill));
-    for (const [i, t] of a.targets.entries()) {
-      const e = this.lifeByOid.get(t.oid);
-      if (!e || e.pending) continue;
-      e.pendingHits = (e.pendingHits || 0) + 1;
-      const land = () => {
-        e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
-        this.damageNumbers(e, t.dmg, false, a.skill, t.crit);
-        this.playHitEffect(a.skill, e, rp, t.dmg);
-        if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
-      };
-      if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + i * HIT_WAVE, land);
-    }
+    // only a spell with a ball is shot; one without lands where it is
+    const ball = a.kind === 'magic' && a.skill && this.skills ? this.skills.ensure(a.skill).then((n) => !!n?.ball) : Promise.resolve(false);
+    ball.then((hasBall) => {
+      const shoots = rp && (a.kind === 'ranged' || hasBall);
+      let order = a.targets;
+      // a swing's hits go through the monsters from one end, starting on the side where they lie
+      if (!shoots && a.kind !== 'magic' && rp && a.skill !== BAND_OF_THIEVES && a.skill !== SPARK) {
+        const x = (t) => this.lifeByOid.get(t.oid)?.x ?? rp.x;
+        const dir = order.reduce((sum, t) => sum + x(t) - rp.x, 0) > 0 ? 1 : -1;
+        order = [...order].sort((p, q) => (x(p) - x(q)) * dir);
+      }
+      for (const [i, t] of order.entries()) {
+        const e = this.lifeByOid.get(t.oid);
+        if (!e || e.pending) continue;
+        e.pendingHits = (e.pendingHits || 0) + 1;
+        const land = () => {
+          e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
+          this.damageNumbers(e, t.dmg, false, a.skill, t.crit);
+          this.playHitEffect(a.skill, e, rp, t.dmg);
+          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
+        };
+        if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
+      }
+    });
   }
 
   onPlayerDamaged(d) {
@@ -2057,6 +2079,8 @@ export class Game {
       return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
     });
     const projectile = kind === 'ranged' || (skillId && sb?.node(skillId)?.ball && kind !== 'melee') || skillId % 10000000 === 1000;
+    // a spell without a projectile takes its monsters in a random order
+    if (kind === 'magic' && !projectile) for (let i = 0; i < out.length; i++) { const j = Math.floor(Math.random() * out.length); [out[i], out[j]] = [out[j], out[i]]; }
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
@@ -2071,7 +2095,7 @@ export class Game {
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
       if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? this.ammoItem() : 0, land));
-      else this.after(hitDelay + i * HIT_WAVE, land);
+      else this.after(hitDelay + hitWave(i, kind, skillId), land);
     }
     if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
     this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack, kind === 'ranged'), facingLeft: !p.facingRight, speed: this.attackSpeed() });
@@ -2517,7 +2541,7 @@ export class Game {
     }
   }
 
-  /** Mobs inside the skill's lt/rb box (or a default reach), nearest first. */
+  /** Mobs inside the skill's lt/rb box (or a default reach): the nearest `count`, a swing's in the order it goes through them. */
   findTargets(kind, skillId, lv, count, action = null, maxReach = Infinity) {
     const p = this.player;
     let { x1, x2, top, bottom } = this.attackBox(kind, skillId, lv, action);
@@ -2529,7 +2553,13 @@ export class Game {
     // Slash Blast, Coma, Charged Blow: only once something is inside the ordinary swing do they reach out to their range
     const reach = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
     if (reach && mobs.some(inside)) { if (p.facingRight) x2 = Math.max(x2, p.x + reach); else x1 = Math.min(x1, p.x - reach); }
-    return mobs.filter(inside).sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x)).slice(0, count);
+    const hit = mobs.filter(inside).sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x)).slice(0, count);
+    // front to back along the way you face, by where each is struck (the middle of its body within the box)
+    if (kind === 'melee' && skillId !== BAND_OF_THIEVES && skillId !== SPARK) {
+      const at = (m) => { const b = m.hitBox(true); return (Math.max(b.left, x1) + Math.min(b.right, x2)) / 2; };
+      hit.sort((a, b) => (at(a) - at(b)) * (p.facingRight ? 1 : -1));
+    }
+    return hit;
   }
 
   talkToNearestNpc() {
