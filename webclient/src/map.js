@@ -302,6 +302,11 @@ function findMapName(strMap, id) {
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
 /** A monster AI wait: `base` + up to `spread` ms, counted in 90ms units of its 30ms ticks (so a third as long). */
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
+/**
+ * The action a knock-back or pull goes out with: hit (6) << 1. With an action, those watching drop the path they
+ * were still playing and take this one at once; without one it would only queue up behind it.
+ */
+const HIT_ACTION = 6 << 1;
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
 /** How much of a path is still to play, in ms. */
 const pathLeft = (p) => p.steps.slice(p.i).reduce((t, s) => t + s.duration, 0) - p.t;
@@ -506,7 +511,7 @@ export class Life {
       else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
     }
     if (!moves.length) moves.push({ cmd: 0, ...start, vx: 0, vy: 0, fh: this.fh?.id || 0, stance: this.stance, duration: 30 });
-    this.onPath?.(this, start, moves);
+    this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
   }
   /** One we control being pulled (Rush, Monster Magnet): the server hears its whole slide at once, as with a blow. */
   startPull(pull) {
@@ -521,7 +526,7 @@ export class Life {
       if (last && last.fh === (sim.fh?.id || 0)) { Object.assign(last, { x, y, vx }); last.duration += 30; }
       else moves.push({ cmd: 0, x, y, vx, vy: 0, fh: sim.fh?.id || 0, stance: this.stance, duration: 30 });
     }
-    if (moves.length) this.onPath?.(this, start, moves);
+    if (moves.length) this.onPath?.(this, start, moves, HIT_ACTION | (this.facingRight ? 0 : 1));
   }
   /** Drawn in by Monster Magnet: toward pull.x at 1000px/s until within pull.stop of it; a floor's edge or a wall stops it. */
   pullStep(dt) {

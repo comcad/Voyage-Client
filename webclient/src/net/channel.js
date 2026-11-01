@@ -910,7 +910,7 @@ export class ChannelSession {
       w.byte(0).byte(speed).zero(4);
     }
     for (const t of targets) {
-      w.int(t.oid).zero(4).pos(t).pos(t).short(0);
+      w.int(t.oid).zero(4).pos(t).pos(t).short(Math.max(0, Math.min(0x7fff, Math.round(t.delay || 0))));   // when it lands (ms)
       for (const d of t.dmg) w.int(d);
       w.int(0); // per-target trailer (mob CRC in the real client); parseDamage skips 4 bytes per target
     }
