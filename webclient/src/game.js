@@ -1504,7 +1504,7 @@ export class Game {
     const rp = this.others.get(a.id);
     let delay = 0;
     if (rp) {
-      rp.attack = this.actionName(a.stance); rp.facingRight = !(a.direction & 0x80);
+      rp.attack = this.actionName(a.action); rp.facingRight = !a.facingLeft;
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
       rp.attackScale = this.attackScale(Math.max(2, Math.min(10, a.speed ?? 6)));
       if (a.skill === BOOMERANG_STEP) {   // unseen for the pose

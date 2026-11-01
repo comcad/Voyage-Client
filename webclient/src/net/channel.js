@@ -553,7 +553,9 @@ export class ChannelSession {
     const readAttack = (kind) => (r) => {
       const id = r.int(), nd = r.ubyte(); r.ubyte();
       const skillLevel = r.ubyte(); const skill = skillLevel ? r.int() : 0;
-      const display = r.ubyte(), direction = r.ubyte(), stance = r.ubyte(), speed = r.ubyte(); r.ubyte();
+      // the action (15 bits) with facing left in the top bit, as the attacker sent it
+      const display = r.ubyte(), act = r.ushort(), speed = r.ubyte(); r.ubyte();
+      const action = act & 0x7fff, facingLeft = !!(act & 0x8000);
       const projectile = r.int();
       const targets = [];
       for (let i = 0; i < (nd >> 4); i++) {
@@ -563,7 +565,7 @@ export class ChannelSession {
         for (let j = 0; j < n; j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
         targets.push({ oid, dmg, crit });
       }
-      this.emit('attack', { kind, id, skill, skillLevel, display, direction, stance, speed, projectile, targets });
+      this.emit('attack', { kind, id, skill, skillLevel, display, action, facingLeft, speed, projectile, targets });
     };
     on(S.CLOSE_RANGE_ATTACK, readAttack('melee'));
     on(S.RANGED_ATTACK, readAttack('ranged'));
@@ -890,7 +892,8 @@ export class ChannelSession {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
     if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
-    w.zero(8).byte(display).byte(facingLeft ? 0x80 : 0).byte(stance);
+    // the action (15 bits) with facing left in the top bit, as one short
+    w.zero(8).byte(display).short((stance & 0x7fff) | (facingLeft ? 0x8000 : 0));
     if (skill === 4211006) {   // Meso Explosion: each monster's own line count, then the mesos used and whom each hit
       w.byte(0).byte(speed).int(Date.now() | 0);
       for (const t of targets) { w.int(t.oid).zero(4).pos(t).pos(t).byte(t.dmg.length); for (const d of t.dmg) w.int(d); w.int(0); }
@@ -900,7 +903,8 @@ export class ChannelSession {
       return;
     }
     if (kind === 'ranged') {
-      w.byte(0).byte(speed).byte(0).byte(facingLeft ? 0x80 : 0).zero(7);
+      // Cosmic passes the 4th byte on in the action's high byte for Hurricane-type skills, so it carries the facing too
+      w.byte(0).byte(speed).byte(0).byte(((stance >> 8) & 0x7f) | (facingLeft ? 0x80 : 0)).zero(7);
       if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.int(charge); // Hurricane / Rapid Fire, Piercing's charge (ms)
     } else {
       w.byte(0).byte(speed).zero(4);
