@@ -16,11 +16,31 @@ export const JOBS = {
 };
 export const jobName = (id) => JOBS[id] || JOBS[Math.floor(id / 10) * 10] || JOBS[Math.floor(id / 100) * 100] || `Job ${id}`;
 
-/** Body action ids as used in attack packets: the order of actions in Character/00002000.img. */
-export const ACTIONS = ['walk1', 'walk2', 'stand1', 'stand2', 'alert', 'swingO1', 'swingO2', 'swingO3', 'swingOF',
-  'swingT1', 'swingT2', 'swingT3', 'swingTF', 'swingP1', 'swingP2', 'swingPF', 'stabO1', 'stabO2', 'stabOF',
-  'stabT1', 'stabT2', 'stabTF', 'shoot1', 'shoot2', 'shootF', 'proneStab', 'prone', 'heal', 'fly', 'jump', 'sit',
-  'ladder', 'rope', 'dead'];
+/**
+ * Body action ids as used in attack packets, in the client's order (not Character/00002000.img's). Some names repeat:
+ * 24-26 are a claw's throws, drawn with swingO1-3.
+ */
+export const ACTIONS = [
+  'walk1', 'walk2', 'stand1', 'stand2', 'alert', 'swingO1', 'swingO2', 'swingO3', 'swingOF', 'swingT1', 'swingT2',
+  'swingT3', 'swingTF', 'swingP1', 'swingP2', 'swingPF', 'stabO1', 'stabO2', 'stabOF', 'stabT1', 'stabT2', 'stabTF',
+  'shoot1', 'shoot2', 'swingO1', 'swingO2', 'swingO3', 'shootF', 'swingO1', 'swingO3', 'stabO1', 'heal', 'proneStab',
+  'prone', 'fly', 'jump', 'ladder', 'rope', 'dead', 'sit', 'tired', 'alert2', 'alert3', 'alert4', 'alert5', 'alert6',
+  'ladder2', 'rope2', 'shoot6', 'magic1', 'magic2', 'magic3', 'magic5', 'burster1', 'burster2', 'savage', 'avenger',
+  'assaulter', 'prone2', 'assassination', 'assassinationS', 'rush', 'rush2', 'brandish1', 'brandish2', 'sanctuary',
+  'meteor', 'paralyze', 'blizzard', 'genesis', 'ninjastorm', 'blast', 'holyshield', 'showdown', 'resurrection',
+  'chainlightning', 'smokeshell', 'handgun', 'somersault', 'straight', 'eburster', 'backspin', 'eorb', 'screw',
+  'doubleupper', 'dragonstrike', 'doublefire', 'triplefire', 'fake', 'airstrike', 'edrain', 'octopus', 'backstep',
+  'shot', 'recovery', 'fireburner', 'coolingeffect', 'fist', 'timeleap', 'rapidfire', 'homing', 'ghostwalk',
+  'ghoststand', 'ghostjump', 'ghostproneStab', 'ghostfly', 'ghostladder', 'ghostrope', 'ghostsit', 'cannon',
+  'torpedo', 'darksight', 'bamboo', 'pyramid', 'wave', 'blade', 'souldriver', 'firestrike', 'flamegear',
+  'stormbreak', 'vampire', 'float', 'swingT2PoleArm', 'swingP1PoleArm', 'swingP2PoleArm', 'doubleSwing',
+  'tripleSwing', 'fullSwingDouble', 'fullSwingTriple', 'overSwingDouble', 'overSwingTriple', 'rollingSpin',
+  'comboSmash', 'comboFenrir', 'comboTempest', 'finalCharge', 'combatStep', 'finalBlow', 'finalToss', 'magicmissile',
+  'dragonSpark', 'dragonBreathe', 'breathe_prepare', 'dragonIceBreathe', 'icebreathe_prepare', 'infinityExplosion',
+  'superMagicmissile', 'illusion', 'magicFlare', 'elementalReset', 'elementalRegistance', 'dragonAura',
+  'magicBooster', 'dragonShield', 'dragonFury', 'dragonFly', 'dragonSkin', 'shockwave', 'demolition', 'snatch',
+  'windspear', 'windshot'
+];
 
 export const INV_NAMES = { 1: 'Equip', 2: 'Use', 3: 'Set-up', 4: 'Etc', 5: 'Cash' };
 export const invType = (id) => Math.floor(id / 1000000);
