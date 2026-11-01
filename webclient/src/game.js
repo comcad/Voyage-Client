@@ -1493,6 +1493,7 @@ export class Game {
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
+    this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
@@ -1529,6 +1530,7 @@ export class Game {
         rp.boomerangUntil = performance.now() + len * rp.attackScale;
       }
       if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic', 'effect', rp.attackScale); else this.playWeaponSound(rp);
+      this.remoteAfterimage(rp, a.skill, a.kind);
       delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
       if (SHAKERS.has(a.skill)) this.startShake(a.skill, 400 - Math.min(400, Math.hypot(rp.x - this.player.x, rp.y - this.player.y)), delay);
     }
@@ -2734,20 +2736,42 @@ export class Game {
     const img = await this.assets.json(`Character/Afterimage/${name}.img`);
     if (this.afterimageName === name) this.afterimage = img;
   }
-  async playAfterimage(action, frame, skillId = 0) {
-    const p = this.player, own = skillId && this.skills?.node(skillId)?.afterimage;
+  async playAfterimage(action, frame, skillId = 0, ent = this.player) {
+    const local = ent === this.player;
+    const name = local ? this.windows?.info(this.weaponId())?.afterImage : ent.look?.weapon?.info?.afterImage;
+    const set = local ? this.afterimage : this.afterimageSet(name);
+    const lv = local ? this.afterimageLevel() : Math.min(10, Math.floor((ent.level || 1) / 10));
+    const own = skillId && (await this.skills?.ensure(skillId))?.afterimage;
     // a skill with its own trail (Dragon Fury's dragon) uses it instead of the weapon's, under the weapon's
     // afterImage name and the pose; with nothing there, no trail at all
-    let node = this.afterimage?.[this.afterimageLevel()]?.[action]?.[frame];
+    let node = set?.[lv]?.[action]?.[frame];
     if (own) {
-      const set = own[this.windows?.info(this.weaponId())?.afterImage]?.[action];
-      node = set && Object.entries(set).find(([, v]) => v && typeof v === 'object' && !Array.isArray(v))?.[1];
+      const sk = own[name]?.[action];
+      node = sk && Object.entries(sk).find(([, v]) => v && typeof v === 'object' && !Array.isArray(v))?.[1];
     }
     const fx = Game.fxNode(node);
     if (!fx) return;
     const anim = new Anim(fx, false);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, follow: p, flip: p.facingRight });
+    this.fx.push({ anim, follow: ent, flip: ent.facingRight });
+  }
+  /** Character/Afterimage/<name>.img, loaded once for everyone who swings that kind of weapon. */
+  afterimageSet(name) {
+    if (!name) return null;
+    const c = (this.afterimages ??= new Map());
+    if (!c.has(name)) { c.set(name, null); this.assets.json(`Character/Afterimage/${name}.img`).then((j) => c.set(name, j)); }
+    return c.get(name);
+  }
+  /** Another player's swing trail: on the trail's frame of their pose, at their attack's speed. */
+  remoteAfterimage(rp, skillId, kind) {
+    const action = rp.attack, look = rp.look;
+    if (!action || !look) return;
+    const set = this.afterimageSet(look.weapon?.info?.afterImage), lv = Math.min(10, Math.floor((rp.level || 1) / 10));
+    const last = Math.max(0, look.frameCount(action) - 1);
+    const keys = Object.keys(set?.[lv]?.[action] || {}).filter((k) => /^\d+$/.test(k)).map(Number);
+    const frame = kind === 'ranged' ? Math.min(1, last) : kind === 'magic' ? last : keys.length ? Math.min(...keys) : last;
+    let t = 0; for (let i = 0; i < frame; i++) t += look.delay(action, i);
+    this.after(t * (rp.attackScale || 1), () => { if (rp.attack === action) this.playAfterimage(action, frame, skillId, rp); });
   }
   /** Run fn after ms of game time (timers pause with the game, unlike setTimeout). */
   after(ms, fn) { if (ms <= 0) fn(); else (this.timers ??= []).push({ t: ms / 1000, fn }); }
