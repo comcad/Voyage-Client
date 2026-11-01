@@ -89,7 +89,7 @@ export class GameMap {
     this.data = data;
     this.info = data.info || {};
     this.fh = new Footholds(data.foothold);
-    this.ladders = Object.values(data.ladderRope || {});
+    this.ladders = Object.entries(data.ladderRope || {}).map(([id, l]) => ({ ...l, id: Number(id) }));   // the id goes in movement
 
     // Bounds: VR* when present, else derived from footholds.
     const i = this.info;

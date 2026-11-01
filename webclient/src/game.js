@@ -4294,7 +4294,9 @@ export class Game {
     this.movePos = { x: p.x, y: p.y };
     if (Math.abs(p.x - prev.x) > 300 || Math.abs(p.y - prev.y) > 300) { this.flushMovement(true); this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; return; }
     const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round((p.x - prev.x) / dt), vy: Math.round((p.y - prev.y) / dt),
-      fh: p.ladder ? 0 : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000, held: !!p.ladder };
+      // on a ladder or rope its id, negative: those watching put you on it, in its layer (0 would leave you in the
+      // layer of the last floor, sometimes behind it)
+      fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000, held: !!p.ladder };
     const last = this.moveBuf[this.moveBuf.length - 1];
     if (last && last.cmd === 0 && last.fh === el.fh && last.stance === el.stance && Math.sign(last.vx) === Math.sign(el.vx) && Math.sign(last.vy) === Math.sign(el.vy)) {
       Object.assign(last, { x: el.x, y: el.y, vx: el.vx, vy: el.vy }); last.duration += el.duration;
