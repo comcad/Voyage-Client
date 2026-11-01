@@ -258,12 +258,68 @@ const DRAGONS_BREATH = new Set([3121003, 3221003]), POWER_KNOCKBACK = new Set([3
 const MORTAL_BLOWS = [3110001, 3210001], SNIPE = 3221007, SOUL_ARROWS = [3101004, 3201004, 13101003];
 const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have used up all of your arrows.',
   147: 'You have used up all of your throwing-stars.', 149: 'You do not have enough bullets to use this skill.' };
-/** DEX's multiplier for a bow's or crossbow's shot; a swing with either is DEX x 3.4 + STR over 150, without mastery. */
-const SHOT_MULT = { 145: 3.4, 146: 3.6 };
-/** Mastery skills per weapon, explorer then Cygnus: the expert one (Bow Expert, Marksman Boost) replaces the first once learned. */
-const MASTERY_SKILLS = { 145: [[3100000, 3120005], [13100000, 13110003]], 146: [[3200000, 3220004]] };
 /** Inferno and Blizzard count a weak or strong monster's element at only x% of the usual. */
 const PART_ELEMENT = new Set([3111003, 3211003]), BLIZZARD = 3211003;
+/**
+ * Skills whose damage follows their own rules, kept to the plain roll: Shadow Meso, Assassinate, Ninja Storm, Heaven's
+ * Hammer, Charged Blow, Combo Tempest, Bamboo Rain / Thrust and Rage of Pharaoh.
+ */
+const OWN_DAMAGE = new Set([4111004, 4221001, 4121008, 1221011, 1211002, 21120006, 1009, 10001009, 20001009, 20011009, 1020,
+  10001020, 20001020, 20011020]);
+/** Blows that go through a monster's defence: Sacrifice, Shadow Meso, Assaulter, Demolition. */
+const IGNORE_DEFENCE = new Set([1311005, 4111004, 4211002, 5121004]);
+const LUCKY_SEVENS = new Set([4001344, 4121007, 14001004, 14111005]), BARRAGES = new Set([5121007, 15111004]);
+/**
+ * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
+ * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
+ * DEX for Somersault Kick / Double Shot); lying down any other weapon jabs for STR + DEX over 200. Axes, blunt weapons,
+ * wands and staves hit harder swung, spears stabbed and polearms swung.
+ */
+function weaponDamage(cat, shot, pose, skillId, job) {
+  const swing = /^swing[OTP]/.test(pose || '');
+  if (!shot && (cat === 45 || cat === 46)) return { main: 'dex', mult: 3.4, sec: ['str'], div: 150 };
+  if (!shot && cat === 47 && skillId !== 4221001 && skillId !== 4121008 && skillId !== 14101006 && skillId !== 14111006) return { main: 'luk', mult: 1, sec: ['str', 'dex'], div: 150 };
+  if (!shot && cat === 49 && ![5201002, 5221003, 5221007, 5221008].includes(skillId) && pose !== 'fireburner' && pose !== 'coolingeffect') {
+    return pose === 'somersault' || pose === 'straight' ? { main: 'dex', mult: 1.8, sec: ['str'], div: 100 } : { main: 'dex', mult: 1, sec: ['str'], div: 200 };
+  }
+  if (pose === 'proneStab') return { main: 'str', mult: 1, sec: ['dex'], div: 200 };
+  const str = (mult) => ({ main: 'str', mult, sec: ['dex'], div: 100 });
+  switch (cat) {
+    case 30: return str(4.0);
+    case 33: return Math.floor((job % 1000) / 100) === 4 ? { main: 'luk', mult: 3.6, sec: ['str', 'dex'], div: 100 } : str(4.0);
+    case 31: case 32: case 37: case 38: return str(swing ? 4.4 : 3.2);
+    case 40: return str(4.6);
+    case 41: case 42: return str(swing ? 4.8 : 3.4);
+    case 43: case 44: return str(skillId === DRAGON_ROAR ? 4.0 : (cat === 43) === swing ? 3.0 : 5.0);
+    case 45: return { main: 'dex', mult: 3.4, sec: ['str'], div: 100 };
+    case 46: case 49: return { main: 'dex', mult: 3.6, sec: ['str'], div: 100 };
+    case 47: return LUCKY_SEVENS.has(skillId) ? { main: 'luk', mult: 5, sec: [], div: 100, mastery: 0.5 } : { main: 'luk', mult: 3.6, sec: ['str', 'dex'], div: 100 };
+    case 48: return str(4.8);
+    default: return null;
+  }
+}
+/**
+ * The mastery skills for a weapon, used shooting (shot) or up close: [explorer, Cygnus...] lists where the first
+ * learned counts, `plus` ones added (Beholder), `over` ones that replace them (Bow Expert, Marksman Boost, High Mastery).
+ */
+function masterySkills(cat, shot, skillId, job) {
+  const close = !shot;
+  switch (cat) {
+    case 30: case 40: return close || skillId === 11101004 ? { first: [1100000, 1200000, 11100000] } : null;
+    case 31: case 41: return close ? { first: [1100001] } : null;
+    case 32: case 42: return close ? { first: [1200001] } : null;
+    case 33: return close ? { first: [4200000] } : null;
+    case 43: return close ? { first: [1300000], plus: [1321007] } : null;
+    case 44: if (!close && ![21100004, 21110004, 21120006].includes(skillId)) return null;
+      return Math.floor(job / 100) === 21 || job === 2000 ? { first: [21100000], over: [21120001] } : { first: [1300001], plus: [1321007] };
+    case 45: return shot ? { first: [3100000, 13100000], over: [3120005, 13110003] } : null;
+    case 46: return shot ? { first: [3200000], over: [3220004] } : null;
+    case 47: return shot || skillId === 14111006 ? { first: [4100000, 14100000] } : null;
+    case 48: return close || skillId === 5121002 || skillId === 15111007 ? { first: [5100001, 15100001] } : null;
+    case 49: return shot || skillId === 5221003 ? { first: [5200000] } : null;
+    default: return null;
+  }
+}
 /** A shot's arrows fly 1200px a second. */
 const flightMs = (dx) => Math.abs(dx) / 1.2;
 /** Time between one shot's arrows: Strafe 60ms, throwing stars 120ms, Double Shot (gun) and Burst Fire 240ms. */
@@ -2245,11 +2301,12 @@ export class Game {
     let knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
     if (POWER_KNOCKBACK.has(skillId)) knockback += ld?.prop || 0;
     if (DRAGONS_BREATH.has(skillId)) knockback = ld?.prop || 0;
-    const bow = (wcat === 145 || wcat === 146) && skillId !== SNIPE && !ld?.fixdamage && (kind === 'ranged' || kind === 'melee');
+    const phys = !!weapon && skillId !== SNIPE && !ld?.fixdamage && !OWN_DAMAGE.has(skillId) && (kind === 'ranged' || kind === 'melee')
+      && !!weaponDamage(wcat % 100, kind === 'ranged', pose, skillId, this.stats?.job || 0);
     const out = targets.map((m) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
-        if (bow) { const h = this.bowHit(m, wcat, skillId, lv, ld, kind === 'ranged', ammo, crit, opts.charge); dmg.push(h.d); crits.push(h.c); continue; }
+        if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
         const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
         dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
       }
@@ -2856,31 +2913,39 @@ export class Game {
     return base + Math.floor((base * mw) / 100) + this.equipStat(k);
   }
   /**
-   * One damage line of a bow or crossbow, shot or swung, on monster m:
+   * One damage line of a physical attack (shot or close up) on monster m:
    *  - it misses when your accuracy x 100 / (255 + 10 per level the monster has over you), times 0.7-1.3, is under
-   *    its avoid;
-   *  - DEX is rolled between DEX x mastery and DEX (mastery: (mastery skill's value x 5 + 10)% x 0.9; a swing has
-   *    none); a shot does (DEX x 3.4 for a bow, 3.6 for a crossbow + STR) x attack / 100, a swing (DEX x 3.4 + STR)
-   *    x attack / 150;
+   *    its avoid (a GM never misses);
+   *  - the weapon's main stat is rolled between it x mastery and itself (mastery: (the mastery skill's value x 5 +
+   *    10)% x 0.9), then (main x the weapon's multiplier + its other stats) x attack / 100 (see weaponDamage);
    *  - 1% less per level the monster has over you; its element: weak x1.5, strong x0.5, immune x0 (for Inferno and
    *    Blizzard only x% of that change); less 50-60% of its defence;
    *  - then the skill's damage %, and a critical adds its extra % of the line before the skill's %; Blizzard can't
-   *    crit. Piercing Arrow does (charge ms x 90 / 1000 + 10)% of that.
+   *    crit. Barrage's 5th line does double and its 6th four times; a charged skill (Piercing Arrow) does
+   *    (charge ms x 90 / its longest charge + 10)%.
    */
-  bowHit(m, wcat, skillId, lv, ld, shot, ammoId, crit, charge = 0) {
-    const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now();
-    const dex = this.totalStat('dex'), str = this.totalStat('str'), luk = this.totalStat('luk');
-    const over = Math.max(0, (info.level || 0) - (this.stats?.level || 1));
-    const accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
-    const acc = Math.min(999, Math.max(0, Math.floor(dex * 0.8 + luk * 0.5) + this.equipStat('acc') + accBuff));
-    const hit = (acc * 100) / (over * 10 + 255);
-    if (rand(hit * 0.7, hit * 1.3) < Math.min(999, Math.max(0, info.eva || 0))) return { d: 0, c: false };
-    let mastery = 0;
-    const cygnus = Math.floor((this.stats?.job || 0) / 1000) === 1;
-    const pair = shot && (MASTERY_SKILLS[wcat]?.[cygnus ? 1 : 0] || MASTERY_SKILLS[wcat]?.[0]);
-    if (pair) mastery = this.skills.levelData(pair[1])?.mastery || this.skills.levelData(pair[0])?.mastery || 0;
-    const roll = rand(dex * (mastery * 5 + 10) * 0.009, dex);
-    let d = shot ? ((roll * SHOT_MULT[wcat] + str) * this.shotWatk(ammoId)) / 100 : ((roll * 3.4 + str) * this.shotWatk(0)) / 150;
+  physicalHit(m, cat, skillId, ld, shot, pose, ammoId, crit, charge = 0, line = 0) {
+    const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now(), job = this.stats?.job || 0;
+    const gm = Math.floor((job % 1000) / 100) === 9;
+    const over = gm ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
+    if (!gm) {
+      const accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
+      const acc = Math.min(999, Math.max(0, Math.floor(this.totalStat('dex') * 0.8 + this.totalStat('luk') * 0.5) + this.equipStat('acc') + accBuff));
+      const hit = (acc * 100) / (over * 10 + 255);
+      if (rand(hit * 0.7, hit * 1.3) < Math.min(999, Math.max(0, info.eva || 0))) return { d: 0, c: false };
+    }
+    const f = weaponDamage(cat, shot, pose, skillId, job);
+    let mastery = f.mastery;
+    if (mastery === undefined) {
+      const ms = masterySkills(cat, shot, skillId, job), val = (id) => (this.skills.level(id) ? this.skills.levelData(id)?.mastery || 0 : 0);
+      const over = (ms?.over || []).map(val).find((v) => v) || 0;
+      const first = (ms?.first || []).map(val).find((v) => v) || 0;
+      const v = over || first + (ms?.plus || []).reduce((a, id) => a + val(id), 0);
+      mastery = (v * 5 + 10) * 0.009;
+    }
+    const main = this.totalStat(f.main), roll = rand(main * mastery, main);
+    let d = ((roll * f.mult + f.sec.reduce((a, k) => a + this.totalStat(k), 0)) * this.attackWatk(shot ? ammoId : 0)) / f.div;
+    if ((skillId === 5211004 || skillId === 5211005) && Math.floor(ammoId / 1000) !== (skillId === 5211004 ? 2331 : 2332)) d *= 0.5;
     if (over) d = ((100 - over) * d) / 100;
     const elem = skillId && this.skills.node(skillId)?.elemAttr;
     const vs = elem && new RegExp(`${elem.toUpperCase()}(\\d)`).exec(info.elemAttr || '')?.[1];
@@ -2888,16 +2953,17 @@ export class Game {
       const p = PART_ELEMENT.has(skillId) ? (ld?.x || 0) / 100 : 1;
       d = vs === '1' ? d * (1 - p) : vs === '2' ? d * (1 - p * 0.5) : vs === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
     }
-    const pdd = Math.min(1999, Math.max(0, info.PDDamage || 0));
+    const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
     const base = Math.trunc(d - rand(pdd * 0.5, pdd * 0.6));
     d = ld?.damage ? (base * ld.damage) / 100 : base;
     const c = !!crit && skillId !== BLIZZARD && Math.random() * 100 < crit.rate;
     if (c) d += (crit.dmg * base) / 100;
     if (charge) d = (d * ((charge * 90) / PIERCE_HOLD + 10)) / 100;
+    if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
     return { d: Math.max(1, Math.trunc(d)), c };
   }
-  /** Weapon attack for a shot: equipment, attack buffs, Bow Expert / Marksman Boost and the arrow's own, at most 1999. */
-  shotWatk(ammoId) {
+  /** Weapon attack: equipment, attack buffs, Bow Expert / Marksman Boost and a shot's ammo, at most 1999. */
+  attackWatk(ammoId) {
     const now = Date.now();
     let w = this.watk() + Math.max(0, ...(this.buffs || []).filter((b) => b.watk && b.until > now).map((b) => b.watk));
     for (const id of [3120005, 3220004]) if (this.skills.owns(id)) w += this.skills.levelData(id)?.x || 0;
