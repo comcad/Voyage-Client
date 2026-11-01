@@ -261,10 +261,10 @@ const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have u
 /** Inferno and Blizzard count a weak or strong monster's element at only x% of the usual. */
 const PART_ELEMENT = new Set([3111003, 3211003]), BLIZZARD = 3211003;
 /**
- * Skills whose damage follows their own rules, kept to the plain roll: Shadow Meso, Assassinate, Ninja Storm, Heaven's
- * Hammer, Charged Blow, Combo Tempest, Bamboo Rain / Thrust and Rage of Pharaoh.
+ * Skills whose damage follows their own rules, kept to the plain roll: Shadow Meso, Assassinate, Ninja Storm, Combo
+ * Tempest, Bamboo Rain / Thrust and Rage of Pharaoh.
  */
-const OWN_DAMAGE = new Set([4111004, 4221001, 4121008, 1221011, 1211002, 21120006, 1009, 10001009, 20001009, 20011009, 1020,
+const OWN_DAMAGE = new Set([4111004, 4221001, 4121008, 21120006, 1009, 10001009, 20001009, 20011009, 1020,
   10001020, 20001020, 20011020]);
 /** Blows that go through a monster's defence: Sacrifice, Shadow Meso, Assaulter, Demolition. */
 const IGNORE_DEFENCE = new Set([1311005, 4111004, 4211002, 5121004]);
@@ -279,6 +279,33 @@ const FINISHERS = new Set([1111003, 1111004, 1111005, 1111006, 11111002, 1111100
  * 300% at a quarter alpha over 300ms. Panic and Coma need an orb, Enrage nine.
  */
 const COMBO_MASK = 0x20000000000000n, ORB_RADIUS = 40, ORB_TURN_MS = 2000, ENRAGE = 1121010;
+/**
+ * Rush: when it strikes something you dash ahead along the floor, 30ms a step: three steps of lt/8 px (31 at 250),
+ * then six slowing by a fifth each; the monsters struck are thrown to 250-269px + 35px ahead of where you started.
+ * It can't be used again for 1.77s, nor where the map forbids movement skills.
+ */
+const RUSH_DASH = new Set([1121006, 1221007, 1321003]), RUSH_LOCK = 1770, DASH_TICK = 30;
+/** Skills a map that forbids movement skills (fieldLimit 0x2) refuses: Rush, Assaulter, Assassinate, Ninja Storm, the Brawler / Thunder Breaker dashes, Snatch and the Aran's. */
+const MOVE_LIMITED = new Set([1121006, 1221007, 1321003, 4211002, 4221001, 4121008, 5101002, 5101004, 15101003, 5121005,
+  21100002, 21110003, 21110006]);
+/**
+ * Final Attack: a skill's finalAttack data lists which Final Attack skills can follow it and with which weapon types.
+ * One learned (Dawn Warrior's and Wind Archer's need their buff on) goes off at its prop chance a third of the way from
+ * the blow to the end of the pose, if you still hold that kind of weapon, in the weapon's final pose (a bow's shot 65px out).
+ */
+const FINAL_POSES = { 1: ['swingOF', 'stabOF'], 2: ['swingPF', 'stabTF'], 3: ['shootF'], 5: ['swingTF', 'stabOF'] };
+const BUFFED_FINALS = new Set([11101002, 13101002]);
+/** White Knight / Paladin / Dawn Warrior charges and their element: the charge's damage %, then its element at z%. */
+const CHARGES = { 1211003: 'F', 1211004: 'F', 1211005: 'I', 1211006: 'I', 1211007: 'L', 1211008: 'L', 1221003: 'H', 1221004: 'H',
+  11111007: 'H' };
+const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 1221011;
+/**
+ * Skills that shake the screen when they land (with the SHAKE UP option on): Shout by 400/15 px, easing by 15% each
+ * 30ms step, for 1.5s at most; Dragon Roar, Super Dragon Roar, Bamboo Rain and Rage of Pharaoh by 400/25, easing by 8%,
+ * for 2s. Another player's shakes you less the farther they are (400 less the distance, up to 400px).
+ */
+const SHOUT = 1111008;
+const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
@@ -1119,6 +1146,8 @@ export class Game {
         for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
       }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
+      // damage the server deals by itself (Heaven's Hammer...): its number over the monster
+      mobDamaged: later((oid, dmg) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.vfx?.damage(m, [dmg], 'red'); }),
       spawnMob: later((m) => this.spawnLife('Mob', m, false)),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
@@ -1323,6 +1352,7 @@ export class Game {
       this.map = map;
       this.charging = null;   // a skill being charged doesn't carry over
       this.keydown = null;
+      this.rush = null;
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
@@ -1446,6 +1476,7 @@ export class Game {
       rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
       if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
       delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
+      if (SHAKERS.has(a.skill)) this.startShake(a.skill, 400 - Math.min(400, Math.hypot(rp.x - this.player.x, rp.y - this.player.y)), delay);
     }
     // only a spell with a ball is shot; one without lands where it is
     const ball = a.kind === 'magic' && a.skill && this.skills ? this.skills.ensure(a.skill).then((n) => !!n?.ball) : Promise.resolve(false);
@@ -1921,6 +1952,7 @@ export class Game {
     this.updateDrops(dt);
     this.updateFx(dt);
     this.runTimers(dt);
+    if (this.shake) this.shakeStep(dt);
     this.loadAfterimage();
     this.handleHotkeys();
     if (this.net) { this.syncMovement(dt); this.puppetAggro(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
@@ -2026,6 +2058,11 @@ export class Game {
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
     if (p.regrabT > 0) p.regrabT -= dt;
 
+    // Rush's dash, on the 30ms clock
+    if (this.rush) {
+      this.rush.acc += dt * 1000;
+      while (this.rush && this.rush.acc >= DASH_TICK) { this.rush.acc -= DASH_TICK; this.rushStep(); }
+    }
     // charging (Monster Magnet, Big Bang) or winding up (Explosion): stand in its pose until the key is let go, or
     // the wind-up is over
     if (this.charging) {
@@ -2244,6 +2281,10 @@ export class Game {
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
     if (FINISHERS.has(id) && this.comboValue() < 2) return false;
     if (id === ENRAGE && this.comboValue() < 10) return false;
+    // Charged Blow needs a charge on; Rush waits 1.77s after the last; movement skills not on maps that forbid them
+    if (id === CHARGED_BLOW && !this.activeCharge()) return false;
+    if (RUSH_DASH.has(id) && performance.now() < (this.rushLock || 0)) return false;
+    if (MOVE_LIMITED.has(id) && ((this.map?.info?.fieldLimit || 0) & 2)) return false;
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -2281,6 +2322,7 @@ export class Game {
         else { if (opts.held) return false; kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0; }
       } else if (close) from = this.closeReach(s);
     }
+    if (opts.from !== undefined) from = opts.from;
     const lv = skillId ? sb.level(skillId) : 0;
     const ld = skillId ? sb.levelData(skillId, lv) : null;
     if (skillId && this.net) {
@@ -2293,7 +2335,7 @@ export class Game {
     if (kind === 'special') return this.castSpecial(skillId, lv);
 
     if (!opts.held) {
-      const action = prone ? 'proneStab' : swing || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
+      const action = prone ? 'proneStab' : swing || opts.pose || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
       p.attack = this.look.has(action) ? action : this.look.attackAction();
       p.frame = 0; p.frameT = 0; p.action = p.attack;
       p.attackScale = this.attackScale();
@@ -2326,12 +2368,17 @@ export class Game {
     let knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
     if (POWER_KNOCKBACK.has(skillId)) knockback += ld?.prop || 0;
     if (DRAGONS_BREATH.has(skillId)) knockback = ld?.prop || 0;
+    // a Paladin's Charged Blow does Advanced Charge's damage % once it is learned
+    const cbLd = skillId === CHARGED_BLOW && this.stats?.job === 122 && sb.level(ADVANCED_CHARGE)
+      ? { ...ld, damage: sb.levelData(ADVANCED_CHARGE)?.damage || ld?.damage } : null;
     const phys = !!weapon && skillId !== SNIPE && !ld?.fixdamage && !OWN_DAMAGE.has(skillId) && (kind === 'ranged' || kind === 'melee')
       && !!weaponDamage(wcat % 100, kind === 'ranged', pose, skillId, this.stats?.job || 0);
     let out = targets.map((m, place) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
-        if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
+        // Heaven's Hammer strikes for 1: the server does its real damage a moment later
+        if (skillId === HEAVENS_HAMMER) { dmg.push(1); crits.push(false); continue; }
+        if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, cbLd || ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
         if (fixedPhys) { dmg.push(this.fixedMiss(m) ? 0 : ld.fixdamage); crits.push(false); continue; }
         const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
         dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
@@ -2352,11 +2399,11 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
           this.after(lineDelay(skillId, t.dmg.length - 1), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -2371,7 +2418,76 @@ export class Game {
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(), charge });
+    if (RUSH_DASH.has(skillId) && out.length) this.startRush(ld, out.map((t) => t.mob));
+    if (SHAKERS.has(skillId)) this.startShake(skillId, 400, hitDelay);
+    if (skillId && !opts.final && !opts.held) this.rollFinalAttack(skillId, wcat % 100, hitDelay, pose, scale);
     return true;
+  }
+
+  /** The screen shake of a skill landing (see SHAKERS); `near` is 400 for your own, 400 less the distance for another's. */
+  startShake(skillId, near, delay) {
+    if (!settings.shake || near <= 0) return;
+    const shout = skillId === SHOUT;
+    this.after(delay, () => { this.shake = { s: near / (shout ? 15 : 25), f: shout ? 0.85 : 0.92, left: shout ? 1500 : 2000, acc: 0, dx: 0, dy: 0 }; });
+  }
+  shakeStep(dt) {
+    const k = this.shake;
+    k.acc += dt * 1000; k.left -= dt * 1000;
+    while (k.acc >= DASH_TICK && this.shake) {
+      k.acc -= DASH_TICK;
+      const r = Math.trunc(k.s);
+      k.dx = r ? Math.floor(Math.random() * (2 * r)) - r : 0; k.dy = r ? Math.floor(Math.random() * (2 * r)) - r : 0;
+      k.s *= k.f;
+      if (k.s < 1 || k.left <= 0) this.shake = null;
+    }
+  }
+  /** Rush: dash ahead (see RUSH_DASH) and throw the monsters struck ahead of where you started. */
+  startRush(ld, mobs) {
+    const p = this.player, dir = p.facingRight ? 1 : -1, v = dir * Math.abs(Math.trunc((ld?.lt?.[0] || 0) / 8));
+    this.rush = { steps: [{ type: 0, v, ms: 90 }, { type: 2, v, ms: 180 }], acc: 0 };
+    this.rushLock = performance.now() + RUSH_LOCK;
+    const reach = -(ld?.lt?.[0] || 0);
+    for (const m of mobs) if (!m.src?.info?.boss) m.pull = { x: p.x + dir * (Math.floor(Math.random() * 20) + reach + 35), stop: 0 };
+  }
+  /** One 30ms step of the dash: along the floor within the step's length up or down, or the dash ends. */
+  rushStep() {
+    const r = this.rush, p = this.player, step = r.steps[0];
+    if (!step) { this.rush = null; return; }
+    if (step.ms <= 0) { r.steps.shift(); return this.rushStep(); }
+    step.ms -= DASH_TICK;
+    if (!step.v) { this.rush = null; return; }
+    if (step.type === 2) step.v = Math.trunc(step.v * 0.8);
+    const x = p.x + step.v, reach = Math.max(Math.abs(step.v), step.type === 2 ? 0 : 30);
+    const down = this.map.fh.below(x, p.y, reach), up = this.map.fh.below(x, p.y - reach, reach);
+    const dy = (f) => (f ? Math.abs(Footholds.yAt(f, x) - p.y) : Infinity), fh = dy(down) <= dy(up) ? down : up;
+    if (!fh) { this.rush = null; return; }
+    p.x = x; p.y = Footholds.yAt(fh, x); p.fh = fh;
+  }
+  /**
+   * A skill's Final Attack (see FINAL_POSES): the first learned one listed for the weapon you hold, at its prop chance,
+   * a third of the way from the blow to the end of the pose.
+   */
+  rollFinalAttack(skillId, wtype, hitDelay, pose, scale) {
+    const sb = this.skills, list = sb.node(skillId)?.finalAttack;
+    if (!list) return;
+    const now = Date.now(), wpn = this.weaponId();
+    for (const [id, types] of Object.entries(list)) {
+      const fa = Number(id), ld = sb.level(fa) && sb.levelData(fa);
+      if (!ld || !Object.values(types).includes(wtype)) continue;
+      if (BUFFED_FINALS.has(fa) && !this.buffs.some((b) => b.source === fa && b.until > now)) continue;
+      if (Math.floor(Math.random() * 101) > (ld.prop || 0)) return;
+      let total = 0;
+      for (let i = 0; i < this.look.frameCount(pose); i++) total += this.look.delay(pose, i);
+      const at = hitDelay + (total * scale - hitDelay) / 3;
+      this.after(at, () => {
+        if (this.dead || this.weaponId() !== wpn) return;
+        const ranged = RANGED_WEAPONS.has(Math.floor(wpn / 10000));
+        const poses = (FINAL_POSES[this.look.weapon?.info?.attack] || []).filter((a) => this.look.has(a));
+        const finalPose = poses[Math.floor(Math.random() * poses.length)];
+        this.attack(fa, ranged ? 'ranged' : 'melee', { final: true, pose: finalPose, from: ranged ? 65 : undefined });
+      });
+      return;
+    }
   }
 
   /** Chain Lightning's bolt from one link to the next, timed to arrive as the hit lands. */
@@ -2494,7 +2610,7 @@ export class Game {
       }
       return false;
     };
-    const reached = this.liveMobs().filter(reaches).slice(0, n);
+    const reached = this.liveMobs().filter((m) => !m.src?.info?.damagedByMob && reaches(m)).slice(0, n);   // escorted monsters can't be caught
     const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
     for (const [m, ok] of caught) if (ok) m.pull = { x: p.x, stop: (m.node?._w || 40) + 45 };
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
@@ -2947,6 +3063,11 @@ export class Game {
    * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
    * and +24 to +40 from six to ten. Panic and Coma climb faster.
    */
+  /** The White Knight / Paladin / Dawn Warrior charge on you: { id, ld, elem } or null. */
+  activeCharge() {
+    const now = Date.now(), b = (this.buffs || []).find((x) => CHARGES[x.source] && x.until > now);
+    return b ? { id: b.source, ld: this.skills.levelData(b.source) || {}, elem: CHARGES[b.source] } : null;
+  }
   /** Combo Attack's value while it is on: 1 + the orbs held (0 when it is off). */
   comboValue() { const now = Date.now(); return (this.buffs || []).find((b) => b.combo && b.until > now)?.combo || 0; }
   /** The orbs of whoever holds `value` (1 + orbs) round them, the ring centred 35px over their feet. */
@@ -3045,6 +3166,13 @@ export class Game {
     if (vs) {
       const p = PART_ELEMENT.has(skillId) ? (ld?.x || 0) / 100 : 1;
       d = vs === '1' ? d * (1 - p) : vs === '2' ? d * (1 - p * 0.5) : vs === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
+    }
+    // a charge: its damage %, then its element at z% of the usual
+    const held = this.activeCharge();
+    if (held) {
+      d = (d * (held.ld.damage || 100)) / 100;
+      const cv = new RegExp(`${held.elem}(\\d)`).exec(info.elemAttr || '')?.[1], p = (held.ld.z || 0) / 100;
+      d = cv === '1' ? d * (1 - p) : cv === '2' ? d * (1 - p * 0.5) : cv === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
     }
     const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
     const base = Math.trunc(d - rand(pdd * 0.5, pdd * 0.6));
@@ -3774,7 +3902,7 @@ export class Game {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
     if (this.inCashShop) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H); this.windows?.draw(ctx); return; }
-    const cam = { ...this.cam, x: Math.round(this.cam.x), y: Math.round(this.cam.y) };
+    const cam = { ...this.cam, x: Math.round(this.cam.x) + (this.shake?.dx || 0), y: Math.round(this.cam.y) + (this.shake?.dy || 0) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     map.drawBacks(ctx, cam, false);
