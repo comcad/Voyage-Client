@@ -18,15 +18,17 @@ const SETS = { red: ['NoRed1', 'NoRed0'], crit: ['NoCri1', 'NoCri0'], violet: ['
 // damage numbers, as openms recovered the original: opaque for 400ms, fading over the next 600, rising 30px
 const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
 /**
- * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish's blows are
- * 80ms late, its second a further 160 (240 with a two-handed weapon) on top.
+ * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish, Assassinate
+ * and Boomerang Step wait 80ms more per line and their second line longer still: 160 (Brandish with a one-handed
+ * weapon) or 240.
  */
 export function lineDelay(skillId, line, weaponId = 0) {
   if ([5101004, 15101003, 5121007, 15111004].includes(skillId)) return 0;   // these all show at once
   if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
-  if (skillId === 1121008 || skillId === 11111004) {
-    const twoHanded = [140, 141].includes(Math.floor(weaponId / 10000));
-    return 80 * (line + 1) + line * 120 + (line ? (twoHanded ? 160 : 80) : 0);
+  const brandish = skillId === 1121008 || skillId === 11111004;
+  if (brandish || skillId === 4221001 || skillId === 4221007) {
+    const second = brandish && ![140, 141].includes(Math.floor(weaponId / 10000)) ? 160 : 240;
+    return 80 * (line + 1) + line * 120 + (line ? second - 80 : 0);
   }
   return line * 120;
 }
