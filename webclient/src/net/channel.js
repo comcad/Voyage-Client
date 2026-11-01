@@ -504,7 +504,7 @@ export class ChannelSession {
         r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
         if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, combo, hidden: !!(hiMask & 0x400) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -692,6 +692,7 @@ export class ChannelSession {
       const id = r.int(), m1 = r.long(), m2 = r.long();
       // Dark Sight or Wind Walk: drawn see-through
       if (BigInt.asUintN(64, m2) & 0x40000000000n || BigInt.asUintN(64, m1) & 0x400000000n) { this.emit('foreignHidden', id); return; }
+      if (BigInt.asUintN(64, m2) & 0x400000000000000n) { this.emit('foreignPartner', id); return; }   // Shadow Partner
       // Combo Attack alone: its value is 1 + the orbs held
       if (BigInt.asUintN(64, m2) === 0x20000000000000n && BigInt.asUintN(64, m1) === 0n && r.available >= 2) { this.emit('foreignCombo', id, r.short()); return; }
       if (BigInt.asUintN(64, m2) & 0x4000000000000n && r.available >= 2) r.short();   // Disease.POISON's value

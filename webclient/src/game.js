@@ -317,6 +317,8 @@ const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
+/** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
+const SHADOW_PARTNERS = [4111002, 14111000], SP_MASK = 0x400000000000000n, NO_PARTNER = new Set([4121003, 14101006]);
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
  * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
@@ -1190,7 +1192,9 @@ export class Game {
         if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
         if (rp && BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
         if (rp && (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK)) rp.hidden = false;
+        if (rp && BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
       }),
+      foreignPartner: later((id) => { const rp = this.others.get(id); if (rp) rp.partner = true; }),
       foreignHidden: later((id) => { const rp = this.others.get(id); if (rp) rp.hidden = true; }),
       foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
@@ -1469,7 +1473,7 @@ export class Game {
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
-    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden;
+    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
@@ -1511,6 +1515,7 @@ export class Game {
         const ld = a.skill ? this.skills.levelData(a.skill, a.skillLevel) : null;
         const mobs = a.targets.map((t) => this.lifeByOid.get(t.oid)).filter((e) => e && !e.pending);
         const shot = this.shotPlan(rp, a.skill, a.skillLevel, ld, ld?.range || 400, 0, mobs);
+        shot.partner = !!rp.partner && !NO_PARTNER.has(a.skill);
         this.shotFx(shot, rp, a.skill, ld, a.projectile, delay);
         return shot;
       })
@@ -2320,7 +2325,7 @@ export class Game {
     if (id === CHARGED_BLOW && !this.activeCharge()) return false;
     if (RUSH_DASH.has(id) && performance.now() < (this.rushLock || 0)) return false;
     if (MOVE_LIMITED.has(id) && ((this.map?.info?.fieldLimit || 0) & 2)) return false;
-    if (id === SHADOW_MESO && this.meso < (sb.levelData(id)?.moneyCon || 0)) { this.notice("You don't have enough mesos to use this skill."); return false; }
+    if (id === SHADOW_MESO && this.meso < Math.trunc(((sb.levelData(id)?.moneyCon || 0) * (100 + (this.partner()?.y || 0))) / 100)) { this.notice("You don't have enough mesos to use this skill."); return false; }
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -2399,8 +2404,11 @@ export class Game {
 
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
-    const lines = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
-    const ammo = kind === 'ranged' ? this.ammoItem(ld?.bulletConsume || ld?.bulletCount || 1) : 0;
+    // Shadow Partner throws as many again: its lines follow yours, at y% of them (x% for a plain throw)
+    const sp = kind === 'ranged' && !NO_PARTNER.has(skillId) ? this.partner() : null;
+    const base = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
+    const lines = sp ? Math.min(15, base * 2) : base, half = Math.floor(lines / 2);
+    const ammo = kind === 'ranged' ? this.ammoItem((ld?.bulletConsume || ld?.bulletCount || 1) * (sp ? 2 : 1)) : 0;
     const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
     const kept = opts.prefer && opts.prefer.alive && !opts.prefer.dying && !opts.prefer.queuedKill ? [opts.prefer] : null;
     const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
@@ -2432,6 +2440,12 @@ export class Game {
     let out = targets.map((m, place) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
+        if (sp && i >= half) {
+          const src = dmg[i - half], info = m.src?.info || {};
+          const missed = this.accuracyMiss(info, Math.max(0, (info.level || 0) - (this.stats?.level || 1)));
+          dmg.push(src > 0 && !missed ? this.partnerHit(src, (skillId ? sp.y : sp.x) || 0) : 0); crits.push(crits[i - half]);
+          continue;
+        }
         // Heaven's Hammer strikes for 1: the server does its real damage a moment later
         if (skillId === HEAVENS_HAMMER) { dmg.push(1); crits.push(false); continue; }
         if (mx) { dmg.push(...mx.damage(m)); crits.push(...dmg.map(() => false)); break; }
@@ -2469,7 +2483,7 @@ export class Game {
       else this.after(hitDelay + hitWave(i, kind, skillId), land);
       if (skillId === CHAIN_LIGHTNING) this.boltAt(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : p, t.mob, skillId);
     }
-    if (plan) this.shotFx(plan, p, skillId, ld, ammo, hitDelay);
+    if (plan) { plan.partner = !!sp; this.shotFx(plan, p, skillId, ld, ammo, hitDelay); }
     else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
@@ -3208,8 +3222,8 @@ export class Game {
     if (skillId % 10000000 === 1000 || NO_AMMO_SHOTS.has(skillId)) return true; // Three Snails, Soul Blade, Shark Wave
     const noAmmoBuffs = [...SOUL_ARROWS, 4121006]; // Soul Arrow x3, Shadow Claw
     if (this.buffs.some((b) => noAmmoBuffs.includes(b.source))) return true;
-    const ld = skillId && this.skills.levelData(skillId);
-    return !!this.ammoItem(ld?.bulletConsume || ld?.bulletCount || 1);
+    const ld = skillId && this.skills.levelData(skillId), sp = !NO_PARTNER.has(skillId) && this.partner();
+    return !!this.ammoItem((ld?.bulletConsume || ld?.bulletCount || 1) * (sp ? 2 : 1));
   }
 
   // ------------------------------------------------------------------ shots
@@ -3330,12 +3344,7 @@ export class Game {
     if (skillId === NINJA_STORM && Math.random() * 100 >= (ld?.prop ?? 100)) return { d: 0, c: false };
     const exempt = !shot && Math.floor((job % 1000) / 100) === 9;
     const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
-    if (!exempt) {
-      const accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
-      const acc = Math.min(999, Math.max(0, this.accuracy() + accBuff));
-      const hit = (acc * 100) / (over * 10 + 255);
-      if (rand(hit * 0.7, hit * 1.3) < Math.min(999, Math.max(0, info.eva || 0))) return { d: 0, c: false };
-    }
+    if (!exempt && this.accuracyMiss(info, over)) return { d: 0, c: false };
     if (skillId === SHADOW_MESO) return this.shadowMesoHit(info, ld, over);
     // Aran's blows are all swings; Rush and Blast swing three times in five; Brandish's second blow swings
     const aran = Math.floor(job / 100) === 21 || job === 2000;
@@ -3389,6 +3398,25 @@ export class Game {
     if (berserk && (this.stats?.hp || 0) <= ((berserk.x || 0) * this.maxHpShown()) / 100) d = (d * ((berserk.damage || 0) + 100)) / 100;
     if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
     return { d: Math.max(1, Math.trunc(d)), c };
+  }
+  /** Your accuracy x 100 / (255 + 10 a level the monster has over you), x 0.7-1.3, under its avoid: a miss. */
+  accuracyMiss(info, over) {
+    const now = Date.now(), accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
+    const acc = Math.min(999, Math.max(0, this.accuracy() + accBuff)), hit = (acc * 100) / (over * 10 + 255);
+    return hit * (0.7 + Math.random() * 0.6) < Math.min(999, Math.max(0, info.eva || 0));
+  }
+  /** A Shadow Partner line: pct% of the line it follows, then Wind Walk and Vanish over again. */
+  partnerHit(src, pct) {
+    const now = Date.now(), buffed = (ids) => (this.buffs || []).some((b) => ids.includes(b.source) && b.until > now);
+    let d = Math.trunc((src * pct) / 100);
+    if (buffed([WIND_WALK])) d = (d * (this.skills.levelData(WIND_WALK)?.damage || 100)) / 100;
+    if (this.skills.level(VANISH) && buffed(DARK_SIGHTS)) d = (d * (this.skills.levelData(VANISH)?.damage || 100)) / 100;
+    return Math.max(1, Math.trunc(d));
+  }
+  /** Your Shadow Partner buff's level data, if it is on. */
+  partner() {
+    const now = Date.now(), b = this.buffs?.find((x) => SHADOW_PARTNERS.includes(x.source) && x.until > now);
+    return b ? this.skills.levelData(b.source) || {} : null;
   }
   /**
    * Shadow Meso: its meso cost x 0.5-1.5, x10, and at its prop chance (100 + x)% of that as a critical; less 1% a level
@@ -3510,8 +3538,12 @@ export class Game {
    */
   shotFx(plan, ent, skillId, ld, ammoId, leave) {
     if (plan.arrows) {
-      const n = Math.max(1, ld?.bulletCount || 1), gap = arrowGap(skillId, ammoId);
-      for (let i = 0; i < n; i++) this.after(leave + i * gap, () => this.fly(skillId, ammoId, plan.sx, plan.sy, plan.ex, plan.ey + 7 - 7 * n + 14 * i, ent));
+      const n = Math.max(1, ld?.bulletCount || 1), gap = arrowGap(skillId, ammoId) || (plan.partner ? 120 : 0), dir = ent.facingRight ? 1 : -1;
+      // Shadow Partner's follow on, from 30px behind, carrying on the 14px steps
+      for (let i = 0; i < (plan.partner ? n * 2 : n); i++) {
+        const sx = plan.sx - (i >= n ? dir * 30 : 0);
+        this.after(leave + i * gap, () => this.fly(skillId, ammoId, sx, plan.sy, plan.ex, plan.ey + 7 - 7 * n + 14 * i, ent));
+      }
     }
     const first = plan.targets[0];
     if (!first) return;
@@ -4266,6 +4298,24 @@ export class Game {
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
   }
 
+  /**
+   * Shadow Partner: Skill/<id>/special/<your action>, on your frame, 30px behind you (50px under you on a ladder or
+   * rope); nothing for an action it has no art for.
+   */
+  drawPartner(ctx, ent, sx, sy, local) {
+    const job = local ? this.stats?.job : ent.job, id = Math.floor((job || 0) / 1000) === 1 ? SHADOW_PARTNERS[1] : SHADOW_PARTNERS[0];
+    const node = this.skills?.node(id);
+    if (!node) { this.skills?.ensure(id); return; }
+    const frames = node.special?.[ent.action];
+    if (!frames) return;
+    if (!frames.loaded) { frames.loaded = true; this.assets.preload(Object.values(frames).filter((f) => f?._canvas)); }
+    const keys = Object.keys(frames).filter((k) => /^\d+$/.test(k));
+    const fr = keys.length && frames[keys[(ent.frame || 0) % keys.length]], img = fr && this.assets.image(fr);
+    if (!img) return;
+    const climbing = /^(ladder|rope)$/.test(ent.action), dir = ent.facingRight ? 1 : -1;
+    const x = climbing ? sx : sx - dir * 30, y = climbing ? sy + 50 : sy, o = fr.origin || [0, 0];
+    ctx.save(); ctx.translate(Math.round(x), Math.round(y)); if (ent.facingRight) ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); ctx.restore();
+  }
   drawChar(ctx, cam, ent, look, local) {
     const parts = look.compose(ent.action, ent.frame, ent.expr);
     const sx = ent.x - cam.x, sy = ent.y - cam.y;
@@ -4279,6 +4329,7 @@ export class Game {
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
     const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
+    if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
