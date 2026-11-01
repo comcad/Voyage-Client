@@ -1243,8 +1243,7 @@ export class Game {
 
   /**
    * Another player's attack, timed like ours: their animation runs at the speed in the packet and the
-   * hits land when the swing connects (a shot after its draw frame, a swing or spell on its last frame),
-   * with the monster's death and loot held until then.
+   * hits land after the pose's attack delay, with the monster's death and loot held until then.
    */
   onRemoteAttack(a) {
     const rp = this.others.get(a.id);
@@ -1254,8 +1253,7 @@ export class Game {
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
       rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
       if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
-      const last = Math.max(0, rp.look.frameCount(rp.attack) - 1), hitAt = a.kind === 'ranged' ? Math.min(1, last) : last;
-      for (let i = 0; i < hitAt; i++) delay += rp.look.delay(rp.attack, i);
+      delay = rp.look.attackDelay(rp.attack);
       delay *= rp.attackScale;
     }
     const shoots = rp && (a.kind === 'ranged' || (a.kind === 'magic' && a.skill));
@@ -2006,8 +2004,8 @@ export class Game {
     p.attack = this.look.has(action) ? action : this.look.attackAction();
     p.frame = 0; p.frameT = 0; p.action = p.attack;
     p.attackScale = this.attackScale();
-    const hitAt = this.hitFrame(p.attack, kind), hitDelay = this.frameTime(p.attack, hitAt) * p.attackScale;
-    this.after(hitDelay, () => this.playAfterimage(p.attack, hitAt));
+    const hitDelay = this.look.attackDelay(p.attack) * p.attackScale, trailAt = this.hitFrame(p.attack, kind);
+    this.after(this.frameTime(p.attack, trailAt) * p.attackScale, () => this.playAfterimage(p.attack, trailAt));
     if (skillId) this.playSkillEffect(skillId, p, kind !== 'magic');
     else this.playWeaponSound(p);
 
@@ -2063,10 +2061,7 @@ export class Game {
     return Math.max(2, Math.min(9, speed));
   }
   attackScale(speed = this.attackSpeed()) { return (speed + 10) / 16; }
-  /**
-   * The frame an attack connects on: a shot leaves after the draw (frame 1), a swing lands on the
-   * frame its afterimage plays on, a spell (or a swing without one) on its last frame.
-   */
+  /** The frame a swing's afterimage (its trail) plays on; when it lands is the look's attackDelay. */
   hitFrame(action, kind) {
     const last = Math.max(0, this.look.frameCount(action) - 1);
     if (kind === 'ranged') return Math.min(1, last);

@@ -88,6 +88,17 @@ export class CharacterLook {
   /** Body actions in WZ order (attack packets number them by ACTIONS instead). */
   actionList() { return (this._actions ??= Object.keys(this.body || {}).filter((k) => k !== 'info')); }
   frameCount(action) { return frames(this.body?.[action]).length; }
+  /**
+   * When an attack in this pose lands, in ms from its start (before attack speed): a pose made of frames that point at
+   * other poses lands once its frames with a negative delay have played (at once if none); any other pose at the
+   * start of its last frame.
+   */
+  attackDelay(action) {
+    const fr = frames(this.body?.[action]);
+    if (fr.some((f) => f?.action)) return fr.reduce((t, f) => t + (f.delay < 0 ? -f.delay : 0), 0);
+    let t = 0; for (let i = 0; i < fr.length - 1; i++) t += this.delay(action, i);
+    return t;
+  }
   /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms. */
   delay(action, frame) { return Math.abs(this.body?.[action]?.[frame]?.delay ?? 150) || 150; }
   /**
