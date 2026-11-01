@@ -273,6 +273,12 @@ const LUCKY_SEVENS = new Set([4001344, 4121007, 14001004, 14111005]), BARRAGES =
 const RUSHES = new Set([1121006, 1221007, 1321003, 1221009]), BRANDISHES = new Set([1121008, 11111004]);
 /** Panic and Coma spend the Combo orbs, and their bonus per orb climbs faster. */
 const FINISHERS = new Set([1111003, 1111004, 1111005, 1111006, 11111002, 11111003]);
+/**
+ * Combo Attack's orbs: orb n sits at n x 72 degrees on a 40px ring that turns round you, drawn with Combo Attack's
+ * state/((n+1)/2) art (Advanced Combo's from the sixth); orbs 6-10 take the places of 1-5. A new orb grows in from
+ * 300% at a quarter alpha over 300ms. Panic and Coma need an orb, Enrage nine.
+ */
+const COMBO_MASK = 0x20000000000000n, ORB_RADIUS = 40, ORB_TURN_MS = 2000, ENRAGE = 1121010;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
@@ -1126,7 +1132,12 @@ export class Game {
       disease: later((d) => this.onDisease(d)),
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
       foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
-      foreignCancel: later((id, m1, m2) => { const rp = this.others.get(id); if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2))); }),
+      foreignCancel: later((id, m1, m2) => {
+        const rp = this.others.get(id);
+        if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
+        if (rp && BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
+      }),
+      foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.setState(d.state); }),
@@ -1402,7 +1413,7 @@ export class Game {
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
-    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0;
+    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0;
     if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
@@ -2230,6 +2241,9 @@ export class Game {
     if (kind === 'passive') return false;
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
     if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
+    // Panic and Coma need an orb, Enrage nine; without them the key does nothing
+    if (FINISHERS.has(id) && this.comboValue() < 2) return false;
+    if (id === ENRAGE && this.comboValue() < 10) return false;
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -2933,6 +2947,40 @@ export class Game {
    * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
    * and +24 to +40 from six to ten. Panic and Coma climb faster.
    */
+  /** Combo Attack's value while it is on: 1 + the orbs held (0 when it is off). */
+  comboValue() { const now = Date.now(); return (this.buffs || []).find((b) => b.combo && b.until > now)?.combo || 0; }
+  /** The orbs of whoever holds `value` (1 + orbs) round them, the ring centred 35px over their feet. */
+  drawCombo(ctx, ent, sx, sy, value) {
+    const orbs = Math.min(10, Math.max(0, value - 1)), now = performance.now();
+    const seen = ent._orbs || (ent._orbs = { n: 0, born: [] });
+    for (let i = seen.n + 1; i <= orbs; i++) seen.born[i] = now;
+    seen.n = orbs;
+    if (!orbs) return;
+    if (!this.orbArt) {
+      this.orbArt = 'loading';
+      Promise.all([this.assets.json('Skill/111.img'), this.assets.json('Skill/112.img')]).then(async ([a, b]) => {
+        const art = [a?.skill?.['1111002']?.state, b?.skill?.['1120003']?.state];
+        await this.assets.preload(art.flatMap((st) => [1, 2, 3, 4, 5].map((k) => st?.[k]).filter(Boolean)));
+        this.orbArt = art;
+      });
+    }
+    if (!Array.isArray(this.orbArt)) return;
+    const turn = (-2 * Math.PI * (now % ORB_TURN_MS)) / ORB_TURN_MS, cx = sx, cy = sy - 35;
+    for (let i = Math.max(1, orbs - 4); i <= orbs; i++) {
+      const node = this.orbArt[i < 6 ? 0 : 1]?.[Math.floor((i + 1) / 2)], img = node && this.assets.image(node);
+      if (!img) continue;
+      const k = Math.min(1, (now - (seen.born[i] || 0)) / (node.delay || 300));
+      const a = ((node.a0 ?? 255) + ((node.a1 ?? 255) - (node.a0 ?? 255)) * k) / 255;
+      const z = ((node.z0 ?? 100) + ((node.z1 ?? 100) - (node.z0 ?? 100)) * k) / 100;
+      const ang = (i * 2 * Math.PI) / 5 + turn, o = node.origin || [0, 0];
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.translate(Math.round(cx + Math.cos(ang) * ORB_RADIUS), Math.round(cy + Math.sin(ang) * ORB_RADIUS));
+      ctx.scale(z, z);
+      ctx.drawImage(img, -o[0], -o[1]);
+      ctx.restore();
+    }
+  }
   comboPercent(skillId) {
     const now = Date.now(), held = (this.buffs || []).find((b) => b.combo && b.until > now)?.combo;
     if (!held) return 0;
@@ -3805,6 +3853,7 @@ export class Game {
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
+    if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
     nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
     const guild = local ? this.guild?.name : ent.guild;
     if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);
