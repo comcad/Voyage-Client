@@ -59,7 +59,8 @@ export class WorldFx {
    */
   damage(target, values, kind = 'red', skillId = 0, crits = [], weaponId = 0, scale = 1) {
     const lift = target.kind === 'Mob' ? 15 : 0;
-    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line, weaponId, scale) }));
+    // only your own crits get the crit art: there is none in blue, so another player's stay blue
+    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v && kind === 'red' ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line, weaponId, scale) }));
   }
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */
