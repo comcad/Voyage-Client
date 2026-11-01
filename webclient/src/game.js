@@ -320,8 +320,13 @@ function masterySkills(cat, shot, skillId, job) {
     default: return null;
   }
 }
-/** A shot's arrows fly 1200px a second. */
-const flightMs = (dx) => Math.abs(dx) / 1.2;
+/** A shot's arrow takes 1.5ms per pixel. */
+const flightMs = (dx) => Math.abs(dx) * 1.5;
+/**
+ * Damage by a monster's place along a shot (first, second...): Iron Arrow loses 10% at each, Piercing Arrow gains 20%,
+ * Energy Orb loses 30%; Arrow Bomb does its x% on all of them.
+ */
+const PIERCE_SCALE = { 3201005: 0.9, 3221001: 1.2, 5121002: 0.7 }, ARROW_BOMB = 3101005;
 /** Time between one shot's arrows: Strafe 60ms, throwing stars 120ms, Double Shot (gun) and Burst Fire 240ms. */
 function arrowGap(skillId, ammoId) {
   if (Math.floor(ammoId / 10000) === 207 || Math.floor(ammoId / 1000) === 5021 || skillId === 5221007) return 120;
@@ -2291,8 +2296,8 @@ export class Game {
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
-    // Snipe always strikes for 195,000 to 199,999
-    const roll = () => (skillId === SNIPE ? 195000 + Math.floor(Math.random() * 5000)
+    // Snipe's shot strikes for 199,999 less up to 10,000
+    const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
       : ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
@@ -2303,15 +2308,19 @@ export class Game {
     if (DRAGONS_BREATH.has(skillId)) knockback = ld?.prop || 0;
     const phys = !!weapon && skillId !== SNIPE && !ld?.fixdamage && !OWN_DAMAGE.has(skillId) && (kind === 'ranged' || kind === 'melee')
       && !!weaponDamage(wcat % 100, kind === 'ranged', pose, skillId, this.stats?.job || 0);
-    const out = targets.map((m) => {
+    let out = targets.map((m, place) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
         if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
         const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
         dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
       }
+      const scale = skillId === ARROW_BOMB ? (ld?.x || 100) / 100 : PIERCE_SCALE[skillId] ? PIERCE_SCALE[skillId] ** place : 1;
+      if (scale !== 1) for (let i = 0; i < dmg.length; i++) dmg[i] = Math.trunc(dmg[i] * scale);
       return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
     });
+    // an Arrow Bomb that misses its first monster doesn't go off
+    if (skillId === ARROW_BOMB && out[0]?.dmg[0] === 0) out = out.slice(0, 1);
     const projectile = kind === 'ranged' || (skillId && sb?.node(skillId)?.ball && kind !== 'melee' && skillId !== CHAIN_LIGHTNING) ||
       skillId % 10000000 === 1000;
     // a spell without a projectile takes its monsters in a random order (Chain Lightning: along its chain)
