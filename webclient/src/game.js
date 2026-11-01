@@ -195,10 +195,10 @@ const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
 const STANCES = { 112: 1121002, 122: 1221002, 132: 1321002, 2112: 21121003 };
 /**
  * Skills that can only be used standing on the ground: Dragon Roar, Assassinate, Boomerang Step, Rush, Demolition,
- * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh and the Aran
- * swings and charges.
+ * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh, Smokescreen and
+ * the Aran swings and charges.
  */
-const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
+const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 4221006, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
   5221003, 5121001, 5121005, 5121007, 15111004, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020,
   21000002, 21100001, 21110007, 21110008, 21120009, 21120010, 21100002, 20000014, 20000015]);
 /** Dragon Roar: only with at least half your HP (it costs x% of your max HP). */
@@ -237,10 +237,12 @@ const NO_CLOSE_SWING = new Set([3100001, 3110001, 3111004, 3200001, 3210001, 321
   21110004, 21120006]);
 /**
  * Shots that fly on through every monster in their way, with how far above and below their line they reach: Iron
- * Arrow, Piercing Arrow, Dragon's Breath, Wind Piercing and Avenger.
+ * Arrow, Piercing Arrow, Dragon's Breath, Wind Piercing, Avenger and Taunt.
  */
 const PIERCING_SHOTS = new Map([[3201005, 10], [3221001, 20], [3121003, 20], [3221003, 20], [13111006, 10], [4111005, 36],
-  [14111002, 36]]);
+  [14111002, 36], [4121003, 10], [4221003, 10]]);
+/** Taunt reaches 300px, whatever the weapon. */
+const TAUNTS = new Set([4121003, 4221003]), TAUNT_RANGE = 300;
 /** Arrow Rain and Arrow Eruption: no arrow flies at them, the monsters in the skill's box are struck 400ms after the shot. */
 const RAIN_SHOTS = new Set([3111004, 3211004, 13111000]), RAIN_DELAY = 400;
 /**
@@ -249,10 +251,10 @@ const RAIN_SHOTS = new Set([3111004, 3211004, 13111000]), RAIN_DELAY = 400;
  */
 const BLAST_SHOTS = new Map([[3101005, () => 50], [3111003, (i) => 90 + i * 30], [3211003, (i) => 90 + i * 30]]);
 /**
- * Shots that keep to their box and the nearest monsters in it: Spark, Energy Orb, Taunt, Shark Wave, Soul Blade,
+ * Shots that keep to their box and the nearest monsters in it: Spark, Energy Orb, Shark Wave, Soul Blade,
  * Vampire, Storm Break, the Aran combos and the Outlaw / Corsair area shots.
  */
-const BOX_SHOTS = new Set([15111006, 5121002, 4121003, 4221003, 15111007, 11101004, 14101006, 13101005, 21100004, 21110004,
+const BOX_SHOTS = new Set([15111006, 5121002, 15111007, 11101004, 14101006, 13101005, 21100004, 21110004,
   21120006, 5201001, 5211004, 5211005, 5221007, 5221008]);
 /**
  * Hurricane fires while its key is held, once 101ms have passed on the game's 30ms clock (so every 120ms); Piercing
@@ -265,14 +267,12 @@ const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have u
   147: 'You have used up all of your throwing-stars.', 149: 'You do not have enough bullets to use this skill.' };
 /** Inferno and Blizzard count a weak or strong monster's element at only x% of the usual. */
 const PART_ELEMENT = new Set([3111003, 3211003]), BLIZZARD = 3211003;
-/**
- * Skills whose damage follows their own rules, kept to the plain roll: Shadow Meso, Assassinate, Ninja Storm, Combo
- * Tempest, Bamboo Rain / Thrust and Rage of Pharaoh.
- */
-const OWN_DAMAGE = new Set([4111004, 4221001, 4121008, 21120006, 1009, 10001009, 20001009, 20011009, 1020,
+/** Skills whose damage follows their own rules, kept to the plain roll: Combo Tempest, Bamboo Rain / Thrust and Rage of Pharaoh. */
+const OWN_DAMAGE = new Set([21120006, 1009, 10001009, 20001009, 20011009, 1020,
   10001020, 20001020, 20011020]);
 /** Blows that go through a monster's defence: Sacrifice, Shadow Meso, Assaulter, Demolition. */
 const IGNORE_DEFENCE = new Set([1311005, 4111004, 4211002, 5121004]);
+const SHADOW_MESO = 4111004, NINJA_STORM = 4121008;
 const LUCKY_SEVENS = new Set([4001344, 4121007, 14001004, 14111005]), BARRAGES = new Set([5121007, 15111004]);
 /** Rush and Blast count as a swing three times in five; Brandish's second blow is a swing. */
 const RUSHES = new Set([1121006, 1221007, 1321003, 1221009]), BRANDISHES = new Set([1121008, 11111004]);
@@ -955,6 +955,8 @@ export class Game {
 
   weaponId() { return this.inventory?.equipped[-11]?.id || 0; }
   weaponOf(who) { return who === this.player ? this.weaponId() : who?.look?.weaponId?.() || 0; }
+  /** What spaces an attacker's damage lines: their weapon and their attack's speed scale. */
+  lineTiming(who) { return [this.weaponOf(who), who === this.player ? this.attackScale() : who?.attackScale || 1]; }
   equipStat(key) { let v = 0; for (const it of Object.values(this.inventory?.equipped || {})) v += it[key] || 0; return v; }
   /**
    * Your Speed and Jump as fractions of the base walk / jump: 100 plus your equipment's plus the strongest buff
@@ -1511,9 +1513,9 @@ export class Game {
         e.pendingHits = (e.pendingHits || 0) + 1;
         const land = () => {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
-          this.damageNumbers(e, t.dmg, false, a.skill, t.crit, this.weaponOf(rp));
+          this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
           this.playHitEffect(a.skill, e, rp, t.dmg);
-          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, this.weaponOf(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
+          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
         };
         const planned = plan?.targets.find((p) => p.mob === e);
         if (planned) this.after(delay + planned.delay, land);
@@ -2292,6 +2294,7 @@ export class Game {
     if (id === CHARGED_BLOW && !this.activeCharge()) return false;
     if (RUSH_DASH.has(id) && performance.now() < (this.rushLock || 0)) return false;
     if (MOVE_LIMITED.has(id) && ((this.map?.info?.fieldLimit || 0) & 2)) return false;
+    if (id === SHADOW_MESO && this.meso < (sb.levelData(id)?.moneyCon || 0)) { this.notice("You don't have enough mesos to use this skill."); return false; }
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -2358,7 +2361,7 @@ export class Game {
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
     const lines = ld?.fixdamage ? 1 : ld?.attackCount || ld?.bulletCount || 1;
-    const ammo = kind === 'ranged' ? this.ammoItem(ld?.bulletCount || 1) : 0;
+    const ammo = kind === 'ranged' ? this.ammoItem(ld?.bulletConsume || ld?.bulletCount || 1) : 0;
     const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
     let targets = plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge);
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
@@ -2369,7 +2372,7 @@ export class Game {
       : ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     const fixedPhys = !!ld?.fixdamage && (kind === 'ranged' || kind === 'melee');
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
-    const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
+    const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat, kind === 'ranged') : null, pct = ld?.damage || 100;
     // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly, more with Power
     // Knock-Back; Dragon's Breath throws back what it strikes at its prop chance
     let knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
@@ -2406,11 +2409,11 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, this.weaponId()); this.playHitEffect(skillId, t.mob, p, t.dmg);
-          this.after(lineDelay(skillId, t.dmg.length - 1, this.weaponId()), () => this.finishKill(t.mob));   // it dies after its last line lands
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, this.weaponId()); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -3055,7 +3058,8 @@ export class Game {
     if (skillId % 10000000 === 1000 || NO_AMMO_SHOTS.has(skillId)) return true; // Three Snails, Soul Blade, Shark Wave
     const noAmmoBuffs = [...SOUL_ARROWS, 4121006]; // Soul Arrow x3, Shadow Claw
     if (this.buffs.some((b) => noAmmoBuffs.includes(b.source))) return true;
-    return !!this.ammoItem((skillId && this.skills.levelData(skillId)?.bulletCount) || 1);
+    const ld = skillId && this.skills.levelData(skillId);
+    return !!this.ammoItem(ld?.bulletConsume || ld?.bulletCount || 1);
   }
 
   // ------------------------------------------------------------------ shots
@@ -3172,6 +3176,8 @@ export class Game {
    */
   physicalHit(m, cat, skillId, ld, shot, pose, ammoId, crit, charge = 0, line = 0) {
     const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now(), job = this.stats?.job || 0;
+    // Ninja Storm's blows land only at its prop chance
+    if (skillId === NINJA_STORM && Math.random() * 100 >= (ld?.prop ?? 100)) return { d: 0, c: false };
     const exempt = !shot && Math.floor((job % 1000) / 100) === 9;
     const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
     if (!exempt) {
@@ -3180,6 +3186,7 @@ export class Game {
       const hit = (acc * 100) / (over * 10 + 255);
       if (rand(hit * 0.7, hit * 1.3) < Math.min(999, Math.max(0, info.eva || 0))) return { d: 0, c: false };
     }
+    if (skillId === SHADOW_MESO) return this.shadowMesoHit(info, ld, over);
     // Aran's blows are all swings; Rush and Blast swing three times in five; Brandish's second blow swings
     const aran = Math.floor(job / 100) === 21 || job === 2000;
     const asSwing = aran || (RUSHES.has(skillId) && Math.random() < 0.6) || (BRANDISHES.has(skillId) && line === 1);
@@ -3231,6 +3238,21 @@ export class Game {
     if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
     return { d: Math.max(1, Math.trunc(d)), c };
   }
+  /**
+   * Shadow Meso: its meso cost x 0.5-1.5, x10, and at its prop chance (100 + x)% of that as a critical; less 1% a level
+   * the monster has over you, by element, never by defence.
+   */
+  shadowMesoHit(info, ld, over) {
+    const m = ld?.moneyCon || 0, rand = (lo, hi) => lo + Math.random() * (hi - lo);
+    let d = Math.trunc(rand(m * 0.5, m * 1.5)) * 10;
+    const c = Math.random() * 100 < (ld?.prop || 0);
+    if (c) d = (d * ((ld?.x || 0) + 100)) / 100;
+    if (over) d = ((100 - over) * d) / 100;
+    const elem = this.skills.node(SHADOW_MESO)?.elemAttr;
+    const vs = elem && new RegExp(`${elem.toUpperCase()}(\\d)`).exec(info.elemAttr || '')?.[1];
+    if (vs) d = vs === '1' ? 0 : vs === '2' ? d * 0.5 : vs === '3' ? Math.min(199999, d * 1.5) : d;
+    return { d: Math.max(1, Math.trunc(d)), c };
+  }
   /** Weapon attack: equipment, attack buffs, Bow Expert / Marksman Boost and a shot's ammo, at most 1999. */
   attackWatk(ammoId) {
     const now = Date.now();
@@ -3251,6 +3273,7 @@ export class Game {
    * claw plus Keen Eyes', 200px for a gun.
    */
   shotRange(skillId, lv, wcat) {
+    if (TAUNTS.has(skillId)) return TAUNT_RANGE;
     const r = skillId ? this.skills.levelData(skillId, lv)?.range : 0;
     if (r > 0) return r;
     const cygnus = Math.floor((this.stats?.job || 0) / 1000) === 1;
@@ -3361,7 +3384,9 @@ export class Game {
     this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur: flightMs(tx - sx) / 1000, flip: tx > sx });
   }
   async shotArt(skillId, ammoId, ent) {
-    let node = skillId ? Game.fxNode((await this.skills?.ensure(skillId))?.ball) : null;
+    // a level can name its own ball (Shadow Meso's coins grow every 10 levels)
+    const sn = skillId ? await this.skills?.ensure(skillId) : null, own = ent === this.player && this.skills.levelData(skillId)?.ball?._uol;
+    let node = sn ? Game.fxNode((own && sn[own.split('/').pop()]) || sn.ball) : null;
     const soul = ent === this.player ? this.buffs.find((b) => SOUL_ARROWS.includes(b.source) && b.until > Date.now())?.source : 0;
     if (!node && soul) node = Game.fxNode((await this.skills?.ensure(soul))?.ball);
     if (!node && ammoId) {
@@ -3552,7 +3577,7 @@ export class Game {
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
     // Seven's two stars twice... (a miss makes no monster damage sound)
-    dmgs.forEach((d, line) => this.after(lineDelay(id, line, this.weaponOf(by)), () => {
+    dmgs.forEach((d, line) => this.after(lineDelay(id, line, ...this.lineTiming(by)), () => {
       if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
       if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
       if (!fx) return;
@@ -3617,9 +3642,9 @@ export class Game {
   }
 
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
-  damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0) {
+  damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0, scale = 1) {
     if (mine && target.kind === 'Mob') target.hpShownUntil = performance.now() + 5000;
-    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits, weaponId);
+    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits, weaponId, scale);
   }
 
   /**

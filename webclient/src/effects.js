@@ -20,9 +20,10 @@ const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
 /**
  * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish, Assassinate
  * and Boomerang Step wait 80ms more per line and their second line longer still: 160 (Brandish with a one-handed
- * weapon) or 240.
+ * weapon) or 240. Vampire's four land 0, 60, 420 and 660ms in, at the attack's speed (scale).
  */
-export function lineDelay(skillId, line, weaponId = 0) {
+export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
+  if (skillId === 14101006) return Math.round([0, 60, 420, 660][Math.min(line, 3)] * scale);
   if ([5101004, 15101003, 5121007, 15111004].includes(skillId)) return 0;   // these all show at once
   if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
   const brandish = skillId === 1121008 || skillId === 11111004;
@@ -56,9 +57,9 @@ export class WorldFx {
    * Each line is placed when it shows, LINE_GAP above the last, over where the target is by then; a monster's
    * 15px above its head, your own right at your head.
    */
-  damage(target, values, kind = 'red', skillId = 0, crits = [], weaponId = 0) {
+  damage(target, values, kind = 'red', skillId = 0, crits = [], weaponId = 0, scale = 1) {
     const lift = target.kind === 'Mob' ? 15 : 0;
-    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line, weaponId) }));
+    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line, weaponId, scale) }));
   }
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */
