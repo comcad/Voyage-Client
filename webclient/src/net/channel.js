@@ -884,6 +884,12 @@ export class ChannelSession {
     if (pos) w.pos(pos).byte(0);
     this.send(w);
   }
+  /** Monster Magnet: the monsters it reached and whether each was caught, then which way you face. */
+  magnet(skillId, level, mobs, facingLeft) {
+    const w = new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level).int(mobs.length);
+    for (const [oid, caught] of mobs) w.int(oid).byte(caught ? 1 : 0);
+    this.send(w.byte(facingLeft ? 1 : 0));
+  }
   cancelBuff(skillId) { this.send(new PacketWriter(C.CANCEL_BUFF).int(skillId)); }
   /** Sit on a chair item (Install 0301xxxx). */
   /** Through a Mystic Door: its owner, and whether you are going from town out to the field. */

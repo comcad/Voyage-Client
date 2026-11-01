@@ -424,6 +424,13 @@ export class Life {
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
   }
+  /** Drawn in by Monster Magnet: toward pull.x at 1000px/s until within pull.stop of it; a floor's edge or a wall stops it. */
+  pullStep(dt) {
+    const p = this.pull, left = p.x - this.x;
+    if (!this.fh || Math.abs(left) <= p.stop) { this.pull = null; return; }
+    const { fh, x, y } = this;
+    if (this.footholds.walk(this, Math.sign(left) * Math.min(Math.abs(left) - p.stop, 1000 * dt)) !== 'ok') { this.fh = fh; this.x = x; this.y = y; this.pull = null; }
+  }
   /** Slide back after a blow, braking to a stop; a floor's edge or a wall stops it. */
   recoilStep(dt) {
     const v = this.recoil, slowed = Math.sign(v) * Math.max(0, Math.abs(v) - (this.recoilBrake || 400) * dt);
@@ -465,6 +472,7 @@ export class Life {
       } else if (!posing && at.landed) this.attacking = null;
       return;
     }
+    if (this.pull && this.state !== 'die1') { this.pullStep(dt); return; }
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
       if (this.recoil && this.fh) this.recoilStep(dt);

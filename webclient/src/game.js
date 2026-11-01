@@ -185,6 +185,8 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/** Monster Magnet (Hero, Paladin, Dark Knight): held up to 1s, the longer the more monsters it can catch. */
+const MONSTER_MAGNETS = new Set([1121001, 1221001, 1321001]), MAGNET_HOLD = 1;
 /** How far in front a bow, crossbow, claw or gun swings rather than shoots. */
 const CLOSE_REACH = 65;
 /**
@@ -208,7 +210,11 @@ function mesoTiming(node, amount) {
 const SEAL = 120, WEAKEN = 122, STUN = 123, SLOW = 126, REVERSE = 132;
 const MOB_DOOM = 0x10000;   // MonsterStatus.DOOM
 const FADE_MS = 600;   // map changes: the old map dims to black over this, the new one lights up over it
-const SLASH_BLASTS = new Set([1001005, 11001003]);   // reach out to their range once the swing has a target
+/**
+ * Skills that reach out to their range once the swing has a target: Slash Blast, Coma (sword, axe, Dawn Warrior's)
+ * and Charged Blow. Others with only a range keep to the swing.
+ */
+const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 1211002]);
 /** Drop hop heights (the original uses 100px for both) and the pickup's length; see updateDrops. */
 const DROP_HOP = 64, THROW_HOP = 93, PICKUP_TIME = 0.7;
 
@@ -1771,6 +1777,13 @@ export class Game {
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
     if (p.regrabT > 0) p.regrabT -= dt;
 
+    // Monster Magnet charging: stand in its pose until the key is let go
+    if (this.magnet) {
+      this.magnet.t += dt;
+      if (this.heldSkill() === this.magnet.id && !this.dead) { this.advanceFrame(this.magnet.pose, dt); return; }
+      this.releaseMagnet();
+    }
+
     if (p.ladder) {
       const l = p.ladder;
       const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
@@ -1963,6 +1976,7 @@ export class Game {
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
+    if (MONSTER_MAGNETS.has(id)) return this.holdMagnet(id, lv);
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() - (this.lastTeleport || 0) < TELEPORT_DELAY) return false;
@@ -2101,6 +2115,42 @@ export class Game {
 
   defaultAttackAction(kind) {
     return (kind === 'ranged' && this.look.shootAction()) || this.look.attackAction();
+  }
+
+  /** Monster Magnet starts charging on its key press (its prepare pose, standing still) and goes off when let go. */
+  holdMagnet(id, lv) {
+    if (this.magnet) return true;
+    const p = this.player, ld = this.skills.levelData(id, lv);
+    if (!this.skillKeyPressed || !p.fh || p.attack) return false;
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    this.magnet = { id, lv, t: 0, pose: this.skills.node(id)?.prepare?.action || 'alert' };
+    return true;
+  }
+  /**
+   * Let go: up to mobCount monsters (fewer the shorter it was held) whose bodies reach into a wedge in front of you,
+   * from 50px out to its range, centred 28px up and spreading a quarter of the distance up and down (checked in 20px
+   * steps). Each (not a boss, nor one that can't move) is caught at its prop chance and drawn in; it does no damage.
+   * The server is told which were caught.
+   */
+  releaseMagnet() {
+    const { id, lv, t } = this.magnet;
+    this.magnet = null;
+    const p = this.player, ld = this.skills.levelData(id, lv) || {};
+    const n = Math.floor((((ld.mobCount || 1) - 1) * Math.min(t, MAGNET_HOLD)) / MAGNET_HOLD) + 1;
+    const dir = p.facingRight ? 1 : -1, range = ld.range || 0, y = p.y - 28;
+    const reaches = (m) => {
+      const h = m.hitBox(true);
+      for (let d = 50; d < range; d += 20) {
+        const a = p.x + dir * d, b = p.x + dir * Math.min(d + 20, range), spread = Math.floor(d / 4);
+        if (h.right > Math.min(a, b) && h.left < Math.max(a, b) && h.bottom > y - spread && h.top < y + spread) return true;
+      }
+      return false;
+    };
+    const reached = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined && reaches(m)).slice(0, n);
+    const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
+    for (const [m, ok] of caught) if (ok) m.pull = { x: p.x, stop: (m.node?._w || 40) + 45 };
+    this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
+    this.playSkillEffect(id, p);
   }
 
   /** Buffs and other SPECIAL_MOVE skills. */
@@ -2415,7 +2465,7 @@ export class Game {
     const p = this.player;
     // a swing reaches as far as its afterimage's box (lt/rb), as in the client
     const swing = kind === 'melee' && action ? this.afterimage?.[this.afterimageLevel()]?.[action] : null;
-    const r = (!SLASH_BLASTS.has(skillId) && skillId && this.skills.range(skillId, lv)) || (swing?.lt && swing?.rb ? swing : null) || ({
+    const r = (!RANGE_SWINGS.has(skillId) && skillId && this.skills.range(skillId, lv)) || (swing?.lt && swing?.rb ? swing : null) || ({
       melee: { lt: [-90, -70], rb: [10, 5] }, ranged: { lt: [-420, -80], rb: [0, 10] }, magic: { lt: [-330, -80], rb: [0, 10] },
     })[kind];
     const [x1, x2] = p.facingRight ? [p.x - r.rb[0], p.x - r.lt[0]] : [p.x + r.lt[0], p.x + r.rb[0]];
@@ -2463,8 +2513,8 @@ export class Game {
     // a monster is in it when its body (now or a frame ago) overlaps the box (openms, docs/hitboxes.md)
     const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
     const inside = (m) => { const b = m.hitBox(true); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; };
-    // Slash Blast: only once something is inside the ordinary swing does it reach out to its range in front of you
-    const reach = SLASH_BLASTS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
+    // Slash Blast, Coma, Charged Blow: only once something is inside the ordinary swing do they reach out to their range
+    const reach = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
     if (reach && mobs.some(inside)) { if (p.facingRight) x2 = Math.max(x2, p.x + reach); else x1 = Math.min(x1, p.x - reach); }
     return mobs.filter(inside).sort((a, b) => Math.abs(a.x - p.x) - Math.abs(b.x - p.x)).slice(0, count);
   }
