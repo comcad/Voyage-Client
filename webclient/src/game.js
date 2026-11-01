@@ -3712,10 +3712,10 @@ export class Game {
     // a deadly attack leaves you 1 HP
     if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
     const fromRight = m.x > p.x;
-    if (damage <= 0) {   // MISS: no knockback, and the next blow can come 36ms later
+    if (damage <= 0) {   // MISS: no knockback, and the next touch is checked two 30ms steps later
       this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
       this.vfx?.damage(p, [0], 'violet');
-      this.invincible = 0.036;
+      this.invincible = 0.06;
       return;
     }
     this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
