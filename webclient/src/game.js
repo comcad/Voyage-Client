@@ -314,7 +314,7 @@ export class Game {
     this.boards = new ShopBoards(this);
     this.queue = []; this.loading = false;
     this.fps = 0; this._frames = 0; this._fpsT = 0;
-    this.moveBuf = []; this.moveT = 0; this.flushT = 0; this.mobT = 0;
+    this.moveBuf = []; this.moveT = 0; this.flushT = 0;
     this.invincible = 0; this.portalCooldown = 0;
     this.stats = null; this.inventory = null; this.meso = 0;
     this.showMinimap = true;
@@ -986,7 +986,7 @@ export class Game {
         let e = this.lifeByOid.get(m.oid);
         if (e && !e.pending) e.controlled = true; else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
         if (e && !e.pending && m.statuses) this.applyMobStatus(e, m.statuses);   // what it was already under
-        if (aggro && e && !e.pending) e.aggro = this.player;     // the server wants it after us
+        if (aggro && e && !e.pending) e.chase(this.player);      // the server wants it after us
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
       reactorSpawn: later((d) => this.spawnReactor(d)),
@@ -1215,6 +1215,8 @@ export class Game {
     if (kind === 'Mob') {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
+      // one we control tells the server each path it plans, as it starts on it
+      e.onPath = (m, start, moves) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves); };
     }
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`); }
     this.lifeByOid.set(d.oid, e);
@@ -1749,7 +1751,7 @@ export class Game {
     this.runTimers(dt);
     this.loadAfterimage();
     this.handleHotkeys();
-    if (this.net) { this.syncMovement(dt); this.puppetAggro(dt); this.syncMobs(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
+    if (this.net) { this.syncMovement(dt); this.puppetAggro(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
     this.updateCamera(dt);
     for (const e of this.effects) e.t += dt;
     this.effects = this.effects.filter((e) => e.t < 1.2);
@@ -2133,7 +2135,7 @@ export class Game {
           return;
         }
         t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
-        if (t.mob.kind === 'Mob') t.mob.aggro = p;                // a struck monster comes after you
+        if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
       if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? this.ammoItem() : 0, land));
@@ -2846,7 +2848,6 @@ export class Game {
       const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
       this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
         (20 + (s.action || 1)) * 2 + facing, s.skill, s.level);
-      m.lastSent = { x, y, state: m.state, facingRight: m.facingRight };
     }
     const lv = await this.mobSkillLevel(s.skill, s.level), fx = lv?.effect && Game.fxNode(lv.effect);
     if (fx) this.after(Number(s.effectAfter) || 0, async () => {
@@ -2910,7 +2911,6 @@ export class Game {
     if (!m.controlled || !this.net || m.oid == null) return;
     const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
     this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing);
-    m.lastSent = { x, y, state: m.state, facingRight: m.facingRight };
   }
   /**
    * Its attack lands (attackAfter into it): if you are in reach then, it hurts you - straight away, or for a ball
@@ -2987,25 +2987,6 @@ export class Game {
       this.net.move(start, this.moveBuf);
       this.lastSent = this.moveBuf[this.moveBuf.length - 1];
       this.moveBuf = []; this.flushT = 0;
-    }
-  }
-
-  syncMobs(dt) {
-    this.mobT += dt;
-    if (this.mobT < 0.5) return;
-    this.mobT = 0;
-    for (const m of this.map.life) {
-      if (!m.controlled || m.kind !== 'Mob' || m.dying || m.oid === null) continue;
-      const ls = m.lastSent;
-      const x = Math.round(m.x), y = Math.round(m.y);
-      // a monster with skills reports in every 2s even standing still: the server offers its next skill in reply
-      const quiet = ls.x === x && ls.y === y && ls.state === m.state && ls.facingRight === m.facingRight;
-      m.reportT = (m.reportT || 0) + 0.5;
-      if (quiet && !(m.mobSkills?.length && m.reportT >= 2)) continue;
-      m.reportT = 0;
-      const stance = ((m.state === 'move' ? 1 : m.state === 'fly' ? 6 : 2) << 1) | (m.facingRight ? 0 : 1);
-      this.net.moveMob(m.oid, { x: Math.round(ls.x), y: Math.round(ls.y) }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance, duration: 500 }]);
-      m.lastSent = { x, y, state: m.state, facingRight: m.facingRight };
     }
   }
 

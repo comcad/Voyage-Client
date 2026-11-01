@@ -25,14 +25,21 @@ export class Footholds {
   constructor(mapFoothold) {
     this.byId = new Map();
     for (const [layer, groups] of Object.entries(mapFoothold || {})) {
-      for (const group of Object.values(groups)) {
+      for (const [g, group] of Object.entries(groups)) {
         for (const [id, f] of Object.entries(group)) {
-          this.byId.set(Number(id), { id: Number(id), layer: Number(layer), ...f });
+          this.byId.set(Number(id), { id: Number(id), layer: Number(layer), group: `${layer}/${g}`, ...f });
         }
       }
     }
     this.all = [...this.byId.values()];
     this.floors = this.all.filter((f) => f.x1 < f.x2);
+    // the map's foothold groups (its platforms), each with its floors and how far it reaches left and right
+    this.groups = new Map();
+    for (const f of this.floors) {
+      const g = this.groups.get(f.group) || { floors: [], x1: Infinity, x2: -Infinity };
+      g.floors.push(f); g.x1 = Math.min(g.x1, f.x1); g.x2 = Math.max(g.x2, f.x2);
+      this.groups.set(f.group, g);
+    }
     this.walls = this.all.filter((f) => f.x1 === f.x2);
     const xs = this.all.flatMap((f) => [f.x1, f.x2]);
     const ys = this.all.flatMap((f) => [f.y1, f.y2]);
