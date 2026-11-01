@@ -316,6 +316,7 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
+const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007;
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
 const SHADOW_PARTNERS = [4111002, 14111000], SP_MASK = 0x400000000000000n, NO_PARTNER = new Set([4121003, 14101006]);
@@ -1504,6 +1505,10 @@ export class Game {
       rp.attack = this.actionName(a.stance); rp.facingRight = !(a.direction & 0x80);
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
       rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
+      if (a.skill === BOOMERANG_STEP) {   // unseen for the pose
+        let len = 0; for (let i = 0; i < rp.look.frameCount(rp.attack); i++) len += rp.look.delay(rp.attack, i);
+        rp.boomerangUntil = performance.now() + len * rp.attackScale;
+      }
       if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
       delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
       if (SHAKERS.has(a.skill)) this.startShake(a.skill, 400 - Math.min(400, Math.hypot(rp.x - this.player.x, rp.y - this.player.y)), delay);
@@ -1529,6 +1534,7 @@ export class Game {
         const dir = order.reduce((sum, t) => sum + x(t) - rp.x, 0) > 0 ? 1 : -1;
         order = [...order].sort((p, q) => (x(p) - x(q)) * dir);
       }
+      const looks = a.skill === BAND_OF_THIEVES ? this.thiefLooks(a.skill, order.length) : [];
       for (const [i, t] of order.entries()) {
         const e = this.lifeByOid.get(t.oid);
         if (!e || e.pending) continue;
@@ -1536,7 +1542,7 @@ export class Game {
         const land = () => {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
           this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
-          this.playHitEffect(a.skill, e, rp, t.dmg);
+          this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null);
           if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
         };
         const planned = plan?.targets.find((p) => p.mob === e);
@@ -2317,6 +2323,11 @@ export class Game {
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
     if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
     if (id === CHAKRA) return this.castChakra(id, lv);
+    // Assaulter needs a monster to go for and floor where it ends; Boomerang Step floor 150px ahead
+    const ahead = (dx) => this.floorNear(this.player.x + (this.player.facingRight ? dx : -dx), this.player.y, 80);
+    if (id === ASSAULTER && (!ahead(-(sb.levelData(id)?.lt?.[0] || 200))
+      || !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length)) return false;
+    if (id === BOOMERANG_STEP && (!ahead(-(sb.levelData(id)?.lt?.[0] || 300) / 2) || performance.now() < (this.boomerangLock || 0))) return false;
     if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
     if (FINISHERS.has(id) && this.comboValue() < 2) return false;
@@ -2414,6 +2425,12 @@ export class Game {
     const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
     let targets = mx?.mobs || kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
+    // Band of Thieves: a monster in reach of your plain swing first, then the rest of its box
+    if (skillId === BAND_OF_THIEVES) {
+      const first = this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH)[0];
+      targets = first ? [first, ...this.mobsIn(this.skillBox(p, skillId, lv), p.x, p.y, first).slice(0, mobCount - 1)] : [];
+    }
+    const looks = skillId === BAND_OF_THIEVES ? this.thiefLooks(skillId, targets.length) : [];
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
     // Snipe's shot strikes for 199,999 less up to 10,000
@@ -2470,11 +2487,11 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null);
           this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -2490,6 +2507,16 @@ export class Game {
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(), charge, display: opts.stage2 ? 0x20 : 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
+    // Assaulter: straight to the floor 200px ahead, leaving its trail where you stood
+    if (skillId === ASSAULTER) {
+      const from = { x: p.x, y: p.y, right: p.facingRight };
+      if (this.blinkAhead(-(ld?.lt?.[0] || 200))) { this.playBasicEff('Assaulter/remain', from.x, from.y, from.right); this.playBasicEff('Assaulter/effect', p.x, p.y, p.facingRight); }
+    }
+    // Boomerang Step: unseen and untouchable for its pose, and not again until 500ms after
+    if (skillId === BOOMERANG_STEP) {
+      const len = this.frameTime(pose, this.look.frameCount(pose)) * scale;
+      this.boomerangUntil = performance.now() + len; this.boomerangLock = this.boomerangUntil + 500;
+    }
     // Assassinate: once its first pose ends, if it found a monster, the finishing blow from 100px ahead
     if (skillId === ASSASSINATE && !opts.stage2 && out.length) {
       const first = out[0].mob, len = this.frameTime(pose, this.look.frameCount(pose)) * scale;
@@ -2522,6 +2549,13 @@ export class Game {
       return Math.max(1, Math.trunc(50 * (ld?.x || 0) * ratio * (0.5 + Math.random() * 0.5)));
     });
     return { mesos, mobs, damage, touches };
+  }
+  /** Band of Thieves' hit art per monster: hit/0 on the first, the others hit/1..x shuffled. */
+  thiefLooks(id, n) {
+    const x = this.skills.node(id)?.level?.[1] ? Math.max(1, Object.keys(this.skills.node(id).hit || {}).length - 1) : 5;
+    const rest = Array.from({ length: x }, (_, i) => i + 1);
+    for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+    return [0, ...Array.from({ length: Math.max(0, n - 1) }, (_, i) => rest[i % rest.length])];
   }
   /** A meso blowing up (Meso Explosion): it goes after `delay` ms with the skill's hit art, the sound at most every 90ms. */
   explodeMeso(oid, delay) {
@@ -3194,7 +3228,7 @@ export class Game {
     return true;
   }
   async playBasicEff(name, x, y, flip) {
-    const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.[name];
+    const node = name.split('/').reduce((n, k) => n?.[k], this.basicEff ??= await this.assets.json('Effect/BasicEff.img'));
     if (!node) return;
     const anim = new Anim(node, false);
     await this.assets.preload(anim.frames);
@@ -3755,9 +3789,9 @@ export class Game {
    * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
    * faces. Without a head point, the middle of its body.
    */
-  async playHitEffect(id, mob, by = this.player, dmgs = [1]) {
+  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null) {
     const node = id ? await this.skills?.ensure(id) : null;
-    const fx = Game.fxNode(node?.hit);
+    const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
     // Seven's two stars twice... (a miss makes no monster damage sound)
@@ -3866,6 +3900,7 @@ export class Game {
     if (this.invincible > 0) { this.invincible -= dt; return; }
     if (this.dead || !this.stats) return;
     const hidden = this.hidden() && !((this.map?.info?.fieldLimit || 0) & 2);
+    if (performance.now() < (this.boomerangUntil || 0)) return;
     // the original receiver: 44x65 standing, 46x31 lying down
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
@@ -3948,6 +3983,7 @@ export class Game {
    */
   hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1, attack = null) {
     const p = this.player;
+    if (performance.now() < (this.boomerangUntil || 0)) return;   // mid Boomerang Step
     let damage = this.damageTaken(m, power, magic);
     // a deadly attack leaves you 1 HP
     if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
@@ -4328,6 +4364,7 @@ export class Game {
     const dead = ent.action === 'dead', t = performance.now() / 700;
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
+    if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
     const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
