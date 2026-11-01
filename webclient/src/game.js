@@ -137,15 +137,28 @@ class RemotePlayer {
     this.action = look.standAction(); this.frame = 0; this.frameT = 0;
     this.path = null; this.attack = null; this.chat = null;
   }
+  /**
+   * Their movement queues behind what is still playing (as the client does); with more than 1.1s queued it plays 10%
+   * faster, and with more than 5s it jumps to the end.
+   */
   applyMovement(moves) {
     const steps = moves.filter((m) => m.x !== undefined || m.stance !== undefined);
-    if (steps.length) this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
+    if (!steps.length) return;
+    if (this.path) this.path.steps.push(...steps);
+    else this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
+    const left = this.path.steps.slice(this.path.i).reduce((t, m) => t + (m.duration || 0), 0);
+    if (left > 5000) {
+      const end = [...this.path.steps].reverse().find((m) => m.x !== undefined);
+      if (end) { this.x = end.x; this.y = end.y; }
+      this.path = null;
+    }
   }
   update(dt) {
     if (this.path) {
       const p = this.path, s = p.steps[p.i];
       const dur = Math.max(1, s.duration || 60) / 1000;
-      p.t += dt;
+      const queued = p.steps.slice(p.i).reduce((t, m) => t + (m.duration || 0), 0) - p.t * 1000;
+      p.t += queued > 1100 ? dt * 1.1 : dt;
       const k = Math.min(1, p.t / dur);
       if (s.x !== undefined) { this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k; }
       if (s.stance !== undefined) {
@@ -316,6 +329,8 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
+/** How much movement (ms) gathers before it goes to the server, as the client does. */
+const MOVE_FLUSH = 1000;
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 /** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
 const CRUSHERS = new Set([1311001, 1311002]);
@@ -499,7 +514,7 @@ export class Game {
     this.boards = new ShopBoards(this);
     this.queue = []; this.loading = false;
     this.fps = 0; this._frames = 0; this._fpsT = 0;
-    this.moveBuf = []; this.moveT = 0; this.flushT = 0;
+    this.moveBuf = []; this.moveTotal = 0;
     this.invincible = 0; this.portalCooldown = 0;
     this.stats = null; this.inventory = null; this.meso = 0;
     this.showMinimap = true;
@@ -1422,7 +1437,7 @@ export class Game {
     p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.ladder = null; p.seat = null;
     p.fh = this.map.fh.below(p.x, p.y, 400);
     if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
-    this.moveBuf = []; this.lastSent = null;
+    this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null;
   }
 
   // ------------------------------------------------------------------ server entities
@@ -1442,7 +1457,7 @@ export class Game {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
       // one we control tells the server each path it plans, as it starts on it
-      e.onPath = (m, start, moves) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves); };
+      e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity); };
     }
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`); }
     this.lifeByOid.set(d.oid, e);
@@ -2266,6 +2281,7 @@ export class Game {
    */
   usePortal(portal) {
     const map = this.map;
+    this.flushMovement(true);   // the server and everyone else see where you were before you go
     sfx.play('Game/Portal');
     if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
       this.portalCooldown = 0.6;
@@ -2510,9 +2526,10 @@ export class Game {
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
-      if (plan) this.after(hitDelay + plan.targets[i].delay, land);
-      else if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? ammo : 0, land));
-      else this.after(hitDelay + hitWave(i, kind, skillId), land);
+      // when each lands goes to the server too (it holds the monster's drops until then)
+      if (plan) { t.delay = hitDelay + plan.targets[i].delay; this.after(t.delay, land); }
+      else if (projectile) { t.delay = hitDelay; this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? ammo : 0, land)); }
+      else { t.delay = hitDelay + hitWave(i, kind, skillId); this.after(t.delay, land); }
       if (skillId === CHAIN_LIGHTNING) this.boltAt(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : p, t.mob, skillId);
     }
     if (plan) { plan.partner = !!sp; this.shotFx(plan, p, skillId, ld, ammo, hitDelay); }
@@ -4239,21 +4256,40 @@ export class Game {
     return stanceByte(st, !p.facingRight);
   }
 
+  /**
+   * Your movement for the server and everyone watching, recorded as the client does: each frame adds to the last
+   * element (where you ended up, how fast you were then moving, in px/s) until the foothold, the stance or the way
+   * you are moving changes; once a second of movement has gathered that touches the ground it goes out, the elements
+   * in the air after the last on the ground waiting for the next packet. Standing still sends nothing. Watchers draw
+   * each element as a curve through those speeds, so they must be the real ones (also on ropes and slopes).
+   */
   syncMovement(dt) {
     const p = this.player;
-    this.moveT += dt * 1000; this.flushT += dt;
-    if (this.moveT >= 90) {
-      const snap = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round(p.vx || 0), vy: Math.round(p.vy || 0), fh: p.fh?.id || 0, stance: this.currentStance(), duration: Math.round(this.moveT) };
-      const last = this.moveBuf[this.moveBuf.length - 1] || this.lastSent;
-      if (!last || last.x !== snap.x || last.y !== snap.y || last.stance !== snap.stance) this.moveBuf.push(snap);
-      this.moveT = 0;
-    }
-    if (this.flushT >= 0.36 && this.moveBuf.length) {
-      const start = this.lastSent ? { x: this.lastSent.x, y: this.lastSent.y } : { x: this.moveBuf[0].x, y: this.moveBuf[0].y };
-      this.net.move(start, this.moveBuf);
-      this.lastSent = this.moveBuf[this.moveBuf.length - 1];
-      this.moveBuf = []; this.flushT = 0;
-    }
+    if (!dt) return;
+    const prev = this.movePos || { x: p.x, y: p.y };
+    this.movePos = { x: p.x, y: p.y };
+    if (Math.abs(p.x - prev.x) > 300 || Math.abs(p.y - prev.y) > 300) { this.flushMovement(true); this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; return; }
+    const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round((p.x - prev.x) / dt), vy: Math.round((p.y - prev.y) / dt),
+      fh: p.ladder ? 0 : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000, held: !!p.ladder };
+    const last = this.moveBuf[this.moveBuf.length - 1];
+    if (last && last.cmd === 0 && last.fh === el.fh && last.stance === el.stance && Math.sign(last.vx) === Math.sign(el.vx) && Math.sign(last.vy) === Math.sign(el.vy)) {
+      Object.assign(last, { x: el.x, y: el.y, vx: el.vx, vy: el.vy }); last.duration += el.duration;
+    } else this.moveBuf.push(el);
+    this.moveTotal = (this.moveTotal || 0) + el.duration;
+    if (this.moveTotal >= MOVE_FLUSH) this.flushMovement(this.moveTotal >= MOVE_FLUSH * 3);
+  }
+  /** Send what is gathered: up to the last element on the ground (all of it when forced, before a portal). */
+  flushMovement(force) {
+    const buf = this.moveBuf || [];
+    const ground = force ? buf.length - 1 : buf.findLastIndex((m) => m.fh > 0 || m.held);   // a ladder or rope holds you too
+    if (ground < 0 || !this.net) return;
+    const send = buf.slice(0, ground + 1), keep = buf.slice(ground + 1), first = send[0], lastSent = this.lastSent;
+    this.moveBuf = keep; this.moveTotal = keep.reduce((t, m) => t + m.duration, 0);
+    // standing where we last were: nothing to tell
+    if (send.length === 1 && lastSent && first.x === lastSent.x && first.y === lastSent.y && first.stance === lastSent.stance && !first.vx && !first.vy) return;
+    const start = lastSent ? { x: lastSent.x, y: lastSent.y } : { x: first.x, y: first.y };
+    this.net.move(start, send.map(({ held, ...m }) => ({ ...m, duration: Math.round(m.duration) })));
+    this.lastSent = send[send.length - 1];
   }
 
   // ------------------------------------------------------------------ camera / render

@@ -179,8 +179,8 @@ export function readMovement(r) {
       case 1: case 2: case 6: case 12: case 13: case 16: case 18: case 19: case 20: case 22:
         moves.push({ cmd, rx: r.short(), ry: r.short(), stance: r.ubyte(), duration: r.short() });
         break;
-      case 3: case 4: case 7: case 8: case 9: case 11:
-        moves.push({ cmd, x: r.short(), y: r.short(), vx: r.short(), vy: r.short(), stance: r.ubyte() });
+      case 3: case 4: case 7: case 8: case 9: case 11:   // a jump to a point: where, on which foothold
+        moves.push({ cmd, x: r.short(), y: r.short(), fh: r.short(), stance: r.ubyte(), duration: r.short() });
         break;
       case 14: r.skip(9); break;
       case 10: moves.push({ cmd, equip: r.ubyte() }); break;
@@ -204,7 +204,7 @@ export function writeMovement(w, moves) {
       case 1: case 2: case 6: case 12: case 13: case 16: case 18: case 19: case 20: case 22:
         w.short(m.rx).short(m.ry).byte(m.stance).short(m.duration); break;
       case 3: case 4: case 7: case 8: case 9: case 11:
-        w.short(m.x).short(m.y).short(m.vx).short(m.vy).byte(m.stance); break;
+        w.short(m.x).short(m.y).short(m.fh || 0).byte(m.stance).short(m.duration || 0); break;
       case 15:
         w.short(m.x).short(m.y).short(m.vx).short(m.vy).short(m.fh).short(m.ofh).byte(m.stance).short(m.duration); break;
       default: break;
