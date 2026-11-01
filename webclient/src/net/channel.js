@@ -706,8 +706,10 @@ export class ChannelSession {
       if (from === -3) r.int();
       const damage = r.int();
       let mobId = 0, direction = 0;
+      let fake = 0;
       if (from !== -4) { mobId = r.int(); direction = r.ubyte(); }
-      this.emit('playerDamaged', { id, from, damage, mobId, direction });
+      if (damage === -1 && r.available >= 4) { r.skip(r.available - 4); fake = r.int(); }   // Shadow Shifter's id, last
+      this.emit('playerDamaged', { id, from, damage, mobId, direction, fake });
     });
 
     const readMob = (r, controlMode) => {

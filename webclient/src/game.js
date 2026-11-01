@@ -315,6 +315,8 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
+/** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
+const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001;
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
  * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
@@ -1538,6 +1540,8 @@ export class Game {
 
   onPlayerDamaged(d) {
     const rp = this.others.get(d.id);
+    // Shadow Shifter dodged it: its art, a MISS
+    if (rp && d.damage === -1 && d.fake) { this.playSkillEffect(d.fake, rp, false, 'special'); setExpression(rp, 2, HIT_FACE_TIME); this.vfx?.damage(rp, [0], 'violet'); return; }
     if (rp) this.vfx?.damage(rp, [d.damage], 'violet');
     if (rp && d.damage > 0) setExpression(rp, 1, HIT_FACE_TIME);
     if (rp && d.from >= 0 && d.mobId) sfx.play(`Mob/${pad(d.mobId, 7)}/CharDam${d.from + 1}`);
@@ -2303,6 +2307,7 @@ export class Game {
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
     if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
+    if (id === CHAKRA) return this.castChakra(id, lv);
     if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
     if (FINISHERS.has(id) && this.comboValue() < 2) return false;
@@ -3111,6 +3116,28 @@ export class Game {
     this.net?.specialMove(id, lv, null);
     return true;
   }
+  /**
+   * Chakra: only at 49% HP or less. It winds up in its prepare pose (others are told), blows doing x% meanwhile, and
+   * goes off when the pose ends.
+   */
+  castChakra(id, lv) {
+    const p = this.player, ld = this.skills.levelData(id, lv);
+    if (!this.skillKeyPressed || p.attack || this.chakra) return false;
+    if (((this.stats?.hp || 0) * 100) / Math.max(1, this.maxHpShown()) > 49) return false;
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    const action = this.skills.node(id)?.prepare?.action, pose = action && this.look.has(action) ? action : 'alert';
+    p.attack = pose; p.action = pose; p.frame = 0; p.frameT = 0; p.attackScale = this.attackScale();
+    this.chakra = { x: ld?.x || 100 };
+    this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
+    this.playSkillEffect(id, p, false, 'prepare');
+    this.after(this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale, () => {
+      this.chakra = null;
+      if (this.dead) return;
+      this.playSkillEffect(id, p);
+      this.net?.specialMove(id, lv, null);
+    });
+    return true;
+  }
   async playBasicEff(name, x, y, flip) {
     const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.[name];
     if (!node) return;
@@ -3852,6 +3879,17 @@ export class Game {
     // a deadly attack leaves you 1 HP
     if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
     const fromRight = m.x > p.x;
+    // while Chakra winds up, blows do only its x%
+    if (damage > 0 && this.chakra) damage = Math.max(1, Math.trunc((damage * this.chakra.x) / 100));
+    // Shadow Shifter: at its prop chance the blow (hit or miss) is dodged - no number, no knock-back
+    const shifter = SHIFTERS[this.stats?.job];
+    if (shifter && this.skills.level(shifter) && !((this.map?.info?.fieldLimit || 0) & 2) && Math.random() * 100 < (this.skills.levelData(shifter)?.prop || 0)) {
+      this.net.takeDamage({ damage: -1, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.playSkillEffect(shifter, p, false, 'special');
+      setExpression(p, 2, HIT_FACE_TIME);
+      this.invincible = HIT_PROTECTION; this.missed = true;
+      return;
+    }
     if (damage <= 0) {   // MISS: no knockback or blinking, but the same 1.5s before the next blow as a hit
       this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
       this.vfx?.damage(p, [0], 'violet');
@@ -3859,7 +3897,15 @@ export class Game {
       return;
     }
     this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
-    this.vfx?.damage(p, [damage], 'violet');
+    // Meso Guard: half the blow is paid in mesos (x% of it), as far as they go; the number shows what you lose
+    const guard = this.buffs?.some((b) => b.source === MESO_GUARD && b.until > Date.now()) && this.skills.levelData(MESO_GUARD);
+    let lost = damage;
+    if (guard?.x) {
+      let absorbed = Math.trunc(Math.min(199999, damage) / 2);
+      if (this.meso < Math.trunc((absorbed * guard.x) / 100)) absorbed = Math.trunc((this.meso * 100) / guard.x);
+      if (absorbed > 0) { lost = damage - absorbed; this.playSkillEffect(MESO_GUARD, p, false, 'special'); }
+    }
+    this.vfx?.damage(p, [lost], 'violet');
     if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
