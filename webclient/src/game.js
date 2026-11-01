@@ -269,14 +269,19 @@ const OWN_DAMAGE = new Set([4111004, 4221001, 4121008, 1221011, 1211002, 2112000
 /** Blows that go through a monster's defence: Sacrifice, Shadow Meso, Assaulter, Demolition. */
 const IGNORE_DEFENCE = new Set([1311005, 4111004, 4211002, 5121004]);
 const LUCKY_SEVENS = new Set([4001344, 4121007, 14001004, 14111005]), BARRAGES = new Set([5121007, 15111004]);
+/** Rush and Blast count as a swing three times in five; Brandish's second blow is a swing. */
+const RUSHES = new Set([1121006, 1221007, 1321003, 1221009]), BRANDISHES = new Set([1121008, 11111004]);
+/** Panic and Coma spend the Combo orbs, and their bonus per orb climbs faster. */
+const FINISHERS = new Set([1111003, 1111004, 1111005, 1111006, 11111002, 11111003]);
+const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
  * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
  * DEX for Somersault Kick / Double Shot); lying down any other weapon jabs for STR + DEX over 200. Axes, blunt weapons,
  * wands and staves hit harder swung, spears stabbed and polearms swung.
  */
-function weaponDamage(cat, shot, pose, skillId, job) {
-  const swing = /^swing[OTP]/.test(pose || '');
+function weaponDamage(cat, shot, pose, skillId, job, asSwing = false) {
+  const swing = asSwing || /^swing[OTP]/.test(pose || '');
   if (!shot && (cat === 45 || cat === 46)) return { main: 'dex', mult: 3.4, sec: ['str'], div: 150 };
   if (!shot && cat === 47 && skillId !== 4221001 && skillId !== 4121008 && skillId !== 14101006 && skillId !== 14111006) return { main: 'luk', mult: 1, sec: ['str', 'dex'], div: 150 };
   if (!shot && cat === 49 && ![5201002, 5221003, 5221007, 5221008].includes(skillId) && pose !== 'fireburner' && pose !== 'coolingeffect') {
@@ -1174,7 +1179,7 @@ export class Game {
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
-          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior });
+          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior, combo: b.combo });
       },
       cancelBuff: (m1, m2) => {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
@@ -2299,6 +2304,7 @@ export class Game {
     // Snipe's shot strikes for 199,999 less up to 10,000
     const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
       : ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
+    const fixedPhys = !!ld?.fixdamage && (kind === 'ranged' || kind === 'melee');
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
     // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly, more with Power
@@ -2312,6 +2318,7 @@ export class Game {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
         if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
+        if (fixedPhys) { dmg.push(this.fixedMiss(m) ? 0 : ld.fixdamage); crits.push(false); continue; }
         const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
         dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
       }
@@ -2922,9 +2929,35 @@ export class Game {
     return base + Math.floor((base * mw) / 100) + this.equipStat(k);
   }
   /**
+   * Combo Attack's % on every blow while it is on, by the orbs held (its buff value less 1): with one orb the skill's
+   * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
+   * and +24 to +40 from six to ten. Panic and Coma climb faster.
+   */
+  comboPercent(skillId) {
+    const now = Date.now(), held = (this.buffs || []).find((b) => b.combo && b.until > now)?.combo;
+    if (!held) return 0;
+    const orbs = held - 1, cygnus = Math.floor((this.stats?.job || 0) / 1000) === 1, sb = this.skills;
+    const [combo, adv] = cygnus ? [11111001, 11110005] : [1111002, 1120003];
+    const lvC = sb.level(combo), lvA = sb.level(adv);
+    if (!lvC || orbs < 0) return 0;
+    const [id, lv] = lvC === (cygnus ? 20 : 30) && lvA > 0 ? [adv, lvA] : [combo, lvC];
+    const dmg = sb.levelData(id, lv)?.damage || 0;
+    const steps = FINISHERS.has(skillId) ? [[24, 6], [64, 16], [120, 30], [184, 46], 250, 270, 290, 305, 320] : [[5, 0], [10, 0], [15, 0], [20, 0], 24, 28, 32, 36, 40];
+    if (orbs < 1 || orbs > 10) return 100;
+    if (orbs === 1) return dmg;
+    const st = steps[orbs - 2];
+    return Array.isArray(st) ? Math.trunc((lv * st[0] - st[0]) / 29) + st[1] + dmg : dmg + st;
+  }
+  /** A fixed-damage skill misses by level alone: your level x 100 / (255 + 150 per level the monster has over you), times 0.7-1.3, under its avoid. */
+  fixedMiss(m) {
+    const info = m.src?.info || {}, lv = this.stats?.level || 1, over = Math.max(0, (info.level || 0) - lv);
+    const hit = (lv * 100) / (over * 150 + 255), r = hit * (0.7 + Math.random() * 0.6);
+    return r < Math.min(999, Math.max(0, info.eva || 0));
+  }
+  /**
    * One damage line of a physical attack (shot or close up) on monster m:
    *  - it misses when your accuracy x 100 / (255 + 10 per level the monster has over you), times 0.7-1.3, is under
-   *    its avoid (a GM never misses);
+   *    its avoid (a GM's blows up close never miss and ignore the level gap; its shots don't);
    *  - the weapon's main stat is rolled between it x mastery and itself (mastery: (the mastery skill's value x 5 +
    *    10)% x 0.9), then (main x the weapon's multiplier + its other stats) x attack / 100 (see weaponDamage);
    *  - 1% less per level the monster has over you; its element: weak x1.5, strong x0.5, immune x0 (for Inferno and
@@ -2935,15 +2968,18 @@ export class Game {
    */
   physicalHit(m, cat, skillId, ld, shot, pose, ammoId, crit, charge = 0, line = 0) {
     const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now(), job = this.stats?.job || 0;
-    const gm = Math.floor((job % 1000) / 100) === 9;
-    const over = gm ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
-    if (!gm) {
+    const exempt = !shot && Math.floor((job % 1000) / 100) === 9;
+    const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
+    if (!exempt) {
       const accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
       const acc = Math.min(999, Math.max(0, Math.floor(this.totalStat('dex') * 0.8 + this.totalStat('luk') * 0.5) + this.equipStat('acc') + accBuff));
       const hit = (acc * 100) / (over * 10 + 255);
       if (rand(hit * 0.7, hit * 1.3) < Math.min(999, Math.max(0, info.eva || 0))) return { d: 0, c: false };
     }
-    const f = weaponDamage(cat, shot, pose, skillId, job);
+    // Aran's blows are all swings; Rush and Blast swing three times in five; Brandish's second blow swings
+    const aran = Math.floor(job / 100) === 21 || job === 2000;
+    const asSwing = aran || (RUSHES.has(skillId) && Math.random() < 0.6) || (BRANDISHES.has(skillId) && line === 1);
+    const f = weaponDamage(cat, shot, pose, skillId, job, asSwing);
     let mastery = f.mastery;
     if (mastery === undefined) {
       const ms = masterySkills(cat, shot, skillId, job), val = (id) => (this.skills.level(id) ? this.skills.levelData(id)?.mastery || 0 : 0);
@@ -2965,9 +3001,22 @@ export class Game {
     const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
     const base = Math.trunc(d - rand(pdd * 0.5, pdd * 0.6));
     d = ld?.damage ? (base * ld.damage) / 100 : base;
-    const c = !!crit && skillId !== BLIZZARD && Math.random() * 100 < crit.rate;
-    if (c) d += (crit.dmg * base) / 100;
+    const combo = this.comboPercent(skillId);
+    if (combo > 0) d = (d * combo) / 100;
+    // a critical: Critical Shot / Throw, Sharp Eyes, and Stun Mastery on a stunned monster (+its prop and damage)
+    let rate = crit?.rate || 0, extra = crit ? crit.dmg + 100 : 0;
+    const stun = this.skills.level(STUN_MASTERY) && (m.status?.second & 0x80) && this.skills.levelData(STUN_MASTERY);
+    if (stun) { rate += Math.max(0, Math.min(100, stun.prop || 0)); extra += stun.damage || 0; }
+    const c = rate > 0 && extra > 0 && skillId !== BLIZZARD && Math.random() * 100 < rate;
+    if (c) d += ((extra - 100) * base) / 100;
+    // Wind Walk and Vanish (out of Dark Sight) strike harder
+    const buffed = (ids) => (this.buffs || []).some((b) => ids.includes(b.source) && b.until > now);
+    if (buffed([WIND_WALK])) d = (d * (this.skills.levelData(WIND_WALK)?.damage || 100)) / 100;
+    if (this.skills.level(VANISH) && buffed(DARK_SIGHTS)) d = (d * (this.skills.levelData(VANISH)?.damage || 100)) / 100;
     if (charge) d = (d * ((charge * 90) / PIERCE_HOLD + 10)) / 100;
+    // Berserk: a Dark Knight at x% of max HP or less does (its damage + 100)% up close
+    const berserk = !shot && job === 132 && this.skills.level(BERSERK) && this.skills.levelData(BERSERK);
+    if (berserk && (this.stats?.hp || 0) <= ((berserk.x || 0) * this.maxHpShown()) / 100) d = (d * ((berserk.damage || 0) + 100)) / 100;
     if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
     return { d: Math.max(1, Math.trunc(d)), c };
   }

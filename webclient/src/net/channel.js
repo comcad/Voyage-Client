@@ -585,7 +585,7 @@ export class ChannelSession {
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
     const SHARP_EYES = [3121002, 3221002];
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n;   // BuffStat.SPEED / JUMP
-    const WATK = 0x100000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR
+    const WATK = 0x100000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -633,6 +633,8 @@ export class ChannelSession {
       }
       // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
       if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
+      // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent
+      if (pick === normal && n === 1 && mask === COMBO) { r.pos = start; b.combo = r.short(); }
       // Sharp Eyes' one stat is (critical rate << 8 | critical damage)
       if (pick === normal && SHARP_EYES.includes(normal.source)) { r.pos = start; const v = r.short(); b.sharpEyes = { rate: v >> 8, dmg: v & 0xff }; }
       this.emit('buff', b);
