@@ -249,8 +249,11 @@ const BLAST_SHOTS = new Map([[3101005, () => 50], [3111003, (i) => 90 + i * 30],
  */
 const BOX_SHOTS = new Set([15111006, 5121002, 4121003, 4221003, 15111007, 11101004, 14101006, 13101005, 21100004, 21110004,
   21120006, 5201001, 5211004, 5211005, 5221007, 5221008]);
-/** Hurricane fires while its key is held, at most every 101ms; Piercing Arrow charges up to 1s and fires when let go. */
-const HURRICANES = new Set([3121004, 13111002]), HURRICANE_GAP = 101, PIERCING_ARROW = 3221001, PIERCE_HOLD = 1000;
+/**
+ * Hurricane fires while its key is held, once 101ms have passed on the game's 30ms clock (so every 120ms); Piercing
+ * Arrow charges up to 1s and fires when let go.
+ */
+const HURRICANES = new Set([3121004, 13111002]), HURRICANE_GAP = 101, TICK = 30, PIERCING_ARROW = 3221001, PIERCE_HOLD = 1000;
 const DRAGONS_BREATH = new Set([3121003, 3221003]), POWER_KNOCKBACK = new Set([3101003, 3201003]);
 const MORTAL_BLOWS = [3110001, 3210001], SNIPE = 3221007, SOUL_ARROWS = [3101004, 3201004, 13101003];
 const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have used up all of your arrows.',
@@ -2395,7 +2398,7 @@ export class Game {
       }
       return false;
     };
-    const reached = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined && reaches(m)).slice(0, n);
+    const reached = this.liveMobs().filter(reaches).slice(0, n);
     const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
     for (const [m, ok] of caught) if (ok) m.pull = { x: p.x, stop: (m.node?._w || 40) + 45 };
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
@@ -2417,7 +2420,7 @@ export class Game {
     }
     const action = sb.node(id)?.prepare?.action;
     const pose = action && this.look.has(action) ? action : this.defaultAttackAction('ranged');
-    this.keydown = { id, lv, t: 0, last: -Infinity, pose };
+    this.keydown = { id, lv, t: 0, tick: 0, last: -Infinity, pose };
     p.frame = 0; p.frameT = 0;
     this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
     sfx.play(`Skill/${pad(id, 7)}/Use`);
@@ -2442,13 +2445,18 @@ export class Game {
     if (loop && this.keydown === k) { this.fx = this.fx.filter((f) => f !== k.art); k.art = await show(loop, true); }
   }
   /**
-   * Hurricane while held: a shot every 101ms at most. Out of arrows or MP it stops; a monster within the bow's swing
-   * stops it too, and gets the swing.
+   * Hurricane while held: a shot each time 101ms have passed on the 30ms clock. Out of arrows or MP it stops; a monster
+   * within the bow's swing stops it too, and gets the swing.
    */
   hurricaneShot(k) {
-    const now = k.t * 1000;
-    if (now - k.last < HURRICANE_GAP) return;
-    k.last = now;
+    while (this.keydown === k && (k.tick + 1) * TICK <= k.t * 1000) {
+      const now = ++k.tick * TICK;
+      if (now - k.last < HURRICANE_GAP) continue;
+      k.last = now;
+      this.hurricaneFire(k);
+    }
+  }
+  hurricaneFire(k) {
     const ld = this.skills.levelData(k.id, k.lv), wcat = Math.floor(this.weaponId() / 10000);
     if (this.net && !this.hasAmmo(k.id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); this.endKeydown(); return; }
     if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice("You don't have enough MP to use this skill."); this.endKeydown(); return; }
@@ -2830,7 +2838,8 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ shots
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined); }
+  /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined); }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
   closeReach(action) {
     const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
@@ -3043,7 +3052,7 @@ export class Game {
     // maxReach: how far in front it goes at most (a ranged weapon's swing)
     if (p.facingRight) x2 = Math.max(x1 + 1, Math.min(x2, p.x + maxReach)); else x1 = Math.min(x2 - 1, Math.max(x1, p.x - maxReach));
     // a monster is in it when its body (now or a frame ago) overlaps the box (openms, docs/hitboxes.md)
-    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
+    const mobs = this.liveMobs();
     const inside = (m) => { const b = m.hitBox(true); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; };
     // Slash Blast, Coma, Charged Blow: only once something is inside the ordinary swing do they reach out to their range
     const reach = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
