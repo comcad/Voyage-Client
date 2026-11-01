@@ -3712,10 +3712,10 @@ export class Game {
     // a deadly attack leaves you 1 HP
     if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
     const fromRight = m.x > p.x;
-    if (damage <= 0) {   // MISS: no knockback, and the next touch is checked two 30ms steps later
+    if (damage <= 0) {   // MISS: no knockback or blinking, but the same 1.5s before the next blow as a hit
       this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
       this.vfx?.damage(p, [0], 'violet');
-      this.invincible = 0.06;
+      this.invincible = HIT_PROTECTION; this.missed = true;
       return;
     }
     this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
@@ -3736,7 +3736,7 @@ export class Game {
       this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);
     }
     p.attack = null;
-    this.invincible = HIT_PROTECTION;
+    this.invincible = HIT_PROTECTION; this.missed = false;
   }
 
   /**
@@ -4044,7 +4044,7 @@ export class Game {
     const chair = local ? ent.seat?.item : ent.action === 'sit' && ent.chair;
     if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight);
     // while protected after a hit, alternate gray and normal every 60ms, as the original does
-    const blink = local && this.invincible > 0 && Math.floor(this.invincible / 0.06) % 2 === 0;
+    const blink = local && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
     // dead: the ghost (body action "dead") hovers over the tombstone, drifting smoothly round a small circle
     // (not snapped to whole game pixels, so it glides instead of stepping)
     const dead = ent.action === 'dead', t = performance.now() / 700;
