@@ -83,6 +83,7 @@ export class WorldFx {
         if (e.kind !== 'Npc') continue;
         const q = this.game.quests.npcQuests(Number(e.spawn.id), ctx);
         const icon = q.complete.length ? this.book : q.start.length ? this.bulb : q.progress.length ? this.bubble : null;
+        e.questIcon = !!icon;
         if (icon) this.questIcons.set(e, icon);
       }
     }
