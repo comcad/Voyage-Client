@@ -7,7 +7,7 @@ import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
 import { npcTalk, MessageBox, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
 import { npcQuestMenu } from './ui/quests-ui.js';
-import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS } from './skills.js';
+import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
 import { WorldFx, lineDelay } from './effects.js';
 import { Reactor, loadReactorImg } from './reactors.js';
@@ -193,7 +193,7 @@ const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
 const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
   5221003, 5121001, 5121005, 5121007, 15111004, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020,
   21000002, 21100001, 21110007, 21110008, 21120009, 21120010, 21100002, 20000014, 20000015]);
-/** Dragon Roar: a spear or polearm only, and only with at least half your HP (it costs x% of your max HP). */
+/** Dragon Roar: only with at least half your HP (it costs x% of your max HP). */
 const DRAGON_ROAR = 1311006;
 /** Monster Magnet (Hero, Paladin, Dark Knight): held up to 1s, the longer the more monsters it can catch. */
 const MONSTER_MAGNETS = new Set([1121001, 1221001, 1321001]), MAGNET_HOLD = 1;
@@ -2004,10 +2004,7 @@ export class Game {
     const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
-    if (skillId && this.net && (!sb.weaponOk(skillId, weapon) || (skillId === DRAGON_ROAR && wcat !== 143 && wcat !== 144))) {
-      this.notice('You cannot use this skill with the weapon you are holding.');
-      return false;
-    }
+    if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     // a bow, crossbow, claw or gun swings (a plain attack) instead of shooting when a monster is within its swing
     // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot
@@ -2469,7 +2466,7 @@ export class Game {
     return 0;
   }
   hasAmmo(skillId) {
-    if (skillId % 10000000 === 1000) return true; // Three Snails
+    if (skillId % 10000000 === 1000 || NO_AMMO_SHOTS.has(skillId)) return true; // Three Snails, Soul Blade, Shark Wave
     const noAmmoBuffs = [3101004, 3201004, 4121006, 13101003]; // Soul Arrow x3, Shadow Claw
     if (this.buffs.some((b) => noAmmoBuffs.includes(b.source))) return true;
     return !!this.ammoItem();

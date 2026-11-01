@@ -11,8 +11,31 @@ import { pad, frames } from './assets.js';
  */
 
 export const RANGED_WEAPONS = new Set([145, 146, 147, 149]); // bow, crossbow, claw, gun
-/** Buffs that look like attacks in their data: the White Knight / Paladin charges and Soul Arrow. */
-const NOT_ATTACKS = new Set([1211003, 1211004, 1211005, 1211006, 1211007, 1211008, 1221003, 1221004, 3101004, 3201004]);
+/**
+ * Buffs and moves that look like attacks in their data: the White Knight / Paladin / Dawn Warrior charges, Soul
+ * Arrow, and Power Crash and Magic Crash (they weaken monsters; the server finds them).
+ */
+const NOT_ATTACKS = new Set([1211003, 1211004, 1211005, 1211006, 1211007, 1211008, 1221003, 1221004, 11111007, 3101004, 3201004,
+  1311007, 1211009]);
+/**
+ * Skills that only ever go off by themselves, so a hotkey does nothing: Endure, the Final Attacks, Advanced Combo,
+ * Guardian, Advanced Charge, Berserk and Hex of the Beholder.
+ */
+const PROCS = new Set([1000002, 1100002, 1100003, 1200002, 1200003, 1300002, 1300003, 1120003, 11110005, 1120005, 1220006,
+  1220010, 1320006, 1320009]);
+/** Attacks that look like buffs in their data (Panic). */
+const MELEE_SKILLS = new Set([1111003, 1111004, 11111002]);
+/** Shots that need no ammo: Soul Blade, Shark Wave. */
+export const NO_AMMO_SHOTS = new Set([11101004, 15111007]);
+/** Weapons (category % 100) a skill needs where its data doesn't say: 30/40 swords, 31/41 axes, 32/42 blunt, 43 spear, 44 polearm. */
+const SKILL_WEAPONS = {
+  1101004: [30, 40], 1101005: [31, 41], 1201004: [30, 40], 1201005: [32, 42], 1301004: [43], 1301005: [44], 11101001: [30, 40],
+  1111003: [30, 40], 1111005: [30, 40], 1111004: [31, 41], 1111006: [31, 41], 11111002: [30, 40], 11111003: [30, 40],
+  1121006: [30, 40, 31, 41], 1121008: [30, 40, 31, 41], 11111004: [30, 40], 1221007: [30, 40, 32, 42], 1211002: [30, 40, 32, 42],
+  1321003: [43, 44], 1311005: [43, 44], 1311006: [43, 44],
+  1211003: [30, 40], 1211005: [30, 40], 1211007: [30, 40], 1221003: [30, 40], 11101002: [30, 40], 11111007: [30, 40],
+  1211004: [32, 42], 1211006: [32, 42], 1211008: [32, 42], 1221004: [32, 42],
+};
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
 
 /** Skill books for a job: 112 -> [0, 100, 110, 111, 112], 2112 -> [2000, 2100, 2110, 2111, 2112]. */
@@ -104,7 +127,9 @@ export class SkillBook {
 
   kind(id, weaponId) {
     const n = this.node(id), ld = n?.level?.[1];
-    if (!n || !ld) return 'passive';
+    if (!n || !ld || PROCS.has(id)) return 'passive';
+    if (MELEE_SKILLS.has(id)) return 'melee';
+    if (NO_AMMO_SHOTS.has(id)) return 'ranged';
     // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
     // an attack has power (damage, magic, a projectile's x...); one that also lasts a while (a stun, a poison, a
@@ -123,8 +148,9 @@ export class SkillBook {
 
   /** Weapon requirement from Skill.wz (`weapon`: weapon category % 100, e.g. 47 claw, 33 dagger). */
   weaponOk(id, weaponId) {
-    const w = this.node(id)?.weapon;
-    return !w || (weaponId && Math.floor(weaponId / 10000) % 100 === w);
+    const w = this.node(id)?.weapon, cat = weaponId ? Math.floor(weaponId / 10000) % 100 : 0;
+    if (SKILL_WEAPONS[id]) return SKILL_WEAPONS[id].includes(cat);
+    return !w || cat === w;
   }
 
   cooling(id) { return Math.max(0, (this.cooldowns[id] || 0) - Date.now()); }
@@ -132,7 +158,9 @@ export class SkillBook {
   /** Body action for a skill: Skill.wz `action` (random pick), else null (use the weapon's default). */
   action(id) {
     const acts = frames(this.node(id)?.action);
-    return acts.length ? acts[Math.floor(Math.random() * acts.length)] : null;
+    if (acts.length) return acts[Math.floor(Math.random() * acts.length)];
+    const own = this.levelData(id)?.action;   // Spear / Pole Arm Crusher: a pose per level (burster1, burster2)
+    return typeof own === 'string' ? own : null;
   }
 
   /** {lt:[x,y], rb:[x,y]} attack box (facing left) or null. */
