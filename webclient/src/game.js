@@ -2418,6 +2418,8 @@ export class Game {
       if (!this.hasAmmo(id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); return false; }
       if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
     }
+    // a monster within the bow's swing gets the swing (or a Mortal Blow) and Hurricane doesn't start
+    if (HURRICANES.has(id) && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length) return this.attack(0);
     const action = sb.node(id)?.prepare?.action;
     const pose = action && this.look.has(action) ? action : this.defaultAttackAction('ranged');
     this.keydown = { id, lv, t: 0, tick: 0, last: -Infinity, pose };
