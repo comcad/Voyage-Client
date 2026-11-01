@@ -1447,8 +1447,50 @@ export class Game {
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
       const dst = equipSlotFor(it.id);
-      if (dst) this.net.moveItem(1, slot, dst, 1);
+      if (!dst) return;
+      if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
+      this.net.moveItem(1, slot, dst, 1);
     }
+  }
+
+  /**
+   * Your level, stats and fame as an equip's requirements see them: your own stats plus the bonuses of what you would
+   * still be wearing once it is on (not its own, nor those of what it takes off: the piece in its slot, a top and
+   * bottom for an overall, a shield for a two-handed weapon...).
+   */
+  equipStats(id) {
+    const s = this.stats || {}, worn = this.inventory?.equipped || {}, dst = equipSlotFor(id), cat = Math.floor(id / 10000);
+    const off = new Set([dst]);
+    if (cat === 105) off.add(-6);
+    if (cat === 106 && Math.floor((worn[-5]?.id || 0) / 10000) === 105) off.add(-5);
+    if (cat >= 140 && cat < 150) off.add(-10);
+    const weapon = Math.floor((worn[-11]?.id || 0) / 10000);
+    if (cat === 109 && weapon >= 140 && weapon < 150) off.add(-11);
+    const out = { level: s.level || 0, str: s.str || 0, dex: s.dex || 0, int: s.int || 0, luk: s.luk || 0, fame: s.fame || 0 };
+    for (const [slot, it] of Object.entries(worn)) {
+      // what a pet wears adds nothing
+      if (off.has(Number(slot)) || Number(slot) <= -114) continue;
+      for (const k of ['str', 'dex', 'int', 'luk']) out[k] += it[k] || 0;
+    }
+    return out;
+  }
+  /**
+   * Whether you can wear an item: its gender, its level, STR, DEX, INT, LUK and fame requirements (against
+   * equipStats) and its jobs (reqJob: 0 anyone, -1 beginners, else a bit per branch: 1 warrior, 2 magician, 4 bowman,
+   * 8 thief, 16 pirate). A GM (jobs 800 / 900) can wear anything.
+   */
+  canEquip(id) {
+    const s = this.stats, info = this.windows?.info(id);
+    if (!s || !info) return true;
+    const branch = Math.floor((s.job % 1000) / 100);
+    if (branch === 8 || branch === 9) return true;
+    const g = Math.floor(id / 1000) % 10, gender = Math.floor(id / 1000000) === 1 && g < 2 ? g : 2;
+    if (s.gender !== 2 && gender !== 2 && gender !== s.gender) return false;
+    const have = this.equipStats(id);
+    const reqs = [['reqLevel', 'level'], ['reqSTR', 'str'], ['reqDEX', 'dex'], ['reqINT', 'int'], ['reqLUK', 'luk'], ['reqPOP', 'fame']];
+    if (reqs.some(([k, stat]) => (info[k] || 0) > have[stat])) return false;
+    const job = info.reqJob || 0, bit = branch ? 1 << (branch - 1) : 0;
+    return job === 0 || (job === -1 && !bit) || (job > 0 && (job & bit) !== 0);
   }
 
   /**
