@@ -12,7 +12,7 @@ export function mapPath(id) {
 
 /**
  * Animation over numbered canvas frames, each with its own `delay`.
- * Frames may fade: alpha goes from `a0` to `a1` (0-255) across the frame's delay.
+ * Frames may fade: alpha goes from `a0` to `a1` (0-255) across the frame's delay, and zoom from `z0` to `z1` (%).
  * A last frame without a delay is held (e.g. the title logo fades in once and stays).
  */
 export class Anim {
@@ -32,6 +32,14 @@ export class Anim {
     const a0 = f.a0 ?? 255, a1 = f.a1 ?? a0;
     const k = Math.min(1, this.t / (f.delay || this.defaultDelay));
     return Math.max(0, Math.min(1, (a0 + (a1 - a0) * k) / 255));
+  }
+  /** Zoom: from `z0` to `z1` percent across the frame's delay (1 = actual size). */
+  get zoom() {
+    const f = this.node;
+    if (!f || (f.z0 === undefined && f.z1 === undefined)) return 1;
+    const z0 = f.z0 ?? 100, z1 = f.z1 ?? z0;
+    const k = Math.min(1, this.t / (f.delay || this.defaultDelay));
+    return Math.max(0, (z0 + (z1 - z0) * k) / 100);
   }
   update(dtMs) {
     // a single still frame only moves on when it plays once (then it ends after its delay, e.g. a

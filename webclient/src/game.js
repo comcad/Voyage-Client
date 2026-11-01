@@ -317,6 +317,8 @@ const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
+/** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
+const CRUSHERS = new Set([1311001, 1311002]);
 const HEROS_WILLS = new Set([1121011, 1221012, 1321010, 2121008, 2221008, 2321009, 3121009, 3221008, 4121009, 4221008, 5121008,
   21121008]);
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
@@ -1511,7 +1513,7 @@ export class Game {
         let len = 0; for (let i = 0; i < rp.look.frameCount(rp.attack); i++) len += rp.look.delay(rp.attack, i);
         rp.boomerangUntil = performance.now() + len * rp.attackScale;
       }
-      if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
+      if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic', 'effect', rp.attackScale); else this.playWeaponSound(rp);
       delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
       if (SHAKERS.has(a.skill)) this.startShake(a.skill, 400 - Math.min(400, Math.hypot(rp.x - this.player.x, rp.y - this.player.y)), delay);
     }
@@ -2420,9 +2422,9 @@ export class Game {
     const pose = (opts.held ? opts.pose : p.attack) || this.defaultAttackAction(kind), scale = opts.held ? this.attackScale() : p.attackScale;
     const hitDelay = this.look.attackDelay(pose) * scale, trailAt = this.hitFrame(pose, kind);
     if (!opts.held) {
-      this.after(this.frameTime(pose, trailAt) * scale, () => this.playAfterimage(pose, trailAt));
+      this.after(this.frameTime(pose, trailAt) * scale, () => this.playAfterimage(pose, trailAt, skillId));
       if (opts.stage2) { this.playSkillEffect(skillId, p, false, 'special'); sfx.play(`Skill/${pad(skillId, 7)}/Use2`); }
-      else if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic');
+      else if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic', 'effect', scale);
       else if (!skillId) this.playWeaponSound(p);
     } else sfx.play(`Skill/${pad(skillId, 7)}/Use`);
 
@@ -2715,8 +2717,15 @@ export class Game {
     const img = await this.assets.json(`Character/Afterimage/${name}.img`);
     if (this.afterimageName === name) this.afterimage = img;
   }
-  async playAfterimage(action, frame) {
-    const p = this.player, node = this.afterimage?.[this.afterimageLevel()]?.[action]?.[frame];
+  async playAfterimage(action, frame, skillId = 0) {
+    const p = this.player, own = skillId && this.skills?.node(skillId)?.afterimage;
+    // a skill with its own trail (Dragon Fury's dragon) uses it instead of the weapon's, under the weapon's
+    // afterImage name and the pose; with nothing there, no trail at all
+    let node = this.afterimage?.[this.afterimageLevel()]?.[action]?.[frame];
+    if (own) {
+      const set = own[this.windows?.info(this.weaponId())?.afterImage]?.[action];
+      node = set && Object.entries(set).find(([, v]) => v && typeof v === 'object' && !Array.isArray(v))?.[1];
+    }
     const fx = Game.fxNode(node);
     if (!fx) return;
     const anim = new Anim(fx, false);
@@ -3788,18 +3797,28 @@ export class Game {
    * swing: fall back to the weapon's swing when the skill has no Use sound (most physical attacks).
    * branch: 'effect' when cast, 'affected' on whoever a party buff reached (no sound: the caster's played).
    */
-  async playSkillEffect(id, ent, swing = false, branch = 'effect') {
+  async playSkillEffect(id, ent, swing = false, branch = 'effect', rate = 1) {
     if (branch === 'effect') sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
     const node = await this.skills?.ensure(id);
+    if (branch !== 'effect') { const fx = Game.fxNode(node?.[branch]); if (fx) this.pushEffect(fx, ent, rate); return; }
     // a skill with an effect per pose (Brandish: effect/0 with brandish1, effect/1 with brandish2) plays the one
     // that goes with the pose being used
-    const posed = branch === 'effect' && node?.action && Object.entries(node.action).find(([, a]) => a === ent?.attack)?.[0];
+    const posed = node?.action && Object.entries(node.action).find(([, a]) => a === ent?.attack)?.[0];
     const own = posed !== undefined && node.effect?.[posed] && !node.effect[posed]._canvas ? node.effect[posed] : null;
-    const fx = own || Game.fxNode(node?.[branch] || (branch === 'effect' ? node?.effect0 : null));
-    if (!fx) return;
-    const anim = new Anim(fx, false);
+    if (own) { this.pushEffect(own, ent, rate); return; }
+    // otherwise effect, then effect0, effect1... all start together (their blank first frames hold the later ones
+    // back), up to the first missing one; Crusher's go up to effect<attackCount>. None without an `effect`.
+    if (!node?.effect) return;
+    const last = CRUSHERS.has(id) ? (this.skills.levelData(id)?.attackCount ?? 0) : Infinity;
+    const layers = [node.effect];
+    for (let i = 0; i <= last && node[`effect${i}`]; i++) layers.push(node[`effect${i}`]);
+    for (const n of layers) { const fx = Game.fxNode(n); if (fx) this.pushEffect(fx, ent, rate); }
+  }
+  /** One effect layer on `ent`, following it, at `rate` (an attack's speed scale); a `fixed` one never flips. */
+  async pushEffect(node, ent, rate = 1) {
+    const anim = new Anim(node, false);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, follow: ent, flip: ent.facingRight });
+    this.fx.push({ anim, follow: ent, rate, fixed: !!node.fixed });
   }
 
   /**
@@ -3841,7 +3860,7 @@ export class Game {
   }
 
   updateFx(dt) {
-    for (const f of this.fx) f.anim.update(dt * 1000);
+    for (const f of this.fx) f.anim.update(dt * 1000 / (f.rate || 1));   // rate: an attack's effect runs at its speed
     for (const d of this.doors?.values() || []) d.anim?.update(dt * 1000);
     for (const m of this.mists?.values() || []) for (const t of m.tiles) t.anim.update(dt * 1000);
     this.fx = this.fx.filter((f) => !f.anim.done && (!f.keep || f.keep()));
@@ -3853,22 +3872,24 @@ export class Game {
   }
 
   drawFx(ctx, cam) {
-    const draw = (node, x, y, flip, alpha = 1) => {
+    const draw = (node, x, y, flip, alpha = 1, zoom = 1) => {
       const img = this.assets.image(node);
-      if (!img) return;
+      if (!img || alpha <= 0) return;
       const o = node.origin || [0, 0];
       ctx.save();
       ctx.globalAlpha = alpha;
       ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
       if (flip) ctx.scale(-1, 1);
+      if (zoom !== 1) ctx.scale(zoom, zoom);
       ctx.drawImage(img, -o[0], -o[1]);
       ctx.restore();
     };
     for (const f of this.fx) {
       const node = f.anim.node;
       if (!node) continue;
-      if (f.follow) draw(node, f.follow.x, f.follow.y, f.follow.facingRight);
-      else draw(node, f.x, f.y, f.flip);
+      // each frame's own fade (a0 -> a1) and zoom (z0 -> z1)
+      if (f.follow) draw(node, f.follow.x, f.follow.y, f.fixed ? false : f.follow.facingRight, f.anim.alpha, f.anim.zoom);
+      else draw(node, f.x, f.y, f.flip, f.anim.alpha, f.anim.zoom);
     }
     for (const s of this.shots) {
       if (!s.anim?.node) continue;
