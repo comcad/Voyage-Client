@@ -91,18 +91,17 @@ export class WorldFx {
 
   drawWorld(ctx, cam) {
     const im = (n) => this.assets.image(n);
-    // HP bars over monsters you have just hit (System Option MONSTER INFO: none / HP / name and HP)
+    // a monster you hit shows its HP bar and its level and name for 5s after your last hit (System Option MONSTER
+    // INFO: none / HP / name and HP); one that other monsters can hurt always shows its bar, in red
     const now = performance.now();
     for (const e of this.game.map.life) {
-      if (!settings.mobInfo) break;
-      if (e.kind !== 'Mob' || !(e.hpShownUntil > now) || !e.alive || e.src?.info?.boss || Number(e.spawn.id) === this.boss?.oid) continue;
-      const b = e.box(), w = 50, x = Math.round(e.x - cam.x - w / 2), y = Math.round(b.top - cam.y - 10);
-      const k = Math.max(0, Math.min(1, e.hp / Math.max(1, e.maxHp)));
-      ctx.fillStyle = '#000'; ctx.fillRect(x - 1, y - 1, w + 2, 7);
-      ctx.fillStyle = '#4a4a4a'; ctx.fillRect(x, y, w, 5);
-      ctx.fillStyle = '#e8323c'; ctx.fillRect(x, y, Math.round(w * k), 5);
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(x, y, Math.round(w * k), 1);
-      if (settings.mobInfo === 2 && e.name) uiText(ctx, e.name, x + w / 2, y - 15, { color: '#fff', size: 11, bold: true, align: 'center', outline: '#000' });
+      if (e.kind !== 'Mob' || !e.alive || Number(e.spawn.id) === this.boss?.oid) continue;
+      const info = e.src?.info || {}, escort = !!Number(info.damagedByMob), shown = e.hpShownUntil > now;
+      if (!escort && (!shown || !settings.mobInfo)) continue;
+      // the bar shows the HP % the server last sent (an escort starts full), not what our own hits took off
+      const pct = e.hpPct ?? (escort ? 100 : null);
+      if (pct !== null && (escort || !(Number(info.hideHP) || Number(info.HPgaugeHide)))) mobHpBar(ctx, e, cam, pct, escort ? '#f00' : '#0f0');
+      if (shown && settings.mobInfo === 2 && !Number(info.hideName) && e.name) mobNameTag(ctx, e, cam, info);
     }
     // quest icons above NPC heads
     for (const [e, anim] of this.questIcons) {
@@ -267,4 +266,39 @@ function deep(node, depth) {
   if (!node || typeof node !== 'object') return [];
   if (isCanvas(node)) return [node];
   return depth ? Object.entries(node).filter(([k]) => !k.startsWith('_')).flatMap(([, v]) => deep(v, depth - 1)) : [];
+}
+
+/**
+ * A monster's HP bar, as the client draws it: a 52x10 box centred over its body, 30px above its top - black, white,
+ * black - holding the HP (46px at full) in 3 rows of its colour over a row of dark red.
+ */
+function mobHpBar(ctx, e, cam, pct, color) {
+  const b = e.hitBox(), x = Math.round((b.left + b.right) / 2 - cam.x) - 26, y = Math.round(b.top - cam.y) - 30;
+  const w = Math.floor((Math.max(0, Math.min(100, pct)) * 46) / 100);
+  ctx.fillStyle = '#000'; ctx.fillRect(x, y, 52, 10);
+  ctx.fillStyle = '#fff'; ctx.fillRect(x + 1, y + 1, 50, 8);
+  ctx.fillStyle = '#000'; ctx.fillRect(x + 2, y + 2, 48, 6);
+  ctx.fillStyle = color; ctx.fillRect(x + 3, y + 3, w, 3);
+  ctx.fillStyle = '#a00300'; ctx.fillRect(x + 3, y + 6, w, 1);
+}
+/** Its level and name under its feet, each in its own see-through dark tag: the name centred, its level just left of it. */
+function mobNameTag(ctx, e, cam, info) {
+  const x = Math.round(e.x - cam.x), y = Math.round(e.y - cam.y) + 2;
+  ctx.save();
+  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const width = (text) => Math.ceil(ctx.measureText(text).width) + 6;
+  const tag = (text, left, w) => {
+    ctx.fillStyle = 'rgba(0,0,0,0.67)';
+    ctx.fillRect(left + 1, y, w - 2, 13); ctx.fillRect(left, y + 1, w, 11);   // its corners rounded off
+    ctx.fillStyle = '#fff';
+    ctx.fillText(text, left + w / 2, y);
+  };
+  const nw = width(e.name), left = x - Math.floor(nw / 2);
+  tag(e.name, left, nw);
+  if (!Number(info.hideLevel) && info.level) {
+    const lv = `Lv.${info.level}`, lw = width(lv);
+    tag(lv, left - 1 - lw, lw);
+  }
+  ctx.restore();
 }

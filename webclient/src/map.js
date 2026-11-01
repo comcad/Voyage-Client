@@ -866,11 +866,6 @@ export class Life {
     }
 
     if (this.name && this.kind === 'Npc' && !Number(this.src.info?.hideName)) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
-    if (this.kind === 'Mob' && this.hp < this.maxHp && this.state !== 'die1') {
-      const w = 50, top = sy - o[1] - 10;
-      ctx.fillStyle = '#000'; ctx.fillRect(sx - w / 2 - 1, top - 1, w + 2, 6);
-      ctx.fillStyle = '#e33'; ctx.fillRect(sx - w / 2, top, w * Math.max(0, this.hp / this.maxHp), 4);
-    }
   }
 
   /** Bounding box of the current frame in world space. */

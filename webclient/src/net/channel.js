@@ -724,7 +724,11 @@ export class ChannelSession {
     });
     on(S.KILL_MONSTER, (r) => this.emit('killMob', r.int(), r.ubyte()));
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
-    on(S.DAMAGE_MONSTER, (r) => { const oid = r.int(); r.ubyte(); this.emit('mobDamaged', oid, r.int()); });
+    // damage (negative: healed), then - for one other monsters can hurt - its HP and max HP
+    on(S.DAMAGE_MONSTER, (r) => {
+      const oid = r.int(); r.ubyte(); const dmg = r.int();
+      this.emit('mobDamaged', oid, dmg, r.available >= 8 ? r.int() : null, r.available >= 4 ? r.int() : null);
+    });
     // the controller's answer: the monster's MP and the skill it may cast next (0 for none)
     // a monster's statuses: two masks (first / second, MonsterStatus), then per status its value (short), the skill
     // behind it (a player skill id, or a monster skill as short id + short level) and a short; all from one skill

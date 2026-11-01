@@ -1008,7 +1008,12 @@ export class Game {
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
       }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
-      mobHp: later((oid, pct) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { e.hp = Math.round((e.maxHp * pct) / 100); e.hpShownUntil = performance.now() + 5000; } }),
+      // one other monsters can hurt: its red bar follows the HP the server sends
+      mobDamaged: later((oid, dmg, hp, maxHp) => {
+        const e = this.lifeByOid.get(oid);
+        if (e && !e.pending && maxHp > 0 && Number(e.src?.info?.damagedByMob)) { e.hp = Math.round((e.maxHp * hp) / maxHp); e.hpPct = Math.floor((hp * 100) / maxHp); }
+      }),
+      mobHp: later((oid, pct) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { e.hp = Math.round((e.maxHp * pct) / 100); e.hpPct = pct; e.hpShownUntil = performance.now() + 5000; } }),
       bossHp: later((d) => this.vfx?.bossHp(d)),
       foreignEffect: later((chrId, effect) => { const rp = this.others.get(chrId), name = this.vfx?.foreign(effect); if (rp && name) this.vfx.play(name, rp); }),
       spawnNpc: later((n) => this.spawnLife('Npc', n, false)),
