@@ -1224,7 +1224,7 @@ export class Game {
       moveMob: later((oid, start, moves, act, skill, level) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending || e.controlled) return;
-        e.applyMovement(start, moves);
+        e.applyMovement(start, moves, act);
         // activity (12 + attack) * 2 + facing: its controller made it attack
         if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
