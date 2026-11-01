@@ -868,7 +868,7 @@ export class ChannelSession {
     w.zero(8).byte(display).byte(facingLeft ? 0x80 : 0).byte(stance);
     if (kind === 'ranged') {
       w.byte(0).byte(speed).byte(0).byte(facingLeft ? 0x80 : 0).zero(7);
-      if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.zero(4); // Hurricane / Piercing / Rapid Fire
+      if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.int(charge); // Hurricane / Rapid Fire, Piercing's charge (ms)
     } else {
       w.byte(0).byte(speed).zero(4);
     }

@@ -231,6 +231,39 @@ const NO_CLOSE_SWING = new Set([3100001, 3110001, 3111004, 3200001, 3210001, 321
   5211004, 5211005, 5221007, 5221008, 11101004, 13101002, 13101005, 13111000, 14101006, 15111006, 15111007, 21100004,
   21110004, 21120006]);
 /**
+ * Shots that fly on through every monster in their way, with how far above and below their line they reach: Iron
+ * Arrow, Piercing Arrow, Dragon's Breath, Wind Piercing and Avenger.
+ */
+const PIERCING_SHOTS = new Map([[3201005, 10], [3221001, 20], [3121003, 20], [3221003, 20], [13111006, 10], [4111005, 36],
+  [14111002, 36]]);
+/** Arrow Rain and Arrow Eruption: no arrow flies at them, the monsters in the skill's box are struck 400ms after the shot. */
+const RAIN_SHOTS = new Set([3111004, 3211004, 13111000]), RAIN_DELAY = 400;
+/**
+ * Arrow Bomb, Inferno and Blizzard: one arrow to the first monster in the way, then a blast in the skill's box around
+ * where it struck catches the others: 50ms later for Arrow Bomb, 120ms and another 30ms each for the others.
+ */
+const BLAST_SHOTS = new Map([[3101005, () => 50], [3111003, (i) => 90 + i * 30], [3211003, (i) => 90 + i * 30]]);
+/**
+ * Shots that keep to their box and the nearest monsters in it: Spark, Energy Orb, Taunt, Shark Wave, Soul Blade,
+ * Vampire, Storm Break, the Aran combos and the Outlaw / Corsair area shots.
+ */
+const BOX_SHOTS = new Set([15111006, 5121002, 4121003, 4221003, 15111007, 11101004, 14101006, 13101005, 21100004, 21110004,
+  21120006, 5201001, 5211004, 5211005, 5221007, 5221008]);
+/** Hurricane fires while its key is held, at most every 101ms; Piercing Arrow charges up to 1s and fires when let go. */
+const HURRICANES = new Set([3121004, 13111002]), HURRICANE_GAP = 101, PIERCING_ARROW = 3221001, PIERCE_HOLD = 1000;
+const DRAGONS_BREATH = new Set([3121003, 3221003]), POWER_KNOCKBACK = new Set([3101003, 3201003]);
+const MORTAL_BLOWS = [3110001, 3210001], SNIPE = 3221007, SOUL_ARROWS = [3101004, 3201004, 13101003];
+const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have used up all of your arrows.',
+  147: 'You have used up all of your throwing-stars.', 149: 'You do not have enough bullets to use this skill.' };
+/** A shot's arrows fly 1200px a second. */
+const flightMs = (dx) => Math.abs(dx) / 1.2;
+/** Time between one shot's arrows: Strafe 60ms, throwing stars 120ms, Double Shot (gun) and Burst Fire 240ms. */
+function arrowGap(skillId, ammoId) {
+  if (Math.floor(ammoId / 10000) === 207 || Math.floor(ammoId / 1000) === 5021 || skillId === 5221007) return 120;
+  if ([3111006, 3211006, 13111001].includes(skillId)) return 60;
+  return skillId === 5001003 || skillId === 5210000 ? 240 : 0;
+}
+/**
  * How long after the first monster each of the others is hit (i: its place in the order), in ms. A melee attack
  * goes 70ms apart up to 280ms (Band of Thieves: the rest all at 280ms); a spell without a projectile 50ms apart, or
  * all at once for Meteor Shower, Blizzard and Genesis. Another player's spell lands all at once, but Thunder Bolt
@@ -1202,6 +1235,7 @@ export class Game {
       if (!current()) return;
       this.map = map;
       this.charging = null;   // a skill being charged doesn't carry over
+      this.keydown = null;
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
@@ -1328,7 +1362,16 @@ export class Game {
     }
     // only a spell with a ball is shot; one without lands where it is
     const ball = a.kind === 'magic' && a.skill && this.skills ? this.skills.ensure(a.skill).then((n) => !!n?.ball) : Promise.resolve(false);
-    ball.then((hasBall) => {
+    const plan = rp && a.kind === 'ranged' && !BOX_SHOTS.has(a.skill) && this.skills
+      ? (a.skill ? this.skills.ensure(a.skill) : Promise.resolve()).then(() => {
+        const ld = a.skill ? this.skills.levelData(a.skill, a.skillLevel) : null;
+        const mobs = a.targets.map((t) => this.lifeByOid.get(t.oid)).filter((e) => e && !e.pending);
+        const shot = this.shotPlan(rp, a.skill, a.skillLevel, ld, ld?.range || 400, 0, mobs);
+        this.shotFx(shot, rp, a.skill, ld, a.projectile, delay);
+        return shot;
+      })
+      : Promise.resolve(null);
+    Promise.all([ball, plan]).then(([hasBall, plan]) => {
       const shoots = rp && (a.kind === 'ranged' || hasBall);
       let order = a.targets;
       // a swing's hits go through the monsters from one end, starting on the side where they lie
@@ -1347,7 +1390,9 @@ export class Game {
           this.playHitEffect(a.skill, e, rp, t.dmg);
           if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
         };
-        if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
+        const planned = plan?.targets.find((p) => p.mob === e);
+        if (planned) this.after(delay + planned.delay, land);
+        else if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
       }
     });
   }
@@ -1903,6 +1948,17 @@ export class Game {
       else if (c.prepare ? c.t < c.prepare : this.heldSkill() === c.id) { this.advanceFrame(c.pose, dt); return; }
       else this.releaseCharge();
     }
+    // Hurricane / Piercing Arrow held: stand in its pose (falling if in the air) until the key is let go
+    if (this.keydown) {
+      const k = this.keydown;
+      k.t += dt;
+      if (this.heldSkill() === k.id && !this.dead && !this.hasDisease(STUN)) {
+        if (p.fh) p.vx = 0; else fh.fall(p, dt, p.ignoreFh);
+        this.advanceFrame(k.pose, dt);
+        if (HURRICANES.has(k.id)) this.hurricaneShot(k);
+        if (this.keydown) return;
+      } else this.endKeydown();
+    }
 
     if (p.ladder) {
       const l = p.ladder;
@@ -2097,6 +2153,7 @@ export class Game {
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
+    if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -2106,8 +2163,11 @@ export class Game {
   /**
    * Basic attack (skillId 0) or skill. kind: melee | ranged | magic | special.
    * Damage, MP cost and ammo are validated by Cosmic; the client picks targets and rolls damage.
+   * opts.held: a shot of a skill whose key is held (Hurricane, Piercing Arrow), fired from the pose it holds;
+   * opts.charge: how long Piercing Arrow was charged (ms).
    */
-  attack(skillId = 0, kind = null, { charge = 0, heal = false } = {}) {
+  attack(skillId = 0, kind = null, opts = {}) {
+    const { charge = 0, heal = false } = opts;
     const p = this.player, sb = this.skills, weapon = this.weaponId();
     const wcat = weapon ? Math.floor(weapon / 10000) : 0;
     // lying down, a plain attack is the prone stab: a short melee jab with any weapon
@@ -2118,14 +2178,18 @@ export class Game {
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.info?.swim) return false;
     // a bow, crossbow, claw or gun swings (a plain attack) instead of shooting when a monster is within its swing
-    // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot
-    let swing = null, reach = Infinity;
+    // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot; a Mortal Blow can go
+    // off instead of that swing. Otherwise the shot starts from the front of the swing.
+    let swing = null, reach = Infinity, from = 0;
     if (kind === 'ranged') {
       const s = this.look.attackAction(), empty = this.net && !this.hasAmmo(skillId);
-      if (empty && skillId) this.notice(wcat === 147 ? 'You have no throwing stars.' : wcat === 149 ? 'You have no bullets.' : 'You have no arrows.');
-      if (empty || (!NO_CLOSE_SWING.has(skillId) && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length)) {
-        kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0;
-      }
+      if (empty && skillId) this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]);
+      const close = !NO_CLOSE_SWING.has(skillId);
+      if (empty || (close && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length)) {
+        const mb = !empty && MORTAL_BLOWS.find((id) => sb.owns(id) && sb.level(id));
+        if (mb && Math.random() * 100 < (sb.levelData(mb)?.prop || 0)) skillId = mb;
+        else { if (opts.held) return false; kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0; }
+      } else if (close) from = this.closeReach(s);
     }
     const lv = skillId ? sb.level(skillId) : 0;
     const ld = skillId ? sb.levelData(skillId, lv) : null;
@@ -2138,33 +2202,44 @@ export class Game {
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
 
-    const action = prone ? 'proneStab' : swing || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
-    p.attack = this.look.has(action) ? action : this.look.attackAction();
-    p.frame = 0; p.frameT = 0; p.action = p.attack;
-    p.attackScale = this.attackScale();
-    const hitDelay = this.look.attackDelay(p.attack) * p.attackScale, trailAt = this.hitFrame(p.attack, kind);
-    this.after(this.frameTime(p.attack, trailAt) * p.attackScale, () => this.playAfterimage(p.attack, trailAt));
-    if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic');
-    else if (!skillId) this.playWeaponSound(p);
+    if (!opts.held) {
+      const action = prone ? 'proneStab' : swing || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
+      p.attack = this.look.has(action) ? action : this.look.attackAction();
+      p.frame = 0; p.frameT = 0; p.action = p.attack;
+      p.attackScale = this.attackScale();
+    }
+    const pose = (opts.held ? opts.pose : p.attack) || this.defaultAttackAction(kind), scale = opts.held ? this.attackScale() : p.attackScale;
+    const hitDelay = this.look.attackDelay(pose) * scale, trailAt = this.hitFrame(pose, kind);
+    if (!opts.held) {
+      this.after(this.frameTime(pose, trailAt) * scale, () => this.playAfterimage(pose, trailAt));
+      if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic');
+      else if (!skillId) this.playWeaponSound(p);
+    } else sfx.play(`Skill/${pad(skillId, 7)}/Use`);
 
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
     const lines = ld?.fixdamage ? 1 : ld?.attackCount || ld?.bulletCount || 1;
-    let targets = this.findTargets(kind, skillId, lv, mobCount, p.attack, reach, charge);
+    const ammo = kind === 'ranged' ? this.ammoItem(ld?.bulletCount || 1) : 0;
+    const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
+    let targets = plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge);
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
-    const swingAction = p.attack;
-    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, swingAction));
-    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(p.attack)) : 25;
-    const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
+    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
+    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
+    // Snipe always strikes for 195,000 to 199,999
+    const roll = () => (skillId === SNIPE ? 195000 + Math.floor(Math.random() * 5000)
+      : ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
-    // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly
-    const knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
+    // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly, more with Power
+    // Knock-Back; Dragon's Breath throws back what it strikes at its prop chance
+    let knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
+    if (POWER_KNOCKBACK.has(skillId)) knockback += ld?.prop || 0;
+    if (DRAGONS_BREATH.has(skillId)) knockback = ld?.prop || 0;
     const out = targets.map((m) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
-        const c = !!crit && Math.random() * 100 < crit.rate, d = roll();
-        dmg.push(c ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
+        const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
+        dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
       }
       return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
     });
@@ -2175,24 +2250,28 @@ export class Game {
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
+        const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
           this.after(lineDelay(skillId, t.dmg.length - 1), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
-      if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? this.ammoItem() : 0, land));
+      if (plan) this.after(hitDelay + plan.targets[i].delay, land);
+      else if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? ammo : 0, land));
       else this.after(hitDelay + hitWave(i, kind, skillId), land);
       if (skillId === CHAIN_LIGHTNING) this.boltAt(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : p, t.mob, skillId);
     }
-    if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
+    if (plan) this.shotFx(plan, p, skillId, ld, ammo, hitDelay);
+    else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
-    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack, kind === 'ranged'), facingLeft: !p.facingRight, speed: this.attackSpeed(), charge });
+    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
+      speed: this.attackSpeed(), charge });
     return true;
   }
 
@@ -2321,6 +2400,86 @@ export class Game {
     for (const [m, ok] of caught) if (ok) m.pull = { x: p.x, stop: (m.node?._w || 40) + 45 };
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
     this.playSkillEffect(id, p);
+  }
+
+  /**
+   * Hurricane and Piercing Arrow start on their key press: their prepare pose and art, then their keydown art while
+   * held, and the server hears they started so others see it.
+   */
+  holdKeydown(id, lv) {
+    if (this.keydown) return true;
+    const p = this.player, sb = this.skills, ld = sb.levelData(id, lv), wcat = Math.floor(this.weaponId() / 10000);
+    if (!this.skillKeyPressed || p.attack) return false;
+    if (this.net) {
+      if (!sb.weaponOk(id, this.weaponId())) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+      if (!this.hasAmmo(id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); return false; }
+      if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    }
+    const action = sb.node(id)?.prepare?.action;
+    const pose = action && this.look.has(action) ? action : this.defaultAttackAction('ranged');
+    this.keydown = { id, lv, t: 0, last: -Infinity, pose };
+    p.frame = 0; p.frameT = 0;
+    this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
+    sfx.play(`Skill/${pad(id, 7)}/Use`);
+    this.keydownArt(this.keydown);
+    return true;
+  }
+  /** The prepare art once, then the keydown art over and over while the key stays held. */
+  async keydownArt(k) {
+    const node = await this.skills.ensure(k.id), p = this.player;
+    const prep = Game.fxNode(node?.prepare), loop = Game.fxNode(node?.keydown);
+    const show = async (n, repeat) => {
+      const anim = new Anim(n, repeat);
+      await this.assets.preload(anim.frames);
+      if (this.keydown !== k) return null;
+      const f = { anim, follow: p }; this.fx.push(f); return f;
+    };
+    if (prep) {
+      k.art = await show(prep, false);
+      const ms = frames(prep).reduce((t, f) => t + (f?.delay || 100), 0);
+      await new Promise((r) => this.after(ms, r));
+    }
+    if (loop && this.keydown === k) { this.fx = this.fx.filter((f) => f !== k.art); k.art = await show(loop, true); }
+  }
+  /**
+   * Hurricane while held: a shot every 101ms at most. Out of arrows or MP it stops; a monster within the bow's swing
+   * stops it too, and gets the swing.
+   */
+  hurricaneShot(k) {
+    const now = k.t * 1000;
+    if (now - k.last < HURRICANE_GAP) return;
+    k.last = now;
+    const ld = this.skills.levelData(k.id, k.lv), wcat = Math.floor(this.weaponId() / 10000);
+    if (this.net && !this.hasAmmo(k.id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); this.endKeydown(); return; }
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice("You don't have enough MP to use this skill."); this.endKeydown(); return; }
+    if (this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length) { this.endKeydown(); this.attack(0); return; }
+    this.attack(k.id, 'ranged', { held: true, pose: k.pose });
+  }
+  /**
+   * Letting go: Hurricane ends (the server hears it, its keydownend art plays). Piercing Arrow fires with how long it
+   * was charged (30ms to 1s), unless a monster within the swing gets the swing instead.
+   */
+  endKeydown() {
+    const k = this.keydown, p = this.player;
+    if (!k) return;
+    this.keydown = null;
+    this.fx = this.fx.filter((f) => f !== k.art);
+    p.frame = 0; p.frameT = 0;
+    if (k.id === PIERCING_ARROW && !this.dead) {
+      const close = this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length;
+      const charge = Math.min(PIERCE_HOLD, Math.max(30, Math.round(k.t * 1000)));
+      if (!close && this.attack(k.id, 'ranged', { charge })) return;
+      this.net?.cancelBuff(k.id);
+      if (close) this.attack(0);
+      return;
+    }
+    this.net?.cancelBuff(k.id);
+    this.skills.ensure(k.id).then((n) => {
+      const end = Game.fxNode(n?.keydownend);
+      if (!end) return;
+      const anim = new Anim(end, false);
+      this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p }));
+    });
   }
 
   /** Buffs and other SPECIAL_MOVE skills. */
@@ -2653,21 +2812,173 @@ export class Game {
     this.fx.push({ anim, x, y, flip: false });
   }
 
-  /** Same rules as RangedAttackHandler: first usable ammo in USE for the weapon (or a skill that needs none). */
-  ammoItem() {
+  /** Same rules as RangedAttackHandler: the first ammo in USE for the weapon with at least `count` left (or a skill that needs none). */
+  ammoItem(count = 1) {
     const cat = Math.floor(this.weaponId() / 10000);
     const ok = { 145: (id) => Math.floor(id / 1000) === 2060, 146: (id) => Math.floor(id / 1000) === 2061,
       147: (id) => Math.floor(id / 10000) === 207, 149: (id) => Math.floor(id / 10000) === 233 }[cat];
     if (!ok) return 0;
     const use = this.inventory?.[2] || {};
-    for (const k of Object.keys(use).map(Number).sort((a, b) => a - b)) if (ok(use[k].id) && use[k].quantity > 0) return use[k].id;
+    for (const k of Object.keys(use).map(Number).sort((a, b) => a - b)) if (ok(use[k].id) && use[k].quantity >= count) return use[k].id;
     return 0;
   }
   hasAmmo(skillId) {
     if (skillId % 10000000 === 1000 || NO_AMMO_SHOTS.has(skillId)) return true; // Three Snails, Soul Blade, Shark Wave
-    const noAmmoBuffs = [3101004, 3201004, 4121006, 13101003]; // Soul Arrow x3, Shadow Claw
+    const noAmmoBuffs = [...SOUL_ARROWS, 4121006]; // Soul Arrow x3, Shadow Claw
     if (this.buffs.some((b) => noAmmoBuffs.includes(b.source))) return true;
-    return !!this.ammoItem();
+    return !!this.ammoItem((skillId && this.skills.levelData(skillId)?.bulletCount) || 1);
+  }
+
+  // ------------------------------------------------------------------ shots
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined); }
+  /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
+  closeReach(action) {
+    const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
+    return Math.max(0, Math.min(CLOSE_REACH, lt ? -lt[0] : CLOSE_REACH));
+  }
+  /**
+   * How far a shot flies: the skill's range, else 300px for a bow or crossbow plus The Eye of Amazon's, 200px for a
+   * claw plus Keen Eyes', 200px for a gun.
+   */
+  shotRange(skillId, lv, wcat) {
+    const r = skillId ? this.skills.levelData(skillId, lv)?.range : 0;
+    if (r > 0) return r;
+    const cygnus = Math.floor((this.stats?.job || 0) / 1000) === 1;
+    const extra = (id) => this.skills.levelData(id)?.range || 0;
+    if (wcat === 145 || wcat === 146) return 300 + extra(cygnus ? 13000001 : 3000002);
+    if (wcat === 147) return 200 + extra(cygnus ? 14000001 : 4000001);
+    return wcat === 149 ? 200 : 0;
+  }
+  /**
+   * The first monster a shot meets along its line (y), from `from` px in front out to `range`: checked in 20px steps,
+   * each reaching a quarter of its distance from you up and down.
+   */
+  firstOnLine(ent, from, range, y) {
+    const dir = ent.facingRight ? 1 : -1, mobs = this.liveMobs();
+    for (let d = from; d < range; d += 20) {
+      const a = ent.x + dir * d, b = ent.x + dir * Math.min(d + 20, range), lo = Math.min(a, b), hi = Math.max(a, b), s = Math.floor(d / 4);
+      const hit = mobs.filter((m) => { const h = m.hitBox(true); return h.right > lo && h.left < hi && h.bottom > y - s && h.top < y + s; });
+      if (hit.length) return hit.sort((p, q) => Math.abs(p.x - ent.x) - Math.abs(q.x - ent.x))[0];
+    }
+    return null;
+  }
+  /** A skill's lt/rb box around someone, turned the way they face. */
+  skillBox(ent, skillId, lv) {
+    const r = this.skills.range(skillId, lv);
+    if (!r) return null;
+    const [left, right] = ent.facingRight ? [ent.x - r.rb[0], ent.x - r.lt[0]] : [ent.x + r.lt[0], ent.x + r.rb[0]];
+    return { left, right, top: ent.y + r.lt[1], bottom: ent.y + r.rb[1] };
+  }
+  mobsIn(box, x, y, except = null) {
+    if (!box) return [];
+    return this.liveMobs().filter((m) => {
+      if (m === except) return false;
+      const h = m.hitBox(true);
+      return h.right >= box.left && h.left <= box.right && h.bottom >= box.top && h.top <= box.bottom;
+    }).sort((p, q) => Math.hypot(p.x - x, p.y - y) - Math.hypot(q.x - x, q.y - y));
+  }
+  /**
+   * Where a shot from `ent` goes and when each monster it strikes is hit (ms after it leaves). It flies 28px up from
+   * the feet, from `from` px in front out to `range`:
+   *  - most stop at the first monster in the way (firstOnLine);
+   *  - piercing shots strike up to mobCount along the line, within their reach above and below, as the arrow passes;
+   *  - Arrow Rain and Arrow Eruption strike up to mobCount in the skill's box;
+   *  - Arrow Bomb, Inferno and Blizzard blast up to mobCount - 1 more in the skill's box around the first they strike.
+   * mobs: the monsters another player's shot struck (nothing is searched for).
+   */
+  shotPlan(ent, skillId, lv, ld, range, from, mobs = null) {
+    const dir = ent.facingRight ? 1 : -1, y = Math.round(ent.y) - 28, sx = ent.x + dir * from, count = ld?.mobCount || 1;
+    const plan = { lv, sx, sy: y, ex: ent.x + dir * range, ey: y, targets: [], arrows: !RAIN_SHOTS.has(skillId) };
+    // where the arrow meets a body, and the time it takes to get there
+    const at = (m) => { const h = m.hitBox(true); return { x: dir > 0 ? Math.max(h.left, sx) : Math.min(h.right, sx), y: Math.max(h.top, Math.min(h.bottom, y)) }; };
+    const strike = (m, delay) => { const h = at(m); return { mob: m, x: h.x, y: h.y, delay: delay ?? flightMs(h.x - sx) }; };
+    if (RAIN_SHOTS.has(skillId)) {
+      plan.targets = (mobs || this.mobsIn(this.skillBox(ent, skillId, lv), ent.x, ent.y).slice(0, count)).map((m) => strike(m, RAIN_DELAY));
+      return plan;
+    }
+    const spread = PIERCING_SHOTS.get(skillId);
+    if (spread !== undefined) {
+      const box = { left: Math.min(sx, plan.ex), right: Math.max(sx, plan.ex), top: y - spread, bottom: y + 1 + spread };
+      const found = mobs || this.mobsIn(box, sx, y).slice(0, count);
+      plan.targets = found.map((m) => strike(m)).sort((p, q) => (p.x - q.x) * dir);
+      return plan;
+    }
+    const first = mobs ? mobs[0] : this.firstOnLine(ent, from, range, y);
+    if (!first) return plan;
+    const hit = strike(first);
+    plan.ex = hit.x; plan.ey = hit.y;
+    plan.targets.push(hit);
+    const blast = BLAST_SHOTS.get(skillId);
+    if (blast) {
+      const r = this.skills.range(skillId, lv);
+      const box = r && { left: hit.x + r.lt[0], right: hit.x + r.rb[0], top: hit.y + r.lt[1], bottom: hit.y + r.rb[1] };
+      const others = mobs ? mobs.slice(1) : this.mobsIn(box, hit.x, hit.y, first).slice(0, count - 1);
+      others.forEach((m, i) => plan.targets.push({ mob: m, x: m.x, y: m.y, delay: hit.delay + blast(i + 1) }));
+      plan.blast = box;
+    } else if (mobs) for (const m of mobs.slice(1)) plan.targets.push(strike(m));
+    return plan;
+  }
+  /**
+   * A shot's art, `leave` ms from now: its arrows (bulletCount of them, 14px apart up and down, Strafe's 60ms
+   * apart...) to where it stops, and from when its first monster is struck, Arrow Rain's arrows falling over the
+   * skill's box, Arrow Eruption's under each monster, Inferno's and Blizzard's over the blast.
+   */
+  shotFx(plan, ent, skillId, ld, ammoId, leave) {
+    if (plan.arrows) {
+      const n = Math.max(1, ld?.bulletCount || 1), gap = arrowGap(skillId, ammoId);
+      for (let i = 0; i < n; i++) this.after(leave + i * gap, () => this.fly(skillId, ammoId, plan.sx, plan.sy, plan.ex, plan.ey + 7 - 7 * n + 14 * i, ent));
+    }
+    const first = plan.targets[0];
+    if (!first) return;
+    const at = leave + first.delay;
+    if (skillId === 3111004 || skillId === 13111000) {
+      const b = this.skillBox(ent, skillId, plan.lv);
+      if (b) this.playSpecial(skillId, { ...b, top: b.top - 250, bottom: b.bottom - 250 }, at, ent.facingRight);
+    } else if (skillId === 3211004) {
+      for (const t of plan.targets) {
+        const h = t.mob.hitBox(), w = h.right - h.left, grow = w < 150 ? (150 - w) / 2 : 0;
+        this.playSpecial(skillId, { left: h.left - grow, right: h.right + grow, top: h.bottom - 10, bottom: h.bottom }, at, ent.facingRight);
+      }
+    } else if ((skillId === 3111003 || skillId === 3211003) && plan.blast) {
+      this.playSpecial(skillId, { ...plan.blast, top: plan.blast.top - 50, bottom: plan.blast.bottom - 170 }, at, ent.facingRight);
+    }
+  }
+  /** One arrow (the skill's ball, else Soul Arrow's while it is on, else the ammo's bullet) from (sx, sy) to (tx, ty). */
+  async fly(skillId, ammoId, sx, sy, tx, ty, ent) {
+    const node = await this.shotArt(skillId, ammoId, ent);
+    const anim = node ? new Anim(node, true) : null;
+    if (anim) await this.assets.preload(anim.frames);
+    this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur: flightMs(tx - sx) / 1000, flip: tx > sx });
+  }
+  async shotArt(skillId, ammoId, ent) {
+    let node = skillId ? Game.fxNode((await this.skills?.ensure(skillId))?.ball) : null;
+    const soul = ent === this.player ? this.buffs.find((b) => SOUL_ARROWS.includes(b.source) && b.until > Date.now())?.source : 0;
+    if (!node && soul) node = Game.fxNode((await this.skills?.ensure(soul))?.ball);
+    if (!node && ammoId) {
+      const img = await this.assets.json(`Item/Consume/${pad(Math.floor(ammoId / 10000), 4)}.img`);
+      node = Game.fxNode(img?.[pad(ammoId, 8)]?.bullet);
+    }
+    return node;
+  }
+  /**
+   * A skill's `special` art over a box, from `at` ms on: `count` pieces (a random one of its kinds each), one every
+   * `interval` ms after `start`, each from a random point in the box travelling (x, y) over `fall` ms and gone after
+   * `duration`; x points the way the shooter faces.
+   */
+  async playSpecial(skillId, box, at, facingRight) {
+    const sp = (await this.skills?.ensure(skillId))?.special;
+    if (!sp) return;
+    const kinds = frames(sp).some((f) => f?._canvas) ? [sp] : frames(sp).filter(Boolean);
+    if (!kinds.length) return;
+    await this.assets.preload(kinds.flatMap((k) => new Anim(k, true).frames));
+    const n = sp.count || 1, dx = (facingRight ? 1 : -1) * (sp.x || 0), dy = sp.y || 0, fall = sp.fall || 1, life = Math.max(sp.duration || 0, fall);
+    for (let i = 0; i < n; i++) {
+      this.after(at + (sp.start || 0) + i * (sp.interval || 0), () => {
+        const x = box.left + Math.random() * (box.right - box.left), y = box.top + Math.random() * (box.bottom - box.top);
+        const anim = new Anim(kinds[Math.floor(Math.random() * kinds.length)], true);
+        this.shots.push({ anim, sx: x, sy: y, tx: x + dx, ty: y + dy, t: 0, dur: fall / 1000, life: life / 1000, flip: facingRight });
+      });
+    }
   }
 
   /** The box an attack reaches: the skill's lt/rb, else the swing's afterimage box, else a default per kind. */
@@ -2857,7 +3168,7 @@ export class Game {
       s.t += dt; s.anim?.update(dt * 1000);
       if (s.t >= s.dur && !s.hit) { s.hit = true; s.onHit?.(); }
     }
-    this.shots = this.shots.filter((s) => !s.hit);
+    this.shots = this.shots.filter((s) => !s.hit || s.t < (s.life || 0));
   }
 
   drawFx(ctx, cam) {
@@ -2879,7 +3190,7 @@ export class Game {
     }
     for (const s of this.shots) {
       if (!s.anim?.node) continue;
-      const k = Math.min(1, s.t / s.dur);
+      const k = s.dur ? Math.min(1, s.t / s.dur) : 1;
       draw(s.anim.node, s.sx + (s.tx - s.sx) * k, s.sy + (s.ty - s.sy) * k, s.flip);
     }
   }

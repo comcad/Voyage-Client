@@ -16,17 +16,21 @@ export const RANGED_WEAPONS = new Set([145, 146, 147, 149]); // bow, crossbow, c
  * Arrow, and Power Crash and Magic Crash (they weaken monsters; the server finds them).
  */
 const NOT_ATTACKS = new Set([1211003, 1211004, 1211005, 1211006, 1211007, 1211008, 1221003, 1221004, 11111007, 3101004, 3201004,
-  1311007, 1211009]);
+  13101003, 1311007, 1211009]);
 /**
  * Skills that only ever go off by themselves, so a hotkey does nothing: Endure, the Final Attacks, Advanced Combo,
- * Guardian, Advanced Charge, Berserk and Hex of the Beholder.
+ * Guardian, Advanced Charge, Berserk, Hex of the Beholder, Critical Shot and Mortal Blow.
  */
 const PROCS = new Set([1000002, 1100002, 1100003, 1200002, 1200003, 1300002, 1300003, 1120003, 11110005, 1120005, 1220006,
-  1220010, 1320006, 1320009]);
+  1220010, 1320006, 1320009, 3000001, 13000000, 3100001, 3200001, 13101002, 3110001, 3210001]);
 /** Attacks that look like buffs in their data (Panic). */
 const MELEE_SKILLS = new Set([1111003, 1111004, 11111002]);
 /** Spells that look like buffs in their data: Cold Beam, Paralyze, Poison Mist, Flame Gear. */
 const MAGIC_SKILLS = new Set([2201004, 2121006, 2111003, 12111005]);
+/** A bowman's attacks are all shots, whatever their data says, except Power Knock-Back's swing. Snipe looks like a buff. */
+const isBowman = (id) => Math.floor(id / 1000000) % 10 === 3;
+const BOW_SWINGS = new Set([3101003, 3201003]);
+const SNIPE = 3221007;
 /** Shots that need no ammo: Soul Blade, Shark Wave. */
 export const NO_AMMO_SHOTS = new Set([11101004, 15111007]);
 /**
@@ -136,7 +140,7 @@ export class SkillBook {
     if (!n || !ld || PROCS.has(id)) return 'passive';
     if (MELEE_SKILLS.has(id)) return 'melee';
     if (MAGIC_SKILLS.has(id)) return 'magic';
-    if (NO_AMMO_SHOTS.has(id)) return 'ranged';
+    if (NO_AMMO_SHOTS.has(id) || id === SNIPE) return 'ranged';
     // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
     // an attack has power (damage, magic, a projectile's x...); one that also lasts a while (a stun, a poison, a
@@ -145,6 +149,7 @@ export class SkillBook {
     const power = ld.damage || ld.mad || ld.fixdamage || ld.attackCount || ld.bulletCount || (ld.x && n.ball);
     if (power && (targets || !ld.time) && !ld.hp && !n.summon && !NOT_ATTACKS.has(id)) {
       if (ld.mad) return 'magic';
+      if (isBowman(id)) return BOW_SWINGS.has(id) ? 'melee' : 'ranged';
       const cat = weaponCat(weaponId);
       if (n.weapon === 47 || ld.bulletCount || (n.ball && RANGED_WEAPONS.has(cat))) return 'ranged';
       return 'melee';
@@ -153,10 +158,14 @@ export class SkillBook {
     return 'passive';
   }
 
-  /** Weapon requirement from Skill.wz (`weapon`: weapon category % 100, e.g. 47 claw, 33 dagger). */
+  /**
+   * Weapon requirement from Skill.wz (`weapon`: weapon category % 100, e.g. 47 claw, 33 dagger). A bowman's attacks
+   * without one take a bow or a crossbow.
+   */
   weaponOk(id, weaponId) {
     const w = this.node(id)?.weapon, cat = weaponId ? Math.floor(weaponId / 10000) % 100 : 0;
     if (SKILL_WEAPONS[id]) return SKILL_WEAPONS[id].includes(cat);
+    if (!w && isBowman(id) && ['ranged', 'melee'].includes(this.kind(id, weaponId))) return cat === 45 || cat === 46;
     return !w || cat === w;
   }
 
