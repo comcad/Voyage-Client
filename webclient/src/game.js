@@ -2637,7 +2637,11 @@ export class Game {
     if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
-    p.fh = null; p.ladder = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
+    // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
+    // monster you're thrown back less, and falling onto it only slows your fall
+    const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    p.fh = null; p.ladder = null;
+    p.vx = impact(p.vx || 0, fromRight ? -KNOCKBACK : KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
     if (p.attack) {   // a hit doesn't shorten the attack delay
       const k = p.attackScale || 1, n = this.look.frameCount(p.attack);
       this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);
