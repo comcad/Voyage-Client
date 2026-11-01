@@ -1178,7 +1178,7 @@ export class Game {
       }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
       // damage the server deals by itself (Heaven's Hammer...): its number over the monster
-      mobDamaged: later((oid, dmg) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.vfx?.damage(m, [dmg], 'red'); }),
+      mobDamaged: later((oid, dmg) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.vfx?.damage(m, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red'); }),
       spawnMob: later((m) => this.spawnLife('Mob', m, false)),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
@@ -3901,7 +3901,8 @@ export class Game {
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
   damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0, scale = 1) {
     if (mine && target.kind === 'Mob') target.hpShownUntil = performance.now() + 5000;
-    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits, weaponId, scale);
+    // a monster's numbers are red (crit art on a crit) whoever struck it; blue is only for one being healed
+    this.vfx?.damage(target, dmgs, target.kind === 'Mob' || mine ? 'red' : 'blue', skillId, crits, weaponId, scale);
   }
 
   /**
