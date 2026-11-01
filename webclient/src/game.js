@@ -1005,6 +1005,7 @@ export class Game {
     if (this.net) this.net.selfName = info.stats?.name;   // the merchant room tells owner from visitor by name
     this.skills = new SkillBook(this.assets);
     await this.skills.load(info.stats.job, info.skills, info.cooldowns);
+    this.standardPdd(0, 1);   // load the standard defence table before the first blow
     this.rocks = { regular: (info.rocks || []).slice(0, 5), vip: (info.rocks || []).slice(5, 15) };   // Teleport Rock maps
     this.keyBar = this.statusBar; // the quick slots (render() rebuilds them from the keymap)
     const later = (fn) => (...a) => (this.loading ? this.queue.push(() => fn(...a)) : fn(...a));
@@ -1224,7 +1225,7 @@ export class Game {
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
-          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance });
+          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
@@ -3635,6 +3636,52 @@ export class Game {
       return;
     }
   }
+  /**
+   * The damage a monster's blow does you, or 0 for a MISS.
+   * Avoid: (DEX / 4 + LUK / 2 + equipment and buffs), less half a point per level the monster has over you. A physical
+   * blow misses at avoid / (its accuracy x 4.5) x 100 %, held to 2-80% (a thief's 5-95%); a magic one when its
+   * accuracy is no more than a roll between a tenth of your avoid and all of it.
+   * Physical: attack x 0.80-0.85 x attack / 100, less (s x 0.00125 + 0.28) x your defence and a share of how far your
+   * defence is above or below the standard for your class and level (Base/StandardPDD.img), s being a mix of your stats
+   * ((LUK + DEX) / 4 + INT / 9 + STR x 2/7 for a warrior, LUK / 4 + INT / 9 + DEX x 2/7 + STR x 0.4 for the rest);
+   * nothing left is a MISS. Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 +
+   * magic defence) x 0.3 (a magician's) or 0.25, at least 1.
+   */
+  damageTaken(m, power, magic) {
+    const info = m.src?.info || {}, s = this.stats || {}, lv = s.level || 1, cls = Math.floor(((s.job || 0) % 1000) / 100);
+    const rand = (lo, hi) => lo + Math.random() * (hi - lo), clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), now = Date.now();
+    const buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k]));
+    const mobLv = info.level || 0, acc = clamp(info.acc || 0, 0, 999);
+    let avoid = clamp(Math.floor(this.totalStat('dex') * 0.25 + this.totalStat('luk') * 0.5) + this.equipStat('avoid') + buff('avoid'), 0, 999);
+    if (mobLv > lv) avoid = Math.max(0, avoid - Math.trunc((mobLv - lv) / 2));
+    if (magic) {
+      if (acc <= rand(avoid * 0.1, avoid)) return 0;
+      const mad = clamp(info.MADamage ?? power, 0, 1999), mdd = clamp(this.equipStat('mdef') + buff('mdef'), 0, 1999);
+      const d = Math.trunc(rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (s.dex / 6 + s.str / 7 + s.luk / 5 + mdd) * (cls === 2 ? 0.3 : 0.25));
+      return d === 0 ? 0 : Math.max(1, d);
+    }
+    const chance = (avoid / (acc * 4.5)) * 100;
+    if (Math.random() * 100 < (cls === 4 ? clamp(chance, 5, 95) : clamp(chance, 2, 80))) return 0;
+    const pad = clamp(power, 0, 1999), pdd = clamp(this.equipStat('wdef') + buff('wdef'), 0, 1999), std = this.standardPdd(cls, lv);
+    const k = Math.trunc(cls === 1 ? (s.luk + s.dex) * 0.25 + s.int / 9 + (s.str * 2) / 7 : s.luk * 0.25 + s.int / 9 + (s.dex * 2) / 7 + s.str * 0.4);
+    let d = rand(pad * 0.8, pad * 0.85) * pad * 0.01 - (k * 0.00125 + 0.28) * pdd;
+    if (pdd >= std) d -= (pdd - std) * (k / 900 + lv / 1300 + 0.28) * 0.7;
+    else if (mobLv <= lv) d -= ((pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 13) / (lv - mobLv + 13);
+    else d -= (pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 1.3;
+    return Math.max(0, Math.trunc(d));
+  }
+  /** The standard weapon defence for a class (0 beginner .. 5 pirate) at a level, from Base/StandardPDD.img (gaps take the last value). */
+  standardPdd(cls, lv) {
+    if (!this.stdPdd) {
+      this.stdPdd = 'loading';
+      this.assets.json('Base/StandardPDD.img').then((j) => {
+        const t = [];
+        for (let c = 0; c < 6; c++) { let last = 0; t[c] = []; for (let l = 0; l <= 200; l++) { const v = Number(j?.[c]?.[l]) || 0; if (v > 0) last = v; t[c][l] = last; } }
+        this.stdPdd = t;
+      }).catch(() => { this.stdPdd = null; });
+    }
+    return Array.isArray(this.stdPdd) && cls >= 0 && cls <= 5 && lv >= 0 && lv <= 200 ? this.stdPdd[cls][lv] : 0;
+  }
   /** Power Stance's roll on a hit that would throw you back (see STANCES): true when you stand firm. */
   holdsStance() {
     const now = Date.now(), b = (this.buffs || []).find((x) => (x.stance || Object.values(STANCES).includes(x.source)) && x.until > now);
@@ -3642,7 +3689,7 @@ export class Game {
     const rate = Math.max(0, Math.min(100, b.stance ?? this.skills.levelData(b.source)?.prop ?? 0));
     if (Math.floor(Math.random() * 100) >= rate) return false;
     const id = STANCES[this.stats?.job] || b.source;
-    if (id) this.playSkillEffect(id, this.player, false);
+    if (id) this.playSkillEffect(id, this.player, false, 'special');
     return true;
   }
   /** The receiver monster attacks are tested against: 44x65 standing, 46x31 lying down. */
@@ -3655,11 +3702,18 @@ export class Game {
    * `from` is the attack index (-1 for touching it): the server applies that attack's extras (MP burn, disease).
    * `knock`: which way you're thrown (-1 left, 1 right, 0 not at all); by default away from the monster.
    */
-  hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1) {
+  hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1, attack = null) {
     const p = this.player;
-    let def = 0; for (const it of Object.values(this.inventory.equipped)) def += (magic ? it.mdef : it.wdef) || 0;
-    const damage = Math.max(1, Math.round(power * (0.85 + Math.random() * 0.15) - def * 0.5));
+    let damage = this.damageTaken(m, power, magic);
+    // a deadly attack leaves you 1 HP
+    if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
     const fromRight = m.x > p.x;
+    if (damage <= 0) {   // MISS: no knockback, and the next blow can come 36ms later
+      this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.vfx?.damage(p, [0], 'violet');
+      this.invincible = 0.036;
+      return;
+    }
     this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
     this.vfx?.damage(p, [damage], 'violet');
     if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
@@ -3795,7 +3849,7 @@ export class Game {
     const power = Number(magic ? a.info.MADamage ?? m.src.info?.MADamage : a.info.PADamage ?? m.src.info?.PADamage) || 1;
     const land = () => {
       if (this.dead || this.invincible > 0) return;
-      this.hurtBy(m, power, magic, a.index);
+      this.hurtBy(m, power, magic, a.index, undefined, a.info);
       const hit = a.info.hit && Game.fxNode(a.info.hit);
       if (hit) { const anim = new Anim(hit, false); this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p })); }
     };
