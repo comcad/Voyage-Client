@@ -520,7 +520,7 @@ class StatWin extends Win {
     const max = this.g.maxDamage();
     const rows = [
       `${Math.max(1, Math.floor(max * 0.1))} ~ ${max}`, sum('wdef'), s.int + sum('matk'), s.int + sum('mdef'),
-      Math.floor(s.dex * 0.8 + s.luk * 0.5) + sum('acc'), Math.floor(s.dex * 0.25 + s.luk * 0.5) + sum('avoid'),
+      this.g.accuracy(), this.g.avoidability(),
       s.dex + s.int + s.luk + sum('hands'), `${100 + sum('speed')}%`, `${100 + sum('jump')}%`,
     ];
     rows.forEach((t, i) => this.text(ctx, t, 90, 10 + i * 20));

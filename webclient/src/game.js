@@ -3065,6 +3065,34 @@ export class Game {
     const mw = Math.max(0, ...(this.buffs || []).filter((b) => b.mapleWarrior && b.until > now).map((b) => b.mapleWarrior));
     return base + Math.floor((base * mw) / 100) + this.equipStat(k);
   }
+  /** A learned passive skill's x / y / z, else 0. */
+  passive(id, key) { return this.skills?.level(id) ? this.skills.levelData(id)?.[key] || 0 : 0; }
+  /** Blessing of the Fairy for your job's branch (Explorer, Cygnus, Aran, Evan). */
+  blessingId() {
+    const job = this.stats?.job || 0;
+    return Math.floor(job / 100) === 22 || job === 2001 ? 20010012 : Math.floor(job / 1000) * 10000000 + 12;
+  }
+  /** Nimble Body, Bullet Time, Quick Motion (and Amazon's, accuracy only): x accuracy, y avoid. */
+  static BEGINNER_PASSIVES = [4000000, 14000000, 5000000, 15000000];
+  /**
+   * Accuracy without buffs: DEX x 0.8 + LUK x 0.5 (bowmen, thieves, pirates DEX x 0.6 + LUK x 0.3; Brawlers DEX x 0.9 +
+   * LUK x 0.3), plus the equipment's, Blessing of the Fairy's z, the weapon mastery's x and the beginner passives' x.
+   */
+  accuracy() {
+    const job = this.stats?.job || 0, cls = Math.floor((job % 1000) / 100), dex = this.totalStat('dex'), luk = this.totalStat('luk');
+    const base = Math.floor(cls === 5 && Math.floor(job / 10) === 51 ? dex * 0.9 + luk * 0.3 : cls >= 3 && cls <= 5 ? dex * 0.6 + luk * 0.3 : dex * 0.8 + luk * 0.5);
+    const ranged = cls === 3 || Math.floor(job / 10) === 41 || Math.floor(job / 10) === 52;
+    const ms = masterySkills(Math.floor(this.weaponId() / 10000) % 100, ranged, 0, job);
+    const mastery = (ms?.first || []).map((id) => this.passive(id, 'x')).find((v) => v) || 0;
+    const passives = [3000000, ...Game.BEGINNER_PASSIVES].reduce((a, id) => a + this.passive(id, 'x'), 0);
+    return base + this.equipStat('acc') + this.passive(this.blessingId(), 'z') + mastery + passives;
+  }
+  /** Avoid without buffs: LUK / 2 + DEX / 4 (Brawlers DEX x 1.5, Gunslingers DEX / 8), the equipment's, Blessing's z, the beginner passives' y. */
+  avoidability() {
+    const job = this.stats?.job || 0, dex = this.totalStat('dex'), luk = this.totalStat('luk'), branch = Math.floor(job / 10);
+    const base = Math.trunc(luk / 2) + (branch === 51 ? Math.floor(dex * 1.5) : Math.trunc(dex / (branch === 52 ? 8 : 4)));
+    return base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0);
+  }
   /**
    * Combo Attack's % on every blow while it is on, by the orbs held (its buff value less 1): with one orb the skill's
    * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
@@ -3148,7 +3176,7 @@ export class Game {
     const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
     if (!exempt) {
       const accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
-      const acc = Math.min(999, Math.max(0, Math.floor(this.totalStat('dex') * 0.8 + this.totalStat('luk') * 0.5) + this.equipStat('acc') + accBuff));
+      const acc = Math.min(999, Math.max(0, this.accuracy() + accBuff));
       const hit = (acc * 100) / (over * 10 + 255);
       if (rand(hit * 0.7, hit * 1.3) < Math.min(999, Math.max(0, info.eva || 0))) return { d: 0, c: false };
     }
@@ -3657,7 +3685,7 @@ export class Game {
     const rand = (lo, hi) => lo + Math.random() * (hi - lo), clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), now = Date.now();
     const buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k]));
     const mobLv = info.level || 0, acc = clamp(info.acc || 0, 0, 999);
-    let avoid = clamp(Math.floor(this.totalStat('dex') * 0.25 + this.totalStat('luk') * 0.5) + this.equipStat('avoid') + buff('avoid'), 0, 999);
+    let avoid = clamp(this.avoidability() + buff('avoid'), 0, 999);
     if (mobLv > lv) avoid = Math.max(0, avoid - Math.trunc((mobLv - lv) / 2));
     if (magic) {
       if (acc <= rand(avoid * 0.1, avoid)) return 0;
