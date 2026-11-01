@@ -220,19 +220,19 @@ export function skillMaxDamage(game, id, lv, kind) {
   const ld = id ? game.skills.levelData(id, lv) : null;
   if (ld?.fixdamage) return ld.fixdamage;
   if (kind === 'magic') {
-    const tm = Math.min(2000, s.int + game.equipStat('matk'));
+    const int = game.totalStat('int'), tm = Math.min(2000, int + game.equipStat('matk'));
     // Heal on the undead: (4.8 x INT + 4 x LUK) x magic / 1000, scaled by its heal %
     if (id === 2301002) {
-      const int = s.int + game.equipStat('int'), luk = s.luk + game.equipStat('luk');
+      const luk = game.totalStat('luk');
       return Math.max(1, Math.floor((((int * 4.8 + luk * 4) * tm) / 1000) * (ld?.hp || 100) / 100));
     }
-    const base = ((tm * tm) / 1000 + tm) / 30 + s.int / 200;
+    const base = ((tm * tm) / 1000 + tm) / 30 + int / 200;
     return Math.max(1, Math.floor(base * (ld?.mad || 1)));
   }
   if ([4001344, 14001004, 4121007, 14111005].includes(id)) { // Lucky Seven / Triple Throw
-    return Math.max(1, Math.floor(s.luk * 5 * Math.ceil(game.watk() / 100) * (ld?.damage || 100) / 100));
+    return Math.max(1, Math.floor(game.totalStat('luk') * 5 * Math.ceil(game.watk() / 100) * (ld?.damage || 100) / 100));
   }
   // Dragon Roar: STR at 4.0 plus DEX, whatever the spear or polearm
-  const base = id === 1311006 ? Math.ceil(((4 * s.str + s.dex) / 100) * game.watk()) : game.maxDamage(game.player?.attack);
+  const base = id === 1311006 ? Math.ceil(((4 * game.totalStat('str') + game.totalStat('dex')) / 100) * game.watk()) : game.maxDamage(game.player?.attack);
   return Math.max(1, Math.floor((base * (ld?.damage || 100)) / 100));
 }

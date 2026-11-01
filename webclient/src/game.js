@@ -1669,9 +1669,10 @@ export class Game {
     const cat = Math.floor((weapon?.id || 0) / 10000) % 100, thiefDagger = cat === 33 && Math.floor(s.job / 100) === 4;
     const mult = thiefDagger ? 3.6 : weaponMultiplier(weapon?.id, pose);   // a thief's dagger counts for less
     if (!mult) return 1;
-    let main = s.str, sec = s.dex;
-    if (cat === 45 || cat === 46 || cat === 49) { main = s.dex; sec = s.str; }
-    else if (cat === 47 || thiefDagger) { main = s.luk; sec = s.dex + s.str; }
+    const str = this.totalStat('str'), dex = this.totalStat('dex'), luk = this.totalStat('luk');   // equipment counts
+    let main = str, sec = dex;
+    if (cat === 45 || cat === 46 || cat === 49) { main = dex; sec = str; }
+    else if (cat === 47 || thiefDagger) { main = luk; sec = dex + str; }
     return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
   }
 
@@ -3947,19 +3948,20 @@ export class Game {
     const info = m.src?.info || {}, s = this.stats || {}, lv = s.level || 1, cls = Math.floor(((s.job || 0) % 1000) / 100);
     const rand = (lo, hi) => lo + Math.random() * (hi - lo), clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), now = Date.now();
     const buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k]));
+    const T = (k) => this.totalStat(k);   // your stats with equipment and Maple Warrior
     const mobLv = info.level || 0, acc = clamp(info.acc || 0, 0, 999);
     let avoid = clamp(this.avoidability() + buff('avoid'), 0, 999);
     if (mobLv > lv) avoid = Math.max(0, avoid - Math.trunc((mobLv - lv) / 2));
     if (magic) {
       if (acc <= rand(avoid * 0.1, avoid)) return 0;
       const mad = clamp(info.MADamage ?? power, 0, 1999), mdd = clamp(this.equipStat('mdef') + buff('mdef'), 0, 1999);
-      const d = Math.trunc(rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (s.dex / 6 + s.str / 7 + s.luk / 5 + mdd) * (cls === 2 ? 0.3 : 0.25));
+      const d = Math.trunc(rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (T('dex') / 6 + T('str') / 7 + T('luk') / 5 + mdd) * (cls === 2 ? 0.3 : 0.25));
       return d === 0 ? 0 : Math.max(1, d);
     }
     const chance = (avoid / (acc * 4.5)) * 100;
     if (Math.random() * 100 < (cls === 4 ? clamp(chance, 5, 95) : clamp(chance, 2, 80))) return 0;
     const pad = clamp(power, 0, 1999), pdd = clamp(this.equipStat('wdef') + buff('wdef'), 0, 1999), std = this.standardPdd(cls, lv);
-    const k = Math.trunc(cls === 1 ? (s.luk + s.dex) * 0.25 + s.int / 9 + (s.str * 2) / 7 : s.luk * 0.25 + s.int / 9 + (s.dex * 2) / 7 + s.str * 0.4);
+    const k = Math.trunc(cls === 1 ? (T('luk') + T('dex')) * 0.25 + T('int') / 9 + (T('str') * 2) / 7 : T('luk') * 0.25 + T('int') / 9 + (T('dex') * 2) / 7 + T('str') * 0.4);
     let d = rand(pad * 0.8, pad * 0.85) * pad * 0.01 - (k * 0.00125 + 0.28) * pdd;
     if (pdd >= std) d -= (pdd - std) * (k / 900 + lv / 1300 + 0.28) * 0.7;
     else if (mobLv <= lv) d -= ((pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 13) / (lv - mobLv + 13);
