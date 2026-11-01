@@ -1149,6 +1149,7 @@ export class Game {
       ]);
       if (!current()) return;
       this.map = map;
+      this.magnet = null;   // a Monster Magnet being charged doesn't carry over
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
