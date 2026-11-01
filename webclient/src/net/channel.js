@@ -585,6 +585,7 @@ export class ChannelSession {
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
     const SHARP_EYES = [3121002, 3221002];
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n;   // BuffStat.SPEED / JUMP
+    const WATK = 0x100000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -618,16 +619,20 @@ export class ChannelSession {
         if (hbHp) b.hbHp = values[0];
         if (hbMp) b.hbMp = values[hbHp ? 1 : 0];
       }
-      // Speed / Jump (Haste, Nimble Feet, speed potions...): the values come in mask-bit order, so each one's place
-      // is the number of set bits below it (both live in the second mask)
+      // Speed / Jump (Haste, Nimble Feet, speed potions...), weapon attack and accuracy: the values come in mask-bit
+      // order, so each one's place is the number of set bits below it (all live in the second mask)
       const mask = BigInt.asUintN(64, m2);
-      if (pick === normal && (mask & (SPEED | JUMP))) {
+      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         const at = (bit) => popcount(mask & (bit - 1n));   // Cosmic lists the plain stats (WATK..JUMP) first
         if (mask & SPEED) b.speed = values[at(SPEED)];
         if (mask & JUMP) b.jump = values[at(JUMP)];
+        if (mask & WATK) b.watk = values[at(WATK)];
+        if (mask & ACC) b.acc = values[at(ACC)];
       }
+      // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
+      if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
       // Sharp Eyes' one stat is (critical rate << 8 | critical damage)
       if (pick === normal && SHARP_EYES.includes(normal.source)) { r.pos = start; const v = r.short(); b.sharpEyes = { rate: v >> 8, dmg: v & 0xff }; }
       this.emit('buff', b);
