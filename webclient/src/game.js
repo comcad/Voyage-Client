@@ -2755,9 +2755,11 @@ export class Game {
   }
 
   checkTouchDamage(dt) {
-    const p = this.player;
+    const p = this.player, last = this.lastPos || p;
+    const dx = p.x - last.x, dy = p.y - last.y;   // how far you moved since the last check
+    this.lastPos = { x: p.x, y: p.y };
     if (this.invincible > 0) { this.invincible -= dt; return; }
-    if (p.ladder || this.dead || !this.stats) return;
+    if (this.dead || !this.stats) return;
     // the original receiver: 44x65 standing, 46x31 lying down
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
@@ -2765,7 +2767,9 @@ export class Game {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
       const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
-      this.hurtBy(m, m.src.info?.PADamage || 1, false, -1);
+      // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
+      const knock = p.ladder && dy < 0 ? 0 : m.x - (m.prevX ?? m.x) - dx < 0 ? -1 : 1;
+      this.hurtBy(m, m.src.info?.PADamage || 1, false, -1, knock);
       return;
     }
   }
@@ -2777,8 +2781,9 @@ export class Game {
   /**
    * Monster `m` hurts you: `power` is its PADamage (MADamage when magic), less half your weapon (magic) defence.
    * `from` is the attack index (-1 for touching it): the server applies that attack's extras (MP burn, disease).
+   * `knock`: which way you're thrown (-1 left, 1 right, 0 not at all); by default away from the monster.
    */
-  hurtBy(m, power, magic, from) {
+  hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1) {
     const p = this.player;
     let def = 0; for (const it of Object.values(this.inventory.equipped)) def += (magic ? it.mdef : it.wdef) || 0;
     const damage = Math.max(1, Math.round(power * (0.85 + Math.random() * 0.15) - def * 0.5));
@@ -2788,7 +2793,13 @@ export class Game {
     if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
-    p.fh = null; p.ladder = null; p.vy = -KNOCKBACK; p.vx = fromRight ? -KNOCKBACK : KNOCKBACK;   // the original's ordinary 270/270 impulse
+    // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
+    // monster you're thrown back less, and falling onto it only slows your fall
+    const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    if (knock) {
+      p.fh = null; p.ladder = null;
+      p.vx = impact(p.vx || 0, knock * KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
+    }
     if (p.attack) {   // a hit doesn't shorten the attack delay
       const k = p.attackScale || 1, n = this.look.frameCount(p.attack);
       this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);

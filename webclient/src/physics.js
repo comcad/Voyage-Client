@@ -126,13 +126,19 @@ export class Footholds {
     }
     const x = ent.x + ent.vx * dt;
 
-    if (ent.vy > 0) {
-      for (const f of this.floors) {
-        if (f === ignore || x < f.x1 || x > f.x2) continue;
-        const fy = Footholds.yAt(f, x);
-        if (ent.y <= fy + 1 && ny >= fy) { ent.x = x; ent.y = fy; ent.vy = 0; ent.fh = f; return; }
-      }
+    // land on the first floor the step's path crosses from above (rising or falling: a slope can rise faster than
+    // you do), wherever along the floor that is
+    const x0 = ent.x, y0 = ent.y;
+    let land = null, first = Infinity;
+    for (const f of this.floors) {
+      if (f === ignore || Math.max(x0, x) < f.x1 || Math.min(x0, x) > f.x2) continue;
+      const d0 = y0 - Footholds.yAt(f, x0), d1 = ny - Footholds.yAt(f, x);   // height above (-) or below (+) its line
+      if (d0 > 1 || d1 < 0 || (d0 >= 0 && d1 <= d0)) continue;
+      const t = d0 >= 0 ? 0 : d0 / (d0 - d1), cx = x0 + (x - x0) * t;
+      if (cx < f.x1 || cx > f.x2 || t >= first) continue;
+      first = t; land = { f, x: cx };
     }
+    if (land) { ent.x = land.x; ent.y = Footholds.yAt(land.f, land.x); ent.vy = 0; ent.fh = land.f; return; }
     ent.x = x; ent.y = ny;
   }
 }
