@@ -585,7 +585,7 @@ export class ChannelSession {
     // GIVE_BUFF: two 64-bit masks, then (short value, int source, int duration) per set bit
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
     const SHARP_EYES = [3121002, 3221002];
-    const SPEED = 0x8000000000n, JUMP = 0x10000000000n;   // BuffStat.SPEED / JUMP
+    const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
     const WATK = 0x100000000n, WDEF = 0x200000000n, MDEF = 0x800000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
@@ -623,7 +623,7 @@ export class ChannelSession {
       // Speed / Jump (Haste, Nimble Feet, speed potions...), weapon attack and accuracy: the values come in mask-bit
       // order, so each one's place is the number of set bits below it (all live in the second mask)
       const mask = BigInt.asUintN(64, m2);
-      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MDEF | AVOID))) {
+      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MDEF | AVOID | BOOSTER))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         const at = (bit) => popcount(mask & (bit - 1n));   // Cosmic lists the plain stats (WATK..JUMP) first
@@ -634,7 +634,10 @@ export class ChannelSession {
         if (mask & WDEF) b.wdef = values[at(WDEF)];
         if (mask & MDEF) b.mdef = values[at(MDEF)];
         if (mask & AVOID) b.avoid = values[at(AVOID)];
+        if (mask & BOOSTER) b.booster = values[at(BOOSTER)];   // -1 to -4: that much faster
       }
+      // Speed Infusion: its value comes first, as an int
+      if (pick === pirate && infusion) { r.pos = start + 2; b.infusion = r.int(); }
       // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
       if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
       // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent

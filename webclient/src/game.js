@@ -316,9 +316,9 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
-const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007;
+const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 const HEROS_WILLS = new Set([1121011, 1221012, 1321010, 2121008, 2221008, 2321009, 3121009, 3221008, 4121009, 4221008, 5121008,
-  5221010, 21121008]);
+  21121008]);
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
 const SHADOW_PARTNERS = [4111002, 14111000], SP_MASK = 0x400000000000000n, NO_PARTNER = new Set([4121003, 14101006]);
@@ -1252,7 +1252,7 @@ export class Game {
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
-          watk: b.watk, acc: b.acc, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
+          watk: b.watk, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
@@ -1506,7 +1506,7 @@ export class Game {
     if (rp) {
       rp.attack = this.actionName(a.stance); rp.facingRight = !(a.direction & 0x80);
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
-      rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
+      rp.attackScale = this.attackScale(Math.max(2, Math.min(10, a.speed ?? 6)));
       if (a.skill === BOOMERANG_STEP) {   // unseen for the pose
         let len = 0; for (let i = 0; i < rp.look.frameCount(rp.attack); i++) len += rp.look.delay(rp.attack, i);
         rp.boomerangUntil = performance.now() + len * rp.attackScale;
@@ -2414,7 +2414,7 @@ export class Game {
       const action = prone ? 'proneStab' : swing || opts.pose || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
       p.attack = this.look.has(action) ? action : this.look.attackAction();
       p.frame = 0; p.frameT = 0; p.action = p.attack;
-      p.attackScale = this.attackScale();
+      p.attackScale = this.attackScale(this.attackSpeed(skillId));
     }
     const pose = (opts.held ? opts.pose : p.attack) || this.defaultAttackAction(kind), scale = opts.held ? this.attackScale() : p.attackScale;
     const hitDelay = this.look.attackDelay(pose) * scale, trailAt = this.hitFrame(pose, kind);
@@ -2517,7 +2517,7 @@ export class Game {
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
-      speed: this.attackSpeed(), charge, display: opts.stage2 ? 0x20 : 0,
+      speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
     // Assaulter: straight to the floor 200px ahead, leaving its trail where you stood
     if (skillId === ASSAULTER) {
@@ -2680,12 +2680,17 @@ export class Game {
 
   /**
    * Attack speed, as v83 does it: every frame of an attack lasts (speed + 10) / 16 of its delay, where
-   * speed is the weapon's attackSpeed (2 fastest .. 9 slowest, 6 normal), two faster under a Booster.
+   * speed is the weapon's attackSpeed (2 fastest .. 10 slowest, 6 normal) plus a booster's value (a skill or an item,
+   * -1 to -4) and Speed Infusion's; Double Stab is two faster still.
    */
-  attackSpeed() {
+  attackSpeed(skillId = 0) {
     let speed = this.windows?.info(this.weaponId())?.attackSpeed ?? 6;
-    if ((this.buffs || []).some((b) => BOOSTERS.has(b.source) && b.until > Date.now())) speed -= 2;
-    return Math.max(2, Math.min(9, speed));
+    const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
+    const booster = active.findLast((b) => b.booster !== undefined || BOOSTERS.has(b.source));
+    if (booster) speed += booster.booster ?? -2;
+    speed += active.findLast((b) => b.infusion)?.infusion || 0;
+    if (skillId === DOUBLE_STAB) speed -= 2;
+    return Math.max(2, Math.min(10, speed));
   }
   attackScale(speed = this.attackSpeed()) { return (speed + 10) / 16; }
   /** The frame a swing's afterimage (its trail) plays on; when it lands is the look's attackDelay. */
