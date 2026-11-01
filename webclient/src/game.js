@@ -314,6 +314,7 @@ const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 2001
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
+const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
  * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
@@ -2075,6 +2076,7 @@ export class Game {
     const ms = this.moveStats(), WALK = PHYS.walk * ms.speed, JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
+    if (p.fh || p.ladder) this.fjUsed = false;   // Flash Jump comes back once you land
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
     if (p.regrabT > 0) p.regrabT -= dt;
 
@@ -2300,6 +2302,7 @@ export class Game {
     if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
+    if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
     if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
     if (FINISHERS.has(id) && this.comboValue() < 2) return false;
@@ -3089,6 +3092,31 @@ export class Game {
     sfx.play(`Skill/${pad(id, 7)}/Use`);
     this.net?.specialMove(id, lv, null);
     return true;
+  }
+  /**
+   * Flash Jump: once per jump, in the air on the way up, not mid-attack nor on a map that forbids movement skills.
+   * Throws you forward (350 + 40 a 4 levels) and up (250 + 20 a 4 levels), like a knock-back's push.
+   */
+  flashJump(id, lv) {
+    const p = this.player, ld = this.skills.levelData(id, lv);
+    if (!this.skillKeyPressed || p.fh || p.ladder || p.attack || this.fjUsed || (p.vy || 0) > 0) return false;
+    if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    const n = Math.floor(lv / 4), dir = p.facingRight ? 1 : -1;
+    const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    p.vx = impact(p.vx || 0, dir * (350 + 40 * n)); p.vy = impact(p.vy || 0, -(250 + 20 * n));
+    this.fjUsed = true;
+    this.playSkillEffect(id, p);
+    this.playBasicEff(id === FLASH_JUMPS_NW ? 'Flying1' : 'Flying', p.x, p.y, p.facingRight);
+    this.net?.specialMove(id, lv, null);
+    return true;
+  }
+  async playBasicEff(name, x, y, flip) {
+    const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.[name];
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, x, y, flip });
   }
   async playTeleportEffect(x, y) {
     const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Teleport;
