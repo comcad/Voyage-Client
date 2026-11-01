@@ -3501,7 +3501,11 @@ export class Game {
   async playSkillEffect(id, ent, swing = false, branch = 'effect') {
     if (branch === 'effect') sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
     const node = await this.skills?.ensure(id);
-    const fx = Game.fxNode(node?.[branch] || (branch === 'effect' ? node?.effect0 : null));
+    // a skill with an effect per pose (Brandish: effect/0 with brandish1, effect/1 with brandish2) plays the one
+    // that goes with the pose being used
+    const posed = branch === 'effect' && node?.action && Object.entries(node.action).find(([, a]) => a === ent?.attack)?.[0];
+    const own = posed !== undefined && node.effect?.[posed] && !node.effect[posed]._canvas ? node.effect[posed] : null;
+    const fx = own || Game.fxNode(node?.[branch] || (branch === 'effect' ? node?.effect0 : null));
     if (!fx) return;
     const anim = new Anim(fx, false);
     await this.assets.preload(anim.frames);
