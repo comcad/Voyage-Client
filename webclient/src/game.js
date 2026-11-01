@@ -198,7 +198,7 @@ const STANCES = { 112: 1121002, 122: 1221002, 132: 1321002, 2112: 21121003 };
  * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh, Smokescreen and
  * the Aran swings and charges.
  */
-const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 4221006, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
+const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 4221006, 4211006, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
   5221003, 5121001, 5121005, 5121007, 15111004, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020,
   21000002, 21100001, 21110007, 21110008, 21120009, 21120010, 21100002, 20000014, 20000015]);
 /** Dragon Roar: only with at least half your HP (it costs x% of your max HP). */
@@ -316,7 +316,7 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
-const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001;
+const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
  * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
@@ -390,7 +390,10 @@ function arrowGap(skillId, ammoId) {
 const BAND_OF_THIEVES = 4211004, SPARK = 15111006;
 const MAGIC_AT_ONCE = new Set([2121007, 2221007, 2321008, 12111003]);
 const REMOTE_MAGIC_WAVE = new Set([2201005, 2301002]);
+/** Meso Explosion's lines shown as up to five numbers: line i adds to number i % 5. */
+const foldLines = (dmg) => dmg.reduce((o, d, i) => { o[i % 5] = (o[i % 5] || 0) + d; return o; }, []);
 function hitWave(i, kind, skillId, remote = false) {
+  if (skillId === MESO_EXPLOSION) return 0;   // every monster at once
   if (skillId === CHAIN_LIGHTNING && !remote) return i * 100;
   if (kind === 'magic') return (remote ? REMOTE_MAGIC_WAVE.has(skillId) : !MAGIC_AT_ONCE.has(skillId)) ? i * 50 : 0;
   if (skillId === BAND_OF_THIEVES && !remote) return i ? 280 : 0;
@@ -1214,7 +1217,7 @@ export class Game {
       spawnNpc: later((n) => this.spawnLife('Npc', n, false)),
       removeNpc: later((oid) => this.killLife(oid, 0)),
       drop: later((d) => this.spawnDrop(d)),
-      removeDrop: later((oid, anim, chr, petSlot) => this.removeDrop(oid, anim, chr, petSlot)),
+      removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
       inventory: (ops) => this.onInventory(ops),
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s)); },
@@ -1581,9 +1584,10 @@ export class Game {
       spin: thrown, angle: 0, speed, flight });
   }
 
-  removeDrop(oid, anim, chr, petSlot = -1) {
+  removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
     const d = this.drops.get(oid);
     if (!d) return;
+    if (anim === 4) { this.explodeMeso(oid, delay); return; }
     const pet = anim === 5 && this.pets.get(`${chr}:${petSlot}`);
     if (pet) { if (chr === this.player.id) sfx.play('Game/PickUpItem'); this.pickUp(d, pet); return; }
     if (anim === 2) {
@@ -2399,7 +2403,8 @@ export class Game {
     const ammo = kind === 'ranged' ? this.ammoItem(ld?.bulletConsume || ld?.bulletCount || 1) : 0;
     const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
     const kept = opts.prefer && opts.prefer.alive && !opts.prefer.dying && !opts.prefer.queuedKill ? [opts.prefer] : null;
-    let targets = kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
+    const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
+    let targets = mx?.mobs || kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
@@ -2429,6 +2434,7 @@ export class Game {
       for (let i = 0; i < lines; i++) {
         // Heaven's Hammer strikes for 1: the server does its real damage a moment later
         if (skillId === HEAVENS_HAMMER) { dmg.push(1); crits.push(false); continue; }
+        if (mx) { dmg.push(...mx.damage(m)); crits.push(...dmg.map(() => false)); break; }
         if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, cbLd || ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
         if (fixedPhys) { dmg.push(this.fixedMiss(m) ? 0 : ld.fixdamage); crits.push(false); continue; }
         const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
@@ -2450,11 +2456,11 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
           this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -2467,8 +2473,9 @@ export class Game {
     else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
-    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
-      speed: this.attackSpeed(), charge, display: opts.stage2 ? 0x20 : 0 });
+    this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
+      speed: this.attackSpeed(), charge, display: opts.stage2 ? 0x20 : 0,
+      mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
     // Assassinate: once its first pose ends, if it found a monster, the finishing blow from 100px ahead
     if (skillId === ASSASSINATE && !opts.stage2 && out.length) {
       const first = out[0].mob, len = this.frameTime(pose, this.look.frameCount(pose)) * scale;
@@ -2483,6 +2490,40 @@ export class Game {
     return true;
   }
 
+  /**
+   * Meso Explosion: the mesos lying in its box that you may pick up (yours, your party's, or anyone's), up to its
+   * attackCount, smallest first; the monsters (up to mobCount) within 50px of any of them. Each meso by a monster is a
+   * line of x x 50 x 0.5-1.0 x (amount <= 1000 ? (amount x 0.82 + 28) / 5300 : amount / (amount + 5250)).
+   */
+  mesoExplosionPlan(p, lv, ld) {
+    const box = this.skillBox(p, MESO_EXPLOSION, lv), mine = this.player.id, party = this.party?.id;
+    const max = Math.max(1, Math.min(20, ld?.attackCount || 1));
+    const mesos = [...this.drops.values()].filter((d) => d.meso && d.landed && !d.pickedBy && box
+      && d.x >= box.left && d.x <= box.right && d.y >= box.top && d.y <= box.bottom
+      && (d.type === 0 ? d.owner === mine : d.type === 1 ? d.owner === party : true)).slice(0, max).sort((a, b) => a.id - b.id);
+    const touches = (m, d) => { const h = m.hitBox(true); return h.right >= d.x - 50 && h.left <= d.x + 50 && h.bottom >= d.y - 50 && h.top <= d.y + 50; };
+    const mobs = this.liveMobs().filter((m) => mesos.some((d) => touches(m, d))).slice(0, Math.max(1, Math.min(15, ld?.mobCount || 1)));
+    const damage = (m) => mesos.slice(0, 15).filter((d) => touches(m, d)).map((d) => {
+      const a = d.id, ratio = a <= 1000 ? (a * 0.82 + 28) / 5300 : a / (a + 5250);
+      return Math.max(1, Math.trunc(50 * (ld?.x || 0) * ratio * (0.5 + Math.random() * 0.5)));
+    });
+    return { mesos, mobs, damage, touches };
+  }
+  /** A meso blowing up (Meso Explosion): it goes after `delay` ms with the skill's hit art, the sound at most every 90ms. */
+  explodeMeso(oid, delay) {
+    this.after(delay, async () => {
+      const d = this.drops.get(oid);
+      if (!d) return;
+      this.drops.delete(oid);
+      const now = performance.now();
+      if (now - (this.lastMesoBoom || 0) > 89) { this.lastMesoBoom = now; sfx.play(`Skill/${pad(MESO_EXPLOSION, 7)}/Hit`); }
+      const node = Game.fxNode((await this.skills?.ensure(MESO_EXPLOSION))?.hit);
+      if (!node) return;
+      const anim = new Anim(node, false);
+      await this.assets.preload(anim.frames);
+      this.fx.push({ anim, x: d.x, y: d.y, flip: false });
+    });
+  }
   /** The screen shake of a skill landing (see SHAKERS); `near` is 400 for your own, 400 less the distance for another's. */
   startShake(skillId, near, delay) {
     if (!settings.shake || near <= 0) return;

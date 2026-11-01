@@ -559,8 +559,8 @@ export class ChannelSession {
       for (let i = 0; i < (nd >> 4); i++) {
         const oid = r.int(); r.ubyte();
         // Cosmic sets a critical hit's top bit before passing it on (damage - 2^31)
-        const dmg = [], crit = [];
-        for (let j = 0; j < (nd & 0xf); j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
+        const dmg = [], crit = [], n = skill === 4211006 ? r.ubyte() : nd & 0xf;   // Meso Explosion: each its own count
+        for (let j = 0; j < n; j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
         targets.push({ oid, dmg, crit });
       }
       this.emit('attack', { kind, id, skill, skillLevel, display, direction, stance, speed, projectile, targets });
@@ -784,7 +784,9 @@ export class ChannelSession {
     on(S.REACTOR_HIT, (r) => { const oid = r.int(), state = r.byte(), pos = r.pos2(), stance = r.available ? r.ubyte() : 0; this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, stance }); });
     on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(); this.emit('reactorDestroy', { oid, state }); });
     on(S.REMOVE_ITEM_FROM_MAP, (r) => {
-      const anim = r.ubyte(), oid = r.int(), chr = anim >= 2 ? r.int() : 0;
+      const anim = r.ubyte(), oid = r.int();
+      if (anim === 4) { this.emit('removeDrop', oid, 4, 0, -1, r.short()); return; }   // 4: blown up by Meso Explosion, after a delay
+      const chr = anim >= 2 ? r.int() : 0;
       this.emit('removeDrop', oid, anim, chr, anim === 5 && r.available ? r.ubyte() : -1);   // 5: a pet picked it up
     });
 
@@ -880,11 +882,19 @@ export class ChannelSession {
    * Attack packets (AbstractDealDamageHandler.parseDamage). kind: melee | ranged | magic.
    * targets: [{oid, x, y, dmg:[...]}]; stance = body action id; facingLeft -> direction bit.
    */
-  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0 }) {
+  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0 }) {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
     if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
     w.zero(8).byte(display).byte(facingLeft ? 0x80 : 0).byte(stance);
+    if (skill === 4211006) {   // Meso Explosion: each monster's own line count, then the mesos used and whom each hit
+      w.byte(0).byte(speed).int(Date.now() | 0);
+      for (const t of targets) { w.int(t.oid).zero(4).pos(t).pos(t).byte(t.dmg.length); for (const d of t.dmg) w.int(d); w.int(0); }
+      w.pos({ x: Math.round(pos?.x || 0), y: Math.round(pos?.y || 0) }).byte((mesos || []).length);
+      for (const m of mesos || []) w.int(m.oid).byte(m.mask);
+      this.send(w.short(delay));
+      return;
+    }
     if (kind === 'ranged') {
       w.byte(0).byte(speed).byte(0).byte(facingLeft ? 0x80 : 0).zero(7);
       if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.int(charge); // Hurricane / Rapid Fire, Piercing's charge (ms)
