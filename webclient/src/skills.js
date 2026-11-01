@@ -178,6 +178,7 @@ export function skillMaxDamage(game, id, lv, kind) {
   if (id === 4001344 || id === 14001004 || id === 4121007) { // Lucky Seven / Triple Throw
     return Math.max(1, Math.floor(s.luk * 5 * Math.ceil(game.watk() / 100) * (ld?.damage || 100) / 100));
   }
-  const base = game.maxDamage(game.player?.attack);
+  // Dragon Roar: STR at 4.0 plus DEX, whatever the spear or polearm
+  const base = id === 1311006 ? Math.ceil(((4 * s.str + s.dex) / 100) * game.watk()) : game.maxDamage(game.player?.attack);
   return Math.max(1, Math.floor((base * (ld?.damage || 100)) / 100));
 }

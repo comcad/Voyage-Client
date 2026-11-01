@@ -185,6 +185,16 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/**
+ * Skills that can only be used standing on the ground: Dragon Roar, Assassinate, Boomerang Step, Rush, Demolition,
+ * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh and the Aran
+ * swings and charges.
+ */
+const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
+  5221003, 5121001, 5121005, 5121007, 15111004, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020,
+  21000002, 21100001, 21110007, 21110008, 21120009, 21120010, 21100002, 20000014, 20000015]);
+/** Dragon Roar: a spear or polearm only, and only with at least half your HP (it costs x% of your max HP). */
+const DRAGON_ROAR = 1311006;
 /** Monster Magnet (Hero, Paladin, Dark Knight): held up to 1s, the longer the more monsters it can catch. */
 const MONSTER_MAGNETS = new Set([1121001, 1221001, 1321001]), MAGNET_HOLD = 1;
 /** How far in front a bow, crossbow, claw or gun swings rather than shoots. */
@@ -1994,7 +2004,11 @@ export class Game {
     const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
-    if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+    if (skillId && this.net && (!sb.weaponOk(skillId, weapon) || (skillId === DRAGON_ROAR && wcat !== 143 && wcat !== 144))) {
+      this.notice('You cannot use this skill with the weapon you are holding.');
+      return false;
+    }
+    if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     // a bow, crossbow, claw or gun swings (a plain attack) instead of shooting when a monster is within its swing
     // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot
     let swing = null, reach = Infinity;
@@ -2011,6 +2025,7 @@ export class Game {
       if (sb.cooling(skillId)) return false;
       if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
       if ((ld?.hpCon || 0) >= this.stats.hp) { this.notice('Not enough HP.'); return false; }
+      if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) { this.notice("You don't have enough HP to use this skill."); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
 
