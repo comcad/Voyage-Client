@@ -2961,9 +2961,10 @@ export class Game {
     return node;
   }
   /**
-   * A skill's `special` art over a box, from `at` ms on: `count` pieces (a random one of its kinds each), one every
-   * `interval` ms after `start`, each from a random point in the box travelling (x, y) over `fall` ms and gone after
-   * `duration`; x points the way the shooter faces.
+   * A skill's `special` art over a box, from `at` ms on: every `interval` ms from `start` until `duration`, `count`
+   * pieces at once (a random one of its kinds each), each from a random point in the box. A piece travels (x, y),
+   * its slant a little off at random, over `fall` ms give or take 150, then is gone; x points the way the shooter
+   * faces. Pieces are drawn at alpha `a`, else 128-191.
    */
   async playSpecial(skillId, box, at, facingRight) {
     const sp = (await this.skills?.ensure(skillId))?.special;
@@ -2971,15 +2972,20 @@ export class Game {
     const kinds = frames(sp).some((f) => f?._canvas) ? [sp] : frames(sp).filter(Boolean);
     if (!kinds.length) return;
     await this.assets.preload(kinds.flatMap((k) => new Anim(k, true).frames));
-    const n = sp.count || 1, dx = (facingRight ? 1 : -1) * (sp.x || 0), dy = sp.y || 0, fall = sp.fall || 1, life = Math.max(sp.duration || 0, fall);
-    for (let i = 0; i < n; i++) {
-      this.after(at + (sp.start || 0) + i * (sp.interval || 0), () => {
-        const x = box.left + Math.random() * (box.right - box.left), y = box.top + Math.random() * (box.bottom - box.top);
-        const anim = new Anim(kinds[Math.floor(Math.random() * kinds.length)], true);
-        this.shots.push({ anim, sx: x, sy: y, tx: x + dx, ty: y + dy, t: 0, dur: fall / 1000, life: life / 1000, flip: facingRight });
-      });
-    }
+    const rand = (n) => (n > 0 ? Math.floor(Math.random() * n) : 0);
+    const x = sp.x || 0, y = sp.y || 0, interval = sp.interval || 0, end = sp.duration || 0;
+    const wave = () => {
+      for (let i = 0; i < (sp.count || 0); i++) {
+        const px = box.left + rand(box.right - box.left), py = box.top + rand(box.bottom - box.top);
+        const dy = x && y ? Math.trunc(((20 - rand(41)) * x) / y) + y : y, dur = Math.max(0, (sp.fall || 0) + rand(300) - 150);
+        const anim = new Anim(kinds[rand(kinds.length)], true);
+        this.shots.push({ anim, sx: px, sy: py, tx: px + (facingRight ? x : -x), ty: py + dy, t: 0, dur: dur / 1000, flip: facingRight,
+          alpha: (sp.a || 128 + rand(64)) / 255 });
+      }
+    };
+    for (let t = sp.start || 0; t <= end; t += interval) { this.after(at + t, wave); if (!interval) break; }
   }
+
 
   /** The box an attack reaches: the skill's lt/rb, else the swing's afterimage box, else a default per kind. */
   attackBox(kind, skillId, lv, action, charge = 0) {
@@ -3168,15 +3174,16 @@ export class Game {
       s.t += dt; s.anim?.update(dt * 1000);
       if (s.t >= s.dur && !s.hit) { s.hit = true; s.onHit?.(); }
     }
-    this.shots = this.shots.filter((s) => !s.hit || s.t < (s.life || 0));
+    this.shots = this.shots.filter((s) => !s.hit);
   }
 
   drawFx(ctx, cam) {
-    const draw = (node, x, y, flip) => {
+    const draw = (node, x, y, flip, alpha = 1) => {
       const img = this.assets.image(node);
       if (!img) return;
       const o = node.origin || [0, 0];
       ctx.save();
+      ctx.globalAlpha = alpha;
       ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
       if (flip) ctx.scale(-1, 1);
       ctx.drawImage(img, -o[0], -o[1]);
@@ -3191,7 +3198,7 @@ export class Game {
     for (const s of this.shots) {
       if (!s.anim?.node) continue;
       const k = s.dur ? Math.min(1, s.t / s.dur) : 1;
-      draw(s.anim.node, s.sx + (s.tx - s.sx) * k, s.sy + (s.ty - s.sy) * k, s.flip);
+      draw(s.anim.node, s.sx + (s.tx - s.sx) * k, s.sy + (s.ty - s.sy) * k, s.flip, s.alpha);
     }
   }
 
