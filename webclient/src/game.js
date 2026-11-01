@@ -187,6 +187,14 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
 /** How far in front a bow, crossbow, claw or gun swings rather than shoots. */
 const CLOSE_REACH = 65;
+/**
+ * Shooting skills that never turn into a swing at close range: Arrow Rain, Arrow Eruption, Final Attack, Mortal
+ * Blow, Taunt, Energy Orb, Recoil Shot, Flamethrower, Ice Splitter, Battleship Cannon / Torpedo, Soul Blade, Storm
+ * Break, Vampire, Spark, Shark Wave and the Aran combos.
+ */
+const NO_CLOSE_SWING = new Set([3100001, 3110001, 3111004, 3200001, 3210001, 3211004, 4121003, 4221003, 5121002, 5201006,
+  5211004, 5211005, 5221007, 5221008, 11101004, 13101002, 13101005, 13111000, 14101006, 15111006, 15111007, 21100004,
+  21110004, 21120006]);
 /** ms between a melee attack's hits on successive monsters, nearest first. */
 const HIT_WAVE = 60;
 /** Meso piles animate on fixed timings (the client overrides the WZ): four 80ms frames below 100, four 200ms below 1000, the bag 4000/120/120/120. */
@@ -1974,26 +1982,25 @@ export class Game {
     const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
+    if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+    // a bow, crossbow, claw or gun swings (a plain attack) instead of shooting when a monster is within its swing
+    // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot
+    let swing = null, reach = Infinity;
+    if (kind === 'ranged') {
+      const s = this.look.attackAction(), empty = this.net && !this.hasAmmo(skillId);
+      if (empty && skillId) this.notice(wcat === 147 ? 'You have no throwing stars.' : wcat === 149 ? 'You have no bullets.' : 'You have no arrows.');
+      if (empty || (!NO_CLOSE_SWING.has(skillId) && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length)) {
+        kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0;
+      }
+    }
     const lv = skillId ? sb.level(skillId) : 0;
     const ld = skillId ? sb.levelData(skillId, lv) : null;
     if (skillId && this.net) {
-      if (!sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
       if (sb.cooling(skillId)) return false;
       if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
       if ((ld?.hpCon || 0) >= this.stats.hp) { this.notice('Not enough HP.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
-    // a bow, crossbow, claw or gun swings instead of shooting when a monster is within its swing (65px in front at
-    // most), or when it has nothing to shoot
-    let swing = null, reach = Infinity;
-    if (kind === 'ranged' && !skillId) {
-      const s = this.look.attackAction(), empty = this.net && !this.hasAmmo(0);
-      if (empty || this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length) { kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; }
-    }
-    if (kind === 'ranged' && this.net && !this.hasAmmo(skillId)) {
-      this.notice(wcat === 147 ? 'You have no throwing stars.' : wcat === 149 ? 'You have no bullets.' : 'You have no arrows.');
-      return false;
-    }
 
     const action = prone ? 'proneStab' : swing || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
     p.attack = this.look.has(action) ? action : this.look.attackAction();
@@ -2014,8 +2021,8 @@ export class Game {
     const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
     const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
-    // the weapon's info/knockback: the chance of a strong recoil
-    const knockback = Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0));
+    // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly
+    const knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
     const out = targets.map((m) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
