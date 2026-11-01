@@ -292,6 +292,12 @@ function findMapName(strMap, id) {
 
 // MonsterStatus bits (second mask) that hold a monster still
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
+/** A monster AI wait: `base` + up to `spread` ms, counted in 90ms units of its 30ms ticks (so a third as long). */
+/** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
+const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
+/** How much of a path is still to play, in ms. */
+const pathLeft = (p) => p.steps.slice(p.i).reduce((t, s) => t + s.duration, 0) - p.t;
+const aiWait = (base, spread) => (Math.floor((base + Math.random() * spread) / 90) * 30) / 1000;
 
 /**
  * A Maple TV NPC (info/MapleTV) is only the cabinet; the client fills its screens from UI/MapleTV.img: the top one
@@ -321,17 +327,19 @@ export class Life {
     this.x = spawn.x; this.y = fh ? Footholds.yAt(fh, spawn.x) : spawn.cy; this.fh = fh;
     this.facingRight = !!spawn.f;   // f=1 mirrors the art, for NPCs and monsters alike
     this.maxHp = src.info?.maxHP || 1; this.hp = this.maxHp;
-    // Mob speed, as the client does it (Journey's Mob): a force of (speed + 100) / 1000 per 8ms tick
-    // against ground friction settles at 7.5x that, i.e. (speed + 100) * 0.78 px/s at our walk speed;
-    // flyers use flySpeed the same way against air friction.
     const info = src.info || {};
-    this.speed = Math.max(0, (info.speed ?? 0) + 100) * 0.78;
-    this.flySpeed = Math.max(0, (info.flySpeed ?? 0) + 100) * 0.9;
-    this.flying = kind === 'Mob' && !!src.fly && !src.move;
-    this.canMove = kind === 'Mob' && (this.flying ? this.flySpeed > 0 : !!src.move && this.speed > 0);
-    this.canJump = kind === 'Mob' && !!src.jump;
+    this.speed = Math.max(0, (info.speed ?? 0) + 100) * 0.78;   // an NPC's walk
+    // a monster's speed, flySpeed and chaseSpeed each count from 100 (held to 0-140); see walkSpeed
+    const stat = (v) => Math.max(0, Math.min(140, (v ?? 0) + 100));
+    this.speedStat = stat(info.speed); this.flySpeedStat = stat(info.flySpeed); this.chaseSpeedStat = stat(info.chaseSpeed);
+    // how it moves: it flies (with a fly animation, whatever else it has), walks and jumps (jump and move), walks, or
+    // stays where it is
+    this.flying = kind === 'Mob' && !!src.fly;
+    this.canJump = kind === 'Mob' && !this.flying && !!src.jump && !!src.move;
+    this.canMove = kind === 'Mob' && (this.flying || !!src.move);
+    this.dir = 0;             // which way it is walking: -1, 0 (standing) or 1
     this.anims = {};
-    for (const k of ['stand', 'move', 'jump', 'hit1', 'die1', 'fly', 'regen']) if (src[k]) this.anims[k] = new Anim(src[k], !['die1', 'hit1', 'regen'].includes(k));
+    for (const k of ['stand', 'move', 'chase', 'jump', 'hit1', 'die1', 'fly', 'regen']) if (src[k]) this.anims[k] = new Anim(src[k], !['die1', 'hit1', 'regen'].includes(k));
     // an NPC's other actions (say, eye...) play now and then; `special` ones are left to scripts
     this.actions = kind === 'Npc' ? Object.keys(src).filter((k) => !['info', 'stand', 'move'].includes(k) && !src[k]?.special && frames(src[k]).some(isCanvas)) : [];
     for (const k of this.actions) this.anims[k] = new Anim(src[k], false);
@@ -359,41 +367,84 @@ export class Life {
     this.status = { first: 0, second: 0 };
     this.statusArt = new Map();
     this.state = this.anims.stand ? 'stand' : this.anims.fly ? 'fly' : Object.keys(this.anims)[0];
-    this.timer = 1 + Math.random() * 3;
-    this.aggro = null;        // the character it chases once hit (or told to by the server)
-    this.vx = 0; this.vy = 0; this.baseY = this.y; this.bob = Math.random() * 6;
+    this.timer = 0;
+    this.aggro = null;        // the character it chases once hit (or told to by the server); see chase()
+    this.chaseT = 0;
+    this.vx = 0; this.vy = 0;
     this.respawnTimer = 0;
     // network state: oid set for server-spawned life; `controlled` = we run its AI and report moves
     this.oid = spawn.oid ?? null;
     this.controlled = false;
     this.path = null;       // remote movement being replayed
     this.removed = false;
-    this.lastSent = { x: this.x, y: this.y, state: this.state, facingRight: this.facingRight };
   }
 
   get online() { return this.oid !== null; }
 
-  /** Replay a movement list from the server (MOVE_MONSTER). */
+  /**
+   * A path from its controller (MOVE_MONSTER): its points are queued after whatever is still to play, as the client
+   * does it. More than 5s behind, it jumps to the end.
+   */
   applyMovement(start, moves) {
-    const steps = moves.filter((m) => m.x !== undefined);
+    const steps = moves.filter((m) => m.x !== undefined).map((m) => ({ ...m, duration: Math.max(0, m.duration || 0) }));
     if (!steps.length) return;
-    this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
-    const last = steps[steps.length - 1];
-    this.facingRight = !(last.stance & 1);
+    const p = this.path || (this.path = { steps: [], i: 0, t: 0, fromX: this.x, fromY: this.y });
+    p.steps = p.steps.slice(p.i).concat(steps); p.i = 0;
+    if (pathLeft(p) > 5000) { const last = steps[steps.length - 1]; this.path = null; this.x = last.x; this.y = last.y; this.takePose(last); }
   }
-
+  /**
+   * Play its path: each point is where it is at the end of that point's time, in that pose and facing, and it glides
+   * there in a straight line. A path more than a second behind plays faster until it has caught up.
+   */
   _replay(dt) {
-    const p = this.path, s = p.steps[p.i];
-    const dur = Math.max(1, s.duration || 100) / 1000;
-    p.t += dt;
-    const k = Math.min(1, p.t / dur);
-    this.x = p.fromX + (s.x - p.fromX) * k;
-    this.y = p.fromY + (s.y - p.fromY) * k;
-    this.setState(Math.abs(s.x - p.fromX) > 1 ? 'move' : (this.anims.stand ? 'stand' : 'fly'));
-    if (k >= 1) {
-      p.fromX = s.x; p.fromY = s.y; p.t = 0; p.i++;
-      if (p.i >= p.steps.length) { this.path = null; this.setState(this.anims.stand ? 'stand' : this.state); }
+    const p = this.path;
+    const left = pathLeft(p);
+    p.t += dt * 1000 * (left > 1000 ? left / 1000 : 1);
+    while (p.i < p.steps.length) {
+      const s = p.steps[p.i];
+      this.takePose(s);
+      if (p.t < s.duration) {
+        const k = p.t / s.duration;
+        this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k;
+        return;
+      }
+      p.t -= s.duration; p.fromX = this.x = s.x; p.fromY = this.y = s.y; p.i++;
     }
+    this.path = null;
+  }
+  /** A path point's pose (its stance: 1 walk, 2 stand, 3 jump, 6 fly, 16 chase; bit 0 faces left) and floor. */
+  takePose(s) {
+    this.facingRight = !(s.stance & 1);
+    const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: this.flying ? 'fly' : 'chase' }[s.stance >> 1];
+    if (pose) this.setState(this.anims[pose] ? pose : pose === 'stand' ? this.state : this.flying ? 'fly' : 'move');
+    if (!this.flying) this.fh = s.fh ? this.footholds.get(s.fh) || this.fh : null;
+  }
+  /** Its pose as a path stance: (walk 1, stand 2, jump 3, fly 6, chase 16) << 1, plus 1 facing left. */
+  get stance() {
+    const st = this.state, action = !this.fh && !this.flying ? 3 : st === 'chase' ? 16 : st === 'move' ? 1 : st === 'fly' ? 6 : st === 'jump' ? 3 : 2;
+    return (action << 1) | (this.facingRight ? 0 : 1);
+  }
+  /**
+   * One we control works out where it will be over the next second, as the client does: its AI and movement run in
+   * 30ms ticks on a stand-in until a second is planned, the path (a point for each stretch in one pose, floor and
+   * direction, with its speed) goes to the server for everyone else, and it then plays that path itself - so every
+   * client shows it moving the same way at the same time. Its AI picks up from where the path ends.
+   */
+  planPath() {
+    const sim = Object.create(this), moves = [], start = { x: Math.round(this.x), y: Math.round(this.y) };
+    sim.setState = function (st) { if (this.anims[st]) this.state = st; };
+    for (let t = 0; t < 1000; t += 30) {
+      const px = sim.x, py = sim.y;
+      sim.step(0.03);
+      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), vy = Math.round((sim.y - py) / 0.03);
+      const fh = sim.fh?.id || 0, stance = sim.stance, last = moves[moves.length - 1];
+      if (last && last.fh === fh && last.stance === stance && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
+        Object.assign(last, { x, y, vx, vy }); last.duration += 30;
+      } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance, duration: 30 });
+    }
+    for (const k of Object.keys(sim)) if (!PLAYED.has(k)) this[k] = sim[k];
+    this.path = { steps: moves, i: 0, t: 0, fromX: this.x, fromY: this.y };
+    this.onPath?.(this, start, moves);
   }
 
   /** KILL_MONSTER: its statuses end (a frozen one thaws) and it plays its death animation, then disappears. */
@@ -428,6 +479,7 @@ export class Life {
     this.facingRight = fromRight;
     if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
     // fromRight: the blow came from the right, so it slides away to the left
+    if (this.controlled) this.path = null;
     if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
   }
   /** Drawn in by Monster Magnet: toward pull.x at 1000px/s until within pull.stop of it; a floor's edge or a wall stops it. */
@@ -478,15 +530,18 @@ export class Life {
       } else if (!posing && at.landed) this.attacking = null;
       return;
     }
-    if (this.pull && this.state !== 'die1') { this.pullStep(dt); return; }
+    if (this.pull && this.state !== 'die1') {
+      // a pulled monster's path picks up from where the pull leaves it (one we control plans a new one)
+      if (this.controlled) this.path = null; else if (this.path) { this.path.fromX = this.x; this.path.fromY = this.y; }
+      this.pullStep(dt); return;
+    }
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
       if (this.recoil && this.fh) this.recoilStep(dt);
       if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
-      if (this.path) { this._replay(dt); return; }
-      if (!this.controlled) return;
+      if (!this.controlled) { if (this.path) this._replay(dt); return; }
     }
-    if (this.held) return;
+    if (this.held) { this.path = null; return; }
     if (this.respawnTimer > 0) {
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) {
@@ -498,23 +553,28 @@ export class Life {
     }
     if (this.state === 'die1') { if (anim?.done) this.respawnTimer = 6; return; }
     if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
-    if ((this.fh || this.flying) && this.tryAttack(dt)) return;
-    if (!this.canMove) return;
+    // a chase lasts 3-4 minutes from the last time it was set on someone
+    if (this.aggro !== this.chased) { this.chased = this.aggro; this.chaseT = 180 + Math.random() * 60; }
+    if (this.aggro && (this.chaseT -= dt) <= 0) this.aggro = this.chased = null;
+    if ((this.fh || this.flying) && this.tryAttack(dt)) { this.path = null; return; }   // an attack cuts its path short
+    if (this.online) { if (!this.path) this.planPath(); this._replay(dt); return; }
+    this.step(dt);
+  }
+  /** Its AI and movement for one step of `dt` seconds. */
+  step(dt) {
+    if (!this.canMove) { this.faceTarget(dt); return; }
     if (this.flying) { this.flyStep(dt); return; }
     if (!this.fh) {                                   // mid-jump (or knocked off a ledge)
       this.footholds.fall(this, dt);
-      if (this.fh) { this.vx = 0; this.setState('move'); }
+      if (this.fh) { this.vx = 0; this.walkState(); }
       return;
     }
     this.think(dt);
-    if (this.state === 'move') this.walkStep(dt);
+    if (this.fh && this.dir && this.state !== 'stand') this.walkStep(dt);
   }
+  /** Set it on `target` (or a fresh 3-4 minutes on the same one). */
+  chase(target) { this.aggro = this.chased = target; this.chaseT = 180 + Math.random() * 60; }
 
-  /**
-   * Wander like the client's mobs: walk a while, pause a little, now and then turn round (and hop,
-   * if it has a jump). Once something has hit it, it turns to follow that character instead,
-   * stopping at its platform's edges rather than walking off.
-   */
   /** Where attack `a` reaches, facing as it does now: its box, or (types 1 and 2) its start point and radius. */
   attackReach(a) {
     const r = a.info.range, s = this.facingRight ? -1 : 1;
@@ -592,11 +652,22 @@ export class Life {
     for (const icon of icons) { ctx.drawImage(icon, x, y); x += 26; }
   }
   /** Its speed now: a Speed status (Slow's negative value) is added to its own speed stat before the conversion. */
+  /**
+   * Its walking speed: the character's walk speed (125px/s) times its speed stat over 100, held to 10-140 - its
+   * chaseSpeed while it chases if it has a chase pose, plus a Speed status (Slow's negative value). Doomed, the
+   * Blue Snail's.
+   */
   get walkSpeed() {
+    const doom = this.doomArt;
+    const base = doom ? Math.max(0, Math.min(140, (doom.speed ?? 0) + 100)) : this.aggro && this.anims.chase ? this.chaseSpeedStat : this.speedStat;
+    return (PHYS.walk * Math.max(10, Math.min(140, base + this.speedMod))) / 100;
+  }
+  /** Its flying speed: 200px/s (the map's flySpeed) times its flySpeed over 100, held to 10-140 the same way. */
+  get flySpeed() { return (200 * Math.max(10, Math.min(140, this.flySpeedStat + this.speedMod))) / 100; }
+  get speedMod() {
     let mod = 0;
     if (this.status.second & MOB_SPEED) for (const e of this.statusArt.values()) if (e.second & MOB_SPEED) mod = e.value || 0;
-    const doom = this.doomArt;
-    return Math.max(0, doom ? (doom.speed + 100) * 0.78 : this.speed + mod * 0.78);
+    return mod;
   }
   /** Doomed: once the puff has played, it is drawn (and walks) as the Blue Snail. */
   get doomArt() { for (const e of this.statusArt.values()) if (e.doom && (!e.anim || e.anim.done)) return e.doom; return null; }
@@ -679,56 +750,98 @@ export class Life {
     if (this.dir && !this.acting && dt > 0 && this.x === x) { this.dir = this.turned ? 0 : -this.dir; this.turned = true; } else this.turned = false;
   }
 
+  /**
+   * Its next move, as the client's monster AI makes it (every 30ms; its waits are counted in 90ms units). Left alone
+   * it walks left, walks right or stands, picked evenly, for 0.33-1s at a time; one that jumps jumps instead one
+   * time in five. Chasing, it heads for its target, aiming again every 0.27-0.4s: within 100px it keeps going the
+   * way it was (so it walks past and back) unless it reaches the map's side. One that jumps and stands under the
+   * platform its target is on jumps up to it.
+   */
   think(dt) {
     const t = this.aggro;
-    if (t) {
-      const dx = t.x - this.x;
-      // a Puppet stops it a little short, up against it; a character it walks right up to
-      if (Math.abs(dx) > (t.reach || 8)) { this.facingRight = dx > 0; this.setState('move'); } else { this.facingRight = dx > 0; this.setState('stand'); }
-      if (this.canJump && t.y < this.y - 40 && Math.abs(dx) < 120 && Math.random() < dt * 0.8) this.jump();
-      return;
+    if (t && this.canJump && this.underTarget(t) && Math.random() < 1 - (2 / 3) ** (dt / 0.03)) {
+      this.dir = 0; this.timer = 0; this.jump(); return;
     }
-    this.timer -= dt;
-    if (this.timer > 0) return;
-    if (this.state === 'move' && Math.random() < 0.35) { this.setState('stand'); this.timer = 0.6 + Math.random() * 1.4; return; }
-    this.setState('move');
-    if (Math.random() < 0.4) this.facingRight = !this.facingRight;
-    if (this.canJump && Math.random() < 0.15) this.jump();
-    this.timer = 1.5 + Math.random() * 2.5;
+    if ((this.timer -= dt) > 0) return;
+    if (t) {
+      this.timer = aiWait(800, 400);
+      if (!this.dir || Math.abs(t.x - this.x) > 99) this.dir = t.x >= this.x ? 1 : -1;
+      else if (this.x <= this.footholds.left) this.dir = 1;
+      else if (this.x >= this.footholds.right) this.dir = -1;
+    } else if (this.canJump && Math.random() < 0.2) {
+      this.jump(); return;
+    } else {
+      this.timer = aiWait(1000, 2000);
+      this.dir = Math.floor(Math.random() * 3) - 1;
+    }
+    this.walkState();
   }
+  /** Its target stands on another platform above it that reaches over where it is. */
+  underTarget(t) {
+    const tf = t.fh;
+    if (!tf || !this.fh || tf.group === this.fh.group || t.y >= this.y) return false;
+    const g = this.footholds.groups?.get(tf.group);
+    return !!g && this.x >= g.x1 && this.x < g.x2;
+  }
+  /** Walking (its chase pose when it has one and is chasing) or standing, facing the way it goes. */
+  walkState() {
+    if (this.dir) this.facingRight = this.dir > 0;
+    this.setState(!this.dir ? 'stand' : this.aggro && this.anims.chase ? 'chase' : 'move');
+  }
+  /** One that can't move still turns to face whoever it is chasing, every 0.27-0.4s. */
+  faceTarget(dt) {
+    if (!this.aggro || (this.timer -= dt) > 0) return;
+    this.timer = aiWait(800, 400);
+    this.facingRight = this.aggro.x >= this.x;
+  }
+  /** A jump: up at the jump speed a character has (555px/s), keeping its walking speed the way it goes. */
   jump() {
     if (!this.fh) return;
-    this.fh = null; this.vy = -420; this.vx = (this.facingRight ? 1 : -1) * this.walkSpeed;
+    this.fh = null; this.vy = -PHYS.jump; this.vx = this.dir * this.walkSpeed;
     this.setState(this.anims.jump ? 'jump' : 'move');
   }
+  /** It walks along its floor; a platform's edge or a wall stops it (standing) until its next move. */
   walkStep(dt) {
-    const dx = (this.facingRight ? 1 : -1) * this.walkSpeed * dt;
     const fh = this.fh, x = this.x, y = this.y;
-    const res = this.footholds.walk(this, dx);
-    const s = this.spawn;
-    if (res !== 'ok' || this.x < s.rx0 || this.x > s.rx1) {
+    if (this.footholds.walk(this, this.dir * this.walkSpeed * dt) !== 'ok') {
       this.fh = fh; this.x = x; this.y = y;
-      if (this.aggro) this.setState('stand');           // a chaser waits at the edge
-      else this.facingRight = !this.facingRight;
+      this.setState('stand');
     }
   }
-  /** Flyers drift back and forth around where they spawned, bobbing; a chaser closes in on its target. */
+  /**
+   * A flyer flies to one spot after another. Left alone it picks a platform of the map at random and spots over its
+   * floors (up to 60px above one), moving on to another platform after (its width + 40-240) / 8 spots. Chasing, its
+   * spots are within 120px left or right and 40px up or down of its target, picked again when it gets there or the
+   * target moves 150px away from the spot; after 60-119 of those it gives up the chase.
+   */
   flyStep(dt) {
-    this.bob += dt * 2.2;
-    const t = this.aggro, home = this.spawn.x;
-    let tx, ty;
-    if (t) { tx = t.x; ty = Math.max(this.baseY - 120, Math.min(this.baseY + 60, t.y - 30)); }
-    else {
-      this.timer -= dt;
-      if (this.timer <= 0) { this.timer = 2 + Math.random() * 3; this.facingRight = Math.random() < 0.5 ? this.x < home : !this.facingRight; }
-      tx = this.x + (this.facingRight ? 1 : -1) * 50; ty = this.baseY;
-      if (Math.abs(this.x - home) > 220) this.facingRight = this.x < home;
-    }
-    const dx = tx - this.x;
-    if (Math.abs(dx) > 6) { this.facingRight = dx > 0; this.x += Math.sign(dx) * Math.min(Math.abs(dx), this.flySpeed * dt); }
-    const goal = ty + Math.sin(this.bob) * 10;
-    this.y += Math.max(-this.flySpeed * dt, Math.min(this.flySpeed * dt, goal - this.y));
+    const t = this.aggro, d = this.dest;
+    if (!d || (t && (Math.abs(t.x - d.x) > 150 || Math.abs(t.y - d.y) > 150))) this.dest = this.flySpot(t);
+    const to = this.dest;
     this.setState('fly');
+    if (!to) return;
+    const dx = to.x - this.x, dy = to.y - this.y, v = this.flySpeed * dt;
+    if (Math.abs(dx) > 9) this.facingRight = dx > 0;
+    this.x += Math.sign(dx) * Math.min(Math.abs(dx), v);
+    this.y += Math.sign(dy) * Math.min(Math.abs(dy), v);
+    if (Math.abs(to.x - this.x) <= 11 && Math.abs(to.y - this.y) <= 11) this.dest = null;
+  }
+  flySpot(t) {
+    const rnd = (n) => Math.floor(Math.random() * n);
+    if (t) {
+      if (!this.chaseSpots) this.chaseSpots = 60 + rnd(60);
+      if (--this.chaseSpots < 1) { this.aggro = this.chased = null; this.chaseSpots = 0; }
+      return { x: t.x + rnd(240) - 120, y: t.y + rnd(80) - 40 };
+    }
+    const groups = [...(this.footholds.groups?.values() || [])];
+    if (!groups.length) return null;
+    if (!this.flyGroup || this.flySpots < 1) {
+      this.flyGroup = groups[rnd(groups.length)];
+      this.flySpots = (this.flyGroup.x2 - this.flyGroup.x1 + 40 + rnd(200)) >> 3;
+    }
+    this.flySpots--;
+    const f = this.flyGroup.floors[rnd(this.flyGroup.floors.length)], x = f.x1 + rnd(Math.max(1, f.x2 - f.x1));
+    return { x, y: Footholds.yAt(f, x) - rnd(60) };
   }
 
   draw(ctx, cam, assets) {
@@ -757,11 +870,6 @@ export class Life {
     }
 
     if (this.name && this.kind === 'Npc' && !Number(this.src.info?.hideName)) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
-    if (this.kind === 'Mob' && this.hp < this.maxHp && this.state !== 'die1') {
-      const w = 50, top = sy - o[1] - 10;
-      ctx.fillStyle = '#000'; ctx.fillRect(sx - w / 2 - 1, top - 1, w + 2, 6);
-      ctx.fillStyle = '#e33'; ctx.fillRect(sx - w / 2, top, w * Math.max(0, this.hp / this.maxHp), 4);
-    }
   }
 
   /** Bounding box of the current frame in world space. */
