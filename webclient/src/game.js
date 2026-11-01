@@ -312,6 +312,8 @@ const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 122101
 const SHOUT = 1111008;
 const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
+/** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
+const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 /**
  * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
  * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
@@ -891,6 +893,7 @@ export class Game {
   }
 
   useItemById(id) {
+    if (this.hidden()) return;
     const t = Math.floor(id / 1000000);
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
@@ -955,6 +958,10 @@ export class Game {
 
   weaponId() { return this.inventory?.equipped[-11]?.id || 0; }
   weaponOf(who) { return who === this.player ? this.weaponId() : who?.look?.weaponId?.() || 0; }
+  /** Your Dark Sight buff, if it is on. */
+  darkSight() { const now = Date.now(); return this.buffs?.find((b) => DARK_SIGHTS.includes(b.source) && b.until > now) || null; }
+  /** In Dark Sight or Wind Walk: monsters don't touch you, you don't regenerate or pick up, and you're drawn see-through. */
+  hidden() { const now = Date.now(); return !!this.buffs?.some((b) => (DARK_SIGHTS.includes(b.source) || b.source === WIND_WALK) && b.until > now); }
   /** What spaces an attacker's damage lines: their weapon and their attack's speed scale. */
   lineTiming(who) { return [this.weaponOf(who), who === this.player ? this.attackScale() : who?.attackScale || 1]; }
   equipStat(key) { let v = 0; for (const it of Object.values(this.inventory?.equipped || {})) v += it[key] || 0; return v; }
@@ -963,7 +970,9 @@ export class Game {
    * (Haste, Nimble Feet, a speed potion...), held to 80-140 and 80-123 as the client does (openms, docs/skills.md).
    */
   moveStats() {
-    const now = Date.now(), buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b.until > now && b[k]).map((b) => b[k]));
+    const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
+    // the last speed buff given sets it, a slowing one too (Dark Sight's -30); jump takes the strongest
+    const buff = (k) => (k === 'speed' ? active.findLast((b) => b.speed)?.speed || 0 : Math.max(0, ...active.filter((b) => b[k]).map((b) => b[k])));
     const pct = (k, max) => Math.max(80, Math.min(max, 100 + this.equipStat(k) + buff(k))) / 100;
     const slow = (this.diseases || []).find((d) => d.skill === SLOW && d.until > now);   // Slow: down to its x%
     return { speed: slow ? Math.min(pct('speed', 140), (slow.x || 80) / 100) : pct('speed', 140), jump: pct('jump', 123) };
@@ -1174,7 +1183,9 @@ export class Game {
         const rp = this.others.get(id);
         if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
         if (rp && BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
+        if (rp && (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK)) rp.hidden = false;
       }),
+      foreignHidden: later((id) => { const rp = this.others.get(id); if (rp) rp.hidden = true; }),
       foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
@@ -1452,7 +1463,7 @@ export class Game {
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
-    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0;
+    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden;
     if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
@@ -1982,7 +1993,7 @@ export class Game {
    */
   regen(dt) {
     const p = this.player, s = this.stats;
-    if (this.dead || !s) { this.hpRegenT = this.mpRegenT = 0; return; }
+    if (this.dead || !s || this.hidden()) { this.hpRegenT = this.mpRegenT = 0; return; }
     const still = p.fh && !p.attack && p.x === this.regenX && p.y === this.regenY && /^(stand|sit)/.test(p.action || '');
     this.regenX = p.x; this.regenY = p.y;
     this.hpRegenT = still ? (this.hpRegenT || 0) + dt : 0;
@@ -2285,6 +2296,9 @@ export class Game {
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
+    // in Dark Sight only Assassinate goes; with Vanish learned, anything but Dark Sight itself
+    if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
+    if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
     if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
@@ -2318,6 +2332,12 @@ export class Game {
     if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.info?.swim) return false;
+    // a plain attack in Dark Sight (without Vanish) only brings you out of it
+    const ds = !skillId && !opts.final && this.darkSight();
+    if (ds && !sb.level(VANISH)) {
+      if (!ds.leaving) { ds.leaving = true; this.playSkillEffect(ds.source, p); this.net?.cancelBuff(ds.source); }
+      return false;
+    }
     // a bow, crossbow, claw or gun swings (a plain attack) instead of shooting when a monster is within its swing
     // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot; a Mortal Blow can go
     // off instead of that swing. Otherwise the shot starts from the front of the swing.
@@ -2343,6 +2363,12 @@ export class Game {
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
+    // Assassinate's first stage brings you out of Dark Sight; it strikes harder the longer you were in it
+    if (skillId === ASSASSINATE && !opts.stage2) {
+      const dsb = this.darkSight();
+      this.assassinSec = dsb ? Math.floor((Date.now() - (dsb.until - dsb.dur)) / 1000) : 0;
+      if (dsb) { this.playSkillEffect(dsb.source, p); this.net?.cancelBuff(dsb.source); }
+    }
 
     if (!opts.held) {
       const action = prone ? 'proneStab' : swing || opts.pose || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
@@ -2354,16 +2380,18 @@ export class Game {
     const hitDelay = this.look.attackDelay(pose) * scale, trailAt = this.hitFrame(pose, kind);
     if (!opts.held) {
       this.after(this.frameTime(pose, trailAt) * scale, () => this.playAfterimage(pose, trailAt));
-      if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic');
+      if (opts.stage2) { this.playSkillEffect(skillId, p, false, 'special'); sfx.play(`Skill/${pad(skillId, 7)}/Use2`); }
+      else if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic');
       else if (!skillId) this.playWeaponSound(p);
     } else sfx.play(`Skill/${pad(skillId, 7)}/Use`);
 
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
-    const lines = ld?.fixdamage ? 1 : ld?.attackCount || ld?.bulletCount || 1;
+    const lines = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
     const ammo = kind === 'ranged' ? this.ammoItem(ld?.bulletConsume || ld?.bulletCount || 1) : 0;
     const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
-    let targets = plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge);
+    const kept = opts.prefer && opts.prefer.alive && !opts.prefer.dying && !opts.prefer.queuedKill ? [opts.prefer] : null;
+    let targets = kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
     if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
@@ -2372,7 +2400,12 @@ export class Game {
       : ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
     const fixedPhys = !!ld?.fixdamage && (kind === 'ranged' || kind === 'melee');
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
-    const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat, kind === 'ranged') : null, pct = ld?.damage || 100;
+    let crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat, kind === 'ranged') : null, pct = ld?.damage || 100;
+    // Assassinate's second stage crits by its own prop and criticalDamage (Sharp Eyes on top)
+    if (opts.stage2) {
+      const se = this.buffs?.find((b) => b.sharpEyes && b.until > Date.now())?.sharpEyes;
+      crit = { rate: (ld?.prop || 0) + (se?.rate || 0), dmg: (ld?.criticalDamage || 100) - 100 + (se?.dmg || 0) };
+    }
     // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly, more with Power
     // Knock-Back; Dragon's Breath throws back what it strikes at its prop chance
     let knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
@@ -2427,7 +2460,15 @@ export class Game {
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
-      speed: this.attackSpeed(), charge });
+      speed: this.attackSpeed(), charge, display: opts.stage2 ? 0x20 : 0 });
+    // Assassinate: once its first pose ends, if it found a monster, the finishing blow from 100px ahead
+    if (skillId === ASSASSINATE && !opts.stage2 && out.length) {
+      const first = out[0].mob, len = this.frameTime(pose, this.look.frameCount(pose)) * scale;
+      this.after(len, () => {
+        if (this.dead || this.weaponId() !== weapon || !this.blinkAhead(-(ld?.lt?.[0] || 100))) return;
+        this.attack(ASSASSINATE, 'melee', { stage2: true, pose: 'assassinationS', prefer: first });
+      });
+    }
     if (RUSH_DASH.has(skillId) && out.length) this.startRush(ld, out.map((t) => t.mob));
     if (SHAKERS.has(skillId)) this.startShake(skillId, 400, hitDelay);
     if (skillId && !opts.final && !opts.held) this.rollFinalAttack(skillId, wcat % 100, hitDelay, pose, scale);
@@ -2458,6 +2499,19 @@ export class Game {
     this.rushLock = performance.now() + RUSH_LOCK;
     const reach = -(ld?.lt?.[0] || 0);
     for (const m of mobs) if (!m.src?.info?.boss) m.pull = { x: p.x + dir * (Math.floor(Math.random() * 20) + reach + 35), stop: 0 };
+  }
+  /** The floor nearest (x, y) within `reach` px up or down. */
+  floorNear(x, y, reach) {
+    const down = this.map.fh.below(x, y, reach), up = this.map.fh.below(x, y - reach, reach);
+    const dy = (f) => (f ? Math.abs(Footholds.yAt(f, x) - y) : Infinity);
+    return dy(down) <= dy(up) ? down : up;
+  }
+  /** Move straight to the floor `dx` px ahead (within 80px up or down); false when there is none. */
+  blinkAhead(dx) {
+    const p = this.player, x = p.x + (p.facingRight ? dx : -dx), fh = this.floorNear(x, p.y, 80);
+    if (!fh) return false;
+    p.x = x; p.y = Footholds.yAt(fh, x); p.fh = fh; p.vx = 0; p.vy = 0;
+    return true;
   }
   /** One 30ms step of the dash: along the floor within the step's length up or down, or the dash ends. */
   rushStep() {
@@ -3227,6 +3281,8 @@ export class Game {
     if (stun) { rate += Math.max(0, Math.min(100, stun.prop || 0)); extra += stun.damage || 0; }
     const c = rate > 0 && extra > 0 && skillId !== BLIZZARD && Math.random() * 100 < rate;
     if (c) d += ((extra - 100) * base) / 100;
+    // Assassinate: x(seconds in Dark Sight, up to its time, / 3 + 1)
+    if (skillId === ASSASSINATE) d *= Math.floor(Math.min(this.assassinSec || 0, ld?.time || 0) / 3) + 1;
     // Wind Walk and Vanish (out of Dark Sight) strike harder
     const buffed = (ids) => (this.buffs || []).some((b) => ids.includes(b.source) && b.until > now);
     if (buffed([WIND_WALK])) d = (d * (this.skills.levelData(WIND_WALK)?.damage || 100)) / 100;
@@ -3681,11 +3737,13 @@ export class Game {
     this.lastPos = { x: p.x, y: p.y };
     if (this.invincible > 0) { this.invincible -= dt; return; }
     if (this.dead || !this.stats) return;
+    const hidden = this.hidden() && !((this.map?.info?.fieldLimit || 0) & 2);
     // the original receiver: 44x65 standing, 46x31 lying down
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
+      if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
       const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
       // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
@@ -3921,6 +3979,7 @@ export class Game {
 
   /** Pick up the item you are standing on: your feet within its width, on the same ground. */
   tryPickup() {
+    if (this.hidden()) return;
     const p = this.player;
     let best = null, bestDx = Infinity;
     for (const [oid, d] of this.drops) {
@@ -4104,7 +4163,8 @@ export class Game {
     const dead = ent.action === 'dead', t = performance.now() / 700;
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
-    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, 1, !dead);   // a ghost always faces left
+    const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
+    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
