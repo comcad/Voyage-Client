@@ -1,5 +1,5 @@
 import { pad, isCanvas, frames } from './assets.js';
-import { Footholds, PHYS } from './physics.js';
+import { Footholds, PHYS, accelerate, approach } from './physics.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -67,7 +67,7 @@ export class GameMap {
     const fh = this.fh.get(spawn.fh) || this.fh.below(spawn.x, spawn.cy - 5, 60);
     const e = new Life(kind, spawn, src, name, fh, this.fh);
     if (kind === 'Npc' && src.info?.MapleTV) e.tv = mapleTV(await a.json('UI/MapleTV.img'), src.info);
-    if (kind === 'Npc') e.lines = npcLines(src, strings?.[Number(spawn.id)]);
+    if (kind === 'Npc') e.picks = npcPicks(src, strings?.[Number(spawn.id)]);
     await a.preload(e.allFrames());
     return e;
   }
@@ -306,12 +306,11 @@ function mapleTV(ui, info) {
   };
 }
 
-/** The lines an NPC says over its head: String/Npc.img entries named by info/speak, else by its actions' speak. */
-function npcLines(src, str) {
-  const keys = (n) => Object.values(n?.speak || {});
-  let ks = keys(src.info);
-  if (!ks.length) ks = Object.entries(src).filter(([k, v]) => k !== 'info' && !v?.special).flatMap(([, v]) => keys(v));
-  return [...new Set(ks)].map((k) => str?.[k]).filter((t) => typeof t === 'string' && t.trim());
+/** What an NPC does now and then: one of its actions (with one of that action's speak lines), or one of its info/speak lines. */
+function npcPicks(src, str) {
+  const say = (n) => Object.values(n?.speak || {}).map((k) => str?.[k]).filter((t) => typeof t === 'string' && t.trim());
+  const acts = Object.entries(src).filter(([k, v]) => !['info', 'stand', 'move', 'hide'].includes(k) && v && typeof v === 'object' && !v.special);
+  return [...acts.map(([k, v]) => ({ action: k, lines: say(v) })), ...say(src.info).map((l) => ({ lines: [l] }))];
 }
 
 /** NPC or monster placed by the map's `life` list. */
@@ -336,8 +335,12 @@ export class Life {
     // an NPC's other actions (say, eye...) play now and then; `special` ones are left to scripts
     this.actions = kind === 'Npc' ? Object.keys(src).filter((k) => !['info', 'stand', 'move'].includes(k) && !src[k]?.special && frames(src[k]).some(isCanvas)) : [];
     for (const k of this.actions) this.anims[k] = new Anim(src[k], false);
-    this.lines = [];
-    this.idleT = 2 + Math.random() * 4; this.walkT = Math.random() * 9; this.talkT = Math.random() * 5;
+    if (kind === 'Npc') {
+      // its speed stat is speed + 70 (capped at 140) percent of the walk speed; only one with a move animation wanders
+      this.speed = Math.min(140, Math.max(0, (info.speed ?? 0) + 70)) * PHYS.walk / 100;
+      this.walks = !!src.move && spawn.rx1 > spawn.rx0;
+      this.picks = []; this.actT = 3 + Math.random() * 6; this.moveT = 0; this.dir = 0;
+    }
     if (kind === 'Npc') for (const a of Object.values(this.anims)) a.defaultDelay = 180;   // the client's NPC frame default
     // its attacks (attack1, attack2...): a reach box (type 0), a start point and radius (1, a shot; 2, a ball), or
     // a row of spots that erupt after a warning (3 on the ground, 4 at a set height - the bosses' area attacks)
@@ -626,30 +629,42 @@ export class Life {
     return true;
   }
 
-  /** An NPC idles: a line every 5-10s (each up for 5s), an action now and then, and short walks within rx0-rx1. */
+  /**
+   * An NPC idles. Every 3-9s, while no line is up and no action plays, it does one thing at random: one of its
+   * actions, saying one of that action's lines if it has any, or one of its own lines (up for 5s; none while it has
+   * a quest icon). One that wanders stands 1-3s or, 1 time in 5, walks 0.5-1.5s either way, turning back at
+   * either end of rx0-rx1; an action brings it to a stop.
+   */
   npcStep(dt) {
-    if (this.chat && (this.chat.t -= dt) <= 0) { this.chat = null; this.talkT = Math.random() * 5; }
-    else if (!this.chat && this.lines.length && (this.talkT -= dt) <= 0) this.chat = { text: this.lines[Math.floor(Math.random() * this.lines.length)], t: 5 };
-    this.walkT -= dt;
-    if (this.walkTo !== undefined) { this.npcWalk(dt); return; }
-    if (this.state !== 'stand') { if (this.anims[this.state]?.done !== false) this.setState('stand'); return; }
-    if ((this.idleT -= dt) > 0) return;
-    this.idleT = 2 + Math.random() * 4;
-    const s = this.spawn;
-    if (this.anims.move && this.fh && s.rx1 > s.rx0 && this.walkT <= 0) {
-      this.walkT = 3 + Math.random() * 7;
-      const d = (Math.random() < 0.5 ? -1 : 1) * (25 + Math.random() * 75), to = Math.max(s.rx0, Math.min(s.rx1, this.x + d));
-      if (Math.abs(to - this.x) < 5) return;
-      this.walkTo = to; this.facingRight = to > this.x; this.setState('move');
-      return;
+    if (this.chat && (this.chat.t -= dt) <= 0) this.chat = null;
+    if (this.acting && this.anims[this.acting]?.done !== false) this.acting = null;
+    if ((this.actT -= dt) <= 0 && !this.chat && !this.acting && this.picks.length) {
+      this.actT = 3 + Math.random() * 6;
+      const p = this.picks[Math.floor(Math.random() * this.picks.length)];
+      if (this.anims[p.action]) { this.acting = p.action; this.setState(p.action); }
+      if (p.lines.length && !this.questIcon) this.chat = { text: p.lines[Math.floor(Math.random() * p.lines.length)], t: 5 };
     }
-    if (this.actions.length) this.setState(this.actions[Math.floor(Math.random() * this.actions.length)]);
+    if (this.walks && this.fh) this.npcWalk(dt);
+    if (!this.acting) this.setState(this.dir ? 'move' : 'stand');
   }
   npcWalk(dt) {
-    const left = this.walkTo - this.x, fh = this.fh, x = this.x, y = this.y;
-    const res = this.footholds.walk(this, Math.sign(left) * Math.min(Math.abs(left), this.speed * dt));
-    if (res !== 'ok') { this.fh = fh; this.x = x; this.y = y; }
-    if (res !== 'ok' || Math.abs(this.walkTo - this.x) < 0.5) { this.walkTo = undefined; this.setState('stand'); }
+    const s = this.spawn;
+    if (this.acting) this.vx = approach(this.vx, 0, 400 * dt);
+    else {
+      if ((this.moveT -= dt) <= 0) {
+        const walk = Math.random() < 0.2;
+        this.dir = walk ? (Math.random() < 0.5 ? -1 : 1) : 0;
+        this.moveT = Math.floor((walk ? 500 + Math.random() * 1000 : 1000 + Math.random() * 2000) / 90) * 0.09;
+      }
+      this.vx = this.dir ? accelerate(this.vx, this.dir * PHYS.walkAccel, this.speed, dt) : approach(this.vx, 0, PHYS.walkBrake * dt);
+      if (this.dir) this.facingRight = this.dir > 0;
+    }
+    const { x, y, fh } = this;
+    const want = this.x + this.vx * dt, to = Math.max(s.rx0, Math.min(s.rx1, want));
+    if (to !== want) this.vx = 0;
+    if (to !== x && this.footholds.walk(this, to - x) !== 'ok') { this.x = x; this.y = y; this.fh = fh; this.vx = 0; }
+    // held up at an end: turn back (and give up if that way is blocked too)
+    if (this.dir && !this.acting && dt > 0 && this.x === x) { this.dir = this.turned ? 0 : -this.dir; this.turned = true; } else this.turned = false;
   }
 
   think(dt) {
