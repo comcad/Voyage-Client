@@ -16,7 +16,7 @@ const EQUIP_DIRS = {
 
 export function equipPath(id) {
   const cat = Math.floor(id / 10000);
-  const dir = cat >= 130 && cat < 170 ? 'Weapon' : EQUIP_DIRS[cat];
+  const dir = cat >= 130 && cat <= 170 ? 'Weapon' : EQUIP_DIRS[cat];
   return dir ? `Character/${dir}/${pad(id, 8)}.img` : null;
 }
 
@@ -75,10 +75,16 @@ export class CharacterLook {
     // poses, which every skin has, so another skin takes them from there and draws them in its own colour
     if (base && this.body) this.body = { ...base, ...this.body };
     const eq = await Promise.all(this.equipIds.map((id) => equipPath(id) && a.json(equipPath(id))));
-    this.equips = eq.filter(Boolean);
+    const cat = (i) => Math.floor(this.equipIds[i] / 10000);
+    const wi = eq.findIndex((n, i) => n && cat(i) >= 130 && cat(i) < 170), ci = eq.findIndex((n, i) => n && cat(i) === 170);
+    this.weapon = eq[wi];
+    // a cash weapon (170) is drawn in the weapon's place, with its art for that kind of weapon (its 30, 33, 47... node)
+    const drawn = [...eq], art = ci >= 0 && wi >= 0 ? eq[ci][cat(wi) % 100] : null;
+    if (ci >= 0) drawn[ci] = null;
+    if (art) drawn[wi] = art;
+    this.equips = drawn.filter(Boolean);
     // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
-    this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
-    this.weapon = this.equips.find((e, i) => Math.floor(this.equipIds[i] / 10000) >= 130);
+    this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(cat(i)) ? n : null).filter(Boolean));
     // what stays on a dead character: the headgear (cap, face / eye accessory, earrings); clothes and weapon come off
     this.deadKeep = new Set(eq.map((n, i) => n && [100, 101, 102, 103].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
     this.hasCap = this.equipIds.some((id) => Math.floor(id / 10000) === 100);
@@ -219,6 +225,7 @@ export class CharacterLook {
     if (ref?.flip) out.flip = true;
     if (ref?.move) out.move = [Number(ref.move[0]) || 0, Number(ref.move[1]) || 0];
     if (ref?.rotate) out.rotate = Number(ref.rotate) || 0;
+    out.brow = anchors.get('brow');
     return out;
   }
 }

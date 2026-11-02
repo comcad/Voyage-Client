@@ -44,6 +44,14 @@ export const ACTIONS = [
 
 export const INV_NAMES = { 1: 'Equip', 2: 'Use', 3: 'Set-up', 4: 'Etc', 5: 'Cash' };
 export const invType = (id) => Math.floor(id / 1000000);
+/** The key type an item dragged from inventory tab `tab` binds as: 2 a Use item, 3 a facial expression (516), 7 an effect (501, 429). */
+export function itemKeyType(tab, id) {
+  const cat = Math.floor(id / 10000);
+  if (tab === 2) return 2;
+  if (tab === 5 && cat === 516) return 3;
+  if ((tab === 5 && cat === 501) || (tab === 4 && cat === 429)) return 7;
+  return null;
+}
 
 /** WZ path of an item's .img and the node holding it. */
 export function itemNode(id) {

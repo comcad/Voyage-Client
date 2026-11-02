@@ -485,7 +485,10 @@ const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
 const TIP_FONT = { title: 'bold 12px Arial, sans-serif', body: '12px Arial, sans-serif',
   small: '9px Tahoma, Verdana, sans-serif', smallB: 'bold 9px Tahoma, Verdana, sans-serif' };
 const TIP_TITLE = { 1: '#fff', 2: '#fdf514', 3: '#ff8a18', 4: '#bcbcbc', 5: '#5ca1ff', 6: '#c261ff' };
-const TIP_ORANGE = '#ff8a18', TIP_LABEL = '#fae8cb', TIP_HI = '#ff9900';
+const TIP_ORANGE = '#ff8a18', TIP_LABEL = '#fae8cb', TIP_HI = '#ff9900', TIP_SALE = '#ff7e00';
+const TIP_KARMA = 'Can trade 1 time (Trade disabled after transaction)';
+const TIP_SCISSORS = '#cYou can enable 1 time of trading when you use the Scissors of Karma.#';
+const WEDDING_RINGS = [1112803, 1112806, 1112807, 1112809];
 const JOBS = [['beginner', 0, 10], ['warrior', 1, 52], ['magician', 2, 92], ['bowman', 4, 132], ['thief', 8, 171], ['pirate', 16, 197]];
 const REQS = [['reqLEV', 'reqLevel', 'level'], ['reqSTR', 'reqSTR', 'str'], ['reqDEX', 'reqDEX', 'dex'], ['reqINT', 'reqINT', 'int'], ['reqLUK', 'reqLUK', 'luk'], ['reqPOP', 'reqPOP', 'fame']];
 // [item field, base value in info, label, shown as " %d" instead of " +%d"]
@@ -522,13 +525,14 @@ function tipDate(ft) {
 }
 
 /** The period line: a Cash Shop commodity's term, else when the item runs out. */
-function tipPeriod(it, cash) {
+function tipPeriod(it, cash, sealed) {
   if (it.periodHours > 0) return `AVAILABLE FOR ${it.periodHours} HOURS.`;
   if (it.period > 0) return `AVAILABLE FOR ${it.period} DAYS.`;
   const d = tipDate(it.expiration);
   if (!d) return null;
   const mo = d.getUTCMonth() + 1, da = d.getUTCDate(), yr = d.getUTCFullYear(), h = p2(d.getUTCHours()), mi = p2(d.getUTCMinutes());
-  return cash ? `Available until ${mo}/${da}/${yr} at ${h}:${mi}` : `USABLE UNTIL ${mo}-${da}-${yr} AT ${h} : ${mi}`;
+  if (cash) return `Available until ${mo}/${da}/${yr} at ${h}:${mi}`;
+  return sealed ? `Seal Released on ${mo}-${da}-${yr} ${h}:${mi}` : `USABLE UNTIL ${mo}-${da}-${yr} AT ${h} : ${mi}`;
 }
 
 function tipPetLife(it, info) {
@@ -543,21 +547,45 @@ function tipPetLife(it, info) {
   return `WATER OF LIFE DRIES UP ON ${d.getUTCMonth() + 1}-${d.getUTCDate()}-${d.getUTCFullYear()} AT ${p2(d.getUTCHours())} : 00`;
 }
 
-/** Trade tags, one or two lines joined by ", ". */
-function tipTags(info, equip) {
-  const on = (k) => tipNum(info[k]) > 0, a = [];
-  let b = '';
-  if (on('only')) a.push('One-of-a-kind Item');
-  if (on('quest')) a.push('Quest Item');
-  if (on('pquest')) a.push('Party Quest Item');
-  if (on('tradeBlock')) a.push('Untradeable');
-  if (equip) {
-    if (on('equipTradeBlock')) a.push('Trade disabled when equipped');
-    if (on('onlyEquip')) { if (a.length) b = 'Unique Equipped Item'; else a.push('Unique Equipped Item'); }
-    if (on('accountSharable')) a.push('Movement is possible only within the account');
+/**
+ * Trade tags: [first line, second line], each joined by ", ". Equip flags: 0x01 sealed, 0x08 untradeable,
+ * 0x10 karma used; other items: 0x02 karma used.
+ */
+function tipTags(it, info, equip, period) {
+  const on = (k) => tipNum(info[k]) > 0, f = tipNum(it.flag);
+  let a = '', b = '';
+  const add = (s) => { a = a ? `${a}, ${s}` : s; };
+  const spill = (s) => { if (!a) a = s; else b = b ? `${b}, ${s}` : s; };
+  if (on('only')) add('One-of-a-kind Item');
+  if (on('quest')) add('Quest Item');
+  if (on('pquest')) add('Party Quest Item');
+  const karma = equip ? f & 0x10 : it.flag !== undefined && f & 0x02;
+  if (equip ? f & 0x08 || on('tradeBlock') : on('tradeBlock')) {
+    if (!karma) add('Untradeable');
+    else if (!a) a = TIP_KARMA;
+    else b = TIP_KARMA;
   }
-  return [a.join(', '), b].filter(Boolean);
+  if (equip) {
+    if (on('equipTradeBlock') && !(f & 0x08)) add('Trade disabled when equipped');
+    if (on('onlyEquip')) spill('Unique Equipped Item');
+    if (on('accountSharable')) add('Movement is possible only within the account');
+    if (on('notExtend') && period) spill('Time limit extension is not possible.');
+  }
+  return [a, b];
 }
+
+/** Couple / friendship / wedding ring text from game.rings ({ couple, friend: [{ ring, partner }], marriage: { husband, wife } }). */
+function tipRingText(g, it) {
+  const r = g.rings, id = it.id, sn = it.cashId ? String(it.cashId) : '';
+  if (!r) return null;
+  const find = (list) => (sn ? list?.find((c) => String(c.ring) === sn)?.partner : null);
+  let p;
+  if (Math.floor(id / 100) === 11120 && id !== 1112000 && (p = find(r.couple))) return `A COUPLE-RING WITH : ${p}`;
+  if (Math.floor(id / 100) === 11128 && id % 10 < 3 && (p = find(r.friend))) return `This is your Friendship Ring with '${p}'.`;
+  if (WEDDING_RINGS.includes(id) && (p = tipSpouse(g))) return `YOU ARE MARRIED WITH : ${p}`;
+  return null;
+}
+const tipSpouse = (g) => { const m = g.rings?.marriage; return m ? (g.stats?.gender ? m.husband : m.wife) : null; };
 
 /** Title colour: +N scrolled items orange, then by how far the stats sit from the item's base. */
 function tipTitleColor(it, info) {
@@ -613,8 +641,8 @@ function tipWrap(ctx, text, width) {
 }
 /** Height of wrapped text: the first line 13, each more 16. */
 const tipWrapH = (lines) => (lines.length ? 13 + (lines.length - 1) * 16 : 0);
-function tipDrawWrap(ctx, lines, x, y) {
-  lines.forEach((l, i) => { for (const r of l) tipText(ctx, r.t, x + r.x, y + i * 16, TIP_FONT.body, r.hi ? TIP_HI : '#fff'); });
+function tipDrawWrap(ctx, lines, x, y, color = '#fff') {
+  lines.forEach((l, i) => { for (const r of l) tipText(ctx, r.t, x + r.x, y + i * 16, TIP_FONT.body, r.hi ? TIP_HI : color); });
 }
 
 function tipFrame(ctx, x, y, w, h) {
@@ -634,16 +662,28 @@ function tipIcon(ctx, mgr, id, x, y) {
   mgr.drawCashMark(ctx, id, x + 66, y + 66, 2);
   ctx.imageSmoothingEnabled = true;
 }
-/** Dot + title, the tag lines and the period line; returns the y the icon block hangs from. */
-function tipHead(ctx, mgr, D, x, y, W, title, color, tags, period, periodStep) {
-  tipSprite(ctx, mgr, D?.[0], x + 10, y + 14);
-  tipText(ctx, title, x + 18, y + 10, TIP_FONT.title, color);
-  tags.forEach((l, i) => tipText(ctx, l, x + (W - tipW(ctx, l, TIP_FONT.body)) / 2, y + 29 + 19 * i, TIP_FONT.body, TIP_ORANGE));
-  const ty = tags.length * 19;
-  if (!period) return ty;
-  tipSprite(ctx, mgr, D?.[1], x + 10, y + ty + 33);
-  tipText(ctx, period, x + 16, y + ty + 29, TIP_FONT.small, '#fff');
-  return ty + periodStep;
+function tipTitle(ctx, mgr, D, x, y, title, color) {
+  tipSprite(ctx, mgr, D?.[0], x + 10, y + 4);
+  tipText(ctx, title, x + 18, y, TIP_FONT.title, color);
+}
+/** A "•" line in the small font: the period, a gift's sender, a pet's life. */
+function tipDotLine(ctx, mgr, D, s, x, y) {
+  tipSprite(ctx, mgr, D?.[1], x + 10, y + 4);
+  tipText(ctx, s, x + 16, y, TIP_FONT.small, '#fff');
+}
+function tipCentre(ctx, s, x, y, W, font, color) { tipText(ctx, s, x + (W - tipW(ctx, s, font)) / 2, y, font, color); }
+/** Two strings side by side, centred as one. */
+function tipPair(ctx, a, fa, ca, b, fb, cb, x, y, W) {
+  const wa = tipW(ctx, a, fa), wb = tipW(ctx, b, fb), x0 = x + (W - wa - wb) / 2;
+  tipText(ctx, a, x0, y, fa, ca);
+  tipText(ctx, b, x0 + wa, y, fb, cb);
+}
+/** Cash Shop sale: original price, then the discount in percent. */
+const tipOnSale = (it) => tipNum(it.origPrice) > 0 && tipNum(it.origPrice) !== tipNum(it.price);
+function tipSale(ctx, it, x, y, W) {
+  const o = tipNum(it.origPrice), pct = Math.trunc(((o - tipNum(it.price)) * 100) / o);
+  tipCentre(ctx, `Original Price : ${o} Cash`, x, y, W, TIP_FONT.body, '#fff');
+  tipPair(ctx, 'Discount Price :', TIP_FONT.body, '#fff', `${pct}%`, TIP_FONT.body, TIP_SALE, x, y + 16, W);
 }
 const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, 799 - W)), Math.max(0, Math.min(my, 599 - H))];
 
@@ -658,13 +698,15 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
 
 function equipTip(ctx, mgr, it, info, mx, my) {
   const g = mgr.game, T = mgr.W.ToolTip?.Equip || {}, id = it.id, cat = Math.floor(id / 10000);
-  const cs = it.period > 0 || it.periodHours > 0, full = it.str !== undefined;
+  const cs = it.period > 0 || it.periodHours > 0, full = it.str !== undefined, f = tipNum(it.flag);
   const sex = Math.floor(id / 1000) % 10;
   let title = mgr.itemName(id) || '...';
   if (it.level > 0) title += ` (+${it.level})`;
   else if (sex < 2) title += sex ? ' (Female)' : ' (Male)';
-  const tags = cs ? [] : tipTags(info, true);
-  const period = tipPeriod(it, !!it.cashId || tipNum(info.cash) > 0);
+  const period = tipPeriod(it, !!it.cashId || tipNum(info.cash) > 0, !!(f & 0x01));
+  const lines = [period, !cs && it.from ? `IT'S A GIFT FROM '${it.from}'` : null].filter(Boolean);
+  const tags = cs ? ['', ''] : tipTags(it, info, true, period);
+  const owner = !cs && it.owner ? String(it.owner) : '';
   // "• LABEL : value" rows: [label, value, value font]
   const rows = [], tuc = tipNum(info.tuc);
   const category = equipCategory(id);
@@ -678,25 +720,36 @@ function equipTip(ctx, mgr, it, info, mx, my) {
     if (v > 0) rows.push([label, plain ? ` ${v}` : ` +${v}`, TIP_FONT.smallB]);
   }
   if (tipNum(info.knockback) > 0) rows.push(['THE RATE OF KNOCK-BACK :', ` ${tipNum(info.knockback)}%`, TIP_FONT.smallB]);
-  if (it.flag & 0x02) rows.push(['ADD PREVENT SLIPPING', '', TIP_FONT.small]);
-  if (it.flag & 0x04) rows.push(['ADD PREVENT COLDNESS', '', TIP_FONT.small]);
+  if (f & 0x02) rows.push(['ADD PREVENT SLIPPING', '', TIP_FONT.small]);
+  if (f & 0x04) rows.push(['ADD PREVENT COLDNESS', '', TIP_FONT.small]);
   if (tuc > 0) rows.push(['NUMBER OF UPGRADES AVAILABLE :', ` ${full ? tipNum(it.slots) : tuc}`, TIP_FONT.smallB]);
   if (!cs && tuc > 0 && Math.floor(id / 100000) !== 18 && id !== 1122000) {
     const n = tipNum(it.vicious);
     rows.push([`NUMBER OF VICIOUS' HAMMER APPLIED : ${n >= 2 ? '2(MAX)' : n}`, '', TIP_FONT.smallB]);
   }
   for (const r of rows) if (r[1] && !r[1].startsWith(' ')) r[1] = ` ${r[1]}`;
+  let text = tipRingText(g, it) ?? (mgr.desc(id) || '');
+  if (!cs && tipNum(info.tradeAvailable) && !(f & 0x10)) text += (text ? '\n' : '') + TIP_SCISSORS;
   // width: 236, or wider for a long title or row
   let W = 236;
   W = Math.max(W, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
-  for (const [l, v, f] of rows) W = Math.max(W, Math.ceil(tipW(ctx, l, TIP_FONT.small) + tipW(ctx, v, f)) + 20);
-  const desc = tipWrap(ctx, mgr.desc(id) || '', 208);
-  const base = tags.length * 19 + (period ? 16 : 0);
-  const H = base + 166 + rows.length * 13 + tipWrapH(desc);
+  for (const [l, v, fo] of rows) W = Math.max(W, Math.ceil(tipW(ctx, l, TIP_FONT.small) + tipW(ctx, v, fo)) + 20);
+  const desc = tipWrap(ctx, text, 208), descH = tipWrapH(desc), sale = tipOnSale(it);
+  // a first tag line wider than the box wraps; the second is given the first one's height
+  const ownH = owner ? 19 : 0, tagW = tags[0] ? tipW(ctx, tags[0], TIP_FONT.body) : 0;
+  const tagN = tags[0] ? Math.floor(tagW / 236) + 1 : 0, tagH = tagN * 19 * (tags[1] ? 2 : 1);
+  const base = ownH + tagH + lines.length * 16;
+  const H = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0);
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
-  const by = y + tipHead(ctx, mgr, T.Dot, x, y, W, title, TIP_TITLE[tipTitleColor(it, info)], tags, period, 16);
+  if (owner) tipPair(ctx, owner, TIP_FONT.title, TIP_ORANGE, "'s", TIP_FONT.title, '#fff', x, y + 10, W);
+  tipTitle(ctx, mgr, T.Dot, x, y + ownH + 10, title, TIP_TITLE[tipTitleColor(it, info)]);
+  if (tags[0] && tagW < 237) tipCentre(ctx, tags[0], x, y + ownH + 29, W, TIP_FONT.body, TIP_ORANGE);
+  else if (tags[0]) tipDrawWrap(ctx, tipWrap(ctx, tags[0], 178), x + 25, y + ownH + 31, TIP_ORANGE);
+  if (tags[1]) tipCentre(ctx, tags[1], x, y + ownH + 48, W, TIP_FONT.body, TIP_ORANGE);
+  lines.forEach((s, i) => tipDotLine(ctx, mgr, T.Dot, s, x, y + ownH + tagH + 29 + 16 * i));
+  const by = y + base;
   tipIcon(ctx, mgr, id, x + 10, by + 32);
   // requirements against the stats the character would have with it on
   const have = g.equipStats?.(id) || g.stats || {};
@@ -719,36 +772,62 @@ function equipTip(ctx, mgr, it, info, mx, my) {
     tipSprite(ctx, mgr, (ok ? T.Can : T.Cannot)?.[job], x + jx, by + 133);
   }
   ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(x + 10, by + 152, W - 20, 1);
-  rows.forEach(([l, v, f], i) => {
+  rows.forEach(([l, v, fo], i) => {
     const ry = by + 159 + 13 * i;
     tipSprite(ctx, mgr, T.Dot?.[1], x + 10, ry + 4);
     tipText(ctx, l, x + 16, ry, TIP_FONT.small, TIP_LABEL);
-    if (v) tipText(ctx, v, x + 16 + tipW(ctx, l, TIP_FONT.small), ry, f, '#fff');
+    if (v) tipText(ctx, v, x + 16 + tipW(ctx, l, TIP_FONT.small), ry, fo, '#fff');
   });
-  tipDrawWrap(ctx, desc, x + 10, y + H - tipWrapH(desc) - (cs ? 3 : 5));
+  if (sale) tipSale(ctx, it, x, y + H - descH - 39, W);
+  tipDrawWrap(ctx, desc, x + 10, y + H - descH - (cs ? 3 : 5));
 }
 
 function itemTip(ctx, mgr, it, info, mx, my) {
-  const T = mgr.W.ToolTip?.Equip || {}, id = it.id, name = mgr.itemName(id) || '...';
-  const pet = Math.floor(id / 10000) === 500;
+  const g = mgr.game, T = mgr.W.ToolTip?.Equip || {}, id = it.id, name = mgr.itemName(id) || '...';
+  const pet = Math.floor(id / 10000) === 500, f = tipNum(it.flag);
   let title = name;
   if (pet && it.pet?.name && it.pet.name !== name) title = `${it.pet.name} (${name})`;
-  const tags = pet ? [] : tipTags(info, false);
-  const period = pet ? tipPetLife(it, info) : tipPeriod(it, !!it.cashId || tipNum(info.cash) > 0);
+  const tags = pet ? ['', ''] : tipTags(it, info, false, null);
+  const tagH = !tags[0] ? 0 : tags[1] ? 38 : 19;
+  const period = pet ? tipPetLife(it, info) : tipPeriod(it, !!it.cashId || tipNum(info.cash) > 0, false);
+  const spouse = !pet && id >= 4031357 && id <= 4031364 ? tipSpouse(g) : null;
+  const owner = !pet && it.owner && Math.floor(id / 10000) !== 430 && id !== 4031406 && id !== 4031407 ? String(it.owner) : '';
+  const gift = it.from ? `A GIFT FROM '${it.from}'` : '';
+  let text = mgr.desc(id) || '';
+  if (!pet && it.flag !== undefined && tipNum(info.tradeAvailable) && !(f & 0x02)) text += (text ? '\n' : '') + TIP_SCISSORS;
   const reqLv = pet ? 0 : tipNum(info.reqLevel), showReq = reqLv > 0 || Math.floor(id / 10000) === 301;
   const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
-  const desc = tipWrap(ctx, mgr.desc(id) || '', W - 20 - 92 - 3);
-  const head = tags.length * 19 + (period ? (pet ? 16 : 20) : 0), top = head + (showReq ? 44 : 32);
-  const H = Math.max(head + 116 + (showReq ? 12 : 0), top + tipWrapH(desc) + 8);
+  const desc = tipWrap(ctx, text, W - 20 - 92 - 3), descH = tipWrapH(desc), sale = tipOnSale(it);
+  const head = pet ? (period ? 16 : 0) + (gift ? 16 : 0)
+    : tagH + (period ? 20 : 0) + (spouse ? 16 : 0) + (owner ? 16 : 0) + (gift ? 16 : 0);
+  const top = head + (showReq ? 44 : 32);
+  const H = Math.max(head + 116 + (showReq ? 12 : 0), top + descH + 8) + (sale ? 35 : 0);
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
-  tipHead(ctx, mgr, T.Dot, x, y, W, title, TIP_TITLE[1], tags, period, pet ? 16 : 20);
+  tipTitle(ctx, mgr, T.Dot, x, y + 10, title, TIP_TITLE[1]);
+  if (pet) {
+    if (period) tipDotLine(ctx, mgr, T.Dot, period, x, y + 29);
+    if (gift) tipCentre(ctx, gift, x, y + (period ? 45 : 29), W, TIP_FONT.body, '#fff');
+  } else {
+    if (tags[0]) tipCentre(ctx, tags[0], x, y + 29, W, TIP_FONT.body, TIP_ORANGE);
+    if (tags[1]) tipCentre(ctx, tags[1], x, y + 48, W, TIP_FONT.body, TIP_ORANGE);
+    let cy = tagH + 31;
+    if (spouse) { tipCentre(ctx, `YOU ARE ENGAGED WITH : ${spouse}`, x, y + cy - 2, W, TIP_FONT.body, TIP_ORANGE); cy = tagH + 50; }
+    if (period) { tipDotLine(ctx, mgr, T.Dot, period, x, y + cy - 2); cy += 16; }
+    if (owner) { tipPair(ctx, 'Specially made by ', TIP_FONT.body, '#fff', owner, TIP_FONT.body, TIP_ORANGE, x, y + cy, W); cy += 16; }
+    if (gift) tipDotLine(ctx, mgr, T.Dot, gift, x, y + cy - 2);
+  }
   tipIcon(ctx, mgr, id, x + 10, y + head + 32);
   if (showReq) {
-    const set = reqLv <= tipNum(mgr.game.stats?.level) ? T.Can : T.Cannot;
-    tipSprite(ctx, mgr, set?.reqLEV, x + 92, y + head + 32);
-    tipDigits(ctx, mgr, set, reqLv, x + 142, y + head + 32);
+    const set = reqLv <= tipNum(g.stats?.level) ? T.Can : T.Cannot, ry = y + tagH + (period ? 20 : 0) + 32;
+    tipSprite(ctx, mgr, set?.reqLEV, x + 92, ry);
+    tipDigits(ctx, mgr, set, reqLv, x + 142, ry);
   }
   tipDrawWrap(ctx, desc, x + 92, y + top);
+  if (sale) {
+    const sy = y + head + 40 + Math.max(descH, 68);
+    ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, sy - 4, W - 12, 1);
+    tipSale(ctx, it, x, sy + 4, W);
+  }
 }

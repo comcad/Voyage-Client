@@ -1,5 +1,5 @@
 import { isCanvas } from '../assets.js';
-import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll } from '../data.js';
+import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { richText, drawRich } from './richtext.js';
@@ -461,7 +461,12 @@ class EquipWin extends Win {
       return this.petCells().find(([, cc, rr]) => cc === c && rr === r)?.[0] || 0;
     }
     const c = Math.floor((lx - 5) / 33), r = Math.floor((ly - 35) / 33);
-    return Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0;
+    return this.shown(Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0);
+  }
+  /** A cell shows (and drags, takes off...) the cash item worn over its slot, 100 below it, when there is one. */
+  shown(slot) {
+    const cash = slot - 100;
+    return slot && slot !== -14 && slot > -100 && this.g.inventory?.equipped?.[cash] ? cash : slot;
   }
   body(ctx) {
     const eq = this.g.inventory?.equipped || {}, m = this.mgr;
@@ -473,10 +478,10 @@ class EquipWin extends Win {
       if (panel) ctx.drawImage(panel, PET_X, 0);
       cells.push(...this.petCells().map(([s, c, r]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
     }
-    for (const [slot, x, y] of cells) {
-      if (slot === 'hp' || slot === 'mp') { const id = this.g.petPotions?.[slot]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
-      const it = eq[slot];
-      if (!it || (m.carry?.tab === 'equip' && m.carry.slot === Number(slot))) continue;
+    for (const [cell, x, y] of cells) {
+      if (cell === 'hp' || cell === 'mp') { const id = this.g.petPotions?.[cell]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
+      const slot = this.shown(Number(cell)), it = eq[slot];
+      if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
     }
   }
@@ -1197,7 +1202,7 @@ class KeyConfigWin extends Win {
   iconFor(b) {
     if (!b) return null;
     if (b.type === 1) return this.g.skills?.icon(b.action) || null;
-    if (b.type === 2) return this.mgr.icon(b.action);
+    if (b.type === 2 || b.type === 3 || b.type === 7) return this.mgr.icon(b.action);
     if (b.type === 8) return this.mgr.W.SkillMacro?.Macroicon?.[b.action]?.icon || null;
     return this.W.icon[b.action] || null;
   }
@@ -1244,7 +1249,8 @@ class KeyConfigWin extends Win {
   }
   drop(lx, ly, c) {
     const sc = this.capAt(lx, ly);
-    const b = c.kind === 'bind' ? c.b : c.kind === 'skill' ? { type: 1, action: c.id } : c.kind === 'item' && c.tab === 2 ? { type: 2, action: c.id } : null;
+    const it = c.kind === 'item' && itemKeyType(c.tab, c.id);
+    const b = c.kind === 'bind' ? c.b : c.kind === 'skill' ? { type: 1, action: c.id } : it ? { type: it, action: c.id } : null;
     if (!b) return;
     if (sc === null) { if (c.fromSc !== undefined) delete this.draft[c.fromSc]; return; } // dropped off the keys: unbind
     if (c.fromSc !== undefined && c.fromSc !== sc) delete this.draft[c.fromSc];
@@ -1258,7 +1264,7 @@ class KeyConfigWin extends Win {
   tooltip(lx, ly) {
     const sc = this.capAt(lx, ly), b = sc !== null ? this.draft[sc] : null;
     if (!b) return null;
-    const title = b.type === 1 ? this.g.skills.name(b.action) : b.type === 2 ? this.mgr.itemName(b.action) : null;
+    const title = b.type === 1 ? this.g.skills.name(b.action) : [2, 3, 7].includes(b.type) ? this.mgr.itemName(b.action) : null;
     return title ? { title, lines: [] } : null;
   }
 }

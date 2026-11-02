@@ -2,7 +2,7 @@ import { GameMap, nameTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases } from './character.js';
 import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
-import { stanceByte, STANCE_NAMES } from './net/proto.js';
+import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
 import { npcTalk, MessageBox, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
@@ -115,7 +115,7 @@ class Input {
  * for EMOTE_TIME, then the face goes back to default - which blinks now and then, as the client's does.
  */
 const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
-  'wink', 'pain', 'glitter', 'despair', 'love', 'shine', 'blaze', 'hum', 'bowing', 'hot', 'dam', 'qBlue'];
+  'wink', 'pain', 'glitter', 'blaze', 'shine', 'love', 'despair', 'hum', 'bowing', 'hot', 'dam'];
 const EMOTE_TIME = 3, HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s (the client's)
 function setExpression(ent, n, time = EMOTE_TIME) {
   const name = EMOTES[n - 1];
@@ -609,7 +609,7 @@ export class Game {
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
-    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; }
+    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
     this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
@@ -641,7 +641,7 @@ export class Game {
       this.net = net;
       this.channel = entered.channel;
       const info = entered.info;
-      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; }
+      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
@@ -669,7 +669,7 @@ export class Game {
   /** A drawable look from packet look data (loads in the background; draws once ready). */
   lookFrom(d) {
     if (!d) return null;
-    const look = new CharacterLook(this.assets, { skin: d.skin, face: d.face, hair: d.hair, equips: visibleEquips(d) });
+    const look = new CharacterLook(this.assets, { skin: d.skin, face: d.face, hair: d.hair, equips: lookEquipIds(d) });
     look.load().then(() => this.assets.preload(lookCanvases(look, [look.standAction()]))).then(() => { look.ready = true; });
     return look;
   }
@@ -712,6 +712,8 @@ export class Game {
       if (!k) continue;
       if (k.type === 4) this.toggleMenu(k.action);
       else if (k.type === 6) this.emote(k.action - 99);
+      else if (k.type === 3) this.useFaceItem(k.action);
+      else if (k.type === 7) this.useItemEffect(k.action);
       else if (k.type === 8) this.runMacro(k.action);
       else if (k.type === 2) this.useItemById(k.action);
     }
@@ -897,7 +899,96 @@ export class Game {
     if (now - (this.lastEmote || 0) < 300) return;   // a held key repeats: once is enough
     this.lastEmote = now;
     setExpression(this.player, n);
+    this.emotionEffect(this.player, n);
     this.net?.faceExpression(n);
+  }
+  /** A facial expression item (516xxxx) from its key or a double-click: expression 8 + the last two digits of its id. */
+  useFaceItem(id) { if (this.itemCount(id) > 0) this.emote((id % 100) + 8); }
+  /** Etc/EmotionEffect.img/<expression>: art some expressions show beside the face. */
+  async emotionEffect(ent, n) {
+    const node = (this.emotionFx ??= await this.assets.json('Etc/EmotionEffect.img'))?.[EMOTES[n - 1]];
+    if (frames(node).length) this.pushEffect(node, ent);
+  }
+
+  /**
+   * An Effect item (501xxxx, or 429xxxx in Etc) from its key or a double-click turns its effect on, or off when it is
+   * the one already on; nothing within 2s of turning one on.
+   */
+  useItemEffect(id) {
+    if (!this.itemCount(id)) return;
+    const now = performance.now();
+    if (now - (this.itemEffectT || 0) < 2000) return;
+    if (this.player.itemFxId === id) id = 0; else this.itemEffectT = now;
+    this.setItemEffect(this.player, id);
+    this.net?.useItemEffect(id);
+  }
+  /**
+   * The effect an Effect item puts on a character, from the item's effect node: one animation (default, or the one
+   * named after the character's action when it has `action`), up to five trailing ones (`follow`), or fading copies
+   * of the character (`spectrum`).
+   */
+  async setItemEffect(ent, id) {
+    ent.itemFxId = id; ent.itemFx = null;
+    if (!id) return;
+    const img = await this.assets.json(Math.floor(id / 10000) === 429 ? 'Item/Etc/0429.img' : 'Item/Cash/0501.img');
+    const node = img?.[pad(id, 8)]?.effect;
+    if (node && ent.itemFxId === id) ent.itemFx = { node, layers: null, action: null };
+  }
+  itemFxLayers(e, action) {
+    const layer = (n) => {
+      const anim = new Anim(n);
+      this.assets.preload(anim.frames);
+      return { anim, z: Number(n.z) || 0, head: Number(n.pos) === 1 || Number(e.follow) === 1, fixed: !!Number(n.fixed), loose: Number(n.loose) || 0 };
+    };
+    if (Number(e.follow)) {
+      const out = [];
+      for (let i = 0; i < 5 && frames(e[i]).length; i++) out.push(layer(e[i]));
+      return out;
+    }
+    let n = Number(e.action) ? e[action] : null;
+    if (!frames(n).length) n = e.default;
+    if (!frames(n).length && frames(e).length) n = e;
+    return frames(n).length ? [layer(n)] : [];
+  }
+  stepItemFx(ent, dt) {
+    const fx = ent.itemFx;
+    if (!fx) return;
+    if (!fx.layers || (Number(fx.node.action) && fx.action !== ent.action)) { fx.action = ent.action; fx.layers = this.itemFxLayers(fx.node, ent.action); }
+    for (const l of fx.layers) l.anim.update(dt * 1000);
+  }
+  /**
+   * A character's item effect behind it (z < 0, and the spectrum's copies) or in front. pos 1 (and the trailing
+   * ones) hang from the head (the brow), the rest from the feet; a `loose` one lags behind by its loose %.
+   */
+  drawItemFx(ctx, cam, ent, parts, front, dx = 0, dy = 0) {
+    const fx = ent.itemFx;
+    if (!fx?.layers) return;
+    const now = performance.now(), e = fx.node, dir = ent.facingRight ? -1 : 1, brow = parts.brow || [0, -55];
+    if (!front && Number(e.spectrum)) {
+      const life = Number(e.delay) || 1000, a = (e.alpha ?? 128) / 255;
+      if (now - (fx.ghostT || 0) >= (Number(e.interval) || 100)) { fx.ghostT = now; (fx.ghosts ??= []).push({ parts, x: ent.x + dx, y: ent.y + dy, right: ent.facingRight, t: now }); }
+      fx.ghosts = (fx.ghosts || []).filter((g) => now - g.t < life);
+      for (const g of fx.ghosts) drawParts(ctx, this.assets, g.parts, g.x - cam.x, g.y - cam.y, g.right, a * (1 - (now - g.t) / life));
+    }
+    for (const l of fx.layers) {
+      if ((l.z >= 0) !== front) continue;
+      let x = ent.x + dx + (l.head ? brow[0] * dir : 0), y = ent.y + dy + (l.head ? brow[1] : 0);
+      if (l.loose) {
+        if (l.x === undefined || Math.hypot(x - l.x, y - l.y) > 600) { l.x = x; l.y = y; }
+        const k = 1 - (l.loose / 100) ** (Math.min(100, now - (l.t || now)) / 16);
+        l.t = now; l.x += (x - l.x) * k; l.y += (y - l.y) * k;
+        x = l.x; y = l.y;
+      }
+      const node = l.anim.node, img = node && this.assets.image(node);
+      if (!img) continue;
+      const o = node.origin || [0, 0];
+      ctx.save();
+      ctx.globalAlpha = l.anim.alpha;
+      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      if (ent.facingRight && !l.fixed) ctx.scale(-1, 1);
+      ctx.drawImage(img, -o[0], -o[1]);
+      ctx.restore();
+    }
   }
 
   /** Skill keys held down (repeat like the real client while held). */
@@ -1308,7 +1399,7 @@ export class Game {
   async goOnline(entered, uiRoot) {
     const info = entered.info;
     sfx.play('Game/GameIn');
-    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso;
+    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
     this.statusBar.layout(VIEW_W, VIEW_H);
@@ -1478,7 +1569,8 @@ export class Game {
       movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
       playerLook: later((id, look) => this.updateOtherLook(id, look)),
       attack: later((a) => this.onRemoteAttack(a)),
-      expression: later((id, emote) => { const rp = this.others.get(id); if (rp) setExpression(rp, emote); }),
+      expression: later((id, emote) => { const rp = this.others.get(id); if (rp) { setExpression(rp, emote); this.emotionEffect(rp, emote); } }),
+      itemEffect: later((id, item) => { const rp = this.others.get(id); if (rp) this.setItemEffect(rp, item); }),
       scrollEffect: later((e) => this.onScrollEffect(e)),
       bookCard: later((id, count) => {
         const b = this.monsterBook;
@@ -1804,7 +1896,7 @@ export class Game {
 
   async spawnPlayer(d) {
     if (d.id === this.player?.id) return;   // the server can spawn you to yourself (a job change): you're already here
-    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, equips: visibleEquips(d.look) });
+    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, equips: lookEquipIds(d.look) });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
@@ -1813,13 +1905,14 @@ export class Game {
     rp.lookData = d.look;
     rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
+    if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
 
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
-    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, equips: visibleEquips(lookData) });
+    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, equips: lookEquipIds(lookData) });
     await look.load();
     rp.look = look; rp.lookData = lookData;
   }
@@ -2027,6 +2120,8 @@ export class Game {
     if (tab === 5 && (Math.floor(it.id / 10000) === 507 || Math.floor(it.id / 10000) === 539)) { this.openMegaphone(slot, it.id); return; }
     if (tab === 5 && Math.floor(it.id / 10000) === 504) { this.openRock(slot, it.id); return; }          // a Teleport Rock
     if (tab === 5 && Math.floor(it.id / 10000) === 537) { this.openChalkboard(slot, it.id); return; }    // a Chalkboard
+    if (tab === 5 && Math.floor(it.id / 10000) === 516) { this.useFaceItem(it.id); return; }             // a facial expression
+    if (tab === 5 && Math.floor(it.id / 10000) === 501) { this.useItemEffect(it.id); return; }           // a character effect
     if (tab === 3 && Math.floor(it.id / 10000) === 301) { this.sitChair(it.id); return; }        // a chair
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
     if (tab === 2 && isScroll(it.id)) {
@@ -2039,7 +2134,7 @@ export class Game {
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
       if (isPetEquip(it.id)) { this.equipPet(slot, it, pet ?? this.windows.wins?.equip?.petSel ?? 0); return; }
-      const dst = equipSlotFor(it.id);
+      const dst = this.equipDest(it.id, it.cash);
       if (!dst) return;
       if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
       this.net.moveItem(1, slot, dst, 1);
@@ -2069,7 +2164,7 @@ export class Game {
    * bottom for an overall, a shield for a two-handed weapon...).
    */
   equipStats(id) {
-    const s = this.stats || {}, worn = this.inventory?.equipped || {}, dst = equipSlotFor(id), cat = Math.floor(id / 10000);
+    const s = this.stats || {}, worn = this.inventory?.equipped || {}, dst = this.equipDest(id), cat = Math.floor(id / 10000);
     const off = new Set([dst]);
     if (cat === 105) off.add(-6);
     if (cat === 106 && Math.floor((worn[-5]?.id || 0) / 10000) === 105) off.add(-5);
@@ -2083,6 +2178,11 @@ export class Game {
       for (const k of ['str', 'dex', 'int', 'luk']) out[k] += it[k] || 0;
     }
     return out;
+  }
+  /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
+  equipDest(id, cash = !!this.windows?.info(id)?.cash) {
+    const dst = equipSlotFor(id);
+    return dst && cash && dst > -100 ? dst - 100 : dst;
   }
   /**
    * Whether you can wear an item: its gender, its level, STR, DEX, INT, LUK and fame requirements (against
@@ -2351,8 +2451,9 @@ export class Game {
     this.updateDiseases(dt);
     if (this.net) this.touchReactors();
     if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
-    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); }
+    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); }
     stepExpression(this.player, this.look, dt);
+    this.stepItemFx(this.player, dt);
     if (this.player.fh) this.ownerGroup = this.player.fh.group;
     for (const pet of this.pets.values()) pet.update(dt);
     for (const [oid, sm] of this.summons) { sm.update(dt); if (sm.gone) this.summons.delete(oid); }
@@ -4819,11 +4920,13 @@ export class Game {
     const dead = ent.action === 'dead', t = performance.now() / 700;
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
+    this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
     const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
+    this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
@@ -4894,15 +4997,12 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
 
-/** Item ids to draw from an avatar look packet (cash items replace the regular one in their slot). */
-const isPetPart = (n) => n === 14 || (n >= 21 && n <= 48);   // what pets wear: never drawn on the character
-function visibleEquips(look) {
-  const slots = Object.fromEntries(Object.entries(look.equips).filter(([k]) => !isPetPart(Number(k))));
-  if (look.cashWeapon) slots[11] = look.cashWeapon;
-  return Object.values(slots);
-}
-
-/** Same rule for our own equipped inventory (slot -N normal, -(N+100) cash cover). */
+/** What pets wear (look slots 14 and 21-48): never drawn on the character. */
+const isPetPart = (n) => n === 14 || (n >= 21 && n <= 48);
+/**
+ * Item ids to draw from our own equipped inventory: slot -N regular, -(N+100) its cash cover, -111 the cash weapon (kept
+ * alongside the weapon). Pet equipment is not the character's.
+ */
 export function equippedIds(equipped) {
   const bySlot = {};
   for (const [k, it] of Object.entries(equipped)) {
@@ -4913,8 +5013,9 @@ export function equippedIds(equipped) {
     const s = Number(k);
     if (s <= -100 && s !== -111 && !isPetPart(-s - 100)) bySlot[-s - 100] = it.id;
   }
-  if (equipped[-111]) bySlot[11] = equipped[-111].id;
-  return Object.values(bySlot);
+  const ids = Object.values(bySlot);
+  if (equipped[-111]) ids.push(equipped[-111].id);
+  return ids;
 }
 
 /**
@@ -4925,7 +5026,7 @@ export function equipSlotFor(id, pet = 0) {
   const cat = Math.floor(id / 10000), P = PET_SLOTS[pet] || PET_SLOTS[0];
   const map = { 100: -1, 101: -2, 102: -3, 103: -4, 104: -5, 105: -5, 106: -6, 107: -7, 108: -8, 109: -10, 110: -9, 111: -12,
     112: -17, 113: -50, 114: -49, 190: -18, 191: -19 };
-  if (cat >= 130 && cat < 170) return -11;
+  if (cat >= 130 && cat <= 170) return -11;
   if (id === 1802100 || cat === 182) return P.label;
   if (cat === 180) return P.acc;
   if (cat === 183) return P.quote;

@@ -35,10 +35,10 @@ export function readCharLook(r) {
   return look;
 }
 
-/** Item ids to render: visible slots, cash weapon sticker replaces the weapon. */
+/** Item ids to render: the visible slots (not the pet's equip, 14), and the cash weapon drawn over the weapon. */
 export function lookEquipIds(look) {
-  const ids = Object.values(look.equips);
-  if (look.cashWeapon && look.equips[11]) ids[ids.indexOf(look.equips[11])] = look.cashWeapon;
+  const ids = Object.entries(look.equips).filter(([s]) => Number(s) !== 14 && !(Number(s) >= 21 && Number(s) <= 48)).map(([, id]) => id);   // not what pets wear
+  if (look.cashWeapon) ids.push(look.cashWeapon);
   return ids;
 }
 
@@ -155,15 +155,17 @@ export function readCharacterInfo(r) {
   const quests = readQuests(r);
   // minigame, rings, teleport rocks, monster book (new year / area info not needed)
   r.short();                                    // minigame
-  const crush = r.short(); r.skip(crush * 33);
-  const friend = r.short(); r.skip(friend * 37);
-  if (r.short() === 1) r.skip(4 + 4 + 4 + 2 + 4 + 4 + 13 + 13);
+  // rings: couple and friendship ones (partner, the ring's cash serial, the partner's), then a marriage
+  const rings = { couple: [], friend: [], marriage: null };
+  for (let n = r.short(); n > 0; n--) { r.int(); const partner = r.paddedString(13), ring = r.long(); r.long(); rings.couple.push({ ring, partner }); }
+  for (let n = r.short(); n > 0; n--) { r.int(); const partner = r.paddedString(13), ring = r.long(); r.long(); r.int(); rings.friend.push({ ring, partner }); }
+  if (r.short() === 1) { r.skip(4 + 4 + 4 + 2 + 4 + 4); rings.marriage = { husband: r.paddedString(13), wife: r.paddedString(13) }; }
   const rocks = []; for (let i = 0; i < 15; i++) rocks.push(r.int());
   // monster book: the cover card, then each card (item id % 10000) with its count 1-5
   const book = { cover: r.int(), cards: {} };
   r.ubyte();
   for (let n = r.short(); n > 0; n--) { const id = 2380000 + r.short(); book.cards[id] = r.ubyte(); }
-  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book };
+  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book, rings };
 }
 
 /** Movement fragments (AbstractMovementPacketHandler.parseMovement). */

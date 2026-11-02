@@ -1,6 +1,6 @@
 import { isCanvas } from '../assets.js';
 import { Anim } from '../map.js';
-import { EXP, jobName, itemIcon } from '../data.js';
+import { EXP, jobName, itemIcon, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText } from './wzui.js';
 import { settings } from '../settings.js';
@@ -164,7 +164,7 @@ export class StatusBar {
     const g = this.game;
     this.quick = await Promise.all(QUICK_KEYS.map(async (sc) => {
       const k = g.keymap?.[sc];
-      if (!k || (k.type !== 1 && k.type !== 2 && k.type !== 8)) return null;
+      if (!k || ![1, 2, 3, 7, 8].includes(k.type)) return null;
       const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? g.windows.W.SkillMacro?.Macroicon?.[k.action]?.icon
         : await itemIcon(this.assets, k.action);
       if (node) await this.assets.preload([node]);
@@ -180,7 +180,7 @@ export class StatusBar {
     if (col < 0 || col > 3 || row < 0 || row > 1) return;
     const sc = QUICK_KEYS[row * 4 + col];
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
-    else if (c.kind === 'item' && c.tab === 2) this.game.bindKey(sc, 2, c.id);
+    else if (c.kind === 'item' && itemKeyType(c.tab, c.id)) this.game.bindKey(sc, itemKeyType(c.tab, c.id), c.id);
     else if (c.kind === 'bind' && c.b.type === 8) this.game.bindKey(sc, 8, c.b.action);   // a skill macro
     else return;
     sfx.play('UI/DragEnd');

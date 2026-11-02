@@ -103,12 +103,13 @@ export class CashShopWin extends Win {
     this.previewOn = true; this.backdrop = 0; this.worn = null; this.tried = new Map();
     this.av = { x: -320, y: PV_MAP.ground, vx: 0, vy: 0, ground: true, ladder: false, right: false, action: 'stand1', frame: 0, t: 0 };
     this.busy = false; this.queue = []; this.rawIcons = new Map();
+    this.selCell = 0; this.focusBtn = null; this.navAt = 0; this.avChat = null;
     this.ready = false;
     this.onKey = (e) => this.keyDown(e);
     addEventListener('keydown', this.onKey);
     this.init();
   }
-  onClose() { removeEventListener('keydown', this.onKey); }
+  onClose() { removeEventListener('keydown', this.onKey); this.chatField?.remove(); }
   get stats() { return this.g.stats || {}; }
 
   async init() {
@@ -133,6 +134,7 @@ export class CashShopWin extends Win {
         wish: this.button(L.BtReserve, x + 158, y + 53, () => this.addWish(this.cellItem(i))),
         remove: this.button(L.BtRemove, x + 158, y + 53, () => this.removeWish(this.cellItem(i))),
       });
+      for (const b of Object.values(this.cells[i])) b.focusRing = true;
     }
     const A = C.CSChar;
     this.btBuyAvatar = this.button(A.BtBuyAvatar, 16, 237, () => this.buyWorn());
@@ -148,6 +150,16 @@ export class CashShopWin extends Win {
     this.button(S.BtCoupon, 584, 543, () => this.enterCoupon());
     this.button(S.BtExit, 632, 545, () => this.g.leaveCashShop());
     await a.preload(this.buttons.flatMap((b) => b.frames()));
+    // the preview's chat bar: what you say shows over the preview character only
+    this.chatField = new TextField(this.mgr.game.statusBar.layer, 0, 0, 182, 15, { max: 70, color: '#000' });
+    this.chatField.el.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        const t = this.chatField.value.trim();
+        if (t) this.avChat = { text: t, until: performance.now() + 5000 };
+        this.chatField.value = '';
+      } else if (e.key === 'Escape') this.chatField.el.blur();
+    });
     this.dress(null);
     this.ready = true;
   }
@@ -328,9 +340,9 @@ export class CashShopWin extends Win {
   setTab(t, sub = 0) {
     if (t === this.tab && sub === this.sub) return;
     if (t !== this.tab) sfx.play('UI/Tab');
-    this.tab = t; this.sub = sub; this.page = 0;
+    this.tab = t; this.sub = sub; this.page = 0; this.selCell = 0; this.focusBtn = null;
   }
-  setPage(p) { const n = this.pages(); if (n) this.page = ((p % n) + n) % n; }
+  setPage(p) { const n = this.pages(); if (n) { this.page = ((p % n) + n) % n; this.selCell = 0; this.focusBtn = null; } }
   /** Best Item: 5 per tab and gender (the wish list and search use EVENT's), an off-sale SN standing in for an on-sale twin. */
   bestItems() {
     const tab = this.tab === WISH || this.tab === SEARCH ? 1 : this.tab, g = this.stats.gender ? 1 : 0, out = [];
@@ -488,7 +500,7 @@ export class CashShopWin extends Win {
     const base = this.g.look, seq = (this.dressSeq = (this.dressSeq || 0) + 1);
     const look = new CharacterLook(this.mgr.assets, { skin: base.skin, face: base.faceId, hair: base.hairId, equips: this.worn, gender: this.stats.gender ?? 0 });
     await look.load();
-    await this.mgr.assets.preload(lookCanvases(look, [look.standAction(), look.walkAction(), 'jump', 'ladder']));
+    await this.mgr.assets.preload(lookCanvases(look, [look.standAction(), look.walkAction(), 'jump', 'ladder', ...look.actionList().filter((x) => /^(swing|stab|shoot)/.test(x))]));
     if (seq === this.dressSeq) this.preview = look;
   }
   /** Try an item on (double-click its icon): an equip goes on, or comes off again; a package puts on its equips. */
@@ -531,6 +543,10 @@ export class CashShopWin extends Win {
     const jump = on && (g.keysFor?.(5, ACTION.JUMP) || []).some((c) => inp?.is(c));
     const jumpHit = jump && !this.avJump;
     this.avJump = jump;
+    // the attack key swings the weapon's basic attack (a shooting pose for ranged weapons), standing still
+    const attack = on && (g.keysFor?.(5, ACTION.ATTACK) || []).some((c) => inp?.is(c));
+    if (attack && !this.avAttack && a.ground && !a.ladder && !a.attack) { a.attack = look.shootAction?.() || look.attackAction(); a.vx = 0; }
+    this.avAttack = attack;
     let moving = false;
     if (a.ladder) {
       const v = (is('down') ? 1 : 0) - (is('up') ? 1 : 0);
@@ -542,9 +558,10 @@ export class CashShopWin extends Win {
       }
     } else {
       const nearLadder = Math.abs(a.x - M.ladderX) <= 12 && a.y >= M.ladderTop && a.y <= M.ground;
-      if (is('up') && nearLadder) {
+      if (is('up') && nearLadder && !a.attack) {
         a.ladder = true; a.ground = false; a.x = M.ladderX; a.vx = a.vy = 0; a.y = Math.min(a.y, M.ladderBottom);
-      } else if (a.ground) {
+      } else if (a.ground && a.attack) a.vx = 0;
+      else if (a.ground) {
         a.vx = dir * PHYS.walk;
         if (dir) a.right = dir > 0;
         if (jumpHit) { a.vy = -PHYS.jump; a.ground = false; }
@@ -555,12 +572,16 @@ export class CashShopWin extends Win {
       }
       a.x = Math.max(M.left, Math.min(M.right, a.x + a.vx * dt));
     }
-    const action = a.ladder ? 'ladder' : !a.ground ? 'jump' : a.vx ? look.walkAction() : look.standAction();
+    const action = a.attack || (a.ladder ? 'ladder' : !a.ground ? 'jump' : a.vx ? look.walkAction() : look.standAction());
     if (action !== a.action) { a.action = action; a.frame = 0; a.t = 0; }
     if (a.ladder && !moving) return;
     a.t += dt * 1000;
     const n = Math.max(1, look.frameCount(action));
-    while (a.t >= look.delay(action, a.frame)) { a.t -= look.delay(action, a.frame); a.frame = (a.frame + 1) % n; }
+    while (a.t >= look.delay(action, a.frame)) {
+      a.t -= look.delay(action, a.frame);
+      if (a.attack && a.frame + 1 >= n) { a.attack = null; break; }   // the swing plays once
+      a.frame = (a.frame + 1) % n;
+    }
   }
   /** A pet tried on walks beside the character (one at a time); trying the same pet again puts it away. */
   async togglePet(id) {
@@ -645,6 +666,11 @@ export class CashShopWin extends Win {
       drawParts(ctx, m.assets, this.preview.compose(a.action, a.frame), x, y, a.right);
       nameTag(ctx, this.g.player?.name || '', x, y + 2);
       ctx.restore();
+      if (this.avChat && performance.now() < this.avChat.until) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y }, `${this.g.player?.name || ''} : ${this.avChat.text}`);
+    }
+    if (this.chatField) {
+      this.chatField.rect.x = this.x + 50; this.chatField.rect.y = this.y + 214;
+      this.chatField.layout({ left: 0, top: 0 }, this.mgr.game.canvas.clientWidth / 800);
     }
     if (this.previewOn) { const on = im(C.Base.PreviewOnOff.On[0]); if (on) ctx.drawImage(on, 13, 9); }
     else { const off = im(C.Base.PreviewOnOff.Off[0]); if (off) ctx.drawImage(off, 90, 10); }
@@ -722,6 +748,8 @@ export class CashShopWin extends Win {
       if (c.Discount > 0) this.drawDiscount(ctx, c.Discount, x + 44, y + 64);
       cell.buy.visible = cell.gift.visible = true;
       cell.buy.enabled = r.buy; cell.gift.enabled = r.gift;
+      const keyed = !this.previewOn && this.selCell === i ? this.focusBtn : null;
+      cell.buy.focused = keyed === 0; cell.gift.focused = keyed === 1; cell.wish.focused = cell.remove.focused = keyed === 2;
       if (this.tab === WISH) cell.remove.visible = true;
       else { cell.wish.visible = true; cell.wish.enabled = r.wish; }
     }
@@ -851,6 +879,7 @@ export class CashShopWin extends Win {
       const y = BEST_Y + BEST_ROW * i;
       if (lx >= BEST_X && lx < BEST_X + 90 && ly >= y && ly < y + 68) return { best: this.bestItems()[i] };
     }
+    if (lx >= 90 && lx < 125 && ly >= 10 && ly < 31) return { onOff: true };   // the ON / OFF label
     for (let i = 0; i < 3; i++) if (lx >= BACKDROP_X[i] - 4 && lx < BACKDROP_X[i] + 29 && ly >= BACKDROP_Y && ly < BACKDROP_Y + 28) return { backdrop: i };
     const L = LOCKER, I = ITEMS;
     const grid = (G, lx2, ly2) => {
@@ -878,6 +907,7 @@ export class CashShopWin extends Win {
     const h = this.hit(lx, ly);
     if (!h) return;
     if (h.tab !== undefined) { this.setTab(h.tab); return; }
+    if (h.onOff) { this.previewOn = !this.previewOn; this.focusBtn = null; sfx.play('UI/BtMouseClick'); return; }
     if (h.backdrop !== undefined) { this.backdrop = h.backdrop; return; }
     if (h.itab) { if (h.itab !== this.itab) { this.itab = h.itab; this.isel = null; sfx.play('UI/Tab'); } return; }
     if (h.cash !== undefined) { this.csel = h.cash; return; }
@@ -928,13 +958,18 @@ export class CashShopWin extends Win {
     if (h.best) return { item: this.tipItem(h.best) };
     if (h.cash) {
       const c = h.cash, pet = Math.floor(c.itemId / 10000) === 500;
-      return { item: { id: c.itemId, quantity: c.quantity, cashId: c.cashId, ...(pet ? {} : { expiration: c.expiration }) } };
+      return { item: { id: c.itemId, quantity: c.quantity, cashId: c.cashId, from: c.from || '', ...(pet ? {} : { expiration: c.expiration }) } };
     }
     if (h.inv?.cashId) return { item: h.inv };
     return null;
   }
   /** A catalogue item's tooltip: the item, with its period ("AVAILABLE FOR n DAYS."). */
-  tipItem(c) { return c.Period > 0 ? { id: c.ItemId, period: c.Period } : { id: c.ItemId }; }
+  tipItem(c) {
+    const t = { id: c.ItemId, price: c.Price };
+    if (c.Period > 0) t.period = c.Period;
+    if (c.Discount > 0) { t.discount = c.Discount; t.origPrice = c.OrigPrice; }
+    return t;
+  }
   slotTip(type) {
     if (!type) return { title: 'Adding slots at the storage', lines: [`Add 4 slots for the storage (Current: ${this.storageSlots ?? 0} slots)`, 'Maximum of 48 slots available.4000 NX'] };
     const cur = this.g.inventory?.limits?.[type] || 0;
@@ -943,12 +978,45 @@ export class CashShopWin extends Win {
 
 
   // ---------------------------------------------------------------- keyboard
-  key(e) { if (e.key === 'Escape') this.mgr.confirm('Are you sure you want to leave the Cash Shop?').then((ok) => { if (ok) this.g.leaveCashShop(); }); }
+  key(e) {
+    if (e.key !== 'Escape') return;
+    if (this.chatField && document.activeElement === this.chatField.el) { this.chatField.el.blur(); return; }
+    if (this.focusBtn !== null) { this.focusBtn = null; return; }
+    this.alert('Are you sure you want to leave the Cash Shop?', true).then((ok) => { if (ok) this.g.leaveCashShop(); });
+  }
+  /**
+   * With the preview off the keyboard works the list: the arrows move the yellow frame (wrapping round the page),
+   * Enter tries the item on and puts the focus on BUY, Left / Right then go between BUY / GIFT / RESERVE and Enter
+   * presses one. Held keys repeat every 300ms.
+   */
+  listKey(e) {
+    const k = e.key, now = performance.now();
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Enter'].includes(k)) return false;
+    if (e.repeat && now - this.navAt < 300) return true;
+    this.navAt = now;
+    const n = Math.min(PER_PAGE, Math.max(0, this.list().length - this.page * PER_PAGE));
+    if (!n || this.tab === MAIN) return true;
+    this.selCell = Math.min(this.selCell, n - 1);
+    const cell = this.cells[this.selCell], btns = [cell.buy, cell.gift, this.tab === WISH ? cell.remove : cell.wish];
+    if (this.focusBtn !== null) {
+      if (k === 'ArrowLeft' || k === 'ArrowRight') {
+        const d = k === 'ArrowLeft' ? 2 : 1;
+        for (let i = 1; i <= 3; i++) { const j = (this.focusBtn + d * i) % 3; if (btns[j].enabled) { this.focusBtn = j; break; } }
+      } else if (k === 'Enter') { const b = btns[this.focusBtn]; this.focusBtn = null; if (b.enabled) b.onClick(); }
+      return true;
+    }
+    if (k === 'Enter') { this.tryOn(this.cellItem(this.selCell)); this.focusBtn = btns.findIndex((b) => b.enabled); if (this.focusBtn < 0) this.focusBtn = null; return true; }
+    const step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 }[k];
+    this.selCell = (((this.selCell + step) % n) + n) % n;
+    return true;
+  }
   keyDown(e) {
     if (!this.ready || this.mgr.modal || e.target instanceof HTMLInputElement) return;
     const k = e.key;
+    if (!this.previewOn && this.listKey(e)) { e.preventDefault(); e.stopPropagation(); return; }
+    if (k === 'Enter' && this.previewOn && this.chatField) { e.preventDefault(); this.chatField.focus(); return; }
     let used = true;
-    if (k === 'CapsLock') this.previewOn = !this.previewOn;
+    if (k === 'CapsLock') { this.previewOn = !this.previewOn; this.focusBtn = null; }
     else if (k === 'PageUp') this.setPage(this.page - 1);
     else if (k === 'PageDown') this.setPage(this.page + 1);
     else if (k === 'Home') this.setTab(1);

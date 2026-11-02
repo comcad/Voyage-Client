@@ -524,7 +524,7 @@ export class ChannelSession {
       r.long(); r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
       const job = r.short();
       const look = readCharLook(r);
-      r.int(); r.int(); const chair = r.int();
+      r.int(); const itemEffect = r.int(), chair = r.int();
       const pos = r.pos2(); const stance = r.ubyte();
       r.short(); r.ubyte();
       const pets = [];
@@ -535,7 +535,7 @@ export class ChannelSession {
         r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
         if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -592,6 +592,7 @@ export class ChannelSession {
     on(S.MOVE_PLAYER, (r) => { const id = r.int(); r.int(); this.emit('movePlayer', id, readMovement(r)); });
     on(S.UPDATE_CHAR_LOOK, (r) => { const id = r.int(); r.ubyte(); this.emit('playerLook', id, readCharLook(r)); });
     on(S.FACIAL_EXPRESSION, (r) => this.emit('expression', r.int(), r.int()));
+    on(S.SHOW_ITEM_EFFECT, (r) => this.emit('itemEffect', r.int(), r.int()));
 
     // addAttackBody: shared by melee / ranged / magic broadcasts
     const readAttack = (kind) => (r) => {
@@ -1014,6 +1015,8 @@ export class ChannelSession {
   chat(text) { this.send(new PacketWriter(C.GENERAL_CHAT).string(text).byte(0)); }
   /** FACE_EXPRESSION: 1 hit .. 7 stunned (F1-F7); higher ones need their cash emotion item */
   faceExpression(emote) { this.send(new PacketWriter(C.FACE_EXPRESSION).int(emote)); }
+  /** USE_ITEMEFFECT: the Effect item now on (0 = off) */
+  useItemEffect(itemId) { this.send(new PacketWriter(C.USE_ITEMEFFECT).int(itemId)); }
   /** type: 0 buddy (recipients = buddy ids), 1 party, 2 guild, 3 alliance */
   groupChat(type, text, recipients = []) {
     const w = new PacketWriter(C.MULTI_CHAT).byte(type).byte(recipients.length);
