@@ -195,14 +195,17 @@ export class WorldFx {
     const lines = wrapText(ctx, text, npc ? 89 : 150, 12);
     const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
+    // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
+    const o = (k) => B[k]?.origin || [0, 0];
     ctx.drawImage(p.c, x0, y0, W, H);
-    ctx.drawImage(p.nw, x0 - 6, y0 - 6); ctx.drawImage(p.n, x0, y0 - 6, W, 6); ctx.drawImage(p.ne, x0 + W, y0 - 6);
-    ctx.drawImage(p.w, x0 - 6, y0, 6, H); ctx.drawImage(p.e, x0 + W, y0, 6, H);
-    ctx.drawImage(p.sw, x0 - 6, y0 + H); ctx.drawImage(p.s, x0, y0 + H, W, 6); ctx.drawImage(p.se, x0 + W, y0 + H);
-    const ao = B.arrow.origin || [0, 0];
+    ctx.drawImage(p.n, x0, y0 - o('n')[1], W, p.n.height); ctx.drawImage(p.s, x0, y0 + H - o('s')[1], W, p.s.height);
+    ctx.drawImage(p.w, x0 - o('w')[0], y0, p.w.width, H); ctx.drawImage(p.e, x0 + W - o('e')[0], y0, p.e.width, H);
+    ctx.drawImage(p.nw, x0 - o('nw')[0], y0 - o('nw')[1]); ctx.drawImage(p.ne, x0 + W - o('ne')[0], y0 - o('ne')[1]);
+    ctx.drawImage(p.sw, x0 - o('sw')[0], y0 + H - o('sw')[1]); ctx.drawImage(p.se, x0 + W - o('se')[0], y0 + H - o('se')[1]);
+    const ao = o('arrow');
     ctx.drawImage(p.arrow, cx - ao[0] + 1, y0 + H - ao[1]);
     const color = `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
-    if (npc) lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
+    if (npc || style !== '0') lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh + (npc ? 0 : 2), { color, size: 12, align: 'center' }));
     else lines.forEach((l, i) => uiText(ctx, l, x0 - 1, y0 + i * 12 + 2, { color, size: 12 }));
     ctx.restore();
     return true;

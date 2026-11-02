@@ -717,7 +717,7 @@ export class CashShopWin extends Win {
       this.g.drawEquipFx?.(ctx, cam, eq, parts, true);
       if (!this.g.drawLabelTag?.(ctx, this.preview, this.g.player?.name || '', x, y + 2)) nameTag(ctx, this.g.player?.name || '', x, y + 2);
       ctx.restore();
-      if (this.avChat && performance.now() < this.avChat.until) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y }, `${this.g.player?.name || ''} : ${this.avChat.text}`, String(this.preview.chatBalloon || 0));
+      if (this.avChat && performance.now() < this.avChat.until) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y }, this.avChat.text, String(this.preview.chatBalloon || 0));
     }
     if (this.chatField) {
       this.chatField.rect.x = this.x + 50; this.chatField.rect.y = this.y + 214;
