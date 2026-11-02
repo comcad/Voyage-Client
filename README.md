@@ -54,7 +54,7 @@ The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://githu
 ## 2. Run the server
 
 ```sh
-cd webclient
+cd Voyage-Client
 node server.js
 # → http://localhost:3000
 ```
