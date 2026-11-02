@@ -1,4 +1,4 @@
-import { invType, itemName, itemIcon } from '../data.js';
+import { invType, itemName, itemIcon, itemInfo } from '../data.js';
 import { CharacterLook, drawParts, lookCanvases } from '../character.js';
 import { sfx } from '../audio.js';
 import { PHYS } from '../physics.js';
@@ -491,7 +491,7 @@ export class CashShopWin extends Win {
     const base = this.g.look;
     if (!base) return;
     this.tried.clear();
-    this.pvPet = null; this.pvFx = null; this.av.expr = null;   // both put the pet, effect and face away too
+    this.pvPet = null; this.pvFx = null; this.av.expr = null; this.pvRings = [0, 0];   // both put the pet, effect, face and rings away too
     this.worn = equips === null ? [...base.equipIds] : equips;
     this.pkgPreview = false;
     if (this.btBuyAvatar) this.btBuyAvatar.enabled = true;
@@ -499,7 +499,8 @@ export class CashShopWin extends Win {
   }
   async redress() {
     const base = this.g.look, seq = (this.dressSeq = (this.dressSeq || 0) + 1);
-    const look = new CharacterLook(this.mgr.assets, { skin: base.skin, face: base.faceId, hair: base.hairId, equips: this.worn, gender: this.stats.gender ?? 0 });
+    const equips = [...this.worn, ...(this.pvRings || []).filter(Boolean)];
+    const look = new CharacterLook(this.mgr.assets, { skin: base.skin, face: base.faceId, hair: base.hairId, equips, gender: this.stats.gender ?? 0 });
     await look.load();
     await this.mgr.assets.preload(lookCanvases(look, [look.standAction(), look.walkAction(), 'jump', 'ladder', ...look.actionList().filter((x) => /^(swing|stab|shoot)/.test(x))]));
     if (seq === this.dressSeq) this.preview = look;
@@ -511,6 +512,7 @@ export class CashShopWin extends Win {
     if (kind === 500) { this.togglePet(c.ItemId); return; }
     if (kind === 516) { this.tryFace(c.ItemId); return; }
     if (kind === 501) { this.tryEffect(c.ItemId); return; }
+    if (kind === 111) { this.tryRing(c.ItemId); return; }
     const pkg = this.isPackage(c), g = this.stats.gender ?? 0;
     const forMe = (id) => { const d = Math.floor(id / 1000) % 10; return d > 1 || d === g; };
     const ids = pkg ? this.contents(c).map((x) => x.ItemId).filter((id) => invType(id) === 1 && forMe(id)) : [c.ItemId];
@@ -593,6 +595,27 @@ export class CashShopWin extends Win {
     if (!node) return;
     await this.mgr.assets.preload(allCanvases(node));
     setExpression(this.av, n);
+  }
+  /**
+   * A ring: only a quote, label or effect ring shows, kept in one of two places (a quote ring in the first, a label
+   * ring in the second, an effect ring in the first unless that already holds one with an effect); trying it again
+   * takes it off.
+   */
+  async tryRing(id) {
+    const r = (this.pvRings ??= [0, 0]), a = this.mgr.assets;
+    if (r[0] === id || r[1] === id) r[r.indexOf(id)] = 0;
+    else {
+      const info = await itemInfo(a, id);
+      if (!info) return;
+      if (Number(info.chatBalloon)) r[0] = id;
+      if (Number(info.nameTag)) r[1] = id;
+      if (info.effect) {
+        if (!r[0] || !(await itemInfo(a, r[0]))?.effect) r[0] = id;
+        else r[1] = id;
+      }
+      if (!r.includes(id)) return;
+    }
+    await this.redress();
   }
   /** An effect item: its effect plays round the preview character; trying it again takes it off. */
   tryEffect(id) {
@@ -683,14 +706,18 @@ export class CashShopWin extends Win {
       stepExpression(a, this.preview, dt);
       const parts = this.preview.compose(a.action, a.frame, a.expr);
       if (fx) { Object.assign(fx, { x, y, facingRight: a.right, action: a.action }); this.g.stepItemFx?.(fx, dt); }
+      const eq = Object.assign((this.pvEq ??= {}), { x, y, facingRight: a.right });
+      this.g.stepEquipFx?.(eq, this.preview, dt);
       ctx.save(); ctx.beginPath(); ctx.rect(PREVIEW.x, PREVIEW.y, PREVIEW.w, PREVIEW.h); ctx.clip();
       this.drawPet(ctx);
       if (fx) this.g.drawItemFx?.(ctx, cam, fx, parts, false);
+      this.g.drawEquipFx?.(ctx, cam, eq, parts, false);
       drawParts(ctx, m.assets, parts, x, y, a.right);
       if (fx) this.g.drawItemFx?.(ctx, cam, fx, parts, true);
-      nameTag(ctx, this.g.player?.name || '', x, y + 2);
+      this.g.drawEquipFx?.(ctx, cam, eq, parts, true);
+      if (!this.g.drawLabelTag?.(ctx, this.preview, this.g.player?.name || '', x, y + 2)) nameTag(ctx, this.g.player?.name || '', x, y + 2);
       ctx.restore();
-      if (this.avChat && performance.now() < this.avChat.until) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y }, `${this.g.player?.name || ''} : ${this.avChat.text}`);
+      if (this.avChat && performance.now() < this.avChat.until) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y }, `${this.g.player?.name || ''} : ${this.avChat.text}`, String(this.preview.chatBalloon || 0));
     }
     if (this.chatField) {
       this.chatField.rect.x = this.x + 50; this.chatField.rect.y = this.y + 214;

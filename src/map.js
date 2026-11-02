@@ -964,6 +964,25 @@ export class Life {
   }
 }
 
+/**
+ * A label ring's name tag, from UI/NameTag.img/<n>: its left end (w), its middle (c) repeated under the text to a
+ * whole number of tiles, its right end (e), the text in its clr. False while there is no art for it (yet).
+ */
+export function labelTag(ctx, assets, N, text, x, y) {
+  const w = assets.image(N?.w), c = assets.image(N?.c), e = assets.image(N?.e);
+  if (!w || !c || !e) return false;
+  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
+  const tw = Math.max(1, Math.ceil(ctx.measureText(text).width / c.width)) * c.width, x0 = Math.round(x - tw / 2), top = y + 4;
+  const oy = (n) => n.origin?.[1] ?? 0;
+  ctx.drawImage(w, x0 - (N.w.origin?.[0] ?? w.width), top - oy(N.w));
+  for (let cx = 0; cx < tw; cx += c.width) ctx.drawImage(c, x0 + cx, top - oy(N.c));
+  ctx.drawImage(e, x0 + tw - (N.e.origin?.[0] ?? 0), top - oy(N.e));
+  ctx.fillStyle = `#${((Number(N.clr) >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  ctx.fillText(text, x, y + 2);
+  return true;
+}
+
 export function nameTag(ctx, text, x, y, color = '#fff') {
   ctx.font = '12px "Segoe UI", system-ui, sans-serif';
   const w = ctx.measureText(text).width + 8;

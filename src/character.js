@@ -92,6 +92,16 @@ export class CharacterLook {
     // what stays on a dead character: the headgear (cap, face / eye accessory, earrings); clothes and weapon come off
     this.deadKeep = new Set(eq.map((n, i) => n && [100, 101, 102, 103].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
     this.hasCap = this.equipIds.some((id) => Math.floor(id / 10000) === 100);
+    // a label / quote ring changes the name tag / chat balloon (the last ring with one wins); some equips (the effect
+    // rings) carry an effect of their own
+    this.nameTag = 0; this.chatBalloon = 0; this.equipFx = [];
+    eq.forEach((n, i) => {
+      const info = n?.info;
+      if (!info) return;
+      if (cat(i) === 111 && Number(info.nameTag)) this.nameTag = Number(info.nameTag);
+      if (cat(i) === 111 && Number(info.chatBalloon)) this.chatBalloon = Number(info.chatBalloon);
+      if (info.effect?.path && !this.equipFx.some((f) => f.id === this.equipIds[i])) this.equipFx.push({ id: this.equipIds[i], effect: info.effect });
+    });
     // the face's expressions (blink, smile...) load in the background; until a frame is ready the default shows
     const exprs = [this.face, ...this.faceAcc].flatMap((n) => Object.entries(n || {}).filter(([k]) => k !== 'info')
       .flatMap(([, e]) => [e, ...Object.values(e || {})]).flatMap((f) => [f, ...Object.values(f || {})]));

@@ -1,4 +1,4 @@
-import { GameMap, nameTag, Anim } from './map.js';
+import { GameMap, nameTag, labelTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases } from './character.js';
 import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
@@ -9,7 +9,7 @@ import { npcTalk, MessageBox, ShopWin, drawItemTip, DeathNotice } from './ui/dia
 import { npcQuestMenu } from './ui/quests-ui.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
-import { WorldFx, lineDelay } from './effects.js';
+import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
@@ -2247,6 +2247,34 @@ export class Game {
       else if (p.a === ent || p.b === ent) draw(p.on[p.a === ent ? 0 : 1], ent.x, ent.y, ent.facingRight);
     }
   }
+  /** A label ring's name tag (UI/NameTag.img/<n>) for a look wearing one; false for the plain tag. */
+  drawLabelTag(ctx, look, text, x, y) {
+    if (!look?.nameTag) return false;
+    if (!this.nameTags) { this.nameTags = this.assets.json('UI/NameTag.img').then((j) => { this.nameTags = j || null; }); return false; }
+    return !(this.nameTags instanceof Promise) && labelTag(ctx, this.assets, this.nameTags?.[look.nameTag], text, x, y);
+  }
+  /** A character's equip effects (EquipEffect), kept in step with what its look wears. */
+  stepEquipFx(ent, look, dt) {
+    const want = look?.equipFx || [];
+    if (!want.length && !ent.equipFx?.length) return;
+    if (!this.charEff) { this.charEff = this.assets.json('Effect/CharacterEff.img').then((j) => { this.charEff = j || null; }); return; }
+    if (this.charEff instanceof Promise) return;
+    if (want.length !== ent.equipFx?.length || want.some((w, i) => w.id !== ent.equipFx[i].id)) {
+      ent.equipFx = want.map((w) => ent.equipFx?.find((f) => f.id === w.id)
+        || new EquipEffect(w.id, w.effect, String(w.effect.path).split('/').slice(2).reduce((n, k) => n?.[k], this.charEff)));
+    }
+    const moving = ent.equipFxX !== undefined && Math.abs(ent.x - ent.equipFxX) > 0.5;
+    ent.equipFxX = ent.x;
+    for (const f of ent.equipFx) f.update(dt, f.head ? ent.browAt || { x: ent.x, y: ent.y - 55 } : ent, ent.facingRight, moving);
+  }
+  drawEquipFx(ctx, cam, ent, parts, front, dx = 0, dy = 0) {
+    const brow = parts.brow || [0, -55], x = ent.x + dx, y = ent.y + dy;
+    ent.browAt = { x: x + brow[0] * (ent.facingRight ? -1 : 1), y: y + brow[1] };
+    for (const f of ent.equipFx || []) {
+      const at = f.head ? ent.browAt : { x, y };
+      f.draw(ctx, this.assets, { x: at.x - cam.x, y: at.y - cam.y }, ent.facingRight, front, cam.x, cam.y);
+    }
+  }
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
   equipDest(id, cash = !!this.windows?.info(id)?.cash) {
     const dst = equipSlotFor(id);
@@ -2519,9 +2547,10 @@ export class Game {
     this.updateDiseases(dt);
     if (this.net) this.touchReactors();
     if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
-    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); }
+    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
     this.stepItemFx(this.player, dt);
+    this.stepEquipFx(this.player, this.look, dt);
     this.updateRingFx(dt);
     if (this.player.fh) this.ownerGroup = this.player.fh.group;
     for (const pet of this.pets.values()) pet.update(dt);
@@ -4991,18 +5020,20 @@ export class Game {
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
     this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
+    this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
     const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
+    this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawRingFx(ctx, cam, ent);
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
-    nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
+    if (!this.drawLabelTag(ctx, look, ent.name, Math.round(sx), Math.round(sy) + 4)) nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
     const guild = local ? this.guild?.name : ent.guild;
     if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);
   }
@@ -5039,8 +5070,8 @@ export class Game {
     const list = [this.player, ...this.others.values()].filter((e) => e.chat);
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
     for (const e of list) {
-      const text = `${e.name} : ${e.chat.text}`;
-      if (this.vfx?.drawBalloon(ctx, cam, e, text)) continue;   // ChatBalloon.img; the drawn box is the offline fallback
+      const text = `${e.name} : ${e.chat.text}`, quote = (e === this.player ? this.look : e.look)?.chatBalloon;
+      if (this.vfx?.drawBalloon(ctx, cam, e, text, quote ? String(quote) : '0')) continue;   // a quote ring's balloon   // ChatBalloon.img; the drawn box is the offline fallback
       const lines = wrap(ctx, text, 160);
       const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14, h = lines.length * 15 + 8;
       const x = Math.round(e.x - cam.x - w / 2), y = Math.round(e.y - cam.y - 90 - h);
