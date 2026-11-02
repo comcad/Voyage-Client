@@ -26,10 +26,10 @@ try {
     bundle: true,
     minify: true,
     sourcemap: false, // Keep sourcemaps helpful if obfuscation is off
-    outfile: path.join(__dirname, 'public/bundle.js'),
+    outfile: path.join(__dirname, 'public/Voyage.js'),
   });
 
-  const bundlePath = path.join(__dirname, 'public/bundle.js');
+  const bundlePath = path.join(__dirname, 'public/Voyage.js');
   const bundledCode = fs.readFileSync(bundlePath, 'utf8');
   console.log(`Bundle loaded (${(bundledCode.length / 1024).toFixed(2)} KB).`);
 
