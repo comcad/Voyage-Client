@@ -10,6 +10,10 @@ import { modal } from './ui/dom.js';
 const PRELOAD = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2'];
 
+// Firefox opens its menu bar when Alt is let go, and its File menu when F10 goes down: never, while the game is open
+addEventListener('keyup', (e) => { if (e.key === 'Alt' || e.code === 'F10') e.preventDefault(); }, true);
+addEventListener('keydown', (e) => { if (e.code === 'F10') e.preventDefault(); }, true);
+
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 
