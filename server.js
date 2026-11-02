@@ -25,7 +25,7 @@ try {
     entryPoints: [path.join(__dirname, 'src/main.js')],
     bundle: true,
     minify: true,
-    sourcemap: !ENABLE_OBFUSCATION, // Keep sourcemaps helpful if obfuscation is off
+    sourcemap: false, // Keep sourcemaps helpful if obfuscation is off
     outfile: path.join(__dirname, 'public/bundle.js'),
   });
 
