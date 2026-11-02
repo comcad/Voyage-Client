@@ -250,6 +250,7 @@ export class CashShopWin extends Win {
   async ring(r) { this.inv.push(r.item); this.alert(`You have given '${r.to}' ${r.count} [ ${await this.name(r.itemId)} ].`); }
   mesoBought() { sfx.play('UI/BuyShopItem'); this.alert('You have successfully made the purchase.'); }
   coupon(c) {
+    this.done();
     this.inv.push(...c.items);
     this.alert(`You have received ${c.items.length + c.got.length} item(s), ${fmt(c.maplePoints)} MaplePoints and ${fmt(c.mesos)} mesos using the coupon.`);
   }
@@ -265,7 +266,10 @@ export class CashShopWin extends Win {
     this.csel = this.inv[this.inv.length - 1] || null;
   }
   setStock(sn, left) { if (left <= 0) this.stock.set(sn, 1); else this.stock.delete(sn); }
+  /** A result that isn't followed by the NX amounts frees the shop itself. */
+  done() { this.busy = false; clearTimeout(this.busyTimer); }
   taken(pos, item) {
+    this.done();
     const it = { ...item, pos };
     this.inv = this.inv.filter((c) => String(c.cashId) !== String(item.cashId));
     this.csel = null;
@@ -273,6 +277,7 @@ export class CashShopWin extends Win {
     if (inv) inv[pos] = it;
   }
   put(item) {
+    this.done();
     this.inv.push(item);
     this.isel = null;
     const inv = this.g.inventory?.[invType(item.itemId)];
