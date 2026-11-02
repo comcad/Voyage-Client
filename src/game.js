@@ -1461,6 +1461,10 @@ export class Game {
       csPut: (it) => this.csWin?.put(it),
       csError: (reason, op, sn) => this.csWin?.error(reason, op, sn),
       csSlots: (kind, slots, type) => this.csWin?.slots(kind, slots, type),
+      csNameChangeRules: (error, x) => this.csWin?.nameChangeRules(error, x),
+      csNameChecked: (name, taken) => this.csWin?.nameChecked(name, taken),
+      csWorldTransferRules: (error, x, worlds) => this.csWin?.worldTransferRules(error, x, worlds),
+      csTransferBought: (kind, item) => this.csWin?.transferBought(kind, item),
       setField: (f) => {
         if (f.hp !== undefined && this.stats) this.stats.hp = f.hp;
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });

@@ -215,6 +215,15 @@ export class ChannelSession {
       else if (op === 0x60) { const type = r.ubyte(); this.emit('csSlots', 'inventory', r.short(), type); }
       else if (op === 0x62) this.emit('csSlots', 'storage', r.short());
       else if (op === 0x64) this.emit('csSlots', 'character', r.short());
+      else if (op === 0x9E || op === 0xA0) this.emit('csTransferBought', op === 0x9E ? 'name' : 'world', readCashItem(r));
+    });
+    // a name change or world transfer: may it go ahead (an error code, then for a transfer the worlds), and is a new name free
+    on(S.CASHSHOP_CHECK_NAME_CHANGE_POSSIBLE_RESULT, (r) => { r.int(); const error = r.ubyte(); this.emit('csNameChangeRules', error, r.int()); });
+    on(S.CASHSHOP_CHECK_NAME_CHANGE, (r) => { const name = r.string(); this.emit('csNameChecked', name, r.byte()); });
+    on(S.CASHSHOP_CHECK_TRANSFER_WORLD_POSSIBLE_RESULT, (r) => {
+      r.int(); const error = r.ubyte(), x = r.int(), worlds = [];
+      if (r.ubyte()) for (let n = r.int(); n > 0; n--) worlds.push(r.string());
+      this.emit('csWorldTransferRules', error, x, worlds);
     });
 
     on(S.STAT_CHANGED, (r) => {
@@ -1178,6 +1187,16 @@ export class ChannelSession {
   coupon(code) { this.send(new PacketWriter(C.COUPON_CODE).string('').string(code)); }
   /** A gift: paid from NX Prepaid, confirmed with the account's birthday (YYYYMMDD) */
   csGift(birthday, sn, to, message) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(4).int(birthday).int(sn).string(to).string(message)); }
+  /** A name change / world transfer asks first whether it may go ahead: character id, birthday */
+  nameTransfer(cid, birthday) { this.send(new PacketWriter(C.NAME_TRANSFER).int(cid).int(birthday)); }
+  worldTransfer(cid, birthday) { this.send(new PacketWriter(C.WORLD_TRANSFER).int(cid).int(birthday)); }
+  checkNewName(name) { this.send(new PacketWriter(C.CHECK_CHAR_NAME).string(name)); }
+  csNameChange(sn, oldName, newName) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x2E).int(sn).string(oldName).string(newName)); }
+  csWorldTransfer(sn, world) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x31).int(sn).int(world)); }
+  /** A ring for a partner: 0x1D a couple ring, 0x23 a friendship ring; birthday, wallet (1 NX Credit / 4 NX Prepaid), SN, partner, message */
+  csBuyRing(op, birthday, wallet, sn, to, message) {
+    this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(op).int(birthday).int(wallet).int(sn).string(to).string(message));
+  }
   /** NOTE_ACTION 1: discard read notes (count, then each id with a 0 fame byte) */
   discardNotes(ids) { const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(ids.length).byte(0).byte(0); for (const id of ids) w.int(id).byte(0); this.send(w); }
   csWish(sns) { const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(5); for (let i = 0; i < 10; i++) w.int(sns[i] || 0); this.send(w); }

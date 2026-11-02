@@ -58,10 +58,37 @@ const ERRORS = {
   0xC3: 'The Cash Shop is unavailable during the beta-test phase. We apologize for your inconvenience.', 0xC4: 'Check your birthday code and please try again.',
   0xC7: 'This coupon is only available to the users buying cash item for the first time.', 0xC8: 'You have already applied for this.',
   0xCD: 'You have reached the daily maximum purchase limit for the Cash Shop.', 0xD3: "This item can only be used 15 days after the account's registration.",
+  0xB4: "This coupon can only be used at\nNexon-affiliated Internet Cafe's.\nPlease use the Nexon-affiliated Internet Cafe's.",
+  0xB5: 'This coupon is a Nexon-affiliated Internet Cafe-only coupon,\nand it had already been used.',
+  0xB6: 'This coupon is a Nexon-affiliated Internet Cafe-only coupon,\nand it had already been expired.',
+  0xD0: 'You have exceeded the maximum number\nof usage per account\\for this account.\nPlease check the coupon for detail.',
+  0xD2: 'The coupon system will be available soon.',
+  0xD4: 'You do not have enough Gift Tokens \nin your account. Please charge your account \nwith Nexon Game Cards to receive \nGift Tokens to gift this item.',
+  0xD5: 'Due to technical difficulties,\nthis item cannot be sent at this time.\nPlease try again.',
+  0xD6: 'You may not gift items for \nit has been less than two weeks \nsince you first charged your account.',
+  0xD7: 'Users with history of illegal activities\n may not gift items to others. Please make sure \nyour account is neither previously blocked, \nnor illegally charged with NX.',
+  0xD8: 'Due to limitations, \nyou may not gift this item as this time. \nPlease try again later.',
+  0xD9: 'You have exceeded the amount of time \nyou can gift items to other characters.',
+  0xDA: 'This item cannot be gifted \ndue to technical difficulties. \nPlease try again later.',
+  0xDB: 'You cannot transfer a character under level 20.', 0xDC: 'You cannot transfer a character \nto the same world it is currently in.',
+  0xDD: 'You cannot transfer a character \ninto the new server world.', 0xDE: 'You may not transfer out of this \nworld at this time.',
+  0xDF: 'You cannot transfer a character into \na world that has no empty character slots.',
   0xE0: 'The event has either ended or this item is not available for free testing.', 0xE6: 'This item cannot be purchased with MaplePoints.',
   0xE7: 'Sorry for inconvinence. please try again.', 0xE8: 'This item cannot be purchased by anyone under 7.', 0xE9: 'This item cannot be received by anyone under 7.',
 };
 /** Items only NX Prepaid can pay for. */
+/** NAME_TRANSFER / WORLD_TRANSFER refusals, by error code. */
+const TRANSFER_ERRORS = {
+  name: { 1: 'The name change is already submitted \ndue to the item purchase', 2: 'This applies to the limitations on the request.\nPlease check if you were recently banned \nwithin 3 months.',
+    3: 'This applies to the limitations on the request.\nPlease check if you requested \nfor the name change within a month.' },
+  world: { 1: 'Cannot find Character Information.', 2: 'You cannot transfer a character under level 20.',
+    3: 'You cannot transfer a character if \nyour account has ever been blocked once.', 4: 'You cannot transfer a character that \nis currently married.',
+    5: 'You cannot transfer a character that \nis currently a Guild leader.', 6: 'You cannot transfer a character if \nyour account has already requested for a transfer.',
+    7: 'You cannot transfer a character that\n has already been transferred \nwithin the last 30 days.', 8: 'You have to quit Family \nto move to another world.' },
+};
+/** Couple rings (11120xx but 1112000) and friendship rings (11128x0 - 11128x2), bought for a partner. */
+const isCoupleRing = (id) => Math.floor(id / 100) === 11120 && id !== 1112000;
+const isFriendRing = (id) => Math.floor(id / 100) === 11128 && id % 10 < 3;
 const prepaidOnly = (id) => id === 5400000 || id === 5401000 || Math.floor(id / 10) === 520000 || Math.floor(id / 1000) === 549 || id === 5221001 || id === 5222000;
 /** Items a character must reach a level to buy (BUY and RESERVE are greyed below it). */
 const LEVEL_GATE = { 507: 11, 539: 11, 503: 16, 514: 16, 520: 16, 504: 7 };
@@ -210,6 +237,7 @@ export class CashShopWin extends Win {
   setCash(c) {
     this.cash = c;
     this.busy = false; clearTimeout(this.busyTimer);
+    if (this.giftRun) { this.nextGift(); return; }
     if (this.queue.length) { this.sendBuy(this.queue.shift(), true); return; }
     if (this.multiBuy) { this.multiBuy = false; this.alert('You have successfully made the purchase.'); }
     if (this.wishAfterBuy) {   // bought from the wish list: it comes off the list
@@ -238,8 +266,12 @@ export class CashShopWin extends Win {
       await this.alert(`You have received ${await this.name(g.itemId)} from ${g.from}.\n${g.message}`);
     }
   }
+  /** A gift was sent: during the gift window's run it is counted for the summary, otherwise it says so. */
   async giftSent(g) {
-    this.alert(`${g.count > 1 ? `${g.count} ` : ''}[ ${await this.name(g.itemId)} ] was sent to ${g.to}. ${fmt(g.price)} NX Prepaid were spent in the process.`);
+    const name = await this.name(g.itemId), run = this.giftRun;
+    if (run) { run.sent.push(g.to); run.total += g.price; run.name = name; return; }
+    sfx.play('UI/BuyShopItem');
+    this.alert(`${g.count} [ ${name} ] \nwas sent to ${g.to}. \n${g.price} NX Prepaid \nwere spent in the process.`);
   }
   boughtPackage(items, bonus) {
     this.inv.push(...items);
@@ -247,7 +279,12 @@ export class CashShopWin extends Win {
     sfx.play('UI/BuyShopItem');
     this.alert(bonus ? `Purchase successful. ${bonus} You have received MaplePoints.` : 'You have successfully made the purchase.');
   }
-  async ring(r) { this.inv.push(r.item); this.alert(`You have given '${r.to}' ${r.count} [ ${await this.name(r.itemId)} ].`); }
+  async ring(r) {
+    this.inv.push(r.item);
+    this.showLockerEnd();
+    sfx.play('UI/BuyShopItem');
+    this.alert(`You have given '${r.to}'\n ${r.count} [ ${await this.name(r.itemId)} ].`);
+  }
   mesoBought() { sfx.play('UI/BuyShopItem'); this.alert('You have successfully made the purchase.'); }
   coupon(c) {
     this.done();
@@ -290,6 +327,8 @@ export class CashShopWin extends Win {
   }
   error(reason, op, sn) {
     this.busy = false; this.queue = []; clearTimeout(this.busyTimer);
+    // a failed gift in the gift window's run goes on to the next recipient (the server may answer with 0x5C)
+    if (this.giftRun && (op === 0x5F || op === 0x5C)) { this.alert(ERRORS[reason] || UNKNOWN_ERROR); this.nextGift(); return; }
     if (this.multiBuy) { this.multiBuy = false; this.alert('The purchase has failed.'); return; }
     if (sn && (reason === 0xBF || reason === 0xC0)) this.stock.set(sn, reason === 0xC0 ? 1 : 2);
     const leave = reason === 0xA2 || reason === 0xA3 || reason === 0xA4 || reason === 0xB1 || op === 0x4C || op === 0x4E || op === 0x50;
@@ -388,6 +427,8 @@ export class CashShopWin extends Win {
   }
   async buy(c) {
     if (!c || this.busy) return;
+    if (isCoupleRing(c.ItemId) || isFriendRing(c.ItemId)) { this.buyRing(c); return; }
+    if (c.ItemId === 5400000 || c.ItemId === 5401000) { this.buyTransfer(c, c.ItemId === 5400000 ? 'name' : 'world'); return; }
     if (isMesoSN(c.SN)) {
       if ((this.g.meso || 0) < c.Price) { this.alert('You do not have enough mesos.'); return; }
       const ok = await this.dialog({ mode: 0, items: [c], text: 'Are you sure you want to buy this item?', wallets: 0 });
@@ -395,7 +436,7 @@ export class CashShopWin extends Win {
       return;
     }
     const prepaid = prepaidOnly(c.ItemId), mask = this.walletsFor(c.Price, prepaid);
-    if (!mask) { this.alert(prepaid ? "You don't have enough NX Prepaid." : "You don't have enough cash."); return; }
+    if (!mask) { this.alert(prepaid ? "You don't have enough NX Prepaid" : "You don't have enough cash."); return; }
     if (c.ItemId === 1802019 && !(await this.mgr.confirm('Only the Rudolph pet can equip this item.'))) return;
     if (this.owns(c)) {
       if (!c.Price) { this.alert('You may not purchase the item since you already have it.'); return; }
@@ -421,20 +462,124 @@ export class CashShopWin extends Win {
     if (queued) { this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000); }
     this.g.net?.csBuy(wallet, c.SN, c.ItemId);
   }
-  /** Gifts are paid from NX Prepaid and confirmed with the birthday code. */
+  /** The birthday code (8 digits), or null when cancelled or mistyped (a mistype says so). */
+  async askBirthday() {
+    const b = await this.mgr.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
+    if (!b) return null;
+    if (!/^\d{8}$/.test(b)) { this.alert(ERRORS[0xC4]); return null; }
+    return Number(b);
+  }
+  /**
+   * A couple or friendship ring is bought for a partner: the birthday code, NX Credit or NX Prepaid, the partner's
+   * name and a message (CSNotice/2), then the purchase dialog asks to confirm.
+   */
+  async buyRing(c) {
+    if (!this.available) { this.alert(ERRORS[0xC3]); return; }
+    const birthday = await this.askBirthday();
+    if (birthday === null) return;
+    const mask = (this.cash.credit >= c.Price ? 1 : 0) | (this.cash.prepaid >= c.Price ? 4 : 0);
+    if (!mask) { this.alert("You don't have enough cash."); return; }
+    const p = await new Promise((done) => this.mgr.show(new CsPartnerDialog(this, done)));
+    if (!p) return;
+    const text = `${this.mgr.itemName(c.ItemId) || ''} (${c.Price} NX)\nWill you buy this item as a gift for\n'${p.to}'?`;
+    const wallet = await this.dialog({ mode: 2, items: [c], text, wallets: mask });
+    if (!wallet || !this.begin()) return;
+    if (this.tab === WISH) this.wishAfterBuy = c.SN;
+    this.g.net?.csBuyRing(isCoupleRing(c.ItemId) ? 0x1D : 0x23, birthday, wallet, c.SN, p.to, p.message);
+  }
+  /**
+   * GIFT: paid from NX Prepaid. The birthday code, a confirm, then the gift window (CSGift) for one or more
+   * recipients ("a;b;c") and a message; several recipients are confirmed, then the purchase dialog. One 0x04 goes
+   * out per recipient, the next after the NX amounts (or a failure) come back, and a summary ends it.
+   */
   async gift(c) {
-    if (!c || this.busy) return;
-    if ((this.cash.prepaid || 0) < c.Price) { this.alert("You don't have enough NX Prepaid."); return; }
-    const birthday = await this.mgr.askText('For the sake of privacy, please enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
-    if (!birthday) return;
-    if (!/^\d{8}$/.test(birthday)) { this.alert(ERRORS[0xC4]); return; }
-    const name = this.nameOf(c);
-    if (!(await this.mgr.confirm(`Would you like to gift this item to someone?\n${c.Count > 1 ? `${c.Count} ` : ''}[ ${name} ]`))) return;
-    const to = await this.mgr.askText('Enter the name of the character who will receive the gift.');
-    if (!to) { this.alert('Not ready to gift items? Please come back later.'); return; }
-    const message = (await this.mgr.askText('Enter a message to go with the gift.', '', { max: 73, width: 220 })) || '';
-    const ok = await this.dialog({ mode: 2, items: [c], text: `You will spend ${c.Price} NX Prepaid \nin this process.\nWould you like to proceed?`, wallets: 4 });
-    if (ok && this.begin()) this.g.net?.csGift(Number(birthday), c.SN, to, message);
+    if (!c) return;
+    if (!this.available) { this.alert(ERRORS[0xC3]); return; }
+    if (this.busy || !c.Price) return;
+    if ((this.cash.prepaid || 0) < c.Price) { this.alert("You don't have enough NX Prepaid"); return; }
+    const birthday = await this.askBirthday();
+    if (birthday === null) return;
+    const name = this.mgr.itemName(c.ItemId) || '';
+    if (!(await this.alert(`Would you like to gift this item to someone?\n${c.Count > 1 ? `${c.Count} ` : ''}[ ${name} ]`, true))) return;
+    for (;;) {
+      const r = await new Promise((done) => this.mgr.show(new CsGiftDialog(this, done)));
+      if (!r) { this.alert('Not ready to gift items? \nPlease come back later.'); return; }
+      const total = r.to.length * c.Price;
+      if (total > (this.cash.prepaid || 0)) { this.alert("You don't have enough cash."); return; }
+      if (r.to.length >= 2 && !(await this.alert(`Do you want to give gifts to ${r.to.length} persons?`, true))) continue;
+      const text = `You will spend ${total} NX Prepaid \nin this process.\nWould you like to proceed?`;
+      if (!(await this.dialog({ mode: 2, items: [c], text, wallets: 4 }))) continue;
+      if (this.tab === WISH) this.wishAfterBuy = c.SN;
+      this.giftRun = { birthday, sn: c.SN, to: r.to, message: r.message, i: 0, sent: [], total: 0, name: '' };
+      this.nextGift();
+      return;
+    }
+  }
+  /** The next recipient's gift, or the summary once every one has been tried. */
+  nextGift() {
+    const g = this.giftRun;
+    if (g.i < g.to.length) {
+      this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
+      this.g.net?.csGift(g.birthday, g.sn, g.to[g.i++], g.message);
+      return;
+    }
+    this.giftRun = null;
+    if (g.sent.length === g.to.length) this.alert(`All the gifts have been sent.\n${g.total} NX \nwas spent in the process.`);
+    else if (g.sent.length) {
+      this.alert(`${g.sent.map((n) => `${n}\n`).join('')}\n[ ${g.name} ]\nhas been sent to the character above.\n(It could not be sent to several persons.)\n${g.total} NX were spent in the process.`);
+    } else this.alert('The gifts could not be sent.');
+  }
+  /**
+   * Name change (5400000) and world transfer (5401000): (for a transfer, a guild master or GM can't) the birthday
+   * code, NX Prepaid, a confirm, then NAME_TRANSFER / WORLD_TRANSFER asks the server whether it may go ahead.
+   */
+  async buyTransfer(c, kind) {
+    if (!this.available) { this.alert(ERRORS[0xC3]); return; }
+    if (kind === 'world') {
+      const me = this.g.player?.id, leader = this.g.guild?.members?.find((m) => m.rank === 1);
+      const why = leader && leader.id === me ? 'Guild Master can not transfer worlds.' : this.g.gm ? 'GM can not transfer worlds.' : '';
+      if (why) { this.alert(why); return; }
+    }
+    const birthday = await this.askBirthday();
+    if (birthday === null) return;
+    this.transferSN = c.SN;
+    if ((this.cash.prepaid || 0) < c.Price) { this.alert("You don't have enough NX Prepaid"); return; }
+    if (!(await this.alert(`You will spend ${c.Price} NX Prepaid.\nWould you like to proceed?`, true)) || !this.begin()) return;
+    if (kind === 'name') this.g.net?.nameTransfer(this.g.player?.id, birthday);
+    else this.g.net?.worldTransfer(this.g.player?.id, birthday);
+  }
+  /** NAME_TRANSFER's answer: 0 shows the rules, then the name window. */
+  async nameChangeRules(error) {
+    this.done();
+    if (error) { this.alert(TRANSFER_ERRORS.name[error] || 'An unknown error has occured.'); return; }
+    if (!(await new Promise((done) => this.mgr.show(new CsRulesNotice(this, 'name', done))))) return;
+    this.nameWin = new CsNameDialog(this);
+    this.mgr.show(this.nameWin);
+  }
+  /** CHECK_CHAR_NAME's answer for the name window: 0 free, more than 0 taken. */
+  async nameChecked(name, code) {
+    this.done();
+    if (code < 0) { this.alert('An unknown error has occured.'); return; }
+    if (code > 0) { this.alert('This name is currently being used. \nPlease use another name.'); return; }
+    await this.alert('This name can be used. \nIf you wish to use this name,\nplease press OK.');
+    this.nameWin?.accept(name);
+  }
+  /** WORLD_TRANSFER's answer, with the worlds: 0 shows the rules, then the world window; its pick (an index into the list) is sent. */
+  async worldTransferRules(error, x, worlds) {
+    this.done();
+    if (worlds.length) this.worlds = worlds;
+    if (error) { this.alert(TRANSFER_ERRORS.world[error] || 'An unknown error has occured.'); return; }
+    if (!(await new Promise((done) => this.mgr.show(new CsRulesNotice(this, 'world', done))))) return;
+    const world = await new Promise((done) => this.mgr.show(new CsWorldDialog(this, this.worlds || [], done)));
+    if (world !== null && this.begin()) this.g.net?.csWorldTransfer(this.transferSN, world);
+  }
+  /** A name change / world transfer bought: the item goes to the Cash Inventory and the name window shuts. */
+  transferBought(kind, item) {
+    this.inv.push(item);
+    this.showLockerEnd();
+    if (kind === 'name') { this.nameWin?.finish(); this.nameWin = null; }
+    sfx.play('UI/BuyShopItem');
+    this.alert('You have successfully made the purchase.');
   }
   sendWish(list, removing = false) { this.wishRemoving = removing; this.g.net?.csWish(list); }
   addWish(c) {
@@ -468,10 +613,11 @@ export class CashShopWin extends Win {
     this.search = found;
     this.tab = SEARCH; this.sub = 0; this.page = 0;
   }
+  /** CODE (F3): the coupon dialog, then COUPON_CODE with the code. */
   async enterCoupon() {
+    if (!this.available) { this.alert(ERRORS[0xC3]); return; }
     if (this.busy) return;
-    sfx.play('UI/DlgNotice');
-    const code = await this.mgr.askText('Please enter the coupon code.', '', { max: 30, width: 200 });
+    const code = await new Promise((done) => this.mgr.show(new CouponDialog(this, done)));
     if (code === null) return;
     if (!code.trim()) { this.alert('Please enter the coupon code.'); return; }
     if (this.begin()) this.g.net?.coupon(code.trim());
@@ -1203,56 +1349,521 @@ class CsAlert extends Win {
   }
 }
 
+/** An edit box for a Cash Shop dialog: Arial 12 black, the text `margin` px in from the box's left edge. */
+function editBox(shop, w, h, max, margin = 0) {
+  const f = new TextField(shop.mgr.game.statusBar.layer, 0, 0, w, h, { color: '#000', max });
+  f.el.style.padding = `0 ${margin}px`;
+  return f;
+}
+/** Keep an edit box over its place (x, y) in a dialog. */
+function placeBox(win, f, x, y) {
+  f.rect.x = win.x + x; f.rect.y = win.y + y;
+  f.layout({ left: 0, top: 0 }, win.mgr.game.canvas.clientWidth / 800);
+}
+
 /**
- * SEARCH ITEM's pop-up (CSItemSearch/PopUp, 265x135, centred): the item name at (103, 27), a price range picked
- * from CSItemSearch/Price at (103, 52), OK / CANCEL. Resolves with { name, range } or null.
+ * A combo box: the box from Basic.img/ComboBox4 (the left cap, the middle tiled, the end with the arrow; normal,
+ * mouseOver, pressed while the list is open, selected after it is shut by the box) with the chosen text at (3, 3),
+ * and its drop-down list 1px over the box's bottom edge: 16px rows, a frame round the background, the row under
+ * the mouse (or keys) filled and its text white. A row is picked when the button comes up on it.
+ */
+class ComboBox {
+  constructor(mgr, art, x, y, w, h, items, colors, font = { face: 'Arial', size: 12, hoverText: '#fff', listDy: 0 }) {
+    Object.assign(this, { mgr, art, x, y, w, h, items, colors, font });
+    this.value = 0; this.hover = 0; this.open = false; this.state = 'normal'; this.inside = false; this.pressedAt = 0;
+  }
+  get listY() { return this.y + this.h - 1; }
+  get listH() { return this.items.length * 16 + 1; }
+  inBox(lx, ly) { return lx >= this.x && lx < this.x + this.w && ly >= this.y && ly < this.y + this.h; }
+  inList(lx, ly) { return this.open && lx >= this.x && lx < this.x + this.w && ly >= this.listY && ly < this.listY + this.listH; }
+  rowAt(ly) { return Math.max(0, Math.min(this.items.length - 1, Math.floor((ly - this.listY) / 16))); }
+  /** A click on the box (or Left / Right / Down while it has the focus) opens the list, or shuts it. */
+  toggle() {
+    this.pressedAt = performance.now(); this.state = 'pressed';
+    if (!this.open) { this.open = true; this.hover = this.value; } else { this.state = 'selected'; this.open = false; }
+  }
+  pick(i) { this.open = false; this.value = i; }
+  move(lx, ly) {
+    const inside = this.inBox(lx, ly);
+    if (inside && !this.inside) this.state = 'mouseOver';
+    else if (!inside && this.inside && this.state === 'mouseOver') this.state = 'normal';
+    this.inside = inside;
+    if (this.inList(lx, ly)) this.hover = this.rowAt(ly);
+  }
+  /** Keys while it has the focus; true when used. */
+  key(k) {
+    if (!this.open) { if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowDown') { this.toggle(); return true; } return false; }
+    if (k === 'ArrowUp') this.hover = Math.max(0, this.hover - 1);
+    else if (k === 'ArrowDown') this.hover = Math.min(this.items.length - 1, this.hover + 1);
+    else if (k === 'Enter') this.pick(this.hover);
+    else return false;
+    return true;
+  }
+  draw(ctx) {
+    if (this.state === 'pressed' && !this.open && performance.now() - this.pressedAt > 300) this.state = 'normal';
+    const S = this.art?.[this.items.length ? this.state : 'disabled'] || this.art?.normal, im = (n) => this.mgr.image(n);
+    const l = im(S?.[0]), m = im(S?.[1]), r = im(S?.[2]);
+    if (!l || !m || !r) return;
+    ctx.drawImage(l, this.x, this.y);
+    let x = this.x + l.width;
+    for (let n = Math.floor((this.w - l.width - r.width - 1) / m.width); n > 0; n--, x += m.width) ctx.drawImage(m, x, this.y);
+    ctx.drawImage(r, x, this.y);
+    const t = this.items[this.value];
+    if (t) this.text(ctx, t, this.w - r.width, this.x + 3, this.y + 3, '#000');
+  }
+  /** Text in the box's font, cut to `width` with "..". */
+  text(ctx, t, width, x, y, color) {
+    ctx.save(); ctx.font = `${this.font.size}px ${this.font.face}, Arial, sans-serif`; ctx.textBaseline = 'top'; ctx.fillStyle = color;
+    if (ctx.measureText(t).width > width) { while (t && ctx.measureText(`${t}..`).width > width) t = t.slice(0, -1); t += '..'; }
+    ctx.fillText(t, x, y);
+    ctx.restore();
+  }
+  drawList(ctx) {
+    if (!this.open) return;
+    const { x, w, colors: c } = this, y = this.listY, h = this.listH;
+    ctx.fillStyle = c.frame; ctx.fillRect(x, y, w - 1, h);
+    ctx.fillStyle = c.back; ctx.fillRect(x + 1, y + 1, w - 3, h - 2);
+    this.items.forEach((t, i) => {
+      const on = i === this.hover;
+      if (on) { ctx.fillStyle = c.hover; ctx.fillRect(x + 1, y + i * 16 + 1, w - 2, 15); }
+      if (t) this.text(ctx, t, w - 18, x + 7, y + i * 16 + 1 + (this.font.listDy || 0), on ? this.font.hoverText : '#000');
+    });
+  }
+}
+
+/**
+ * SEARCH ITEM's pop-up (CSItemSearch/PopUp, 265x135, centred): the item name box at (103, 27) 140x16, the price
+ * range combo box at (103, 52) 140x16 (blank, then each CSItemSearch/Price range as "%d ~ %d") and OK / CANCEL.
+ * Tab moves between the name and the combo box, Enter is OK and Escape CANCEL. Resolves with { name, range } or null.
  */
 class SearchPopup extends Win {
   constructor(shop, done) {
-    const P = shop.C.CSItemSearch.PopUp;
-    super(shop.mgr, P.backgrnd, Math.round((800 - 265) / 2), Math.round((600 - 135) / 2));
+    const P = shop.C.CSItemSearch.PopUp, mgr = shop.mgr;
+    super(mgr, P.backgrnd, (800 - 265) >> 1, (600 - 135) >> 1);
     this.buttons = [];
-    this.shop = shop; this.done = done; this.w = 265; this.h = 135; this.modal = true;
+    this.shop = shop; this.done = done; this.w = 265; this.h = 135; this.modal = true; this.mouse = { x: -1, y: -1 };
     this.ranges = Object.values(shop.C.CSItemSearch.Price || {}).map((r) => [Number(r[0]), Number(r[1])]);
-    this.range = -1; this.open = false;
-    this.field = new TextField(shop.mgr.game.statusBar.layer, 0, 0, 138, 16, { color: '#000', max: 30 });
-    this.field.el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false); });
-    this.button(shop.mgr.B.BtOK2, 58, 104, () => this.finish(true));
-    this.button(shop.mgr.B.BtCancel2, 159, 104, () => this.finish(false));
+    this.combo = new ComboBox(mgr, mgr.B.ComboBox4, 103, 52, 140, 16, ['', ...this.ranges.map(([a, b]) => `${a} ~ ${b}`)],
+      { back: '#eeeeee', hover: '#a5a198', frame: '#999999' });
+    this.focus = 'name';
+    this.field = editBox(shop, 140, 16, 0xffff);
+    this.field.el.addEventListener('focus', () => { this.focus = 'name'; this.combo.open = false; });
+    this.field.el.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Tab') { e.preventDefault(); this.focusCombo(); }
+    });
+    this.button(mgr.B.BtOK2, 58, 104, () => this.finish(true));
+    this.cancel = this.button(mgr.B.BtCancel2, 159, 104, () => this.finish(false));
   }
-  frames() { return [this.bg, ...allCanvases(this.shop.C.CSItemSearch.PopUp), ...this.buttons.flatMap((b) => b.frames())]; }
+  frames() { return [this.bg, ...allCanvases(this.mgr.B.ComboBox4), ...this.buttons.flatMap((b) => b.frames())]; }
+  focusCombo() { this.focus = 'combo'; this.field.el.blur(); }
   finish(ok) {
     if (this.answered) return;
     this.answered = true; this.field.remove(); this.mgr.close(this);
-    this.done(ok ? { name: this.field.value.trim(), range: this.ranges[this.range] || null } : null);
+    this.done(ok ? { name: this.field.value.trim(), range: this.ranges[this.combo.value - 1] || null } : null);
   }
-  key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false); }
-  rangeText(i) { const r = this.ranges[i]; return r ? `${r[0]} ~ ${r[1]}` : ''; }
+  key(e) {
+    if (e.key === 'Enter' && this.focus === 'combo' && this.combo.key('Enter')) return;
+    if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false);
+  }
+  /** The other keys while the combo box has the focus (the name box takes its own). */
+  keys(e) {
+    if (this.focus !== 'combo') return false;
+    if (e.key === 'Tab') { this.combo.open = false; this.field.focus(); return true; }
+    return this.combo.key(e.key);
+  }
   down(lx, ly) {
-    if (this.open) {
-      const i = Math.floor((ly - 69) / 16) - 1;
-      if (lx >= 103 && lx < 243 && i >= -1 && i < this.ranges.length && ly >= 69) this.range = i;
-      this.open = false; this.h = 135;
-      return;
-    }
-    if (lx >= 103 && lx < 243 && ly >= 52 && ly < 68) { this.open = true; this.h = 69 + (this.ranges.length + 1) * 16 + 2; }
+    const c = this.combo;
+    if (c.inList(lx, ly)) return;
+    if (c.inBox(lx, ly)) { this.focusCombo(); c.toggle(); return; }
+    c.open = false;
+  }
+  dblclick(lx, ly) { this.down(lx, ly); }
+  move(lx, ly) { this.mouse = { x: lx, y: ly }; this.combo.move(lx, ly); }
+  up() {
+    const c = this.combo, { x, y } = this.mouse;
+    if (c.inList(x, y)) { c.pick(c.rowAt(y)); this.focus = 'combo'; }
   }
   body(ctx) {
-    const f = this.field;
-    f.rect.x = this.x + 104; f.rect.y = this.y + 27;
-    f.layout({ left: 0, top: 0 }, this.mgr.game.canvas.clientWidth / 800);
-    if (!this.focused) { this.focused = true; setTimeout(() => f.focus(), 0); }
-    uiText(ctx, this.rangeText(this.range), 106, 54, { color: '#000' });
+    placeBox(this, this.field, 103, 27);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.field.focus(), 0); }
+    this.combo.draw(ctx);
+    // the open list lies over CANCEL and below the pop-up's bottom edge, and takes the clicks there
+    this.h = this.combo.open ? Math.max(135, this.combo.listY + this.combo.listH) : 135;
+    this.cancel.visible = !this.combo.open;
   }
   draw(ctx) {
     super.draw(ctx);
-    if (!this.open) return;
-    // the drop-down list under the price box: blank, then each range
-    ctx.save(); ctx.translate(this.x, this.y);
-    const rows = this.ranges.length + 1;
-    ctx.fillStyle = '#fff'; ctx.fillRect(103, 69, 140, rows * 16);
-    ctx.strokeStyle = '#7f9db9'; ctx.strokeRect(103.5, 69.5, 139, rows * 16 - 1);
-    for (let i = -1; i < this.ranges.length; i++) uiText(ctx, this.rangeText(i), 106, 70 + (i + 1) * 16, { color: '#000' });
+    ctx.save(); ctx.translate(this.x, this.y); this.combo.drawList(ctx); ctx.restore();
+  }
+}
+
+/**
+ * A ring's partner (CSNotice/2/backgrnd, 266x142, centred): after "To :" the name box at (84, 25) 122x13 (12
+ * letters), the message on two lines at (26, 49) and (26, 65), 210x13 (34 letters each), OK at (168, 112) and
+ * CANCEL at (210, 112). A faint "Please enter a message." sits at (55, 50) while both lines are empty and neither
+ * has the focus. Enter in the name goes on to an empty first line, in the first line to an empty second line, and
+ * is OK otherwise. Resolves with { to, message } (the two lines joined by a line break) or null.
+ */
+class CsPartnerDialog extends Win {
+  constructor(shop, done) {
+    const mgr = shop.mgr;
+    super(mgr, shop.C.CSNotice[2].backgrnd, (800 - 266) >> 1, (600 - 142) >> 1);
+    this.buttons = [];
+    this.shop = shop; this.done = done; this.w = 266; this.h = 142; this.modal = true;
+    this.fields = [editBox(shop, 122, 13, 12), editBox(shop, 210, 13, 34), editBox(shop, 210, 13, 34)];
+    [this.to, this.line1, this.line2] = this.fields;
+    this.focus = this.to;
+    this.fields.forEach((f, i) => {
+      f.el.addEventListener('focus', () => { this.focus = f; });
+      f.el.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Tab') { e.preventDefault(); this.fields[(i + (e.shiftKey ? 2 : 1)) % 3].focus(); }
+      });
+    });
+    this.button(mgr.B.BtOK2, 168, 112, () => this.ok());
+    this.button(mgr.B.BtCancel2, 210, 112, () => this.finish(null));
+  }
+  frames() { return [this.bg, ...this.buttons.flatMap((b) => b.frames())]; }
+  say(text) { this.shop.alert(text); }
+  ok() {
+    const to = this.to.value.trim(), l1 = this.line1.value.trim(), l2 = this.line2.value.trim();
+    if (to.length < 4 || to.length > 12) { this.say('Please enter the name of \nthe receiving character.'); return; }
+    if (to.toLowerCase() === (this.shop.g.player?.name || '').toLowerCase()) { this.say('You cannot send gifts to yourself.'); return; }
+    if (!l1 && !l2) { this.say('Please enter the message.'); return; }
+    const message = `${l1}\n${l2}`;
+    if (message.length > 72) { this.say('The message can be no longer than 72 characters long.'); return; }
+    this.finish({ to, message });
+  }
+  finish(v) { if (this.answered) return; this.answered = true; for (const f of this.fields) f.remove(); this.mgr.close(this); this.done(v); }
+  key(e) {
+    if (e.key === 'Escape') { this.finish(null); return; }
+    if (e.key !== 'Enter') return;
+    if (this.focus === this.to && !this.line1.value) this.line1.focus();
+    else if (this.focus === this.line1 && !this.line2.value) this.line2.focus();
+    else this.ok();
+  }
+  body(ctx) {
+    placeBox(this, this.to, 84, 25); placeBox(this, this.line1, 26, 49); placeBox(this, this.line2, 26, 65);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.to.focus(), 0); }
+    if (this.focus !== this.line1 && this.focus !== this.line2 && !this.line1.value.trim() && !this.line2.value.trim()) {
+      ctx.save(); ctx.globalAlpha = 0x37 / 255;
+      uiText(ctx, 'Please enter a message.', 55, 50, { color: '#000' });
+      ctx.restore();
+    }
+  }
+}
+
+/**
+ * The coupon dialog (UIWindow.img/Coupon/backgrnd, 266x125, centred): the code box at (17, 53) 230x15 (32
+ * letters, a "-" typed at the end is dropped), OK at (159, 95) and CANCEL at (209, 95). Resolves with the code or null.
+ */
+class CouponDialog extends Win {
+  constructor(shop, done) {
+    const mgr = shop.mgr;
+    super(mgr, mgr.W.Coupon.backgrnd, (800 - 266) >> 1, (600 - 125) >> 1);
+    this.buttons = [];
+    this.shop = shop; this.done = done; this.w = 266; this.h = 125; this.modal = true;
+    this.field = editBox(shop, 230, 15, 32, 1);
+    this.field.el.addEventListener('keydown', (e) => e.stopPropagation());
+    this.field.el.addEventListener('input', () => { if (this.field.value.endsWith('-')) this.field.value = this.field.value.slice(0, -1); });
+    this.button(mgr.B.BtOK2, 159, 95, () => this.finish(this.field.value));
+    this.button(mgr.B.BtCancel2, 209, 95, () => this.finish(null));
+  }
+  frames() { return [this.bg, ...this.buttons.flatMap((b) => b.frames())]; }
+  finish(v) { if (this.answered) return; this.answered = true; this.field.remove(); this.mgr.close(this); this.done(v); }
+  key(e) { if (e.key === 'Enter') this.finish(this.field.value); else if (e.key === 'Escape') this.finish(null); }
+  body() {
+    placeBox(this, this.field, 17, 53);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.field.focus(), 0); }
+  }
+}
+
+/** A vertical scrollbar in the given Basic.img VScr art (Win.scrollbar's layout). */
+function drawVScr(win, ctx, V, x, y, h, first, rows, visible) {
+  const on = rows > visible, S = on ? V.enabled : V.disabled, im = (n) => win.mgr.image(n);
+  const base = im(S.base), prev = im(on ? S.prev0 : S.prev), next = im(on ? S.next0 : S.next);
+  if (base) ctx.drawImage(base, x, y + 12, 12, h - 24);
+  if (prev) ctx.drawImage(prev, x, y);
+  if (next) ctx.drawImage(next, x, y + h - 12);
+  const thumb = on && im(S.thumb0);
+  if (thumb) ctx.drawImage(thumb, x, y + 12 + Math.round((h - 36) * first / Math.max(1, rows - visible)));
+}
+
+/**
+ * The rules before a name change / world transfer (CSChangeName or CSTransferWorld/Base/backgrndnotice, 406x424 at
+ * (197, 48)): every String/NameChange.img/NameChange (TransferWorld.img/TransferWorld) Text%02d run together, in
+ * black Arial 10 (#e bold Arial 11), wrapped at 350 from x 7, 13px apart, shown in (29, 51) 353x315 and scrolled 5px
+ * a step by a VScr6 bar at (384, 47), 324 long. OK at (275, 395) only comes on at the last step; CANCEL at (340, 395).
+ * Enter and Escape do nothing. Resolves with true for OK.
+ */
+class CsRulesNotice extends Win {
+  constructor(shop, kind, done) {
+    const mgr = shop.mgr, B = kind === 'name' ? shop.C.CSChangeName.Base : shop.C.CSTransferWorld.Base;
+    super(mgr, B.backgrndnotice, 197, 48);
+    this.buttons = [];
+    this.shop = shop; this.done = done; this.w = 406; this.h = 424; this.modal = true; this.pos = 0; this.steps = 0; this.last = 0; this.lines = [];
+    this.btOK = this.button(mgr.B.BtOK2, 275, 395, () => this.finish(true));
+    this.btOK.enabled = false;
+    this.button(mgr.B.BtCancel2, 340, 395, () => this.finish(false));
+    const [img, key] = kind === 'name' ? ['NameChange', 'NameChange'] : ['TransferWorld', 'TransferWorld'];
+    mgr.assets.json(`String/${img}.img`).then((d) => {
+      const node = d?.[key] || {}, n = Object.keys(node).length;
+      let text = '';
+      for (let i = 0; i < n; i++) text += node[`Text${String(i).padStart(2, '0')}`] ?? '';
+      this.layout(text);
+    });
+  }
+  frames() { return [this.bg, ...allCanvases(this.mgr.B.VScr6), ...this.buttons.flatMap((b) => b.frames())]; }
+  font(bold) { return bold ? 'bold 11px Arial, sans-serif' : '10px Arial, sans-serif'; }
+  layout(text) {
+    const ctx = (CsRulesNotice.scratch ??= document.createElement('canvas').getContext('2d'));
+    const lines = [[]];
+    let x = 7, bold = false;
+    for (const tk of String(text).replace(/\\[rR]\\[nN]|\r\n|\n/g, '\n').split(/(#[a-zA-Z]|\n|\s+)/)) {
+      if (!tk) continue;
+      if (tk === '\n') { lines.push([]); x = 7; continue; }
+      if (/^#[a-zA-Z]$/.test(tk)) { if (tk[1] === 'e') bold = true; else if (tk[1] === 'n') bold = false; continue; }
+      ctx.font = this.font(bold);
+      const w = ctx.measureText(tk).width;
+      if (!tk.trim()) { if (x > 7) x += w; continue; }
+      if (x + 7 + w > 350 && x > 7) { lines.push([]); x = 7; }
+      lines[lines.length - 1].push({ t: tk, x, bold });
+      x += w;
+    }
+    this.lines = lines;
+    // 16px lines 2px apart inside 7px of padding; the bar's last step is (height - 317) / 7 - 15
+    const H = 7 + lines.length * 18 + 7;
+    this.last = Math.trunc((H - 317) / 7) - 15;
+    const range = this.last + 1 + (this.last < 1 ? 1 : 0);
+    this.steps = range < 2 ? 0 : range;
+  }
+  scrollTo(p) { this.pos = Math.max(0, Math.min(Math.max(0, this.steps - 1), p)); this.btOK.enabled = this.steps > 0 && this.last <= this.pos; }
+  finish(ok) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(ok); }
+  key() {}
+  down(lx, ly) {
+    const p = this.scrollClick(lx, ly, 384, 47, 324, this.pos, this.steps, 1);
+    if (p !== null && this.steps) this.scrollTo(p);
+  }
+  body(ctx) {
+    ctx.save(); ctx.beginPath(); ctx.rect(29, 51, 353, 315); ctx.clip();
+    this.lines.forEach((runs, i) => {
+      const y = 7 + 13 * i - this.pos * 5;
+      if (y <= -49 || y >= 341) return;
+      for (const r of runs) {
+        ctx.font = this.font(r.bold); ctx.fillStyle = '#000'; ctx.textBaseline = 'top';
+        ctx.fillText(r.t, 29 + r.x, 51 + y + 3);
+      }
+    });
     ctx.restore();
+    drawVScr(this, ctx, this.mgr.B.VScr6, 384, 47, 324, this.pos, this.steps, 1);
+  }
+}
+
+/**
+ * The new name (CSChangeName/Base/backgrnd, 266x124, centred): the name box at (26, 51) 212x13 on white (12 letters),
+ * CHECK at (195, 26), OK at (161, 93) (off until a name has been checked free) and CANCEL at (210, 93). OK sends
+ * the change and the window stays until the purchase comes back. Enter checks the name then does the same.
+ */
+class CsNameDialog extends Win {
+  constructor(shop) {
+    const mgr = shop.mgr, C = shop.C.CSChangeName;
+    super(mgr, C.Base.backgrnd, (800 - 266) >> 1, (600 - 124) >> 1);
+    this.buttons = [];
+    this.shop = shop; this.w = 266; this.h = 124; this.modal = true; this.checked = ''; this.sn = shop.transferSN;
+    this.field = editBox(shop, 212, 13, 12);
+    this.field.el.addEventListener('keydown', (e) => e.stopPropagation());
+    this.button(C.BtCheck, 195, 26, () => this.check());
+    this.btOK = this.button(mgr.B.BtOK2, 161, 93, () => this.ok());
+    this.btOK.enabled = false;
+    this.button(mgr.B.BtCancel2, 210, 93, () => this.finish());
+  }
+  frames() { return [this.bg, ...this.buttons.flatMap((b) => b.frames())]; }
+  get me() { return this.shop.g.player?.name || ''; }
+  say(t) { this.shop.alert(t); }
+  check() {
+    const t = this.field.value;
+    if (t === this.checked) return;
+    this.checked = '';
+    if (t === this.me) { this.say('This name is same as your current name. \nPlease use another name.'); return; }
+    if (this.shop.begin()) this.shop.g.net?.checkNewName(t);
+  }
+  /** The server says the name is free: OK comes on for it. */
+  accept(name) { this.checked = name; this.btOK.enabled = true; }
+  send() { if (this.shop.begin()) this.shop.g.net?.csNameChange(this.sn, this.me, this.field.value); }
+  ok() {
+    if (this.field.value === this.checked) this.send();
+    else this.say('Press the CHECK button \nto check if you can use\nthe name of the character.');
+  }
+  key(e) {
+    if (e.key === 'Escape') { this.finish(); return; }
+    if (e.key !== 'Enter') return;
+    const t = this.field.value.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
+    const press = 'Press the CHECK button \nto check if you can use\nthe name of the character.';
+    if (t.length < 4 || t.length > 12) { this.say(press); return; }
+    if (t === this.me) { this.say('This name is same as your current name. \nPlease use another name.'); return; }
+    if (this.field.value !== this.checked) { this.say(press); return; }
+    this.send();
+    this.finish();
+  }
+  finish() { if (this.answered) return; this.answered = true; this.field.remove(); this.mgr.close(this); if (this.shop.nameWin === this) this.shop.nameWin = null; }
+  body(ctx) {
+    ctx.fillStyle = '#fff'; ctx.fillRect(26, 51, 212, 13);
+    placeBox(this, this.field, 26, 51);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.field.focus(), 0); }
+  }
+}
+
+/**
+ * The world to move to (CSTransferWorld/Base/backgrnd, 209x101, centred): the character's name at (105, 33) (cut to
+ * 95px), a Basic.img/ComboBox combo box at (103, 50) 100x17 of the server's worlds in Tahoma 9 (the first chosen),
+ * OK at (107, 77), CANCEL at (156, 77) and a close box at (190, 6). Resolves with the index picked, or null.
+ */
+class CsWorldDialog extends Win {
+  constructor(shop, worlds, done) {
+    const mgr = shop.mgr;
+    super(mgr, shop.C.CSTransferWorld.Base.backgrnd, (800 - 209) >> 1, (600 - 101) >> 1);
+    this.buttons = [];
+    this.shop = shop; this.done = done; this.w = 209; this.h = 101; this.modal = true; this.mouse = { x: -1, y: -1 };
+    this.combo = new ComboBox(mgr, mgr.B.ComboBox, 103, 50, 100, 17, worlds, { back: '#eeeeee', hover: '#a5a198', frame: '#999999' },
+      { face: 'Tahoma', size: 9, hoverText: '#000', listDy: 2 });
+    this.button(mgr.B.BtOK2, 107, 77, () => this.finish(this.combo.value));
+    this.button(mgr.B.BtCancel2, 156, 77, () => this.finish(null));
+    this.button(mgr.B.BtClose, 190, 6, () => this.finish(null));
+  }
+  frames() { return [this.bg, ...allCanvases(this.mgr.B.ComboBox), ...this.buttons.flatMap((b) => b.frames())]; }
+  finish(v) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(v); }
+  key(e) {
+    if (e.key === 'Enter' && this.combo.key('Enter')) return;
+    if (e.key === 'Enter') this.finish(this.combo.value); else if (e.key === 'Escape') this.finish(null);
+  }
+  keys(e) { return this.combo.key(e.key); }
+  down(lx, ly) {
+    const c = this.combo;
+    if (c.inList(lx, ly)) return;
+    if (c.inBox(lx, ly)) { c.toggle(); return; }
+    c.open = false;
+  }
+  dblclick(lx, ly) { this.down(lx, ly); }
+  move(lx, ly) { this.mouse = { x: lx, y: ly }; this.combo.move(lx, ly); }
+  up() { const c = this.combo, { x, y } = this.mouse; if (c.inList(x, y)) c.pick(c.rowAt(y)); }
+  body(ctx) {
+    uiText(ctx, clipText(ctx, this.shop.g.player?.name || '', 95), 105, 33, { color: '#000' });
+    this.combo.draw(ctx);
+    this.h = this.combo.open ? Math.max(101, this.combo.listY + this.combo.listH) : 101;
+  }
+  draw(ctx) { super.draw(ctx); ctx.save(); ctx.translate(this.x, this.y); this.combo.drawList(ctx); ctx.restore(); }
+}
+
+/**
+ * The gift window (CSGift/backgrnd, 266x169 at (267, 215); backgrnd1, 473 wide, while a picker is open): after "To :"
+ * the recipients box at (84, 52) 122x13 ("a;b;c"), the message on two lines at (26, 76) and (26, 92), 210x13 (34
+ * letters each), with a faint "Please enter a message." at (55, 77) while both are empty and neither has the focus;
+ * GUILD (56, 139), BUDDY (110, 139), OK (168, 139), CANCEL (210, 139). BUDDY / GUILD open a picker of your buddies /
+ * guild members sorted by name: 3 rows from (293, 55) 18px apart, the chosen one on 0xff244768 in white, a VScr4
+ * bar at (439, 52) 55 long, "None" at (337, 55) when empty, and BtHide at (439, 139) to shut it. A click picks a
+ * row, a double-click adds it to the recipients. Resolves with { to: [names], message } or null.
+ */
+class CsGiftDialog extends Win {
+  constructor(shop, done) {
+    const mgr = shop.mgr, G = shop.C.CSGift;
+    super(mgr, G.backgrnd, 267, 215);
+    this.buttons = [];
+    this.shop = shop; this.done = done; this.G = G; this.w = 266; this.h = 169; this.modal = true;
+    this.mode = 0; this.list = []; this.sel = null; this.first = 0; this.mouse = { x: -1, y: -1 };
+    this.fields = [editBox(shop, 122, 13, 0xffff), editBox(shop, 210, 13, 34), editBox(shop, 210, 13, 34)];
+    [this.to, this.line1, this.line2] = this.fields;
+    this.focus = this.to;
+    this.fields.forEach((f, i) => {
+      f.el.addEventListener('focus', () => { this.focus = f; });
+      f.el.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Tab') { e.preventDefault(); this.fields[(i + (e.shiftKey ? 2 : 1)) % 3].focus(); }
+      });
+    });
+    this.button(mgr.B.BtOK2, 168, 139, () => this.ok());
+    this.button(mgr.B.BtCancel2, 210, 139, () => this.finish(null));
+    this.button(G.BtBuddy, 110, 139, () => this.setMode(1));
+    this.button(G.BtGuild, 56, 139, () => this.setMode(2));
+    this.btHide = this.button(G.BtHide, 439, 139, () => this.setMode(0));
+    this.btHide.visible = false;
+  }
+  frames() { return [this.G.backgrnd, this.G.backgrnd1, ...allCanvases(this.mgr.B.VScr4), ...this.buttons.flatMap((b) => b.frames())]; }
+  /** 0 the window alone, 1 with the buddy picker, 2 with the guild picker. */
+  setMode(m) {
+    if (m === this.mode) return;
+    this.mode = m; this.sel = null; this.first = 0;
+    this.bg = m ? this.G.backgrnd1 : this.G.backgrnd; this.w = m ? 473 : 266;
+    this.btHide.visible = !!m;
+    const g = this.shop.g, src = m === 1 ? g.buddies || [] : m === 2 ? g.guild?.members || [] : [];
+    this.list = src.filter((x) => x.id).map((x) => ({ id: x.id, name: x.name })).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  }
+  /** The scrollbar's steps: 0 to (rows - 3). */
+  get steps() { const r = this.list.length - 2; return r < 2 ? 0 : r; }
+  rowAt(lx, ly) {
+    if (!this.mode) return null;
+    for (let i = 0; i < 3; i++) {
+      const e = this.list[this.first + i], y = 55 + 18 * i;
+      if (e && lx >= 283 && lx < 436 && ly >= y - 2 && ly < y + 16) return e;
+    }
+    return null;
+  }
+  say(t) { this.shop.alert(t); }
+  ok() {
+    const me = (this.shop.g.player?.name || '').toLowerCase(), to = [], l1 = this.line1.value.trim(), l2 = this.line2.value.trim();
+    let rest = this.to.value;
+    for (;;) {
+      rest = rest.replace(/^;+|;+$/g, '').trim();
+      if (!rest) { this.say('Please enter the name of \nthe receiving character.'); return; }
+      const k = rest.indexOf(';');
+      if (k < 0) { to.push(rest); break; }
+      const t = rest.slice(0, k);
+      if (t.length < 4 || t.length > 12) { this.say('Please enter the name of \nthe receiving character.'); return; }
+      if (t.toLowerCase() === me) { this.say('You cannot send gifts to yourself.'); return; }
+      if (to.includes(t)) { this.say('There are repeating character names.'); return; }
+      to.push(t);
+      rest = rest.slice(k + 1);
+    }
+    const message = `${l1}\n${l2}`;
+    if (!l1 && !l2) { this.say('Please enter the message.'); return; }
+    if (message.length > 72) { this.say('The message can be no longer than 72 characters long.'); return; }
+    this.finish({ to, message });
+  }
+  finish(v) { if (this.answered) return; this.answered = true; for (const f of this.fields) f.remove(); this.mgr.close(this); this.done(v); }
+  key(e) {
+    if (e.key === 'Escape') { this.finish(null); return; }
+    if (e.key !== 'Enter') return;
+    if (this.focus === this.to && !this.line1.value) this.line1.focus();
+    else if (this.focus === this.line1 && !this.line2.value) this.line2.focus();
+    else this.ok();
+  }
+  down(lx, ly) {
+    if (!this.mode) return;
+    const p = this.scrollClick(lx, ly, 439, 52, 55, this.first, this.steps, 1);
+    if (p !== null && this.steps) this.first = p;
+  }
+  move(lx, ly) { this.mouse = { x: lx, y: ly }; }
+  up() { const e = this.rowAt(this.mouse.x, this.mouse.y); if (e) this.sel = e.id; }
+  dblclick(lx, ly) {
+    const e = this.rowAt(lx, ly);
+    if (!e) return;
+    this.sel = e.id;
+    if (e.name) this.to.value = this.to.value ? `${this.to.value};${e.name}` : e.name;
+  }
+  body(ctx) {
+    placeBox(this, this.to, 84, 52); placeBox(this, this.line1, 26, 76); placeBox(this, this.line2, 26, 92);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.to.focus(), 0); }
+    const faint = (t, x, y) => { ctx.save(); ctx.globalAlpha = 0x37 / 255; uiText(ctx, t, x, y, { color: '#000' }); ctx.restore(); };
+    if (this.focus !== this.line1 && this.focus !== this.line2 && !this.line1.value.trim() && !this.line2.value.trim()) faint('Please enter a message.', 55, 77);
+    if (!this.mode) return;
+    if (!this.list.length) faint('None', 337, 55);
+    for (let i = 0; i < 3; i++) {
+      const e = this.list[this.first + i], y = 55 + 18 * i;
+      if (!e) continue;
+      const on = e.id === this.sel;
+      if (on) { ctx.fillStyle = '#244768'; ctx.fillRect(283, y - 2, 153, 18); }
+      uiText(ctx, e.name, 293, y, { color: on ? '#fff' : '#000' });
+    }
+    drawVScr(this, ctx, this.mgr.B.VScr4, 439, 52, 55, this.first, this.steps, 1);
   }
 }
