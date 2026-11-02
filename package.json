@@ -4,7 +4,7 @@
   "description": "Pure JS MapleStory v83 web client",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --minify --outfile=public/bundle.js || echo 'BUILD FAILED'",
+    "build": "esbuild src/main.js --bundle --minify --outfile=public/Voyage.js || echo 'BUILD FAILED'",
     "start": "npm run build && node server.js"
   },
   "dependencies": {
