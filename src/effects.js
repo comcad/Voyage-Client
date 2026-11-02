@@ -1,7 +1,7 @@
 import { isCanvas, frames } from './assets.js';
 import { Anim } from './map.js';
 import { itemIcon } from './data.js';
-import { uiText, wrapText } from './ui/wzui.js';
+import { uiText } from './ui/wzui.js';
 import { settings } from './settings.js';
 
 /**
@@ -34,6 +34,26 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   return line * 120;
 }
 const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear' };
+
+/** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
+function balloonLines(ctx, text, max) {
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const t = line ? `${line} ${word}` : word;
+      if (ctx.measureText(t).width <= max) { line = t; continue; }
+      if (line) out.push(line);
+      line = '';
+      for (const ch of word) {
+        if (line && ctx.measureText(line + ch).width > max) { out.push(line); line = ''; }
+        line += ch;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+}
 
 export class WorldFx {
   constructor(game) {
@@ -188,11 +208,9 @@ export class WorldFx {
     if (Object.values(p).some((v) => !v)) return style !== '0' && style !== 'npc' ? this.drawBalloon(ctx, cam, ent, text) : false;   // a quote ring's, until its art is in
     ctx.save();
     ctx.font = '12px Arial, sans-serif';
-    // ChatBalloon.img/0 round the text: 12px lines on the white, 5px in from its left and 6px from its right, the
-    // arrow (origin 1, 0) laid over the bottom edge at the centre so the tail grows out of it, leaning left
-    // an NPC's or a pet's: centred 14px lines wrapped at 89px, in its clr (dark red for both by default)
-    const npc = style === 'npc' || String(style).startsWith('pet/'), lh = npc ? 14 : 12;
-    const lines = wrapText(ctx, text, npc ? 89 : 150, 12);
+    // centred 14px lines wrapped at 89px (a word too long for a line is broken up), in the balloon's clr; the arrow
+    // laid over the bottom edge at the centre so the tail grows out of it
+    const lh = 14, lines = balloonLines(ctx, text, 89);
     const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
     // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
@@ -205,8 +223,7 @@ export class WorldFx {
     const ao = o('arrow');
     ctx.drawImage(p.arrow, cx - ao[0] + 1, y0 + H - ao[1]);
     const color = `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
-    if (npc || style !== '0') lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh + (npc ? 0 : 2), { color, size: 12, align: 'center' }));
-    else lines.forEach((l, i) => uiText(ctx, l, x0 - 1, y0 + i * 12 + 2, { color, size: 12 }));
+    lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
     ctx.restore();
     return true;
   }
