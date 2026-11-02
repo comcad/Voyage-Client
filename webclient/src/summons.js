@@ -110,7 +110,7 @@ export class Summon {
     const r = info?.range || {}, lt = r.lt || [-200, -150], rb = r.rb || [200, 150];
     const x1 = this.facingRight ? -rb[0] : lt[0], x2 = this.facingRight ? -lt[0] : rb[0];
     const inBox = (m) => m.x >= this.x + x1 && m.x <= this.x + x2 && m.y >= this.y + lt[1] && m.y - 30 <= this.y + rb[1];
-    return this.g.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== null && inBox(m))
+    return this.g.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== null && inBox(m))
       .sort((a, b) => Math.abs(a.x - this.x) - Math.abs(b.x - this.x)).slice(0, count);
   }
   tryAttack(dt) {

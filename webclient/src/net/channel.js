@@ -487,7 +487,8 @@ export class ChannelSession {
       r.int(); r.short(); r.ubyte(); r.ubyte();
       const morph = r.int();
       const hiMask = r.int();
-      if (morph === 2) r.short(); else if (hiMask & 0x200000) r.ubyte(); // morph value / combo count
+      let combo = 0;
+      if (morph === 2) r.short(); else if (hiMask & 0x200000) combo = r.ubyte(); // morph value / Combo Attack's value (1 + orbs)
       r.int(); r.int(); r.short(); r.skip(4); r.int(); r.skip(11); r.short(); r.skip(9); r.int(); r.short(); r.ubyte();
       r.long(); r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
       const job = r.short();
@@ -503,7 +504,7 @@ export class ChannelSession {
         r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
         if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -552,17 +553,19 @@ export class ChannelSession {
     const readAttack = (kind) => (r) => {
       const id = r.int(), nd = r.ubyte(); r.ubyte();
       const skillLevel = r.ubyte(); const skill = skillLevel ? r.int() : 0;
-      const display = r.ubyte(), direction = r.ubyte(), stance = r.ubyte(), speed = r.ubyte(); r.ubyte();
+      // the action (15 bits) with facing left in the top bit, as the attacker sent it
+      const display = r.ubyte(), act = r.ushort(), speed = r.ubyte(); r.ubyte();
+      const action = act & 0x7fff, facingLeft = !!(act & 0x8000);
       const projectile = r.int();
       const targets = [];
       for (let i = 0; i < (nd >> 4); i++) {
         const oid = r.int(); r.ubyte();
         // Cosmic sets a critical hit's top bit before passing it on (damage - 2^31)
-        const dmg = [], crit = [];
-        for (let j = 0; j < (nd & 0xf); j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
+        const dmg = [], crit = [], n = skill === 4211006 ? r.ubyte() : nd & 0xf;   // Meso Explosion: each its own count
+        for (let j = 0; j < n; j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
         targets.push({ oid, dmg, crit });
       }
-      this.emit('attack', { kind, id, skill, skillLevel, display, direction, stance, speed, projectile, targets });
+      this.emit('attack', { kind, id, skill, skillLevel, display, action, facingLeft, speed, projectile, targets });
     };
     on(S.CLOSE_RANGE_ATTACK, readAttack('melee'));
     on(S.RANGED_ATTACK, readAttack('ranged'));
@@ -584,7 +587,8 @@ export class ChannelSession {
     // GIVE_BUFF: two 64-bit masks, then (short value, int source, int duration) per set bit
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
     const SHARP_EYES = [3121002, 3221002];
-    const SPEED = 0x8000000000n, JUMP = 0x10000000000n;   // BuffStat.SPEED / JUMP
+    const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
+    const WATK = 0x100000000n, WDEF = 0x200000000n, MDEF = 0x800000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -618,16 +622,30 @@ export class ChannelSession {
         if (hbHp) b.hbHp = values[0];
         if (hbMp) b.hbMp = values[hbHp ? 1 : 0];
       }
-      // Speed / Jump (Haste, Nimble Feet, speed potions...): the values come in mask-bit order, so each one's place
-      // is the number of set bits below it (both live in the second mask)
+      // Speed / Jump (Haste, Nimble Feet, speed potions...), weapon attack and accuracy: the values come in mask-bit
+      // order, so each one's place is the number of set bits below it (all live in the second mask)
       const mask = BigInt.asUintN(64, m2);
-      if (pick === normal && (mask & (SPEED | JUMP))) {
+      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MDEF | AVOID | BOOSTER))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         const at = (bit) => popcount(mask & (bit - 1n));   // Cosmic lists the plain stats (WATK..JUMP) first
         if (mask & SPEED) b.speed = values[at(SPEED)];
         if (mask & JUMP) b.jump = values[at(JUMP)];
+        if (mask & WATK) b.watk = values[at(WATK)];
+        if (mask & ACC) b.acc = values[at(ACC)];
+        if (mask & WDEF) b.wdef = values[at(WDEF)];
+        if (mask & MDEF) b.mdef = values[at(MDEF)];
+        if (mask & AVOID) b.avoid = values[at(AVOID)];
+        if (mask & BOOSTER) b.booster = values[at(BOOSTER)];   // -1 to -4: that much faster
       }
+      // Speed Infusion: its value comes first, as an int
+      if (pick === pirate && infusion) { r.pos = start + 2; b.infusion = r.int(); }
+      // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
+      if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
+      // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent
+      if (pick === normal && n === 1 && mask === COMBO) { r.pos = start; b.combo = r.short(); }
+      // Power Stance / Freeze Standing: its one stat is the % chance not to be knocked back
+      if (pick === normal && n === 1 && mask === STANCE) { r.pos = start; b.stance = r.short(); }
       // Sharp Eyes' one stat is (critical rate << 8 | critical damage)
       if (pick === normal && SHARP_EYES.includes(normal.source)) { r.pos = start; const v = r.short(); b.sharpEyes = { rate: v >> 8, dmg: v & 0xff }; }
       this.emit('buff', b);
@@ -677,6 +695,11 @@ export class ChannelSession {
     // short id + short level; an ordinary foreign buff has values and zeros there instead, so the id tells them apart
     on(S.GIVE_FOREIGN_BUFF, (r) => {
       const id = r.int(), m1 = r.long(), m2 = r.long();
+      // Dark Sight or Wind Walk: drawn see-through
+      if (BigInt.asUintN(64, m2) & 0x40000000000n || BigInt.asUintN(64, m1) & 0x400000000n) { this.emit('foreignHidden', id); return; }
+      if (BigInt.asUintN(64, m2) & 0x400000000000000n) { this.emit('foreignPartner', id); return; }   // Shadow Partner
+      // Combo Attack alone: its value is 1 + the orbs held
+      if (BigInt.asUintN(64, m2) === 0x20000000000000n && BigInt.asUintN(64, m1) === 0n && r.available >= 2) { this.emit('foreignCombo', id, r.short()); return; }
       if (BigInt.asUintN(64, m2) & 0x4000000000000n && r.available >= 2) r.short();   // Disease.POISON's value
       if (r.available < 4) return;
       const src = r.int(), skill = src & 0xffff, level = src >>> 16;
@@ -689,8 +712,10 @@ export class ChannelSession {
       if (from === -3) r.int();
       const damage = r.int();
       let mobId = 0, direction = 0;
+      let fake = 0;
       if (from !== -4) { mobId = r.int(); direction = r.ubyte(); }
-      this.emit('playerDamaged', { id, from, damage, mobId, direction });
+      if (damage === -1 && r.available >= 4) { r.skip(r.available - 4); fake = r.int(); }   // Shadow Shifter's id, last
+      this.emit('playerDamaged', { id, from, damage, mobId, direction, fake });
     });
 
     const readMob = (r, controlMode) => {
@@ -765,7 +790,9 @@ export class ChannelSession {
     on(S.REACTOR_HIT, (r) => { const oid = r.int(), state = r.byte(), pos = r.pos2(), stance = r.available ? r.ubyte() : 0; this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, stance }); });
     on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(); this.emit('reactorDestroy', { oid, state }); });
     on(S.REMOVE_ITEM_FROM_MAP, (r) => {
-      const anim = r.ubyte(), oid = r.int(), chr = anim >= 2 ? r.int() : 0;
+      const anim = r.ubyte(), oid = r.int();
+      if (anim === 4) { this.emit('removeDrop', oid, 4, 0, -1, r.short()); return; }   // 4: blown up by Meso Explosion, after a delay
+      const chr = anim >= 2 ? r.int() : 0;
       this.emit('removeDrop', oid, anim, chr, anim === 5 && r.available ? r.ubyte() : -1);   // 5: a pet picked it up
     });
 
@@ -861,19 +888,29 @@ export class ChannelSession {
    * Attack packets (AbstractDealDamageHandler.parseDamage). kind: melee | ranged | magic.
    * targets: [{oid, x, y, dmg:[...]}]; stance = body action id; facingLeft -> direction bit.
    */
-  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0 }) {
+  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0 }) {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
     if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
-    w.zero(8).byte(display).byte(facingLeft ? 0x80 : 0).byte(stance);
+    // the action (15 bits) with facing left in the top bit, as one short
+    w.zero(8).byte(display).short((stance & 0x7fff) | (facingLeft ? 0x8000 : 0));
+    if (skill === 4211006) {   // Meso Explosion: each monster's own line count, then the mesos used and whom each hit
+      w.byte(0).byte(speed).int(Date.now() | 0);
+      for (const t of targets) { w.int(t.oid).zero(4).pos(t).pos(t).byte(t.dmg.length); for (const d of t.dmg) w.int(d); w.int(0); }
+      w.pos({ x: Math.round(pos?.x || 0), y: Math.round(pos?.y || 0) }).byte((mesos || []).length);
+      for (const m of mesos || []) w.int(m.oid).byte(m.mask);
+      this.send(w.short(delay));
+      return;
+    }
     if (kind === 'ranged') {
-      w.byte(0).byte(speed).byte(0).byte(facingLeft ? 0x80 : 0).zero(7);
-      if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.zero(4); // Hurricane / Piercing / Rapid Fire
+      // Cosmic passes the 4th byte on in the action's high byte for Hurricane-type skills, so it carries the facing too
+      w.byte(0).byte(speed).byte(0).byte(((stance >> 8) & 0x7f) | (facingLeft ? 0x80 : 0)).zero(7);
+      if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.int(charge); // Hurricane / Rapid Fire, Piercing's charge (ms)
     } else {
       w.byte(0).byte(speed).zero(4);
     }
     for (const t of targets) {
-      w.int(t.oid).zero(4).pos(t).pos(t).short(0);
+      w.int(t.oid).zero(4).pos(t).pos(t).short(Math.max(0, Math.min(0x7fff, Math.round(t.delay || 0))));   // when it lands (ms)
       for (const d of t.dmg) w.int(d);
       w.int(0); // per-target trailer (mob CRC in the real client); parseDamage skips 4 bytes per target
     }

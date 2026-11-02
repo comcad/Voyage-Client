@@ -13,25 +13,30 @@ import { pad, frames } from './assets.js';
 export const RANGED_WEAPONS = new Set([145, 146, 147, 149]); // bow, crossbow, claw, gun
 /**
  * Buffs and moves that look like attacks in their data: the White Knight / Paladin / Dawn Warrior charges, Soul
- * Arrow, and Power Crash and Magic Crash (they weaken monsters; the server finds them).
+ * Arrow, Power Crash and Magic Crash, Ninja Ambush (they weaken monsters; the server finds them).
  */
 const NOT_ATTACKS = new Set([1211003, 1211004, 1211005, 1211006, 1211007, 1211008, 1221003, 1221004, 11111007, 3101004, 3201004,
-  1311007, 1211009]);
+  13101003, 1311007, 1211009, 4121004, 4221004]);
 /**
  * Skills that only ever go off by themselves, so a hotkey does nothing: Endure, the Final Attacks, Advanced Combo,
- * Guardian, Advanced Charge, Berserk and Hex of the Beholder.
+ * Guardian, Advanced Charge, Berserk, Hex of the Beholder, Critical Shot / Throw, Mortal Blow, Venomous Star / Stab and Vanish.
  */
 const PROCS = new Set([1000002, 1100002, 1100003, 1200002, 1200003, 1300002, 1300003, 1120003, 11110005, 1120005, 1220006,
-  1220010, 1320006, 1320009]);
-/** Attacks that look like buffs in their data (Panic). */
-const MELEE_SKILLS = new Set([1111003, 1111004, 11111002]);
+  1220010, 1320006, 1320009, 3000001, 13000000, 3100001, 3200001, 13101002, 3110001, 3210001, 4120005, 4220005, 14110004,
+  4100001, 14100001, 4100002, 4200001, 14100005]);
+/** Close-range attacks whatever their data says: Panic, Disorder, Ninja Storm. */
+const MELEE_SKILLS = new Set([1111003, 1111004, 11111002, 4001002, 14001002, 4121008]);
 /** Spells that look like buffs in their data: Cold Beam, Paralyze, Poison Mist, Flame Gear. */
 const MAGIC_SKILLS = new Set([2201004, 2121006, 2111003, 12111005]);
-/** Shots that need no ammo: Soul Blade, Shark Wave. */
-export const NO_AMMO_SHOTS = new Set([11101004, 15111007]);
+/** A bowman's attacks are all shots, whatever their data says, except Power Knock-Back's swing. Snipe looks like a buff. */
+const isBowman = (id) => Math.floor(id / 1000000) % 10 === 3;
+const BOW_SWINGS = new Set([3101003, 3201003]);
+const SNIPE = 3221007;
+/** Shots that need no ammo: Soul Blade, Shark Wave, Taunt, Shadow Meso, Vampire. */
+export const NO_AMMO_SHOTS = new Set([11101004, 15111007, 4121003, 4221003, 4111004, 14101006]);
 /**
  * Weapons (category % 100) a skill needs where its data doesn't say: 30/40 swords, 31/41 axes, 32/42 blunt, 43 spear,
- * 44 polearm, 37 wand, 38 staff.
+ * 44 polearm, 37 wand, 38 staff, 47 claw.
  */
 const SKILL_WEAPONS = {
   1101004: [30, 40], 1101005: [31, 41], 1201004: [30, 40], 1201005: [32, 42], 1301004: [43], 1301005: [44], 11101001: [30, 40],
@@ -39,7 +44,7 @@ const SKILL_WEAPONS = {
   1121006: [30, 40, 31, 41], 1121008: [30, 40, 31, 41], 11111004: [30, 40], 1221007: [30, 40, 32, 42], 1211002: [30, 40, 32, 42],
   1321003: [43, 44], 1311005: [43, 44], 1311006: [43, 44],
   1211003: [30, 40], 1211005: [30, 40], 1211007: [30, 40], 1221003: [30, 40], 11101002: [30, 40], 11111007: [30, 40],
-  1211004: [32, 42], 1211006: [32, 42], 1211008: [32, 42], 1221004: [32, 42],
+  1211004: [32, 42], 1211006: [32, 42], 1211008: [32, 42], 1221004: [32, 42], 14101006: [47],
   2111005: [37, 38], 2211005: [37, 38], 12101004: [37, 38], 12101005: [37, 38],
 };
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
@@ -136,7 +141,7 @@ export class SkillBook {
     if (!n || !ld || PROCS.has(id)) return 'passive';
     if (MELEE_SKILLS.has(id)) return 'melee';
     if (MAGIC_SKILLS.has(id)) return 'magic';
-    if (NO_AMMO_SHOTS.has(id)) return 'ranged';
+    if (NO_AMMO_SHOTS.has(id) || id === SNIPE) return 'ranged';
     // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
     // an attack has power (damage, magic, a projectile's x...); one that also lasts a while (a stun, a poison, a
@@ -145,6 +150,7 @@ export class SkillBook {
     const power = ld.damage || ld.mad || ld.fixdamage || ld.attackCount || ld.bulletCount || (ld.x && n.ball);
     if (power && (targets || !ld.time) && !ld.hp && !n.summon && !NOT_ATTACKS.has(id)) {
       if (ld.mad) return 'magic';
+      if (isBowman(id)) return BOW_SWINGS.has(id) ? 'melee' : 'ranged';
       const cat = weaponCat(weaponId);
       if (n.weapon === 47 || ld.bulletCount || (n.ball && RANGED_WEAPONS.has(cat))) return 'ranged';
       return 'melee';
@@ -153,14 +159,21 @@ export class SkillBook {
     return 'passive';
   }
 
-  /** Weapon requirement from Skill.wz (`weapon`: weapon category % 100, e.g. 47 claw, 33 dagger). */
+  /**
+   * Weapon requirement from Skill.wz (`weapon`: weapon category % 100, e.g. 47 claw, 33 dagger). A bowman's attacks
+   * without one take a bow or a crossbow.
+   */
   weaponOk(id, weaponId) {
     const w = this.node(id)?.weapon, cat = weaponId ? Math.floor(weaponId / 10000) % 100 : 0;
     if (SKILL_WEAPONS[id]) return SKILL_WEAPONS[id].includes(cat);
+    if (!w && isBowman(id) && ['ranged', 'melee'].includes(this.kind(id, weaponId))) return cat === 45 || cat === 46;
     return !w || cat === w;
   }
 
-  cooling(id) { return Math.max(0, (this.cooldowns[id] || 0) - Date.now()); }
+  /** A skill stays unusable from the server's cooldown until the server says it is over, whatever the clock says. */
+  cooling(id) { return id in this.cooldowns; }
+  /** Milliseconds left on a cooldown by the clock, for its countdown. */
+  cooldownLeft(id) { return id in this.cooldowns ? Math.max(0, this.cooldowns[id] - Date.now()) : 0; }
 
   /** Body action for a skill: Skill.wz `action` (random pick), else null (use the weapon's default). */
   action(id) {
@@ -185,14 +198,15 @@ export class SkillBook {
  */
 /**
  * Your critical chance and extra damage (percentage points on top of the skill's own damage%), v83 style:
- * Critical Shot with a bow or crossbow, Critical Throw with a claw (and their Cygnus copies), plus Sharp Eyes
+ * Critical Shot with a bow or crossbow, Critical Throw with a claw (their Cygnus copies), Critical Punch with a knuckle, plus Sharp Eyes
  * from yourself or a party member. A critical hit does (skill damage% + extra)% instead of the skill's damage%.
  */
-const CRIT_SKILLS = { 145: [3000001, 13000000], 146: [3000001, 13000000], 147: [4100001, 14100001] };
-export function critical(game, weaponCat) {
+const CRIT_SKILLS = { 145: [3000001, 13000000], 146: [3000001, 13000000], 147: [4100001, 14100001], 148: [15110000] };
+export function critical(game, weaponCat, shot = true) {
   const sb = game.skills;
   let rate = 0, dmg = 0;
-  for (const id of CRIT_SKILLS[weaponCat] || []) {
+  // Critical Shot and Critical Throw only count for a shot; Critical Punch for any knuckle blow
+  for (const id of shot || weaponCat === 148 ? CRIT_SKILLS[weaponCat] || [] : []) {
     const ld = sb.owns(id) && sb.levelData(id);
     if (ld) { rate += ld.prop || 0; dmg += (ld.damage || 100) - 100; }
   }
@@ -206,19 +220,19 @@ export function skillMaxDamage(game, id, lv, kind) {
   const ld = id ? game.skills.levelData(id, lv) : null;
   if (ld?.fixdamage) return ld.fixdamage;
   if (kind === 'magic') {
-    const tm = Math.min(2000, s.int + game.equipStat('matk'));
+    const int = game.totalStat('int'), tm = Math.min(2000, int + game.equipStat('matk'));
     // Heal on the undead: (4.8 x INT + 4 x LUK) x magic / 1000, scaled by its heal %
     if (id === 2301002) {
-      const int = s.int + game.equipStat('int'), luk = s.luk + game.equipStat('luk');
+      const luk = game.totalStat('luk');
       return Math.max(1, Math.floor((((int * 4.8 + luk * 4) * tm) / 1000) * (ld?.hp || 100) / 100));
     }
-    const base = ((tm * tm) / 1000 + tm) / 30 + s.int / 200;
+    const base = ((tm * tm) / 1000 + tm) / 30 + int / 200;
     return Math.max(1, Math.floor(base * (ld?.mad || 1)));
   }
-  if (id === 4001344 || id === 14001004 || id === 4121007) { // Lucky Seven / Triple Throw
-    return Math.max(1, Math.floor(s.luk * 5 * Math.ceil(game.watk() / 100) * (ld?.damage || 100) / 100));
+  if ([4001344, 14001004, 4121007, 14111005].includes(id)) { // Lucky Seven / Triple Throw
+    return Math.max(1, Math.floor(game.totalStat('luk') * 5 * Math.ceil(game.watk() / 100) * (ld?.damage || 100) / 100));
   }
   // Dragon Roar: STR at 4.0 plus DEX, whatever the spear or polearm
-  const base = id === 1311006 ? Math.ceil(((4 * s.str + s.dex) / 100) * game.watk()) : game.maxDamage(game.player?.attack);
+  const base = id === 1311006 ? Math.ceil(((4 * game.totalStat('str') + game.totalStat('dex')) / 100) * game.watk()) : game.maxDamage(game.player?.attack);
   return Math.max(1, Math.floor((base * (ld?.damage || 100)) / 100));
 }

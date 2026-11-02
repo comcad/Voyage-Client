@@ -137,15 +137,28 @@ class RemotePlayer {
     this.action = look.standAction(); this.frame = 0; this.frameT = 0;
     this.path = null; this.attack = null; this.chat = null;
   }
+  /**
+   * Their movement queues behind what is still playing (as the client does); with more than 1.1s queued it plays 10%
+   * faster, and with more than 5s it jumps to the end.
+   */
   applyMovement(moves) {
     const steps = moves.filter((m) => m.x !== undefined || m.stance !== undefined);
-    if (steps.length) this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
+    if (!steps.length) return;
+    if (this.path) this.path.steps.push(...steps);
+    else this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
+    const left = this.path.steps.slice(this.path.i).reduce((t, m) => t + (m.duration || 0), 0);
+    if (left > 5000) {
+      const end = [...this.path.steps].reverse().find((m) => m.x !== undefined);
+      if (end) { this.x = end.x; this.y = end.y; }
+      this.path = null;
+    }
   }
   update(dt) {
     if (this.path) {
       const p = this.path, s = p.steps[p.i];
       const dur = Math.max(1, s.duration || 60) / 1000;
-      p.t += dt;
+      const queued = p.steps.slice(p.i).reduce((t, m) => t + (m.duration || 0), 0) - p.t * 1000;
+      p.t += queued > 1100 ? dt * 1.1 : dt;
       const k = Math.min(1, p.t / dur);
       if (s.x !== undefined) { this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k; }
       if (s.stance !== undefined) {
@@ -189,11 +202,16 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
 /**
- * Skills that can only be used standing on the ground: Dragon Roar, Assassinate, Boomerang Step, Rush, Demolition,
- * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh and the Aran
- * swings and charges.
+ * Power Stance (Hero, Paladin, Dark Knight) and Freeze Standing (Aran): a hit that would throw you back doesn't at the
+ * buff's % chance (its prop), and the skill's effect plays; not on maps that forbid movement skills.
  */
-const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
+const STANCES = { 112: 1121002, 122: 1221002, 132: 1321002, 2112: 21121003 };
+/**
+ * Skills that can only be used standing on the ground: Dragon Roar, Assassinate, Boomerang Step, Rush, Demolition,
+ * Shockwave, Backspin Blow, Aerial Strike, Dragon Strike, Snatch, Barrage, Bamboo Thrust, Rage of Pharaoh, Smokescreen and
+ * the Aran swings and charges.
+ */
+const GROUND_ONLY = new Set([1311006, 4221001, 4221007, 4221006, 4211006, 1121006, 1221007, 1321003, 5121004, 5111006, 15111003, 5101002,
   5221003, 5121001, 5121005, 5121007, 15111004, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020,
   21000002, 21100001, 21110007, 21110008, 21120009, 21120010, 21100002, 20000014, 20000015]);
 /** Dragon Roar: only with at least half your HP (it costs x% of your max HP). */
@@ -231,6 +249,161 @@ const NO_CLOSE_SWING = new Set([3100001, 3110001, 3111004, 3200001, 3210001, 321
   5211004, 5211005, 5221007, 5221008, 11101004, 13101002, 13101005, 13111000, 14101006, 15111006, 15111007, 21100004,
   21110004, 21120006]);
 /**
+ * Shots that fly on through every monster in their way, with how far above and below their line they reach: Iron
+ * Arrow, Piercing Arrow, Dragon's Breath, Wind Piercing, Avenger and Taunt.
+ */
+const PIERCING_SHOTS = new Map([[3201005, 10], [3221001, 20], [3121003, 20], [3221003, 20], [13111006, 10], [4111005, 36],
+  [14111002, 36], [4121003, 10], [4221003, 10]]);
+/** Taunt reaches 300px, whatever the weapon. */
+const TAUNTS = new Set([4121003, 4221003]), TAUNT_RANGE = 300;
+/** Arrow Rain and Arrow Eruption: no arrow flies at them, the monsters in the skill's box are struck 400ms after the shot. */
+const RAIN_SHOTS = new Set([3111004, 3211004, 13111000]), RAIN_DELAY = 400;
+/**
+ * Arrow Bomb, Inferno and Blizzard: one arrow to the first monster in the way, then a blast in the skill's box around
+ * where it struck catches the others: 50ms later for Arrow Bomb, 120ms and another 30ms each for the others.
+ */
+const BLAST_SHOTS = new Map([[3101005, () => 50], [3111003, (i) => 90 + i * 30], [3211003, (i) => 90 + i * 30]]);
+/**
+ * Shots that keep to their box and the nearest monsters in it: Spark, Energy Orb, Shark Wave, Soul Blade,
+ * Vampire, Storm Break, the Aran combos and the Outlaw / Corsair area shots.
+ */
+const BOX_SHOTS = new Set([15111006, 5121002, 15111007, 11101004, 14101006, 13101005, 21100004, 21110004,
+  21120006, 5201001, 5211004, 5211005, 5221007, 5221008]);
+/**
+ * Hurricane fires while its key is held, once 101ms have passed on the game's 30ms clock (so every 120ms); Piercing
+ * Arrow charges up to 1s and fires when let go.
+ */
+const HURRICANES = new Set([3121004, 13111002]), HURRICANE_GAP = 101, TICK = 30, PIERCING_ARROW = 3221001, PIERCE_HOLD = 1000;
+const DRAGONS_BREATH = new Set([3121003, 3221003]), POWER_KNOCKBACK = new Set([3101003, 3201003]);
+const MORTAL_BLOWS = [3110001, 3210001], SNIPE = 3221007, SOUL_ARROWS = [3101004, 3201004, 13101003];
+const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have used up all of your arrows.',
+  147: 'You have used up all of your throwing-stars.', 149: 'You do not have enough bullets to use this skill.' };
+/** Inferno and Blizzard count a weak or strong monster's element at only x% of the usual. */
+const PART_ELEMENT = new Set([3111003, 3211003]), BLIZZARD = 3211003;
+/** Skills whose damage follows their own rules, kept to the plain roll: Combo Tempest, Bamboo Rain / Thrust and Rage of Pharaoh. */
+const OWN_DAMAGE = new Set([21120006, 1009, 10001009, 20001009, 20011009, 1020,
+  10001020, 20001020, 20011020]);
+/** Blows that go through a monster's defence: Sacrifice, Shadow Meso, Assaulter, Demolition. */
+const IGNORE_DEFENCE = new Set([1311005, 4111004, 4211002, 5121004]);
+const SHADOW_MESO = 4111004, NINJA_STORM = 4121008;
+const LUCKY_SEVENS = new Set([4001344, 4121007, 14001004, 14111005]), BARRAGES = new Set([5121007, 15111004]);
+/** Rush and Blast count as a swing three times in five; Brandish's second blow is a swing. */
+const RUSHES = new Set([1121006, 1221007, 1321003, 1221009]), BRANDISHES = new Set([1121008, 11111004]);
+/** Panic and Coma spend the Combo orbs, and their bonus per orb climbs faster. */
+const FINISHERS = new Set([1111003, 1111004, 1111005, 1111006, 11111002, 11111003]);
+/**
+ * Combo Attack's orbs: orb n sits at n x 72 degrees on a 40px ring that turns round you, drawn with Combo Attack's
+ * state/((n+1)/2) art (Advanced Combo's from the sixth); orbs 6-10 take the places of 1-5. A new orb grows in from
+ * 300% at a quarter alpha over 300ms. Panic and Coma need an orb, Enrage nine.
+ */
+const COMBO_MASK = 0x20000000000000n, ORB_RADIUS = 40, ORB_TURN_MS = 2000, ENRAGE = 1121010;
+/**
+ * Rush: when it strikes something you dash ahead along the floor, 30ms a step: three steps of lt/8 px (31 at 250),
+ * then six slowing by a fifth each; the monsters struck are thrown to 250-269px + 35px ahead of where you started.
+ * It can't be used again for 1.77s, nor where the map forbids movement skills.
+ */
+const RUSH_DASH = new Set([1121006, 1221007, 1321003]), RUSH_LOCK = 1770, DASH_TICK = 30;
+/** Skills a map that forbids movement skills (fieldLimit 0x2) refuses: Rush, Assaulter, Assassinate, Ninja Storm, the Brawler / Thunder Breaker dashes, Snatch and the Aran's. */
+const MOVE_LIMITED = new Set([1121006, 1221007, 1321003, 4211002, 4221001, 4121008, 5101002, 5101004, 15101003, 5121005,
+  21100002, 21110003, 21110006]);
+/**
+ * Final Attack: a skill's finalAttack data lists which Final Attack skills can follow it and with which weapon types.
+ * One learned (Dawn Warrior's and Wind Archer's need their buff on) goes off at its prop chance a third of the way from
+ * the blow to the end of the pose, if you still hold that kind of weapon, in the weapon's final pose (a bow's shot 65px out).
+ */
+const FINAL_POSES = { 1: ['swingOF', 'stabOF'], 2: ['swingPF', 'stabTF'], 3: ['shootF'], 5: ['swingTF', 'stabOF'] };
+const BUFFED_FINALS = new Set([11101002, 13101002]);
+/** White Knight / Paladin / Dawn Warrior charges and their element: the charge's damage %, then its element at z%. */
+const CHARGES = { 1211003: 'F', 1211004: 'F', 1211005: 'I', 1211006: 'I', 1211007: 'L', 1211008: 'L', 1221003: 'H', 1221004: 'H',
+  11111007: 'H' };
+const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 1221011;
+/**
+ * Skills that shake the screen when they land (with the SHAKE UP option on): Shout by 400/15 px, easing by 15% each
+ * 30ms step, for 1.5s at most; Dragon Roar, Super Dragon Roar, Bamboo Rain and Rage of Pharaoh by 400/25, easing by 8%,
+ * for 2s. Another player's shakes you less the farther they are (400 less the distance, up to 400px).
+ */
+const SHOUT = 1111008;
+const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
+const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
+/** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
+const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
+const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
+/** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
+/** How much movement (ms) gathers before it goes to the server, as the client does. */
+const MOVE_FLUSH = 1000;
+const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
+/** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
+const CRUSHERS = new Set([1311001, 1311002]);
+const HEROS_WILLS = new Set([1121011, 1221012, 1321010, 2121008, 2221008, 2321009, 3121009, 3221008, 4121009, 4221008, 5121008,
+  21121008]);
+const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
+/** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
+const SHADOW_PARTNERS = [4111002, 14111000], SP_MASK = 0x400000000000000n, NO_PARTNER = new Set([4121003, 14101006]);
+/**
+ * A weapon's damage, as { main, mult, sec (stats added), div }: (main stat x mult + sec) x attack / div. A bow's or
+ * crossbow's swing is DEX x 3.4 + STR over 150, a claw's LUK + STR + DEX over 150, a gun's DEX + STR over 200 (1.8 x
+ * DEX for Somersault Kick / Double Shot); lying down any other weapon jabs for STR + DEX over 200. Axes, blunt weapons,
+ * wands and staves hit harder swung, spears stabbed and polearms swung.
+ */
+function weaponDamage(cat, shot, pose, skillId, job, asSwing = false) {
+  const swing = asSwing || /^swing[OTP]/.test(pose || '');
+  if (!shot && (cat === 45 || cat === 46)) return { main: 'dex', mult: 3.4, sec: ['str'], div: 150 };
+  if (!shot && cat === 47 && skillId !== 4221001 && skillId !== 4121008 && skillId !== 14101006 && skillId !== 14111006) return { main: 'luk', mult: 1, sec: ['str', 'dex'], div: 150 };
+  if (!shot && cat === 49 && ![5201002, 5221003, 5221007, 5221008].includes(skillId) && pose !== 'fireburner' && pose !== 'coolingeffect') {
+    return pose === 'somersault' || pose === 'straight' ? { main: 'dex', mult: 1.8, sec: ['str'], div: 100 } : { main: 'dex', mult: 1, sec: ['str'], div: 200 };
+  }
+  if (pose === 'proneStab') return { main: 'str', mult: 1, sec: ['dex'], div: 200 };
+  const str = (mult) => ({ main: 'str', mult, sec: ['dex'], div: 100 });
+  switch (cat) {
+    case 30: return str(4.0);
+    case 33: return Math.floor((job % 1000) / 100) === 4 ? { main: 'luk', mult: 3.6, sec: ['str', 'dex'], div: 100 } : str(4.0);
+    case 31: case 32: case 37: case 38: return str(swing ? 4.4 : 3.2);
+    case 40: return str(4.6);
+    case 41: case 42: return str(swing ? 4.8 : 3.4);
+    case 43: case 44: return str(skillId === DRAGON_ROAR ? 4.0 : (cat === 43) === swing ? 3.0 : 5.0);
+    case 45: return { main: 'dex', mult: 3.4, sec: ['str'], div: 100 };
+    case 46: case 49: return { main: 'dex', mult: 3.6, sec: ['str'], div: 100 };
+    case 47: return LUCKY_SEVENS.has(skillId) ? { main: 'luk', mult: 5, sec: [], div: 100, mastery: 0.5 } : { main: 'luk', mult: 3.6, sec: ['str', 'dex'], div: 100 };
+    case 48: return str(4.8);
+    default: return null;
+  }
+}
+/**
+ * The mastery skills for a weapon, used shooting (shot) or up close: [explorer, Cygnus...] lists where the first
+ * learned counts, `plus` ones added (Beholder), `over` ones that replace them (Bow Expert, Marksman Boost, High Mastery).
+ */
+function masterySkills(cat, shot, skillId, job) {
+  const close = !shot;
+  switch (cat) {
+    case 30: case 40: return close || skillId === 11101004 ? { first: [1100000, 1200000, 11100000] } : null;
+    case 31: case 41: return close ? { first: [1100001] } : null;
+    case 32: case 42: return close ? { first: [1200001] } : null;
+    case 33: return close ? { first: [4200000] } : null;
+    case 43: return close ? { first: [1300000], plus: [1321007] } : null;
+    case 44: if (!close && ![21100004, 21110004, 21120006].includes(skillId)) return null;
+      return Math.floor(job / 100) === 21 || job === 2000 ? { first: [21100000], over: [21120001] } : { first: [1300001], plus: [1321007] };
+    case 45: return shot ? { first: [3100000, 13100000], over: [3120005, 13110003] } : null;
+    case 46: return shot ? { first: [3200000], over: [3220004] } : null;
+    case 47: return shot || skillId === 14111006 ? { first: [4100000, 14100000] } : null;
+    case 48: return close || skillId === 5121002 || skillId === 15111007 ? { first: [5100001, 15100001] } : null;
+    case 49: return shot || skillId === 5221003 ? { first: [5200000] } : null;
+    default: return null;
+  }
+}
+/** A shot's arrow takes 1.5ms per pixel. */
+const flightMs = (dx) => Math.abs(dx) * 1.5;
+/**
+ * Damage by a monster's place along a shot (first, second...): Iron Arrow loses 10% at each, Piercing Arrow gains 20%,
+ * Energy Orb loses 30%; Arrow Bomb does its x% on all of them.
+ */
+const PIERCE_SCALE = { 3201005: 0.9, 3221001: 1.2, 5121002: 0.7 }, ARROW_BOMB = 3101005;
+/** Time between one shot's arrows: Strafe 60ms, throwing stars 120ms, Double Shot (gun) and Burst Fire 240ms. */
+function arrowGap(skillId, ammoId) {
+  if (Math.floor(ammoId / 10000) === 207 || Math.floor(ammoId / 1000) === 5021 || skillId === 5221007) return 120;
+  if ([3111006, 3211006, 13111001].includes(skillId)) return 60;
+  return skillId === 5001003 || skillId === 5210000 ? 240 : 0;
+}
+/**
  * How long after the first monster each of the others is hit (i: its place in the order), in ms. A melee attack
  * goes 70ms apart up to 280ms (Band of Thieves: the rest all at 280ms); a spell without a projectile 50ms apart, or
  * all at once for Meteor Shower, Blizzard and Genesis. Another player's spell lands all at once, but Thunder Bolt
@@ -239,7 +412,10 @@ const NO_CLOSE_SWING = new Set([3100001, 3110001, 3111004, 3200001, 3210001, 321
 const BAND_OF_THIEVES = 4211004, SPARK = 15111006;
 const MAGIC_AT_ONCE = new Set([2121007, 2221007, 2321008, 12111003]);
 const REMOTE_MAGIC_WAVE = new Set([2201005, 2301002]);
+/** Meso Explosion's lines shown as up to five numbers: line i adds to number i % 5. */
+const foldLines = (dmg) => dmg.reduce((o, d, i) => { o[i % 5] = (o[i % 5] || 0) + d; return o; }, []);
 function hitWave(i, kind, skillId, remote = false) {
+  if (skillId === MESO_EXPLOSION) return 0;   // every monster at once
   if (skillId === CHAIN_LIGHTNING && !remote) return i * 100;
   if (kind === 'magic') return (remote ? REMOTE_MAGIC_WAVE.has(skillId) : !MAGIC_AT_ONCE.has(skillId)) ? i * 50 : 0;
   if (skillId === BAND_OF_THIEVES && !remote) return i ? 280 : 0;
@@ -338,7 +514,7 @@ export class Game {
     this.boards = new ShopBoards(this);
     this.queue = []; this.loading = false;
     this.fps = 0; this._frames = 0; this._fpsT = 0;
-    this.moveBuf = []; this.moveT = 0; this.flushT = 0;
+    this.moveBuf = []; this.moveTotal = 0;
     this.invincible = 0; this.portalCooldown = 0;
     this.stats = null; this.inventory = null; this.meso = 0;
     this.showMinimap = true;
@@ -745,6 +921,7 @@ export class Game {
   }
 
   useItemById(id) {
+    if (this.hidden()) return;
     const t = Math.floor(id / 1000000);
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
@@ -808,13 +985,22 @@ export class Game {
   }
 
   weaponId() { return this.inventory?.equipped[-11]?.id || 0; }
+  weaponOf(who) { return who === this.player ? this.weaponId() : who?.look?.weaponId?.() || 0; }
+  /** Your Dark Sight buff, if it is on. */
+  darkSight() { const now = Date.now(); return this.buffs?.find((b) => DARK_SIGHTS.includes(b.source) && b.until > now) || null; }
+  /** In Dark Sight or Wind Walk: monsters don't touch you, you don't regenerate or pick up, and you're drawn see-through. */
+  hidden() { const now = Date.now(); return !!this.buffs?.some((b) => (DARK_SIGHTS.includes(b.source) || b.source === WIND_WALK) && b.until > now); }
+  /** What spaces an attacker's damage lines: their weapon and their attack's speed scale. */
+  lineTiming(who) { return [this.weaponOf(who), who === this.player ? this.attackScale() : who?.attackScale || 1]; }
   equipStat(key) { let v = 0; for (const it of Object.values(this.inventory?.equipped || {})) v += it[key] || 0; return v; }
   /**
    * Your Speed and Jump as fractions of the base walk / jump: 100 plus your equipment's plus the strongest buff
    * (Haste, Nimble Feet, a speed potion...), held to 80-140 and 80-123 as the client does (openms, docs/skills.md).
    */
   moveStats() {
-    const now = Date.now(), buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b.until > now && b[k]).map((b) => b[k]));
+    const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
+    // the last speed buff given sets it, a slowing one too (Dark Sight's -30); jump takes the strongest
+    const buff = (k) => (k === 'speed' ? active.findLast((b) => b.speed)?.speed || 0 : Math.max(0, ...active.filter((b) => b[k]).map((b) => b[k])));
     const pct = (k, max) => Math.max(80, Math.min(max, 100 + this.equipStat(k) + buff(k))) / 100;
     const slow = (this.diseases || []).find((d) => d.skill === SLOW && d.until > now);   // Slow: down to its x%
     return { speed: slow ? Math.min(pct('speed', 140), (slow.x || 80) / 100) : pct('speed', 140), jump: pct('jump', 123) };
@@ -859,6 +1045,7 @@ export class Game {
     if (this.net) this.net.selfName = info.stats?.name;   // the merchant room tells owner from visitor by name
     this.skills = new SkillBook(this.assets);
     await this.skills.load(info.stats.job, info.skills, info.cooldowns);
+    this.standardPdd(0, 1);   // load the standard defence table before the first blow
     this.rocks = { regular: (info.rocks || []).slice(0, 5), vip: (info.rocks || []).slice(5, 15) };   // Teleport Rock maps
     this.keyBar = this.statusBar; // the quick slots (render() rebuilds them from the keymap)
     const later = (fn) => (...a) => (this.loading ? this.queue.push(() => fn(...a)) : fn(...a));
@@ -1005,6 +1192,8 @@ export class Game {
         for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
       }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
+      // damage the server deals by itself (Heaven's Hammer...): its number over the monster
+      mobDamaged: later((oid, dmg) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.vfx?.damage(m, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red'); }),
       spawnMob: later((m) => this.spawnLife('Mob', m, false)),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
@@ -1018,7 +1207,16 @@ export class Game {
       disease: later((d) => this.onDisease(d)),
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
       foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
-      foreignCancel: later((id, m1, m2) => { const rp = this.others.get(id); if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2))); }),
+      foreignCancel: later((id, m1, m2) => {
+        const rp = this.others.get(id);
+        if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
+        if (rp && BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
+        if (rp && (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK)) rp.hidden = false;
+        if (rp && BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
+      }),
+      foreignPartner: later((id) => { const rp = this.others.get(id); if (rp) rp.partner = true; }),
+      foreignHidden: later((id) => { const rp = this.others.get(id); if (rp) rp.hidden = true; }),
+      foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.setState(d.state); }),
@@ -1026,7 +1224,7 @@ export class Game {
       moveMob: later((oid, start, moves, act, skill, level) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending || e.controlled) return;
-        e.applyMovement(start, moves);
+        e.applyMovement(start, moves, act);
         // activity (12 + attack) * 2 + facing: its controller made it attack
         if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
@@ -1043,7 +1241,7 @@ export class Game {
       spawnNpc: later((n) => this.spawnLife('Npc', n, false)),
       removeNpc: later((oid) => this.killLife(oid, 0)),
       drop: later((d) => this.spawnDrop(d)),
-      removeDrop: later((oid, anim, chr, petSlot) => this.removeDrop(oid, anim, chr, petSlot)),
+      removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
       inventory: (ops) => this.onInventory(ops),
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s)); },
@@ -1067,10 +1265,11 @@ export class Game {
         this.skillWin?.render(); this.keyBar.render();
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
-      cooldown: (id, sec) => { this.skills.cooldowns[id] = sec ? Date.now() + sec * 1000 : 0; },
+      cooldown: (id, sec) => { if (sec) this.skills.cooldowns[id] = Date.now() + sec * 1000; else delete this.skills.cooldowns[id]; },
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
-        this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump });
+        this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
+          watk: b.watk, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
@@ -1202,6 +1401,8 @@ export class Game {
       if (!current()) return;
       this.map = map;
       this.charging = null;   // a skill being charged doesn't carry over
+      this.keydown = null;
+      this.rush = null;
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
@@ -1236,7 +1437,7 @@ export class Game {
     p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.ladder = null; p.seat = null;
     p.fh = this.map.fh.below(p.x, p.y, 400);
     if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
-    this.moveBuf = []; this.lastSent = null;
+    this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null;
   }
 
   // ------------------------------------------------------------------ server entities
@@ -1256,7 +1457,7 @@ export class Game {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
       // one we control tells the server each path it plans, as it starts on it
-      e.onPath = (m, start, moves) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves); };
+      e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity); };
     }
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`); }
     this.lifeByOid.set(d.oid, e);
@@ -1292,7 +1493,8 @@ export class Game {
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
-    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0;
+    this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
+    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
@@ -1320,15 +1522,31 @@ export class Game {
     const rp = this.others.get(a.id);
     let delay = 0;
     if (rp) {
-      rp.attack = this.actionName(a.stance); rp.facingRight = !(a.direction & 0x80);
+      rp.attack = this.actionName(a.action); rp.facingRight = !a.facingLeft;
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
-      rp.attackScale = this.attackScale(a.speed >= 2 && a.speed <= 9 ? a.speed : 6);
-      if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic'); else this.playWeaponSound(rp);
+      rp.attackScale = this.attackScale(Math.max(2, Math.min(10, a.speed ?? 6)));
+      if (a.skill === BOOMERANG_STEP) {   // unseen for the pose
+        let len = 0; for (let i = 0; i < rp.look.frameCount(rp.attack); i++) len += rp.look.delay(rp.attack, i);
+        rp.boomerangUntil = performance.now() + len * rp.attackScale;
+      }
+      if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic', 'effect', rp.attackScale); else this.playWeaponSound(rp);
+      this.remoteAfterimage(rp, a.skill, a.kind);
       delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
+      if (SHAKERS.has(a.skill)) this.startShake(a.skill, 400 - Math.min(400, Math.hypot(rp.x - this.player.x, rp.y - this.player.y)), delay);
     }
     // only a spell with a ball is shot; one without lands where it is
     const ball = a.kind === 'magic' && a.skill && this.skills ? this.skills.ensure(a.skill).then((n) => !!n?.ball) : Promise.resolve(false);
-    ball.then((hasBall) => {
+    const plan = rp && a.kind === 'ranged' && !BOX_SHOTS.has(a.skill) && this.skills
+      ? (a.skill ? this.skills.ensure(a.skill) : Promise.resolve()).then(() => {
+        const ld = a.skill ? this.skills.levelData(a.skill, a.skillLevel) : null;
+        const mobs = a.targets.map((t) => this.lifeByOid.get(t.oid)).filter((e) => e && !e.pending);
+        const shot = this.shotPlan(rp, a.skill, a.skillLevel, ld, ld?.range || 400, 0, mobs);
+        shot.partner = !!rp.partner && !NO_PARTNER.has(a.skill);
+        this.shotFx(shot, rp, a.skill, ld, a.projectile, delay);
+        return shot;
+      })
+      : Promise.resolve(null);
+    Promise.all([ball, plan]).then(([hasBall, plan]) => {
       const shoots = rp && (a.kind === 'ranged' || hasBall);
       let order = a.targets;
       // a swing's hits go through the monsters from one end, starting on the side where they lie
@@ -1337,23 +1555,28 @@ export class Game {
         const dir = order.reduce((sum, t) => sum + x(t) - rp.x, 0) > 0 ? 1 : -1;
         order = [...order].sort((p, q) => (x(p) - x(q)) * dir);
       }
+      const looks = a.skill === BAND_OF_THIEVES ? this.thiefLooks(a.skill, order.length) : [];
       for (const [i, t] of order.entries()) {
         const e = this.lifeByOid.get(t.oid);
         if (!e || e.pending) continue;
         e.pendingHits = (e.pendingHits || 0) + 1;
         const land = () => {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
-          this.damageNumbers(e, t.dmg, false, a.skill, t.crit);
-          this.playHitEffect(a.skill, e, rp, t.dmg);
-          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1), () => this.finishKill(e)); else this.releaseDrops(e); }
+          this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
+          this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null);
+          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
         };
-        if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
+        const planned = plan?.targets.find((p) => p.mob === e);
+        if (planned) this.after(delay + planned.delay, land);
+        else if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
       }
     });
   }
 
   onPlayerDamaged(d) {
     const rp = this.others.get(d.id);
+    // Shadow Shifter dodged it: its art, a MISS
+    if (rp && d.damage === -1 && d.fake) { this.playSkillEffect(d.fake, rp, false, 'special'); setExpression(rp, 2, HIT_FACE_TIME); this.vfx?.damage(rp, [0], 'violet'); return; }
     if (rp) this.vfx?.damage(rp, [d.damage], 'violet');
     if (rp && d.damage > 0) setExpression(rp, 1, HIT_FACE_TIME);
     if (rp && d.from >= 0 && d.mobId) sfx.play(`Mob/${pad(d.mobId, 7)}/CharDam${d.from + 1}`);
@@ -1393,9 +1616,10 @@ export class Game {
       spin: thrown, angle: 0, speed, flight });
   }
 
-  removeDrop(oid, anim, chr, petSlot = -1) {
+  removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
     const d = this.drops.get(oid);
     if (!d) return;
+    if (anim === 4) { this.explodeMeso(oid, delay); return; }
     const pet = anim === 5 && this.pets.get(`${chr}:${petSlot}`);
     if (pet) { if (chr === this.player.id) sfx.play('Game/PickUpItem'); this.pickUp(d, pet); return; }
     if (anim === 2) {
@@ -1464,9 +1688,10 @@ export class Game {
     const cat = Math.floor((weapon?.id || 0) / 10000) % 100, thiefDagger = cat === 33 && Math.floor(s.job / 100) === 4;
     const mult = thiefDagger ? 3.6 : weaponMultiplier(weapon?.id, pose);   // a thief's dagger counts for less
     if (!mult) return 1;
-    let main = s.str, sec = s.dex;
-    if (cat === 45 || cat === 46 || cat === 49) { main = s.dex; sec = s.str; }
-    else if (cat === 47 || thiefDagger) { main = s.luk; sec = s.dex + s.str; }
+    const str = this.totalStat('str'), dex = this.totalStat('dex'), luk = this.totalStat('luk');   // equipment counts
+    let main = str, sec = dex;
+    if (cat === 45 || cat === 46 || cat === 49) { main = dex; sec = str; }
+    else if (cat === 47 || thiefDagger) { main = luk; sec = dex + str; }
     return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
   }
 
@@ -1789,6 +2014,7 @@ export class Game {
     this.updateDrops(dt);
     this.updateFx(dt);
     this.runTimers(dt);
+    if (this.shake) this.shakeStep(dt);
     this.loadAfterimage();
     this.handleHotkeys();
     if (this.net) { this.syncMovement(dt); this.puppetAggro(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
@@ -1809,16 +2035,24 @@ export class Game {
    */
   regen(dt) {
     const p = this.player, s = this.stats;
-    if (this.dead || !s) { this.hpRegenT = this.mpRegenT = 0; return; }
+    if (this.dead || !s || this.hidden()) { this.hpRegenT = this.mpRegenT = 0; return; }
     const still = p.fh && !p.attack && p.x === this.regenX && p.y === this.regenY && /^(stand|sit)/.test(p.action || '');
     this.regenX = p.x; this.regenY = p.y;
-    this.hpRegenT = still ? (this.hpRegenT || 0) + dt : 0;
+    // Endure: more HP and MP a tick, and HP on a ladder or rope every its time seconds
+    const endure = [4100002, 4200001].map((id) => this.skills?.level(id) && this.skills.levelData(id)).find(Boolean) || null;
+    const climbing = !!p.ladder && !!endure;
+    this.hpRegenT = still || climbing ? (this.hpRegenT || 0) + dt : 0;
     this.mpRegenT = (this.mpRegenT || 0) + dt;
     const k = Number(this.map?.info?.recovery) || 1;
     const maxHp = this.maxHpShown(), maxMp = this.maxMpShown();   // the server heals up to the same buffed max
     let hp = 0, mp = 0;
-    if (this.hpRegenT >= 10) { this.hpRegenT = 0; hp = s.hp < maxHp ? Math.min(Math.trunc(10 * k), maxHp - s.hp) : 0; }
-    if (this.mpRegenT >= 10) { this.mpRegenT = 0; mp = s.mp < maxMp ? Math.min(Math.trunc((3 + Math.floor(s.int / 10)) * k), 100, maxMp - s.mp) : 0; }
+    const mage = Math.floor(((s.job || 0) % 1000) / 100) === 2;
+    if (this.hpRegenT >= (climbing ? endure.time || 10 : 10)) { this.hpRegenT = 0; hp = s.hp < maxHp ? Math.min(Math.trunc((10 + (endure?.hp || 0)) * k), maxHp - s.hp) : 0; }
+    if (this.mpRegenT >= 10) {
+      this.mpRegenT = 0;
+      const tick = mage ? 3 + Math.floor(s.int / 10) : 3 + (endure?.mp || 0);   // INT counts for a magician only
+      mp = s.mp < maxMp ? Math.min(Math.trunc(tick * k), 100, maxMp - s.mp) : 0;
+    }
     if (!hp && !mp) return;
     this.net.healOverTime(hp, mp);
     if (hp) this.vfx?.damage(p, [hp], 'blue');
@@ -1882,6 +2116,8 @@ export class Game {
     if (this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
+      const hw = this.heldSkill();   // Hero's Will still goes
+      if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
       if (p.ladder) { this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
       if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
       else { fh.fall(p, dt, p.ignoreFh); if (p.fh) p.vx = 0; }
@@ -1891,9 +2127,15 @@ export class Game {
     const ms = this.moveStats(), WALK = PHYS.walk * ms.speed, JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
+    if (p.fh || p.ladder) this.fjUsed = false;   // Flash Jump comes back once you land
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
     if (p.regrabT > 0) p.regrabT -= dt;
 
+    // Rush's dash, on the 30ms clock
+    if (this.rush) {
+      this.rush.acc += dt * 1000;
+      while (this.rush && this.rush.acc >= DASH_TICK) { this.rush.acc -= DASH_TICK; this.rushStep(); }
+    }
     // charging (Monster Magnet, Big Bang) or winding up (Explosion): stand in its pose until the key is let go, or
     // the wind-up is over
     if (this.charging) {
@@ -1902,6 +2144,17 @@ export class Game {
       if (this.dead) this.charging = null;
       else if (c.prepare ? c.t < c.prepare : this.heldSkill() === c.id) { this.advanceFrame(c.pose, dt); return; }
       else this.releaseCharge();
+    }
+    // Hurricane / Piercing Arrow held: stand in its pose (falling if in the air) until the key is let go
+    if (this.keydown) {
+      const k = this.keydown;
+      k.t += dt;
+      if (this.heldSkill() === k.id && !this.dead && !this.hasDisease(STUN)) {
+        if (p.fh) p.vx = 0; else fh.fall(p, dt, p.ignoreFh);
+        this.advanceFrame(k.pose, dt);
+        if (HURRICANES.has(k.id)) this.hurricaneShot(k);
+        if (this.keydown) return;
+      } else this.endKeydown();
     }
 
     if (p.ladder) {
@@ -2030,6 +2283,7 @@ export class Game {
    */
   usePortal(portal) {
     const map = this.map;
+    this.flushMovement(true);   // the server and everyone else see where you were before you go
     sfx.play('Game/Portal');
     if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
       this.portalCooldown = 0.6;
@@ -2091,12 +2345,31 @@ export class Game {
 
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
-    if (this.hasDisease(SEAL)) return false;   // sealed by a monster: no skills until it wears off
+    if (this.hasDisease(SEAL) && !HEROS_WILLS.has(id)) return false;   // sealed by a monster: only Hero's Will
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
+    // in Dark Sight only Assassinate goes; with Vanish learned, anything but Dark Sight itself
+    if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
+    if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
+    if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
+    if (id === CHAKRA) return this.castChakra(id, lv);
+    // Assaulter needs a monster to go for and floor where it ends; Boomerang Step floor 150px ahead
+    const ahead = (dx) => this.floorNear(this.player.x + (this.player.facingRight ? dx : -dx), this.player.y, 80);
+    if (id === ASSAULTER && (!ahead(-(sb.levelData(id)?.lt?.[0] || 200))
+      || !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length)) return false;
+    if (id === BOOMERANG_STEP && (!ahead(-(sb.levelData(id)?.lt?.[0] || 300) / 2) || performance.now() < (this.boomerangLock || 0))) return false;
+    if (HURRICANES.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
+    // Panic and Coma need an orb, Enrage nine; without them the key does nothing
+    if (FINISHERS.has(id) && this.comboValue() < 2) return false;
+    if (id === ENRAGE && this.comboValue() < 10) return false;
+    // Charged Blow needs a charge on; Rush waits 1.77s after the last; movement skills not on maps that forbid them
+    if (id === CHARGED_BLOW && !this.activeCharge()) return false;
+    if (RUSH_DASH.has(id) && performance.now() < (this.rushLock || 0)) return false;
+    if (MOVE_LIMITED.has(id) && ((this.map?.info?.fieldLimit || 0) & 2)) return false;
+    if (id === SHADOW_MESO && this.meso < Math.trunc(((sb.levelData(id)?.moneyCon || 0) * (100 + (this.partner()?.y || 0))) / 100)) { this.notice("You don't have enough mesos to use this skill."); return false; }
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -2106,8 +2379,11 @@ export class Game {
   /**
    * Basic attack (skillId 0) or skill. kind: melee | ranged | magic | special.
    * Damage, MP cost and ammo are validated by Cosmic; the client picks targets and rolls damage.
+   * opts.held: a shot of a skill whose key is held (Hurricane, Piercing Arrow), fired from the pose it holds;
+   * opts.charge: how long Piercing Arrow was charged (ms).
    */
-  attack(skillId = 0, kind = null, { charge = 0, heal = false } = {}) {
+  attack(skillId = 0, kind = null, opts = {}) {
+    const { charge = 0, heal = false } = opts;
     const p = this.player, sb = this.skills, weapon = this.weaponId();
     const wcat = weapon ? Math.floor(weapon / 10000) : 0;
     // lying down, a plain attack is the prone stab: a short melee jab with any weapon
@@ -2117,57 +2393,123 @@ export class Game {
     if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.info?.swim) return false;
+    // a plain attack in Dark Sight (without Vanish) only brings you out of it
+    const ds = !skillId && !opts.final && this.darkSight();
+    if (ds && !sb.level(VANISH)) {
+      if (!ds.leaving) { ds.leaving = true; this.playSkillEffect(ds.source, p); this.net?.cancelBuff(ds.source); }
+      return false;
+    }
     // a bow, crossbow, claw or gun swings (a plain attack) instead of shooting when a monster is within its swing
-    // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot
-    let swing = null, reach = Infinity;
+    // (65px in front at most) - for most shooting skills too - or when it has nothing to shoot; a Mortal Blow can go
+    // off instead of that swing. Otherwise the shot starts from the front of the swing.
+    let swing = null, reach = Infinity, from = 0;
     if (kind === 'ranged') {
       const s = this.look.attackAction(), empty = this.net && !this.hasAmmo(skillId);
-      if (empty && skillId) this.notice(wcat === 147 ? 'You have no throwing stars.' : wcat === 149 ? 'You have no bullets.' : 'You have no arrows.');
-      if (empty || (!NO_CLOSE_SWING.has(skillId) && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length)) {
-        kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0;
-      }
+      if (empty && skillId) this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]);
+      const close = !NO_CLOSE_SWING.has(skillId);
+      if (empty || (close && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length)) {
+        const mb = !empty && MORTAL_BLOWS.find((id) => sb.owns(id) && sb.level(id));
+        if (mb && Math.random() * 100 < (sb.levelData(mb)?.prop || 0)) skillId = mb;
+        else { if (opts.held) return false; kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0; }
+      } else if (close) from = this.closeReach(s);
     }
+    if (opts.from !== undefined) from = opts.from;
     const lv = skillId ? sb.level(skillId) : 0;
     const ld = skillId ? sb.levelData(skillId, lv) : null;
     if (skillId && this.net) {
-      if (sb.cooling(skillId)) return false;
+      if (sb.cooling(skillId)) { this.notice('You may not use the skill yet.'); return false; }
       if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
       if ((ld?.hpCon || 0) >= this.stats.hp) { this.notice('Not enough HP.'); return false; }
       if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) { this.notice("You don't have enough HP to use this skill."); return false; }
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
+    // Assassinate's first stage brings you out of Dark Sight; it strikes harder the longer you were in it
+    if (skillId === ASSASSINATE && !opts.stage2) {
+      const dsb = this.darkSight();
+      this.assassinSec = dsb ? Math.floor((Date.now() - (dsb.until - dsb.dur)) / 1000) : 0;
+      if (dsb) { this.playSkillEffect(dsb.source, p); this.net?.cancelBuff(dsb.source); }
+    }
 
-    const action = prone ? 'proneStab' : swing || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
-    p.attack = this.look.has(action) ? action : this.look.attackAction();
-    p.frame = 0; p.frameT = 0; p.action = p.attack;
-    p.attackScale = this.attackScale();
-    const hitDelay = this.look.attackDelay(p.attack) * p.attackScale, trailAt = this.hitFrame(p.attack, kind);
-    this.after(this.frameTime(p.attack, trailAt) * p.attackScale, () => this.playAfterimage(p.attack, trailAt));
-    if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic');
-    else if (!skillId) this.playWeaponSound(p);
+    if (!opts.held) {
+      const action = prone ? 'proneStab' : swing || opts.pose || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
+      p.attack = this.look.has(action) ? action : this.look.attackAction();
+      p.frame = 0; p.frameT = 0; p.action = p.attack;
+      p.attackScale = this.attackScale(this.attackSpeed(skillId));
+    }
+    const pose = (opts.held ? opts.pose : p.attack) || this.defaultAttackAction(kind), scale = opts.held ? this.attackScale() : p.attackScale;
+    const hitDelay = this.look.attackDelay(pose) * scale, trailAt = this.hitFrame(pose, kind);
+    if (!opts.held) {
+      this.after(this.frameTime(pose, trailAt) * scale, () => this.playAfterimage(pose, trailAt, skillId));
+      if (opts.stage2) { this.playSkillEffect(skillId, p, false, 'special'); sfx.play(`Skill/${pad(skillId, 7)}/Use2`); }
+      else if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic', 'effect', scale);
+      else if (!skillId) this.playWeaponSound(p);
+    } else sfx.play(`Skill/${pad(skillId, 7)}/Use`);
 
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
-    const lines = ld?.fixdamage ? 1 : ld?.attackCount || ld?.bulletCount || 1;
-    let targets = this.findTargets(kind, skillId, lv, mobCount, p.attack, reach, charge);
+    // Shadow Partner throws as many again: its lines follow yours, at y% of them (x% for a plain throw)
+    const sp = kind === 'ranged' && !NO_PARTNER.has(skillId) ? this.partner() : null;
+    const base = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
+    const lines = sp ? Math.min(15, base * 2) : base, half = Math.floor(lines / 2);
+    const ammo = kind === 'ranged' ? this.ammoItem((ld?.bulletConsume || ld?.bulletCount || 1) * (sp ? 2 : 1)) : 0;
+    const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
+    const kept = opts.prefer && opts.prefer.alive && !opts.prefer.dying && !opts.prefer.queuedKill ? [opts.prefer] : null;
+    const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
+    let targets = mx?.mobs || kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
-    const swingAction = p.attack;
-    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, swingAction));
-    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(p.attack)) : 25;
-    const roll = () => (ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
+    // Band of Thieves: a monster in reach of your plain swing first, then the rest of its box
+    if (skillId === BAND_OF_THIEVES) {
+      const first = this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH)[0];
+      targets = first ? [first, ...this.mobsIn(this.skillBox(p, skillId, lv), p.x, p.y, first).slice(0, mobCount - 1)] : [];
+    }
+    const looks = skillId === BAND_OF_THIEVES ? this.thiefLooks(skillId, targets.length) : [];
+    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
+    const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
+    // Snipe's shot strikes for 199,999 less up to 10,000
+    const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
+      : ld?.fixdamage ? ld.fixdamage : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.5))));
+    const fixedPhys = !!ld?.fixdamage && (kind === 'ranged' || kind === 'melee');
     // magic and fixed-damage skills never crit; the server tells a critical by its going over the plain maximum
-    const crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat) : null, pct = ld?.damage || 100;
-    // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly
-    const knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
-    const out = targets.map((m) => {
+    let crit = this.net && kind !== 'magic' && !ld?.fixdamage ? critical(this, wcat, kind === 'ranged') : null, pct = ld?.damage || 100;
+    // Assassinate's second stage crits by its own prop and criticalDamage (Sharp Eyes on top)
+    if (opts.stage2) {
+      const se = this.buffs?.find((b) => b.sharpEyes && b.until > Date.now())?.sharpEyes;
+      crit = { rate: (ld?.prop || 0) + (se?.rate || 0), dmg: (ld?.criticalDamage || 100) - 100 + (se?.dmg || 0) };
+    }
+    // the weapon's info/knockback: the chance a swing (not a shot) recoils the monster strongly, more with Power
+    // Knock-Back; Dragon's Breath throws back what it strikes at its prop chance
+    let knockback = kind === 'melee' ? Math.max(0, Math.min(100, this.windows?.info(weapon)?.knockback || 0)) : 0;
+    if (POWER_KNOCKBACK.has(skillId)) knockback += ld?.prop || 0;
+    if (DRAGONS_BREATH.has(skillId)) knockback = ld?.prop || 0;
+    // a Paladin's Charged Blow does Advanced Charge's damage % once it is learned
+    const cbLd = skillId === CHARGED_BLOW && this.stats?.job === 122 && sb.level(ADVANCED_CHARGE)
+      ? { ...ld, damage: sb.levelData(ADVANCED_CHARGE)?.damage || ld?.damage } : null;
+    const phys = !!weapon && skillId !== SNIPE && !ld?.fixdamage && !OWN_DAMAGE.has(skillId) && (kind === 'ranged' || kind === 'melee')
+      && !!weaponDamage(wcat % 100, kind === 'ranged', pose, skillId, this.stats?.job || 0);
+    let out = targets.map((m, place) => {
       const dmg = [], crits = [];
       for (let i = 0; i < lines; i++) {
-        const c = !!crit && Math.random() * 100 < crit.rate, d = roll();
-        dmg.push(c ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
+        if (sp && i >= half) {
+          const src = dmg[i - half], info = m.src?.info || {};
+          const missed = this.accuracyMiss(info, Math.max(0, (info.level || 0) - (this.stats?.level || 1)));
+          dmg.push(src > 0 && !missed ? this.partnerHit(src, (skillId ? sp.y : sp.x) || 0) : 0); crits.push(crits[i - half]);
+          continue;
+        }
+        // Heaven's Hammer strikes for 1: the server does its real damage a moment later
+        if (skillId === HEAVENS_HAMMER) { dmg.push(1); crits.push(false); continue; }
+        if (mx) { dmg.push(...mx.damage(m)); crits.push(...dmg.map(() => false)); break; }
+        if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, cbLd || ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
+        if (fixedPhys) { dmg.push(this.fixedMiss(m) ? 0 : ld.fixdamage); crits.push(false); continue; }
+        const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
+        dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
       }
+      const scale = skillId === ARROW_BOMB ? (ld?.x || 100) / 100 : PIERCE_SCALE[skillId] ? PIERCE_SCALE[skillId] ** place : 1;
+      if (scale !== 1) for (let i = 0; i < dmg.length; i++) dmg[i] = Math.trunc(dmg[i] * scale);
       return { mob: m, oid: m.oid, x: Math.round(m.x), y: Math.round(m.y), dmg, crit: crits };
     });
+    // an Arrow Bomb that misses its first monster doesn't go off
+    if (skillId === ARROW_BOMB && out[0]?.dmg[0] === 0) out = out.slice(0, 1);
     const projectile = kind === 'ranged' || (skillId && sb?.node(skillId)?.ball && kind !== 'melee' && skillId !== CHAIN_LIGHTNING) ||
       skillId % 10000000 === 1000;
     // a spell without a projectile takes its monsters in a random order (Chain Lightning: along its chain)
@@ -2175,25 +2517,172 @@ export class Game {
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
+        const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
-          this.after(lineDelay(skillId, t.dmg.length - 1), () => this.finishKill(t.mob));   // it dies after its last line lands
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null);
+          this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, Math.random() * 100 < knockback); this.damageNumbers(t.mob, t.dmg, true, skillId, t.crit); this.playHitEffect(skillId, t.mob, p, t.dmg);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
-      if (projectile) this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? this.ammoItem() : 0, land));
-      else this.after(hitDelay + hitWave(i, kind, skillId), land);
+      // when each lands goes to the server too (it holds the monster's drops until then)
+      if (plan) { t.delay = hitDelay + plan.targets[i].delay; this.after(t.delay, land); }
+      else if (projectile) { t.delay = hitDelay; this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? ammo : 0, land)); }
+      else { t.delay = hitDelay + hitWave(i, kind, skillId); this.after(t.delay, land); }
       if (skillId === CHAIN_LIGHTNING) this.boltAt(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : p, t.mob, skillId);
     }
-    if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? this.ammoItem() : 0, null));
+    if (plan) { plan.partner = !!sp; this.shotFx(plan, p, skillId, ld, ammo, hitDelay); }
+    else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
-    this.net?.attack(kind, { targets: out, lines, skill: skillId, stance: this.actionId(p.attack, kind === 'ranged'), facingLeft: !p.facingRight, speed: this.attackSpeed(), charge });
+    this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(pose, kind === 'ranged'), facingLeft: !p.facingRight,
+      speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0,
+      mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
+    // Assaulter: straight to the floor 200px ahead, leaving its trail where you stood
+    if (skillId === ASSAULTER) {
+      const from = { x: p.x, y: p.y, right: p.facingRight };
+      if (this.blinkAhead(-(ld?.lt?.[0] || 200))) { this.playBasicEff('Assaulter/remain', from.x, from.y, from.right); this.playBasicEff('Assaulter/effect', p.x, p.y, p.facingRight); }
+    }
+    // Boomerang Step: unseen and untouchable for its pose, and not again until 500ms after
+    if (skillId === BOOMERANG_STEP) {
+      const len = this.frameTime(pose, this.look.frameCount(pose)) * scale;
+      this.boomerangUntil = performance.now() + len; this.boomerangLock = this.boomerangUntil + 500;
+    }
+    // Assassinate: once its first pose ends, if it found a monster, the finishing blow from 100px ahead
+    if (skillId === ASSASSINATE && !opts.stage2 && out.length) {
+      const first = out[0].mob, len = this.frameTime(pose, this.look.frameCount(pose)) * scale;
+      this.after(len, () => {
+        if (this.dead || this.weaponId() !== weapon || !this.blinkAhead(-(ld?.lt?.[0] || 100))) return;
+        this.attack(ASSASSINATE, 'melee', { stage2: true, pose: 'assassinationS', prefer: first });
+      });
+    }
+    if (RUSH_DASH.has(skillId) && out.length) this.startRush(ld, out.map((t) => t.mob));
+    if (SHAKERS.has(skillId)) this.startShake(skillId, 400, hitDelay);
+    if (skillId && !opts.final && !opts.held) this.rollFinalAttack(skillId, wcat % 100, hitDelay, pose, scale);
     return true;
+  }
+
+  /**
+   * Meso Explosion: the mesos lying in its box that you may pick up (yours, your party's, or anyone's), up to its
+   * attackCount, smallest first; the monsters (up to mobCount) within 50px of any of them. Each meso by a monster is a
+   * line of x x 50 x 0.5-1.0 x (amount <= 1000 ? (amount x 0.82 + 28) / 5300 : amount / (amount + 5250)).
+   */
+  mesoExplosionPlan(p, lv, ld) {
+    const box = this.skillBox(p, MESO_EXPLOSION, lv), mine = this.player.id, party = this.party?.id;
+    const max = Math.max(1, Math.min(20, ld?.attackCount || 1));
+    const mesos = [...this.drops.values()].filter((d) => d.meso && d.landed && !d.pickedBy && box
+      && d.x >= box.left && d.x <= box.right && d.y >= box.top && d.y <= box.bottom
+      && (d.type === 0 ? d.owner === mine : d.type === 1 ? d.owner === party : true)).slice(0, max).sort((a, b) => a.id - b.id);
+    const touches = (m, d) => { const h = m.hitBox(true); return h.right >= d.x - 50 && h.left <= d.x + 50 && h.bottom >= d.y - 50 && h.top <= d.y + 50; };
+    const mobs = this.liveMobs().filter((m) => mesos.some((d) => touches(m, d))).slice(0, Math.max(1, Math.min(15, ld?.mobCount || 1)));
+    const damage = (m) => mesos.slice(0, 15).filter((d) => touches(m, d)).map((d) => {
+      const a = d.id, ratio = a <= 1000 ? (a * 0.82 + 28) / 5300 : a / (a + 5250);
+      return Math.max(1, Math.trunc(50 * (ld?.x || 0) * ratio * (0.5 + Math.random() * 0.5)));
+    });
+    return { mesos, mobs, damage, touches };
+  }
+  /** Band of Thieves' hit art per monster: hit/0 on the first, the others hit/1..x shuffled. */
+  thiefLooks(id, n) {
+    const x = this.skills.node(id)?.level?.[1] ? Math.max(1, Object.keys(this.skills.node(id).hit || {}).length - 1) : 5;
+    const rest = Array.from({ length: x }, (_, i) => i + 1);
+    for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
+    return [0, ...Array.from({ length: Math.max(0, n - 1) }, (_, i) => rest[i % rest.length])];
+  }
+  /** A meso blowing up (Meso Explosion): it goes after `delay` ms with the skill's hit art, the sound at most every 90ms. */
+  explodeMeso(oid, delay) {
+    this.after(delay, async () => {
+      const d = this.drops.get(oid);
+      if (!d) return;
+      this.drops.delete(oid);
+      const now = performance.now();
+      if (now - (this.lastMesoBoom || 0) > 89) { this.lastMesoBoom = now; sfx.play(`Skill/${pad(MESO_EXPLOSION, 7)}/Hit`); }
+      const node = Game.fxNode((await this.skills?.ensure(MESO_EXPLOSION))?.hit);
+      if (!node) return;
+      const anim = new Anim(node, false);
+      await this.assets.preload(anim.frames);
+      this.fx.push({ anim, x: d.x, y: d.y, flip: false });
+    });
+  }
+  /** The screen shake of a skill landing (see SHAKERS); `near` is 400 for your own, 400 less the distance for another's. */
+  startShake(skillId, near, delay) {
+    if (!settings.shake || near <= 0) return;
+    const shout = skillId === SHOUT;
+    this.after(delay, () => { this.shake = { s: near / (shout ? 15 : 25), f: shout ? 0.85 : 0.92, left: shout ? 1500 : 2000, acc: 0, dx: 0, dy: 0 }; });
+  }
+  shakeStep(dt) {
+    const k = this.shake;
+    k.acc += dt * 1000; k.left -= dt * 1000;
+    while (k.acc >= DASH_TICK && this.shake) {
+      k.acc -= DASH_TICK;
+      const r = Math.trunc(k.s);
+      k.dx = r ? Math.floor(Math.random() * (2 * r)) - r : 0; k.dy = r ? Math.floor(Math.random() * (2 * r)) - r : 0;
+      k.s *= k.f;
+      if (k.s < 1 || k.left <= 0) this.shake = null;
+    }
+  }
+  /** Rush: dash ahead (see RUSH_DASH) and throw the monsters struck ahead of where you started. */
+  startRush(ld, mobs) {
+    const p = this.player, dir = p.facingRight ? 1 : -1, v = dir * Math.abs(Math.trunc((ld?.lt?.[0] || 0) / 8));
+    this.rush = { steps: [{ type: 0, v, ms: 90 }, { type: 2, v, ms: 180 }], acc: 0 };
+    this.rushLock = performance.now() + RUSH_LOCK;
+    const reach = -(ld?.lt?.[0] || 0);
+    for (const m of mobs) if (!m.src?.info?.boss) m.startPull({ x: p.x + dir * (Math.floor(Math.random() * 20) + reach + 35), stop: 0 });
+  }
+  /** The floor nearest (x, y) within `reach` px up or down. */
+  floorNear(x, y, reach) {
+    const down = this.map.fh.below(x, y, reach), up = this.map.fh.below(x, y - reach, reach);
+    const dy = (f) => (f ? Math.abs(Footholds.yAt(f, x) - y) : Infinity);
+    return dy(down) <= dy(up) ? down : up;
+  }
+  /** Move straight to the floor `dx` px ahead (within 80px up or down); false when there is none. */
+  blinkAhead(dx) {
+    const p = this.player, x = p.x + (p.facingRight ? dx : -dx), fh = this.floorNear(x, p.y, 80);
+    if (!fh) return false;
+    p.x = x; p.y = Footholds.yAt(fh, x); p.fh = fh; p.vx = 0; p.vy = 0;
+    return true;
+  }
+  /** One 30ms step of the dash: along the floor within the step's length up or down, or the dash ends. */
+  rushStep() {
+    const r = this.rush, p = this.player, step = r.steps[0];
+    if (!step) { this.rush = null; return; }
+    if (step.ms <= 0) { r.steps.shift(); return this.rushStep(); }
+    step.ms -= DASH_TICK;
+    if (!step.v) { this.rush = null; return; }
+    if (step.type === 2) step.v = Math.trunc(step.v * 0.8);
+    const x = p.x + step.v, reach = Math.max(Math.abs(step.v), step.type === 2 ? 0 : 30);
+    const down = this.map.fh.below(x, p.y, reach), up = this.map.fh.below(x, p.y - reach, reach);
+    const dy = (f) => (f ? Math.abs(Footholds.yAt(f, x) - p.y) : Infinity), fh = dy(down) <= dy(up) ? down : up;
+    if (!fh) { this.rush = null; return; }
+    p.x = x; p.y = Footholds.yAt(fh, x); p.fh = fh;
+  }
+  /**
+   * A skill's Final Attack (see FINAL_POSES): the first learned one listed for the weapon you hold, at its prop chance,
+   * a third of the way from the blow to the end of the pose.
+   */
+  rollFinalAttack(skillId, wtype, hitDelay, pose, scale) {
+    const sb = this.skills, list = sb.node(skillId)?.finalAttack;
+    if (!list) return;
+    const now = Date.now(), wpn = this.weaponId();
+    for (const [id, types] of Object.entries(list)) {
+      const fa = Number(id), ld = sb.level(fa) && sb.levelData(fa);
+      if (!ld || !Object.values(types).includes(wtype)) continue;
+      if (BUFFED_FINALS.has(fa) && !this.buffs.some((b) => b.source === fa && b.until > now)) continue;
+      if (Math.floor(Math.random() * 101) > (ld.prop || 0)) return;
+      let total = 0;
+      for (let i = 0; i < this.look.frameCount(pose); i++) total += this.look.delay(pose, i);
+      const at = hitDelay + (total * scale - hitDelay) / 3;
+      this.after(at, () => {
+        if (this.dead || this.weaponId() !== wpn) return;
+        const ranged = RANGED_WEAPONS.has(Math.floor(wpn / 10000));
+        const poses = (FINAL_POSES[this.look.weapon?.info?.attack] || []).filter((a) => this.look.has(a));
+        const finalPose = poses[Math.floor(Math.random() * poses.length)];
+        this.attack(fa, ranged ? 'ranged' : 'melee', { final: true, pose: finalPose, from: ranged ? 65 : undefined });
+      });
+      return;
+    }
   }
 
   /** Chain Lightning's bolt from one link to the next, timed to arrive as the hit lands. */
@@ -2213,12 +2702,17 @@ export class Game {
 
   /**
    * Attack speed, as v83 does it: every frame of an attack lasts (speed + 10) / 16 of its delay, where
-   * speed is the weapon's attackSpeed (2 fastest .. 9 slowest, 6 normal), two faster under a Booster.
+   * speed is the weapon's attackSpeed (2 fastest .. 10 slowest, 6 normal) plus a booster's value (a skill or an item,
+   * -1 to -4) and Speed Infusion's; Double Stab is two faster still.
    */
-  attackSpeed() {
+  attackSpeed(skillId = 0) {
     let speed = this.windows?.info(this.weaponId())?.attackSpeed ?? 6;
-    if ((this.buffs || []).some((b) => BOOSTERS.has(b.source) && b.until > Date.now())) speed -= 2;
-    return Math.max(2, Math.min(9, speed));
+    const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
+    const booster = active.findLast((b) => b.booster !== undefined || BOOSTERS.has(b.source));
+    if (booster) speed += booster.booster ?? -2;
+    speed += active.findLast((b) => b.infusion)?.infusion || 0;
+    if (skillId === DOUBLE_STAB) speed -= 2;
+    return Math.max(2, Math.min(10, speed));
   }
   attackScale(speed = this.attackSpeed()) { return (speed + 10) / 16; }
   /** The frame a swing's afterimage (its trail) plays on; when it lands is the look's attackDelay. */
@@ -2242,13 +2736,42 @@ export class Game {
     const img = await this.assets.json(`Character/Afterimage/${name}.img`);
     if (this.afterimageName === name) this.afterimage = img;
   }
-  async playAfterimage(action, frame) {
-    const p = this.player, node = this.afterimage?.[this.afterimageLevel()]?.[action]?.[frame];
+  async playAfterimage(action, frame, skillId = 0, ent = this.player) {
+    const local = ent === this.player;
+    const name = local ? this.windows?.info(this.weaponId())?.afterImage : ent.look?.weapon?.info?.afterImage;
+    const set = local ? this.afterimage : this.afterimageSet(name);
+    const lv = local ? this.afterimageLevel() : Math.min(10, Math.floor((ent.level || 1) / 10));
+    const own = skillId && (await this.skills?.ensure(skillId))?.afterimage;
+    // a skill with its own trail (Dragon Fury's dragon) uses it instead of the weapon's, under the weapon's
+    // afterImage name and the pose; with nothing there, no trail at all
+    let node = set?.[lv]?.[action]?.[frame];
+    if (own) {
+      const sk = own[name]?.[action];
+      node = sk && Object.entries(sk).find(([, v]) => v && typeof v === 'object' && !Array.isArray(v))?.[1];
+    }
     const fx = Game.fxNode(node);
     if (!fx) return;
     const anim = new Anim(fx, false);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, follow: p, flip: p.facingRight });
+    this.fx.push({ anim, follow: ent, flip: ent.facingRight });
+  }
+  /** Character/Afterimage/<name>.img, loaded once for everyone who swings that kind of weapon. */
+  afterimageSet(name) {
+    if (!name) return null;
+    const c = (this.afterimages ??= new Map());
+    if (!c.has(name)) { c.set(name, null); this.assets.json(`Character/Afterimage/${name}.img`).then((j) => c.set(name, j)); }
+    return c.get(name);
+  }
+  /** Another player's swing trail: on the trail's frame of their pose, at their attack's speed. */
+  remoteAfterimage(rp, skillId, kind) {
+    const action = rp.attack, look = rp.look;
+    if (!action || !look) return;
+    const set = this.afterimageSet(look.weapon?.info?.afterImage), lv = Math.min(10, Math.floor((rp.level || 1) / 10));
+    const last = Math.max(0, look.frameCount(action) - 1);
+    const keys = Object.keys(set?.[lv]?.[action] || {}).filter((k) => /^\d+$/.test(k)).map(Number);
+    const frame = kind === 'ranged' ? Math.min(1, last) : kind === 'magic' ? last : keys.length ? Math.min(...keys) : last;
+    let t = 0; for (let i = 0; i < frame; i++) t += look.delay(action, i);
+    this.after(t * (rp.attackScale || 1), () => { if (rp.attack === action) this.playAfterimage(action, frame, skillId, rp); });
   }
   /** Run fn after ms of game time (timers pause with the game, unlike setTimeout). */
   after(ms, fn) { if (ms <= 0) fn(); else (this.timers ??= []).push({ t: ms / 1000, fn }); }
@@ -2316,11 +2839,98 @@ export class Game {
       }
       return false;
     };
-    const reached = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined && reaches(m)).slice(0, n);
+    const reached = this.liveMobs().filter((m) => !m.src?.info?.damagedByMob && reaches(m)).slice(0, n);   // escorted monsters can't be caught
     const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
-    for (const [m, ok] of caught) if (ok) m.pull = { x: p.x, stop: (m.node?._w || 40) + 45 };
+    for (const [m, ok] of caught) if (ok) m.startPull({ x: p.x, stop: (m.node?._w || 40) + 45 });
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
     this.playSkillEffect(id, p);
+  }
+
+  /**
+   * Hurricane and Piercing Arrow start on their key press: their prepare pose and art, then their keydown art while
+   * held, and the server hears they started so others see it.
+   */
+  holdKeydown(id, lv) {
+    if (this.keydown) return true;
+    const p = this.player, sb = this.skills, ld = sb.levelData(id, lv), wcat = Math.floor(this.weaponId() / 10000);
+    if (!this.skillKeyPressed || p.attack) return false;
+    if (this.net) {
+      if (!sb.weaponOk(id, this.weaponId())) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+      if (!this.hasAmmo(id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); return false; }
+      if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    }
+    // a monster within the bow's swing gets the swing (or a Mortal Blow) and Hurricane doesn't start
+    if (HURRICANES.has(id) && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length) return this.attack(0);
+    const action = sb.node(id)?.prepare?.action;
+    const pose = action && this.look.has(action) ? action : this.defaultAttackAction('ranged');
+    this.keydown = { id, lv, t: 0, tick: 0, last: -Infinity, pose };
+    p.frame = 0; p.frameT = 0;
+    this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
+    sfx.play(`Skill/${pad(id, 7)}/Use`);
+    this.keydownArt(this.keydown);
+    return true;
+  }
+  /** The prepare art once, then the keydown art over and over while the key stays held. */
+  async keydownArt(k) {
+    const node = await this.skills.ensure(k.id), p = this.player;
+    const prep = Game.fxNode(node?.prepare), loop = Game.fxNode(node?.keydown);
+    const show = async (n, repeat) => {
+      const anim = new Anim(n, repeat);
+      await this.assets.preload(anim.frames);
+      if (this.keydown !== k) return null;
+      const f = { anim, follow: p }; this.fx.push(f); return f;
+    };
+    if (prep) {
+      k.art = await show(prep, false);
+      const ms = frames(prep).reduce((t, f) => t + (f?.delay || 100), 0);
+      await new Promise((r) => this.after(ms, r));
+    }
+    if (loop && this.keydown === k) { this.fx = this.fx.filter((f) => f !== k.art); k.art = await show(loop, true); }
+  }
+  /**
+   * Hurricane while held: a shot each time 101ms have passed on the 30ms clock. Out of arrows or MP it stops; a monster
+   * within the bow's swing stops it too, and gets the swing.
+   */
+  hurricaneShot(k) {
+    while (this.keydown === k && (k.tick + 1) * TICK <= k.t * 1000) {
+      const now = ++k.tick * TICK;
+      if (now - k.last < HURRICANE_GAP) continue;
+      k.last = now;
+      this.hurricaneFire(k);
+    }
+  }
+  hurricaneFire(k) {
+    const ld = this.skills.levelData(k.id, k.lv), wcat = Math.floor(this.weaponId() / 10000);
+    if (this.net && !this.hasAmmo(k.id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); this.endKeydown(); return; }
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice("You don't have enough MP to use this skill."); this.endKeydown(); return; }
+    if (this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length) { this.endKeydown(); this.attack(0); return; }
+    this.attack(k.id, 'ranged', { held: true, pose: k.pose });
+  }
+  /**
+   * Letting go: Hurricane ends (the server hears it, its keydownend art plays). Piercing Arrow fires with how long it
+   * was charged (30ms to 1s), unless a monster within the swing gets the swing instead.
+   */
+  endKeydown() {
+    const k = this.keydown, p = this.player;
+    if (!k) return;
+    this.keydown = null;
+    this.fx = this.fx.filter((f) => f !== k.art);
+    p.frame = 0; p.frameT = 0;
+    if (k.id === PIERCING_ARROW && !this.dead) {
+      const close = this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length;
+      const charge = Math.min(PIERCE_HOLD, Math.max(30, Math.round(k.t * 1000)));
+      if (!close && this.attack(k.id, 'ranged', { charge })) return;
+      this.net?.cancelBuff(k.id);
+      if (close) this.attack(0);
+      return;
+    }
+    this.net?.cancelBuff(k.id);
+    this.skills.ensure(k.id).then((n) => {
+      const end = Game.fxNode(n?.keydownend);
+      if (!end) return;
+      const anim = new Anim(end, false);
+      this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p }));
+    });
   }
 
   /** Buffs and other SPECIAL_MOVE skills. */
@@ -2645,6 +3255,53 @@ export class Game {
     this.net?.specialMove(id, lv, null);
     return true;
   }
+  /**
+   * Flash Jump: once per jump, in the air on the way up, not mid-attack nor on a map that forbids movement skills.
+   * Throws you forward (350 + 40 a 4 levels) and up (250 + 20 a 4 levels), like a knock-back's push.
+   */
+  flashJump(id, lv) {
+    const p = this.player, ld = this.skills.levelData(id, lv);
+    if (!this.skillKeyPressed || p.fh || p.ladder || p.attack || this.fjUsed || (p.vy || 0) > 0) return false;
+    if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    const n = Math.floor(lv / 4), dir = p.facingRight ? 1 : -1;
+    const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    p.vx = impact(p.vx || 0, dir * (350 + 40 * n)); p.vy = impact(p.vy || 0, -(250 + 20 * n));
+    this.fjUsed = true;
+    this.playSkillEffect(id, p);
+    this.playBasicEff(id === FLASH_JUMPS_NW ? 'Flying1' : 'Flying', p.x, p.y, p.facingRight);
+    this.net?.specialMove(id, lv, null);
+    return true;
+  }
+  /**
+   * Chakra: only at 49% HP or less. It winds up in its prepare pose (others are told), blows doing x% meanwhile, and
+   * goes off when the pose ends.
+   */
+  castChakra(id, lv) {
+    const p = this.player, ld = this.skills.levelData(id, lv);
+    if (!this.skillKeyPressed || p.attack || this.chakra) return false;
+    if (((this.stats?.hp || 0) * 100) / Math.max(1, this.maxHpShown()) > 49) return false;
+    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    const action = this.skills.node(id)?.prepare?.action, pose = action && this.look.has(action) ? action : 'alert';
+    p.attack = pose; p.action = pose; p.frame = 0; p.frameT = 0; p.attackScale = this.attackScale();
+    this.chakra = { x: ld?.x || 100 };
+    this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
+    this.playSkillEffect(id, p, false, 'prepare');
+    this.after(this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale, () => {
+      this.chakra = null;
+      if (this.dead) return;
+      this.playSkillEffect(id, p);
+      this.net?.specialMove(id, lv, null);
+    });
+    return true;
+  }
+  async playBasicEff(name, x, y, flip) {
+    const node = name.split('/').reduce((n, k) => n?.[k], this.basicEff ??= await this.assets.json('Effect/BasicEff.img'));
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, x, y, flip });
+  }
   async playTeleportEffect(x, y) {
     const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Teleport;
     if (!node) return;
@@ -2653,22 +3310,403 @@ export class Game {
     this.fx.push({ anim, x, y, flip: false });
   }
 
-  /** Same rules as RangedAttackHandler: first usable ammo in USE for the weapon (or a skill that needs none). */
-  ammoItem() {
+  /** Same rules as RangedAttackHandler: the first ammo in USE for the weapon with at least `count` left (or a skill that needs none). */
+  ammoItem(count = 1) {
     const cat = Math.floor(this.weaponId() / 10000);
     const ok = { 145: (id) => Math.floor(id / 1000) === 2060, 146: (id) => Math.floor(id / 1000) === 2061,
       147: (id) => Math.floor(id / 10000) === 207, 149: (id) => Math.floor(id / 10000) === 233 }[cat];
     if (!ok) return 0;
     const use = this.inventory?.[2] || {};
-    for (const k of Object.keys(use).map(Number).sort((a, b) => a - b)) if (ok(use[k].id) && use[k].quantity > 0) return use[k].id;
+    for (const k of Object.keys(use).map(Number).sort((a, b) => a - b)) if (ok(use[k].id) && use[k].quantity >= count) return use[k].id;
     return 0;
   }
   hasAmmo(skillId) {
     if (skillId % 10000000 === 1000 || NO_AMMO_SHOTS.has(skillId)) return true; // Three Snails, Soul Blade, Shark Wave
-    const noAmmoBuffs = [3101004, 3201004, 4121006, 13101003]; // Soul Arrow x3, Shadow Claw
+    const noAmmoBuffs = [...SOUL_ARROWS, 4121006]; // Soul Arrow x3, Shadow Claw
     if (this.buffs.some((b) => noAmmoBuffs.includes(b.source))) return true;
-    return !!this.ammoItem();
+    const ld = skillId && this.skills.levelData(skillId), sp = !NO_PARTNER.has(skillId) && this.partner();
+    return !!this.ammoItem((ld?.bulletConsume || ld?.bulletCount || 1) * (sp ? 2 : 1));
   }
+
+  // ------------------------------------------------------------------ shots
+  /** STR, DEX, INT or LUK with equipment and Maple Warrior. */
+  totalStat(k) {
+    const base = this.stats?.[k] || 0, now = Date.now();
+    const mw = Math.max(0, ...(this.buffs || []).filter((b) => b.mapleWarrior && b.until > now).map((b) => b.mapleWarrior));
+    return base + Math.floor((base * mw) / 100) + this.equipStat(k);
+  }
+  /** A learned passive skill's x / y / z, else 0. */
+  passive(id, key) { return this.skills?.level(id) ? this.skills.levelData(id)?.[key] || 0 : 0; }
+  /** Blessing of the Fairy for your job's branch (Explorer, Cygnus, Aran, Evan). */
+  blessingId() {
+    const job = this.stats?.job || 0;
+    return Math.floor(job / 100) === 22 || job === 2001 ? 20010012 : Math.floor(job / 1000) * 10000000 + 12;
+  }
+  /** Nimble Body, Bullet Time, Quick Motion (and Amazon's, accuracy only): x accuracy, y avoid. */
+  static BEGINNER_PASSIVES = [4000000, 14000000, 5000000, 15000000];
+  /**
+   * Accuracy without buffs: DEX x 0.8 + LUK x 0.5 (bowmen, thieves, pirates DEX x 0.6 + LUK x 0.3; Brawlers DEX x 0.9 +
+   * LUK x 0.3), plus the equipment's, Blessing of the Fairy's z, the weapon mastery's x and the beginner passives' x.
+   */
+  accuracy() {
+    const job = this.stats?.job || 0, cls = Math.floor((job % 1000) / 100), dex = this.totalStat('dex'), luk = this.totalStat('luk');
+    const base = Math.floor(cls === 5 && Math.floor(job / 10) === 51 ? dex * 0.9 + luk * 0.3 : cls >= 3 && cls <= 5 ? dex * 0.6 + luk * 0.3 : dex * 0.8 + luk * 0.5);
+    const ranged = cls === 3 || Math.floor(job / 10) === 41 || Math.floor(job / 10) === 52;
+    const ms = masterySkills(Math.floor(this.weaponId() / 10000) % 100, ranged, 0, job);
+    const mastery = (ms?.first || []).map((id) => this.passive(id, 'x')).find((v) => v) || 0;
+    const passives = [3000000, ...Game.BEGINNER_PASSIVES].reduce((a, id) => a + this.passive(id, 'x'), 0);
+    return base + this.equipStat('acc') + this.passive(this.blessingId(), 'z') + mastery + passives;
+  }
+  /** Avoid without buffs: LUK / 2 + DEX / 4 (Brawlers DEX x 1.5, Gunslingers DEX / 8), the equipment's, Blessing's z, the beginner passives' y. */
+  avoidability() {
+    const job = this.stats?.job || 0, dex = this.totalStat('dex'), luk = this.totalStat('luk'), branch = Math.floor(job / 10);
+    const base = Math.trunc(luk / 2) + (branch === 51 ? Math.floor(dex * 1.5) : Math.trunc(dex / (branch === 52 ? 8 : 4)));
+    return base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0);
+  }
+  /**
+   * Combo Attack's % on every blow while it is on, by the orbs held (its buff value less 1): with one orb the skill's
+   * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
+   * and +24 to +40 from six to ten. Panic and Coma climb faster.
+   */
+  /** The White Knight / Paladin / Dawn Warrior charge on you: { id, ld, elem } or null. */
+  activeCharge() {
+    const now = Date.now(), b = (this.buffs || []).find((x) => CHARGES[x.source] && x.until > now);
+    return b ? { id: b.source, ld: this.skills.levelData(b.source) || {}, elem: CHARGES[b.source] } : null;
+  }
+  /** Combo Attack's value while it is on: 1 + the orbs held (0 when it is off). */
+  comboValue() { const now = Date.now(); return (this.buffs || []).find((b) => b.combo && b.until > now)?.combo || 0; }
+  /** The orbs of whoever holds `value` (1 + orbs) round them, the ring centred 35px over their feet. */
+  drawCombo(ctx, ent, sx, sy, value) {
+    const orbs = Math.min(10, Math.max(0, value - 1)), now = performance.now();
+    const seen = ent._orbs || (ent._orbs = { n: 0, born: [] });
+    for (let i = seen.n + 1; i <= orbs; i++) seen.born[i] = now;
+    seen.n = orbs;
+    if (!orbs) return;
+    if (!this.orbArt) {
+      this.orbArt = 'loading';
+      Promise.all([this.assets.json('Skill/111.img'), this.assets.json('Skill/112.img')]).then(async ([a, b]) => {
+        const art = [a?.skill?.['1111002']?.state, b?.skill?.['1120003']?.state];
+        await this.assets.preload(art.flatMap((st) => [1, 2, 3, 4, 5].map((k) => st?.[k]).filter(Boolean)));
+        this.orbArt = art;
+      });
+    }
+    if (!Array.isArray(this.orbArt)) return;
+    const turn = (-2 * Math.PI * (now % ORB_TURN_MS)) / ORB_TURN_MS, cx = sx, cy = sy - 35;
+    for (let i = Math.max(1, orbs - 4); i <= orbs; i++) {
+      const node = this.orbArt[i < 6 ? 0 : 1]?.[Math.floor((i + 1) / 2)], img = node && this.assets.image(node);
+      if (!img) continue;
+      const k = Math.min(1, (now - (seen.born[i] || 0)) / (node.delay || 300));
+      const a = ((node.a0 ?? 255) + ((node.a1 ?? 255) - (node.a0 ?? 255)) * k) / 255;
+      const z = ((node.z0 ?? 100) + ((node.z1 ?? 100) - (node.z0 ?? 100)) * k) / 100;
+      const ang = (i * 2 * Math.PI) / 5 + turn, o = node.origin || [0, 0];
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.translate(Math.round(cx + Math.cos(ang) * ORB_RADIUS), Math.round(cy + Math.sin(ang) * ORB_RADIUS));
+      ctx.scale(z, z);
+      ctx.drawImage(img, -o[0], -o[1]);
+      ctx.restore();
+    }
+  }
+  comboPercent(skillId) {
+    const now = Date.now(), held = (this.buffs || []).find((b) => b.combo && b.until > now)?.combo;
+    if (!held) return 0;
+    const orbs = held - 1, cygnus = Math.floor((this.stats?.job || 0) / 1000) === 1, sb = this.skills;
+    const [combo, adv] = cygnus ? [11111001, 11110005] : [1111002, 1120003];
+    const lvC = sb.level(combo), lvA = sb.level(adv);
+    if (!lvC || orbs < 0) return 0;
+    const [id, lv] = lvC === (cygnus ? 20 : 30) && lvA > 0 ? [adv, lvA] : [combo, lvC];
+    const dmg = sb.levelData(id, lv)?.damage || 0;
+    const steps = FINISHERS.has(skillId) ? [[24, 6], [64, 16], [120, 30], [184, 46], 250, 270, 290, 305, 320] : [[5, 0], [10, 0], [15, 0], [20, 0], 24, 28, 32, 36, 40];
+    if (orbs < 1 || orbs > 10) return 100;
+    if (orbs === 1) return dmg;
+    const st = steps[orbs - 2];
+    return Array.isArray(st) ? Math.trunc((lv * st[0] - st[0]) / 29) + st[1] + dmg : dmg + st;
+  }
+  /** A fixed-damage skill misses by level alone: your level x 100 / (255 + 150 per level the monster has over you), times 0.7-1.3, under its avoid. */
+  fixedMiss(m) {
+    const info = m.src?.info || {}, lv = this.stats?.level || 1, over = Math.max(0, (info.level || 0) - lv);
+    const hit = (lv * 100) / (over * 150 + 255), r = hit * (0.7 + Math.random() * 0.6);
+    return r < Math.min(999, Math.max(0, info.eva || 0));
+  }
+  /**
+   * One damage line of a physical attack (shot or close up) on monster m:
+   *  - it misses when your accuracy x 100 / (255 + 10 per level the monster has over you), times 0.7-1.3, is under
+   *    its avoid (a GM's blows up close never miss and ignore the level gap; its shots don't);
+   *  - the weapon's main stat is rolled between it x mastery and itself (mastery: (the mastery skill's value x 5 +
+   *    10)% x 0.9), then (main x the weapon's multiplier + its other stats) x attack / 100 (see weaponDamage);
+   *  - 1% less per level the monster has over you; its element: weak x1.5, strong x0.5, immune x0 (for Inferno and
+   *    Blizzard only x% of that change); less 50-60% of its defence;
+   *  - then the skill's damage %, and a critical adds its extra % of the line before the skill's %; Blizzard can't
+   *    crit. Barrage's 5th line does double and its 6th four times; a charged skill (Piercing Arrow) does
+   *    (charge ms x 90 / its longest charge + 10)%.
+   */
+  physicalHit(m, cat, skillId, ld, shot, pose, ammoId, crit, charge = 0, line = 0) {
+    const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now(), job = this.stats?.job || 0;
+    // Ninja Storm's blows land only at its prop chance
+    if (skillId === NINJA_STORM && Math.random() * 100 >= (ld?.prop ?? 100)) return { d: 0, c: false };
+    const exempt = !shot && Math.floor((job % 1000) / 100) === 9;
+    const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
+    if (!exempt && this.accuracyMiss(info, over)) return { d: 0, c: false };
+    if (skillId === SHADOW_MESO) return this.shadowMesoHit(info, ld, over);
+    // Aran's blows are all swings; Rush and Blast swing three times in five; Brandish's second blow swings
+    const aran = Math.floor(job / 100) === 21 || job === 2000;
+    const asSwing = aran || (RUSHES.has(skillId) && Math.random() < 0.6) || (BRANDISHES.has(skillId) && line === 1);
+    const f = weaponDamage(cat, shot, pose, skillId, job, asSwing);
+    let mastery = f.mastery;
+    if (mastery === undefined) {
+      const ms = masterySkills(cat, shot, skillId, job), val = (id) => (this.skills.level(id) ? this.skills.levelData(id)?.mastery || 0 : 0);
+      const over = (ms?.over || []).map(val).find((v) => v) || 0;
+      const first = (ms?.first || []).map(val).find((v) => v) || 0;
+      const v = over || first + (ms?.plus || []).reduce((a, id) => a + val(id), 0);
+      mastery = (v * 5 + 10) * 0.009;
+    }
+    const main = this.totalStat(f.main), roll = rand(main * mastery, main);
+    let d = ((roll * f.mult + f.sec.reduce((a, k) => a + this.totalStat(k), 0)) * this.attackWatk(shot ? ammoId : 0)) / f.div;
+    if ((skillId === 5211004 || skillId === 5211005) && Math.floor(ammoId / 1000) !== (skillId === 5211004 ? 2331 : 2332)) d *= 0.5;
+    if (over) d = ((100 - over) * d) / 100;
+    const elem = skillId && this.skills.node(skillId)?.elemAttr;
+    const vs = elem && new RegExp(`${elem.toUpperCase()}(\\d)`).exec(info.elemAttr || '')?.[1];
+    if (vs) {
+      const p = PART_ELEMENT.has(skillId) ? (ld?.x || 0) / 100 : 1;
+      d = vs === '1' ? d * (1 - p) : vs === '2' ? d * (1 - p * 0.5) : vs === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
+    }
+    // a charge: its damage %, then its element at z% of the usual
+    const held = this.activeCharge();
+    if (held) {
+      d = (d * (held.ld.damage || 100)) / 100;
+      const cv = new RegExp(`${held.elem}(\\d)`).exec(info.elemAttr || '')?.[1], p = (held.ld.z || 0) / 100;
+      d = cv === '1' ? d * (1 - p) : cv === '2' ? d * (1 - p * 0.5) : cv === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
+    }
+    const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
+    const base = Math.trunc(d - rand(pdd * 0.5, pdd * 0.6));
+    d = ld?.damage ? (base * ld.damage) / 100 : base;
+    const combo = this.comboPercent(skillId);
+    if (combo > 0) d = (d * combo) / 100;
+    // a critical: Critical Shot / Throw, Sharp Eyes, and Stun Mastery on a stunned monster (+its prop and damage)
+    let rate = crit?.rate || 0, extra = crit ? crit.dmg + 100 : 0;
+    const stun = this.skills.level(STUN_MASTERY) && (m.status?.second & 0x80) && this.skills.levelData(STUN_MASTERY);
+    if (stun) { rate += Math.max(0, Math.min(100, stun.prop || 0)); extra += stun.damage || 0; }
+    const c = rate > 0 && extra > 0 && skillId !== BLIZZARD && Math.random() * 100 < rate;
+    if (c) d += ((extra - 100) * base) / 100;
+    // Assassinate: x(seconds in Dark Sight, up to its time, / 3 + 1)
+    if (skillId === ASSASSINATE) d *= Math.floor(Math.min(this.assassinSec || 0, ld?.time || 0) / 3) + 1;
+    // Wind Walk and Vanish (out of Dark Sight) strike harder
+    const buffed = (ids) => (this.buffs || []).some((b) => ids.includes(b.source) && b.until > now);
+    if (buffed([WIND_WALK])) d = (d * (this.skills.levelData(WIND_WALK)?.damage || 100)) / 100;
+    if (this.skills.level(VANISH) && buffed(DARK_SIGHTS)) d = (d * (this.skills.levelData(VANISH)?.damage || 100)) / 100;
+    if (charge) d = (d * ((charge * 90) / PIERCE_HOLD + 10)) / 100;
+    // Berserk: a Dark Knight at x% of max HP or less does (its damage + 100)% up close
+    const berserk = !shot && job === 132 && this.skills.level(BERSERK) && this.skills.levelData(BERSERK);
+    if (berserk && (this.stats?.hp || 0) <= ((berserk.x || 0) * this.maxHpShown()) / 100) d = (d * ((berserk.damage || 0) + 100)) / 100;
+    if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
+    return { d: Math.max(1, Math.trunc(d)), c };
+  }
+  /** Your accuracy x 100 / (255 + 10 a level the monster has over you), x 0.7-1.3, under its avoid: a miss. */
+  accuracyMiss(info, over) {
+    const now = Date.now(), accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
+    const acc = Math.min(999, Math.max(0, this.accuracy() + accBuff)), hit = (acc * 100) / (over * 10 + 255);
+    return hit * (0.7 + Math.random() * 0.6) < Math.min(999, Math.max(0, info.eva || 0));
+  }
+  /** A Shadow Partner line: pct% of the line it follows, then Wind Walk and Vanish over again. */
+  partnerHit(src, pct) {
+    const now = Date.now(), buffed = (ids) => (this.buffs || []).some((b) => ids.includes(b.source) && b.until > now);
+    let d = Math.trunc((src * pct) / 100);
+    if (buffed([WIND_WALK])) d = (d * (this.skills.levelData(WIND_WALK)?.damage || 100)) / 100;
+    if (this.skills.level(VANISH) && buffed(DARK_SIGHTS)) d = (d * (this.skills.levelData(VANISH)?.damage || 100)) / 100;
+    return Math.max(1, Math.trunc(d));
+  }
+  /** Your Shadow Partner buff's level data, if it is on. */
+  partner() {
+    const now = Date.now(), b = this.buffs?.find((x) => SHADOW_PARTNERS.includes(x.source) && x.until > now);
+    return b ? this.skills.levelData(b.source) || {} : null;
+  }
+  /**
+   * Shadow Meso: its meso cost x 0.5-1.5, x10, and at its prop chance (100 + x)% of that as a critical; less 1% a level
+   * the monster has over you, by element, never by defence.
+   */
+  shadowMesoHit(info, ld, over) {
+    const m = ld?.moneyCon || 0, rand = (lo, hi) => lo + Math.random() * (hi - lo);
+    let d = Math.trunc(rand(m * 0.5, m * 1.5)) * 10;
+    const c = Math.random() * 100 < (ld?.prop || 0);
+    if (c) d = (d * ((ld?.x || 0) + 100)) / 100;
+    if (over) d = ((100 - over) * d) / 100;
+    const elem = this.skills.node(SHADOW_MESO)?.elemAttr;
+    const vs = elem && new RegExp(`${elem.toUpperCase()}(\\d)`).exec(info.elemAttr || '')?.[1];
+    if (vs) d = vs === '1' ? 0 : vs === '2' ? d * 0.5 : vs === '3' ? Math.min(199999, d * 1.5) : d;
+    return { d: Math.max(1, Math.trunc(d)), c };
+  }
+  /** Weapon attack: equipment, attack buffs, Bow Expert / Marksman Boost and a shot's ammo, at most 1999. */
+  attackWatk(ammoId) {
+    const now = Date.now();
+    let w = this.watk() + Math.max(0, ...(this.buffs || []).filter((b) => b.watk && b.until > now).map((b) => b.watk));
+    for (const id of [3120005, 3220004]) if (this.skills.owns(id)) w += this.skills.levelData(id)?.x || 0;
+    if (ammoId) w += this.windows?.info(ammoId)?.incPAD || 0;
+    return Math.min(1999, w);
+  }
+  /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined); }
+  /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
+  closeReach(action) {
+    const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
+    return Math.max(0, Math.min(CLOSE_REACH, lt ? -lt[0] : CLOSE_REACH));
+  }
+  /**
+   * How far a shot flies: the skill's range, else 300px for a bow or crossbow plus The Eye of Amazon's, 200px for a
+   * claw plus Keen Eyes', 200px for a gun.
+   */
+  shotRange(skillId, lv, wcat) {
+    if (TAUNTS.has(skillId)) return TAUNT_RANGE;
+    const r = skillId ? this.skills.levelData(skillId, lv)?.range : 0;
+    if (r > 0) return r;
+    const cygnus = Math.floor((this.stats?.job || 0) / 1000) === 1;
+    const extra = (id) => this.skills.levelData(id)?.range || 0;
+    if (wcat === 145 || wcat === 146) return 300 + extra(cygnus ? 13000001 : 3000002);
+    if (wcat === 147) return 200 + extra(cygnus ? 14000001 : 4000001);
+    return wcat === 149 ? 200 : 0;
+  }
+  /**
+   * The first monster a shot meets along its line (y), from `from` px in front out to `range`: checked in 20px steps,
+   * each reaching a quarter of its distance from you up and down.
+   */
+  firstOnLine(ent, from, range, y) {
+    const dir = ent.facingRight ? 1 : -1, mobs = this.liveMobs();
+    for (let d = from; d < range; d += 20) {
+      const a = ent.x + dir * d, b = ent.x + dir * Math.min(d + 20, range), lo = Math.min(a, b), hi = Math.max(a, b), s = Math.floor(d / 4);
+      const hit = mobs.filter((m) => { const h = m.hitBox(true); return h.right > lo && h.left < hi && h.bottom > y - s && h.top < y + s; });
+      if (hit.length) return hit.sort((p, q) => Math.abs(p.x - ent.x) - Math.abs(q.x - ent.x))[0];
+    }
+    return null;
+  }
+  /** A skill's lt/rb box around someone, turned the way they face. */
+  skillBox(ent, skillId, lv) {
+    const r = this.skills.range(skillId, lv);
+    if (!r) return null;
+    const [left, right] = ent.facingRight ? [ent.x - r.rb[0], ent.x - r.lt[0]] : [ent.x + r.lt[0], ent.x + r.rb[0]];
+    return { left, right, top: ent.y + r.lt[1], bottom: ent.y + r.rb[1] };
+  }
+  mobsIn(box, x, y, except = null) {
+    if (!box) return [];
+    return this.liveMobs().filter((m) => {
+      if (m === except) return false;
+      const h = m.hitBox(true);
+      return h.right >= box.left && h.left <= box.right && h.bottom >= box.top && h.top <= box.bottom;
+    }).sort((p, q) => Math.hypot(p.x - x, p.y - y) - Math.hypot(q.x - x, q.y - y));
+  }
+  /**
+   * Where a shot from `ent` goes and when each monster it strikes is hit (ms after it leaves). It flies 28px up from
+   * the feet, from `from` px in front out to `range`:
+   *  - most stop at the first monster in the way (firstOnLine);
+   *  - piercing shots strike up to mobCount along the line, within their reach above and below, as the arrow passes;
+   *  - Arrow Rain and Arrow Eruption strike up to mobCount in the skill's box;
+   *  - Arrow Bomb, Inferno and Blizzard blast up to mobCount - 1 more in the skill's box around the first they strike.
+   * mobs: the monsters another player's shot struck (nothing is searched for).
+   */
+  shotPlan(ent, skillId, lv, ld, range, from, mobs = null) {
+    const dir = ent.facingRight ? 1 : -1, y = Math.round(ent.y) - 28, sx = ent.x + dir * from, count = ld?.mobCount || 1;
+    const plan = { lv, sx, sy: y, ex: ent.x + dir * range, ey: y, targets: [], arrows: !RAIN_SHOTS.has(skillId) };
+    // where the arrow meets a body, and the time it takes to get there
+    const at = (m) => { const h = m.hitBox(true); return { x: dir > 0 ? Math.max(h.left, sx) : Math.min(h.right, sx), y: Math.max(h.top, Math.min(h.bottom, y)) }; };
+    const strike = (m, delay) => { const h = at(m); return { mob: m, x: h.x, y: h.y, delay: delay ?? flightMs(h.x - sx) }; };
+    if (RAIN_SHOTS.has(skillId)) {
+      plan.targets = (mobs || this.mobsIn(this.skillBox(ent, skillId, lv), ent.x, ent.y).slice(0, count)).map((m) => strike(m, RAIN_DELAY));
+      return plan;
+    }
+    const spread = PIERCING_SHOTS.get(skillId);
+    if (spread !== undefined) {
+      const box = { left: Math.min(sx, plan.ex), right: Math.max(sx, plan.ex), top: y - spread, bottom: y + 1 + spread };
+      const found = mobs || this.mobsIn(box, sx, y).slice(0, count);
+      plan.targets = found.map((m) => strike(m)).sort((p, q) => (p.x - q.x) * dir);
+      return plan;
+    }
+    const first = mobs ? mobs[0] : this.firstOnLine(ent, from, range, y);
+    if (!first) return plan;
+    const hit = strike(first);
+    plan.ex = hit.x; plan.ey = hit.y;
+    plan.targets.push(hit);
+    const blast = BLAST_SHOTS.get(skillId);
+    if (blast) {
+      const r = this.skills.range(skillId, lv);
+      const box = r && { left: hit.x + r.lt[0], right: hit.x + r.rb[0], top: hit.y + r.lt[1], bottom: hit.y + r.rb[1] };
+      const others = mobs ? mobs.slice(1) : this.mobsIn(box, hit.x, hit.y, first).slice(0, count - 1);
+      others.forEach((m, i) => plan.targets.push({ mob: m, x: m.x, y: m.y, delay: hit.delay + blast(i + 1) }));
+      plan.blast = box;
+    } else if (mobs) for (const m of mobs.slice(1)) plan.targets.push(strike(m));
+    return plan;
+  }
+  /**
+   * A shot's art, `leave` ms from now: its arrows (bulletCount of them, 14px apart up and down, Strafe's 60ms
+   * apart...) to where it stops, and from when its first monster is struck, Arrow Rain's arrows falling over the
+   * skill's box, Arrow Eruption's under each monster, Inferno's and Blizzard's over the blast.
+   */
+  shotFx(plan, ent, skillId, ld, ammoId, leave) {
+    if (plan.arrows) {
+      const n = Math.max(1, ld?.bulletCount || 1), gap = arrowGap(skillId, ammoId) || (plan.partner ? 120 : 0), dir = ent.facingRight ? 1 : -1;
+      // Shadow Partner's follow on, from 30px behind, carrying on the 14px steps
+      for (let i = 0; i < (plan.partner ? n * 2 : n); i++) {
+        const sx = plan.sx - (i >= n ? dir * 30 : 0);
+        this.after(leave + i * gap, () => this.fly(skillId, ammoId, sx, plan.sy, plan.ex, plan.ey + 7 - 7 * n + 14 * i, ent));
+      }
+    }
+    const first = plan.targets[0];
+    if (!first) return;
+    const at = leave + first.delay;
+    if (skillId === 3111004 || skillId === 13111000) {
+      const b = this.skillBox(ent, skillId, plan.lv);
+      if (b) this.playSpecial(skillId, { ...b, top: b.top - 250, bottom: b.bottom - 250 }, at, ent.facingRight);
+    } else if (skillId === 3211004) {
+      for (const t of plan.targets) {
+        const h = t.mob.hitBox(), w = h.right - h.left, grow = w < 150 ? (150 - w) / 2 : 0;
+        this.playSpecial(skillId, { left: h.left - grow, right: h.right + grow, top: h.bottom - 10, bottom: h.bottom }, at, ent.facingRight);
+      }
+    } else if ((skillId === 3111003 || skillId === 3211003) && plan.blast) {
+      this.playSpecial(skillId, { ...plan.blast, top: plan.blast.top - 50, bottom: plan.blast.bottom - 170 }, at, ent.facingRight);
+    }
+  }
+  /** One arrow (the skill's ball, else Soul Arrow's while it is on, else the ammo's bullet) from (sx, sy) to (tx, ty). */
+  async fly(skillId, ammoId, sx, sy, tx, ty, ent) {
+    const node = await this.shotArt(skillId, ammoId, ent);
+    const anim = node ? new Anim(node, true) : null;
+    if (anim) await this.assets.preload(anim.frames);
+    this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur: flightMs(tx - sx) / 1000, flip: tx > sx });
+  }
+  async shotArt(skillId, ammoId, ent) {
+    // a level can name its own ball (Shadow Meso's coins grow every 10 levels)
+    const sn = skillId ? await this.skills?.ensure(skillId) : null, own = ent === this.player && this.skills.levelData(skillId)?.ball?._uol;
+    let node = sn ? Game.fxNode((own && sn[own.split('/').pop()]) || sn.ball) : null;
+    const soul = ent === this.player ? this.buffs.find((b) => SOUL_ARROWS.includes(b.source) && b.until > Date.now())?.source : 0;
+    if (!node && soul) node = Game.fxNode((await this.skills?.ensure(soul))?.ball);
+    if (!node && ammoId) {
+      const img = await this.assets.json(`Item/Consume/${pad(Math.floor(ammoId / 10000), 4)}.img`);
+      node = Game.fxNode(img?.[pad(ammoId, 8)]?.bullet);
+    }
+    return node;
+  }
+  /**
+   * A skill's `special` art over a box, from `at` ms on: every `interval` ms from `start` until `duration`, `count`
+   * pieces at once (a random one of its kinds each), each from a random point in the box. A piece travels (x, y),
+   * its slant a little off at random, over `fall` ms give or take 150, then is gone; x points the way the shooter
+   * faces. Pieces are drawn at alpha `a`, else 128-191.
+   */
+  async playSpecial(skillId, box, at, facingRight) {
+    const sp = (await this.skills?.ensure(skillId))?.special;
+    if (!sp) return;
+    const kinds = frames(sp).some((f) => f?._canvas) ? [sp] : frames(sp).filter(Boolean);
+    if (!kinds.length) return;
+    await this.assets.preload(kinds.flatMap((k) => new Anim(k, true).frames));
+    const rand = (n) => (n > 0 ? Math.floor(Math.random() * n) : 0);
+    const x = sp.x || 0, y = sp.y || 0, interval = sp.interval || 0, end = sp.duration || 0;
+    const wave = () => {
+      for (let i = 0; i < (sp.count || 0); i++) {
+        const px = box.left + rand(box.right - box.left), py = box.top + rand(box.bottom - box.top);
+        const dy = x && y ? Math.trunc(((20 - rand(41)) * x) / y) + y : y, dur = Math.max(0, (sp.fall || 0) + rand(300) - 150);
+        const anim = new Anim(kinds[rand(kinds.length)], true);
+        this.shots.push({ anim, sx: px, sy: py, tx: px + (facingRight ? x : -x), ty: py + dy, t: 0, dur: dur / 1000, flip: facingRight,
+          alpha: (sp.a || 128 + rand(64)) / 255 });
+      }
+    };
+    for (let t = sp.start || 0; t <= end; t += interval) { this.after(at + t, wave); if (!interval) break; }
+  }
+
 
   /** The box an attack reaches: the skill's lt/rb, else the swing's afterimage box, else a default per kind. */
   attackBox(kind, skillId, lv, action, charge = 0) {
@@ -2726,7 +3764,7 @@ export class Game {
     // maxReach: how far in front it goes at most (a ranged weapon's swing)
     if (p.facingRight) x2 = Math.max(x1 + 1, Math.min(x2, p.x + maxReach)); else x1 = Math.min(x2 - 1, Math.max(x1, p.x - maxReach));
     // a monster is in it when its body (now or a frame ago) overlaps the box (openms, docs/hitboxes.md)
-    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
+    const mobs = this.liveMobs();
     const inside = (m) => { const b = m.hitBox(true); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; };
     // Slash Blast, Coma, Charged Blow: only once something is inside the ordinary swing do they reach out to their range
     const reach = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
@@ -2800,14 +3838,28 @@ export class Game {
    * swing: fall back to the weapon's swing when the skill has no Use sound (most physical attacks).
    * branch: 'effect' when cast, 'affected' on whoever a party buff reached (no sound: the caster's played).
    */
-  async playSkillEffect(id, ent, swing = false, branch = 'effect') {
+  async playSkillEffect(id, ent, swing = false, branch = 'effect', rate = 1) {
     if (branch === 'effect') sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
     const node = await this.skills?.ensure(id);
-    const fx = Game.fxNode(node?.[branch] || (branch === 'effect' ? node?.effect0 : null));
-    if (!fx) return;
-    const anim = new Anim(fx, false);
+    if (branch !== 'effect') { const fx = Game.fxNode(node?.[branch]); if (fx) this.pushEffect(fx, ent, rate); return; }
+    // a skill with an effect per pose (Brandish: effect/0 with brandish1, effect/1 with brandish2) plays the one
+    // that goes with the pose being used
+    const posed = node?.action && Object.entries(node.action).find(([, a]) => a === ent?.attack)?.[0];
+    const own = posed !== undefined && node.effect?.[posed] && !node.effect[posed]._canvas ? node.effect[posed] : null;
+    if (own) { this.pushEffect(own, ent, rate); return; }
+    // otherwise effect, then effect0, effect1... all start together (their blank first frames hold the later ones
+    // back), up to the first missing one; Crusher's go up to effect<attackCount>. None without an `effect`.
+    if (!node?.effect) return;
+    const last = CRUSHERS.has(id) ? (this.skills.levelData(id)?.attackCount ?? 0) : Infinity;
+    const layers = [node.effect];
+    for (let i = 0; i <= last && node[`effect${i}`]; i++) layers.push(node[`effect${i}`]);
+    for (const n of layers) { const fx = Game.fxNode(n); if (fx) this.pushEffect(fx, ent, rate); }
+  }
+  /** One effect layer on `ent`, following it, at `rate` (an attack's speed scale); a `fixed` one never flips. */
+  async pushEffect(node, ent, rate = 1) {
+    const anim = new Anim(node, false);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, follow: ent, flip: ent.facingRight });
+    this.fx.push({ anim, follow: ent, rate, fixed: !!node.fixed });
   }
 
   /**
@@ -2815,13 +3867,13 @@ export class Game {
    * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
    * faces. Without a head point, the middle of its body.
    */
-  async playHitEffect(id, mob, by = this.player, dmgs = [1]) {
+  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null) {
     const node = id ? await this.skills?.ensure(id) : null;
-    const fx = Game.fxNode(node?.hit);
+    const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
     // Seven's two stars twice... (a miss makes no monster damage sound)
-    dmgs.forEach((d, line) => this.after(lineDelay(id, line), () => {
+    dmgs.forEach((d, line) => this.after(lineDelay(id, line, ...this.lineTiming(by)), () => {
       if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
       if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
       if (!fx) return;
@@ -2849,7 +3901,7 @@ export class Game {
   }
 
   updateFx(dt) {
-    for (const f of this.fx) f.anim.update(dt * 1000);
+    for (const f of this.fx) f.anim.update(dt * 1000 / (f.rate || 1));   // rate: an attack's effect runs at its speed
     for (const d of this.doors?.values() || []) d.anim?.update(dt * 1000);
     for (const m of this.mists?.values() || []) for (const t of m.tiles) t.anim.update(dt * 1000);
     this.fx = this.fx.filter((f) => !f.anim.done && (!f.keep || f.keep()));
@@ -2861,33 +3913,37 @@ export class Game {
   }
 
   drawFx(ctx, cam) {
-    const draw = (node, x, y, flip) => {
+    const draw = (node, x, y, flip, alpha = 1, zoom = 1) => {
       const img = this.assets.image(node);
-      if (!img) return;
+      if (!img || alpha <= 0) return;
       const o = node.origin || [0, 0];
       ctx.save();
+      ctx.globalAlpha = alpha;
       ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
       if (flip) ctx.scale(-1, 1);
+      if (zoom !== 1) ctx.scale(zoom, zoom);
       ctx.drawImage(img, -o[0], -o[1]);
       ctx.restore();
     };
     for (const f of this.fx) {
       const node = f.anim.node;
       if (!node) continue;
-      if (f.follow) draw(node, f.follow.x, f.follow.y, f.follow.facingRight);
-      else draw(node, f.x, f.y, f.flip);
+      // each frame's own fade (a0 -> a1) and zoom (z0 -> z1)
+      if (f.follow) draw(node, f.follow.x, f.follow.y, f.fixed ? false : f.follow.facingRight, f.anim.alpha, f.anim.zoom);
+      else draw(node, f.x, f.y, f.flip, f.anim.alpha, f.anim.zoom);
     }
     for (const s of this.shots) {
       if (!s.anim?.node) continue;
-      const k = Math.min(1, s.t / s.dur);
-      draw(s.anim.node, s.sx + (s.tx - s.sx) * k, s.sy + (s.ty - s.sy) * k, s.flip);
+      const k = s.dur ? Math.min(1, s.t / s.dur) : 1;
+      draw(s.anim.node, s.sx + (s.tx - s.sx) * k, s.sy + (s.ty - s.sy) * k, s.flip, s.alpha);
     }
   }
 
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
-  damageNumbers(target, dmgs, mine, skillId = 0, crits = []) {
+  damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0, scale = 1) {
     if (mine && target.kind === 'Mob') target.hpShownUntil = performance.now() + 5000;
-    this.vfx?.damage(target, dmgs, mine ? 'red' : 'blue', skillId, crits);
+    // a monster's numbers are red (crit art on a crit) whoever struck it; blue is only for one being healed
+    this.vfx?.damage(target, dmgs, target.kind === 'Mob' || mine ? 'red' : 'blue', skillId, crits, weaponId, scale);
   }
 
   /**
@@ -2924,11 +3980,14 @@ export class Game {
     this.lastPos = { x: p.x, y: p.y };
     if (this.invincible > 0) { this.invincible -= dt; return; }
     if (this.dead || !this.stats) return;
+    const hidden = this.hidden() && !((this.map?.info?.fieldLimit || 0) & 2);
+    if (performance.now() < (this.boomerangUntil || 0)) return;
     // the original receiver: 44x65 standing, 46x31 lying down
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
+      if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
       const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
       // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
@@ -2936,6 +3995,63 @@ export class Game {
       this.hurtBy(m, m.src.info?.PADamage || 1, false, -1, knock);
       return;
     }
+  }
+  /**
+   * The damage a monster's blow does you, or 0 for a MISS.
+   * Avoid: (DEX / 4 + LUK / 2 + equipment and buffs), less half a point per level the monster has over you. A physical
+   * blow misses at avoid / (its accuracy x 4.5) x 100 %, held to 2-80% (a thief's 5-95%); a magic one when its
+   * accuracy is no more than a roll between a tenth of your avoid and all of it.
+   * Physical: attack x 0.80-0.85 x attack / 100, less (s x 0.00125 + 0.28) x your defence and a share of how far your
+   * defence is above or below the standard for your class and level (Base/StandardPDD.img), s being a mix of your stats
+   * ((LUK + DEX) / 4 + INT / 9 + STR x 2/7 for a warrior, LUK / 4 + INT / 9 + DEX x 2/7 + STR x 0.4 for the rest);
+   * nothing left is a MISS. Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 +
+   * magic defence) x 0.3 (a magician's) or 0.25, at least 1.
+   */
+  damageTaken(m, power, magic) {
+    const info = m.src?.info || {}, s = this.stats || {}, lv = s.level || 1, cls = Math.floor(((s.job || 0) % 1000) / 100);
+    const rand = (lo, hi) => lo + Math.random() * (hi - lo), clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), now = Date.now();
+    const buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k]));
+    const T = (k) => this.totalStat(k);   // your stats with equipment and Maple Warrior
+    const mobLv = info.level || 0, acc = clamp(info.acc || 0, 0, 999);
+    let avoid = clamp(this.avoidability() + buff('avoid'), 0, 999);
+    if (mobLv > lv) avoid = Math.max(0, avoid - Math.trunc((mobLv - lv) / 2));
+    if (magic) {
+      if (acc <= rand(avoid * 0.1, avoid)) return 0;
+      const mad = clamp(info.MADamage ?? power, 0, 1999), mdd = clamp(this.equipStat('mdef') + buff('mdef'), 0, 1999);
+      const d = Math.trunc(rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (T('dex') / 6 + T('str') / 7 + T('luk') / 5 + mdd) * (cls === 2 ? 0.3 : 0.25));
+      return d === 0 ? 0 : Math.max(1, d);
+    }
+    const chance = (avoid / (acc * 4.5)) * 100;
+    if (Math.random() * 100 < (cls === 4 ? clamp(chance, 5, 95) : clamp(chance, 2, 80))) return 0;
+    const pad = clamp(power, 0, 1999), pdd = clamp(this.equipStat('wdef') + buff('wdef'), 0, 1999), std = this.standardPdd(cls, lv);
+    const k = Math.trunc(cls === 1 ? (T('luk') + T('dex')) * 0.25 + T('int') / 9 + (T('str') * 2) / 7 : T('luk') * 0.25 + T('int') / 9 + (T('dex') * 2) / 7 + T('str') * 0.4);
+    let d = rand(pad * 0.8, pad * 0.85) * pad * 0.01 - (k * 0.00125 + 0.28) * pdd;
+    if (pdd >= std) d -= (pdd - std) * (k / 900 + lv / 1300 + 0.28) * 0.7;
+    else if (mobLv <= lv) d -= ((pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 13) / (lv - mobLv + 13);
+    else d -= (pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 1.3;
+    return Math.max(0, Math.trunc(d));
+  }
+  /** The standard weapon defence for a class (0 beginner .. 5 pirate) at a level, from Base/StandardPDD.img (gaps take the last value). */
+  standardPdd(cls, lv) {
+    if (!this.stdPdd) {
+      this.stdPdd = 'loading';
+      this.assets.json('Base/StandardPDD.img').then((j) => {
+        const t = [];
+        for (let c = 0; c < 6; c++) { let last = 0; t[c] = []; for (let l = 0; l <= 200; l++) { const v = Number(j?.[c]?.[l]) || 0; if (v > 0) last = v; t[c][l] = last; } }
+        this.stdPdd = t;
+      }).catch(() => { this.stdPdd = null; });
+    }
+    return Array.isArray(this.stdPdd) && cls >= 0 && cls <= 5 && lv >= 0 && lv <= 200 ? this.stdPdd[cls][lv] : 0;
+  }
+  /** Power Stance's roll on a hit that would throw you back (see STANCES): true when you stand firm. */
+  holdsStance() {
+    const now = Date.now(), b = (this.buffs || []).find((x) => (x.stance || Object.values(STANCES).includes(x.source)) && x.until > now);
+    if (!b || ((this.map?.info?.fieldLimit || 0) & 2)) return false;
+    const rate = Math.max(0, Math.min(100, b.stance ?? this.skills.levelData(b.source)?.prop ?? 0));
+    if (Math.floor(Math.random() * 100) >= rate) return false;
+    const id = STANCES[this.stats?.job] || b.source;
+    if (id) this.playSkillEffect(id, this.player, false, 'special');
+    return true;
   }
   /** The receiver monster attacks are tested against: 44x65 standing, 46x31 lying down. */
   playerBody() {
@@ -2947,19 +4063,47 @@ export class Game {
    * `from` is the attack index (-1 for touching it): the server applies that attack's extras (MP burn, disease).
    * `knock`: which way you're thrown (-1 left, 1 right, 0 not at all); by default away from the monster.
    */
-  hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1) {
+  hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1, attack = null) {
     const p = this.player;
-    let def = 0; for (const it of Object.values(this.inventory.equipped)) def += (magic ? it.mdef : it.wdef) || 0;
-    const damage = Math.max(1, Math.round(power * (0.85 + Math.random() * 0.15) - def * 0.5));
+    if (performance.now() < (this.boomerangUntil || 0)) return;   // mid Boomerang Step
+    let damage = this.damageTaken(m, power, magic);
+    // a deadly attack leaves you 1 HP
+    if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
     const fromRight = m.x > p.x;
+    // while Chakra winds up, blows do only its x%
+    if (damage > 0 && this.chakra) damage = Math.max(1, Math.trunc((damage * this.chakra.x) / 100));
+    // Shadow Shifter: at its prop chance the blow (hit or miss) is dodged - no number, no knock-back
+    const shifter = SHIFTERS[this.stats?.job];
+    if (shifter && this.skills.level(shifter) && !((this.map?.info?.fieldLimit || 0) & 2) && Math.random() * 100 < (this.skills.levelData(shifter)?.prop || 0)) {
+      this.net.takeDamage({ damage: -1, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.playSkillEffect(shifter, p, false, 'special');
+      setExpression(p, 2, HIT_FACE_TIME);
+      this.invincible = HIT_PROTECTION; this.missed = true;
+      return;
+    }
+    if (damage <= 0) {   // MISS: no knockback or blinking, but the same 1.5s before the next blow as a hit
+      this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.vfx?.damage(p, [0], 'violet');
+      this.invincible = HIT_PROTECTION; this.missed = true;
+      return;
+    }
     this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
-    this.vfx?.damage(p, [damage], 'violet');
+    // Meso Guard: half the blow is paid in mesos (x% of it), as far as they go; the number shows what you lose
+    const guard = this.buffs?.some((b) => b.source === MESO_GUARD && b.until > Date.now()) && this.skills.levelData(MESO_GUARD);
+    let lost = damage;
+    if (guard?.x) {
+      let absorbed = Math.trunc(Math.min(199999, damage) / 2);
+      if (this.meso < Math.trunc((absorbed * guard.x) / 100)) absorbed = Math.trunc((this.meso * 100) / guard.x);
+      if (absorbed > 0) { lost = damage - absorbed; this.playSkillEffect(MESO_GUARD, p, false, 'special'); }
+    }
+    this.vfx?.damage(p, [lost], 'violet');
     if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
     // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
     // monster you're thrown back less, and falling onto it only slows your fall
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    if (knock && this.holdsStance()) knock = 0;
     if (knock) {
       p.fh = null; p.ladder = null;
       p.vx = impact(p.vx || 0, knock * KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
@@ -2969,7 +4113,7 @@ export class Game {
       this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);
     }
     p.attack = null;
-    this.invincible = HIT_PROTECTION;
+    this.invincible = HIT_PROTECTION; this.missed = false;
   }
 
   /**
@@ -3086,7 +4230,7 @@ export class Game {
     const power = Number(magic ? a.info.MADamage ?? m.src.info?.MADamage : a.info.PADamage ?? m.src.info?.PADamage) || 1;
     const land = () => {
       if (this.dead || this.invincible > 0) return;
-      this.hurtBy(m, power, magic, a.index);
+      this.hurtBy(m, power, magic, a.index, undefined, a.info);
       const hit = a.info.hit && Game.fxNode(a.info.hit);
       if (hit) { const anim = new Anim(hit, false); this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p })); }
     };
@@ -3100,6 +4244,7 @@ export class Game {
 
   /** Pick up the item you are standing on: your feet within its width, on the same ground. */
   tryPickup() {
+    if (this.hidden()) return;
     const p = this.player;
     let best = null, bestDx = Infinity;
     for (const [oid, d] of this.drops) {
@@ -3135,21 +4280,42 @@ export class Game {
     return stanceByte(st, !p.facingRight);
   }
 
+  /**
+   * Your movement for the server and everyone watching, recorded as the client does: each frame adds to the last
+   * element (where you ended up, how fast you were then moving, in px/s) until the foothold, the stance or the way
+   * you are moving changes; once a second of movement has gathered that touches the ground it goes out, the elements
+   * in the air after the last on the ground waiting for the next packet. Standing still sends nothing. Watchers draw
+   * each element as a curve through those speeds, so they must be the real ones (also on ropes and slopes).
+   */
   syncMovement(dt) {
     const p = this.player;
-    this.moveT += dt * 1000; this.flushT += dt;
-    if (this.moveT >= 90) {
-      const snap = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round(p.vx || 0), vy: Math.round(p.vy || 0), fh: p.fh?.id || 0, stance: this.currentStance(), duration: Math.round(this.moveT) };
-      const last = this.moveBuf[this.moveBuf.length - 1] || this.lastSent;
-      if (!last || last.x !== snap.x || last.y !== snap.y || last.stance !== snap.stance) this.moveBuf.push(snap);
-      this.moveT = 0;
-    }
-    if (this.flushT >= 0.36 && this.moveBuf.length) {
-      const start = this.lastSent ? { x: this.lastSent.x, y: this.lastSent.y } : { x: this.moveBuf[0].x, y: this.moveBuf[0].y };
-      this.net.move(start, this.moveBuf);
-      this.lastSent = this.moveBuf[this.moveBuf.length - 1];
-      this.moveBuf = []; this.flushT = 0;
-    }
+    if (!dt) return;
+    const prev = this.movePos || { x: p.x, y: p.y };
+    this.movePos = { x: p.x, y: p.y };
+    if (Math.abs(p.x - prev.x) > 300 || Math.abs(p.y - prev.y) > 300) { this.flushMovement(true); this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; return; }
+    const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round((p.x - prev.x) / dt), vy: Math.round((p.y - prev.y) / dt),
+      // on a ladder or rope its id, negative: those watching put you on it, in its layer (0 would leave you in the
+      // layer of the last floor, sometimes behind it)
+      fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000, held: !!p.ladder };
+    const last = this.moveBuf[this.moveBuf.length - 1];
+    if (last && last.cmd === 0 && last.fh === el.fh && last.stance === el.stance && Math.sign(last.vx) === Math.sign(el.vx) && Math.sign(last.vy) === Math.sign(el.vy)) {
+      Object.assign(last, { x: el.x, y: el.y, vx: el.vx, vy: el.vy }); last.duration += el.duration;
+    } else this.moveBuf.push(el);
+    this.moveTotal = (this.moveTotal || 0) + el.duration;
+    if (this.moveTotal >= MOVE_FLUSH) this.flushMovement(this.moveTotal >= MOVE_FLUSH * 3);
+  }
+  /** Send what is gathered: up to the last element on the ground (all of it when forced, before a portal). */
+  flushMovement(force) {
+    const buf = this.moveBuf || [];
+    const ground = force ? buf.length - 1 : buf.findLastIndex((m) => m.fh > 0 || m.held);   // a ladder or rope holds you too
+    if (ground < 0 || !this.net) return;
+    const send = buf.slice(0, ground + 1), keep = buf.slice(ground + 1), first = send[0], lastSent = this.lastSent;
+    this.moveBuf = keep; this.moveTotal = keep.reduce((t, m) => t + m.duration, 0);
+    // standing where we last were: nothing to tell
+    if (send.length === 1 && lastSent && first.x === lastSent.x && first.y === lastSent.y && first.stance === lastSent.stance && !first.vx && !first.vy) return;
+    const start = lastSent ? { x: lastSent.x, y: lastSent.y } : { x: first.x, y: first.y };
+    this.net.move(start, send.map(({ held, ...m }) => ({ ...m, duration: Math.round(m.duration) })));
+    this.lastSent = send[send.length - 1];
   }
 
   // ------------------------------------------------------------------ camera / render
@@ -3209,7 +4375,7 @@ export class Game {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
     if (this.inCashShop) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H); this.windows?.draw(ctx); return; }
-    const cam = { ...this.cam, x: Math.round(this.cam.x), y: Math.round(this.cam.y) };
+    const cam = { ...this.cam, x: Math.round(this.cam.x) + (this.shake?.dx || 0), y: Math.round(this.cam.y) + (this.shake?.dy || 0) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     map.drawBacks(ctx, cam, false);
@@ -3271,23 +4437,45 @@ export class Game {
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
   }
 
+  /**
+   * Shadow Partner: Skill/<id>/special/<your action>, on your frame, 30px behind you (50px under you on a ladder or
+   * rope); nothing for an action it has no art for.
+   */
+  drawPartner(ctx, ent, sx, sy, local) {
+    const job = local ? this.stats?.job : ent.job, id = Math.floor((job || 0) / 1000) === 1 ? SHADOW_PARTNERS[1] : SHADOW_PARTNERS[0];
+    const node = this.skills?.node(id);
+    if (!node) { this.skills?.ensure(id); return; }
+    const frames = node.special?.[ent.action];
+    if (!frames) return;
+    if (!frames.loaded) { frames.loaded = true; this.assets.preload(Object.values(frames).filter((f) => f?._canvas)); }
+    const keys = Object.keys(frames).filter((k) => /^\d+$/.test(k));
+    const fr = keys.length && frames[keys[(ent.frame || 0) % keys.length]], img = fr && this.assets.image(fr);
+    if (!img) return;
+    const climbing = /^(ladder|rope)$/.test(ent.action), dir = ent.facingRight ? 1 : -1;
+    const x = climbing ? sx : sx - dir * 30, y = climbing ? sy + 50 : sy, o = fr.origin || [0, 0];
+    ctx.save(); ctx.translate(Math.round(x), Math.round(y)); if (ent.facingRight) ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); ctx.restore();
+  }
   drawChar(ctx, cam, ent, look, local) {
     const parts = look.compose(ent.action, ent.frame, ent.expr);
     const sx = ent.x - cam.x, sy = ent.y - cam.y;
     const chair = local ? ent.seat?.item : ent.action === 'sit' && ent.chair;
     if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight);
     // while protected after a hit, alternate gray and normal every 60ms, as the original does
-    const blink = local && this.invincible > 0 && Math.floor(this.invincible / 0.06) % 2 === 0;
+    const blink = local && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
     // dead: the ghost (body action "dead") hovers over the tombstone, drifting smoothly round a small circle
     // (not snapped to whole game pixels, so it glides instead of stepping)
     const dead = ent.action === 'dead', t = performance.now() / 700;
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
+    if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
-    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, 1, !dead);   // a ghost always faces left
+    const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
+    if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
+    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
+    if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
     nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
     const guild = local ? this.guild?.name : ent.guild;
     if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);

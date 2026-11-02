@@ -517,11 +517,11 @@ class StatWin extends Win {
     ctx.drawImage(bg, 0, 0);
     const eq = Object.values(this.g.inventory?.equipped || {});
     const sum = (k) => eq.reduce((a, it) => a + (it[k] || 0), 0);
-    const max = this.g.maxDamage();
+    const max = this.g.maxDamage(), T = (k) => this.g.totalStat(k);   // with equipment
     const rows = [
-      `${Math.max(1, Math.floor(max * 0.1))} ~ ${max}`, sum('wdef'), s.int + sum('matk'), s.int + sum('mdef'),
-      Math.floor(s.dex * 0.8 + s.luk * 0.5) + sum('acc'), Math.floor(s.dex * 0.25 + s.luk * 0.5) + sum('avoid'),
-      s.dex + s.int + s.luk + sum('hands'), `${100 + sum('speed')}%`, `${100 + sum('jump')}%`,
+      `${Math.max(1, Math.floor(max * 0.1))} ~ ${max}`, sum('wdef'), T('int') + sum('matk'), T('int') + sum('mdef'),
+      this.g.accuracy(), this.g.avoidability(),
+      T('dex') + T('int') + T('luk') + sum('hands'), `${100 + sum('speed')}%`, `${100 + sum('jump')}%`,
     ];
     rows.forEach((t, i) => this.text(ctx, t, 90, 10 + i * 20));
     ctx.restore();
