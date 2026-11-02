@@ -1,5 +1,6 @@
 # --- Generated / runtime ---
 assets/
+test/
 **/node_modules/
 **/*.pid
 **/*.log
