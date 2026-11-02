@@ -4,11 +4,13 @@
   "description": "Pure JS MapleStory v83 web client",
   "type": "module",
   "scripts": {
-    "build": "esbuild server.js --bundle --minify --platform=node --outfile=index.js",
-    "start": "node index.js"
+    "build": "esbuild src/main.js --bundle --minify --outfile=public/bundle.js || echo 'BUILD FAILED'",
+    "start": "npm run build && node server.js"
   },
   "dependencies": {
+    "esbuild": "^0.25.12",
     "express": "^4.21.0",
+    "javascript-obfuscator": "^4.0.1",
     "pako": "^2.1.0",
     "ws": "^8.18.0"
   }
