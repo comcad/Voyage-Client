@@ -181,7 +181,8 @@ export class WorldFx {
 
   /** ChatBalloon.img/0 (or /npc): a 9-slice around the text with the arrow under it, pointing at the speaker. */
   drawBalloon(ctx, cam, ent, text, style = '0') {
-    const B = this.CB?.[style], im = (n) => this.assets.image(n);
+    const B = String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
+    if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
     const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
     if (Object.values(p).some((v) => !v)) return false;
     ctx.save();

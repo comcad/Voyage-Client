@@ -1,7 +1,7 @@
 import { GameMap, nameTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases } from './character.js';
-import { weaponMultiplier, itemIcon, mesoIcon, invType, isScroll, scrollFits, ACTIONS } from './data.js';
+import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
 import { stanceByte, STANCE_NAMES } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
@@ -14,7 +14,7 @@ import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
 import { StatusBar } from './ui/statusbar.js';
-import { WindowManager } from './ui/windows.js';
+import { WindowManager, allCanvases } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
@@ -32,7 +32,7 @@ import { uiText } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
-import { Pet, petLines } from './pets.js';
+import { Pet, pickReaction, NO_LOOT_MAP } from './pets.js';
 import { Summon, PUPPET_RANGE } from './summons.js';
 import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
@@ -44,7 +44,23 @@ import { settings } from './settings.js';
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
 // and how long it takes to glide to a new focus height (s)
 const CAM_LIFT = 50, CAM_DEADBAND = 28, CAM_DAMPING = 100;   // the original camera filter (see updateCamera)
-const PET_LOOT_X = 75;   // how far to either side of a pet it reaches for items
+/**
+ * Pet equipment, by pet: accessory, Label Ring, Quote Ring and the ability items (Item Pouch, Meso Magnet, Wing Boots,
+ * Binocular, Magic Scales, Item Ignore Pendant); the Auto HP / MP Potion Pouches are shared by all three.
+ */
+export const PET_SLOTS = [
+  { acc: -114, label: -121, quote: -129, pouch: -122, magnet: -123, boots: -126, binocular: -127, scales: -128, ignore: -146 },
+  { acc: -130, label: -131, quote: -132, pouch: -133, magnet: -134, boots: -135, binocular: -136, scales: -137, ignore: -147 },
+  { acc: -138, label: -139, quote: -140, pouch: -141, magnet: -142, boots: -143, binocular: -144, scales: -145, ignore: -148 },
+];
+for (const s of PET_SLOTS) s.ability = [s.pouch, s.magnet, s.boots, s.binocular, s.scales, s.ignore];
+export const SHARED_PET_SLOTS = [-124, -125];
+const PET_FLAGS = ['pickupMeso', 'pickupItem', 'pickupOthers', 'longRange', 'sweepForDrop', 'consumeHP', 'consumeMP', 'ignorePickup'];
+const PET_GONE = { 1: "The pet went back home because it's hungry.", 2: "The pet's magical time has run out, and so it has turned back into a doll.", 3: 'You cannot use pet here.' };
+const PET_DOLL_TIME = 0x0217E646BB058000n;   // a dateDead from 2079 on: a doll
+const FOLLOW_THE_LEAD = { 0: 8, 1: 10000018, 2: 20000024 };
+export const MESO_ID = 2147483647;
+const MAGIC_GUARDS = [2001002, 12001001, 22111001], POWER_GUARDS = [1101007, 1201007];
 const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'You cannot do that while dead.', 6: 'You need a Shop Permit to open a shop.',
   10: 'You cannot open a store this close to a portal.', 13: 'You cannot open a store this close to another one.',
   15: 'You cannot open a shop here. Shops open in the Free Market rooms.', 16: 'You cannot open a shop here.',
@@ -189,6 +205,7 @@ class RemotePlayer {
 }
 
 const isPetFood = (id) => Math.floor(id / 10000) === 212;
+const isPetEquip = (id) => { const c = Math.floor(id / 10000); return c === 180 || c === 181 || c === 182 || c === 183; };
 
 /** Weapon boosters (Sword/Axe/BW/Spear/Polearm/Bow/Crossbow/Claw/Dagger/Knuckler/Gun, Cygnus and Aran ones). */
 const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 3101002, 3201002, 4101003, 4201002, 5101006, 5201003,
@@ -925,58 +942,343 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ pets
+  /** A pet comes out at its index: one there already is replaced, or pushed along with those after it. */
   addPet(d) {
-    const pet = new Pet(this, d);
-    this.pets.set(pet.key, pet);
     if (!this.petDialog) this.petDialog = this.assets.json('String/PetDialog.img').then((s) => { this.petDialog = s; return s; });
+    this.petEff ??= this.assets.json('Effect/PetEff.img').then(async (n) => { this.petEff = n; if (n?.Basic) await this.assets.preload(allCanvases(n.Basic)); return n; });
+    this.nameTags ??= this.assets.json('UI/NameTag.img').then(async (n) => { this.nameTags = n; if (n?.pet) await this.assets.preload(allCanvases(n.pet)); return n; });
+    const pet = new Pet(this, d), list = this.petsOf(d.owner);
+    if (d.replace) list[d.slot] = pet; else list.splice(d.slot, 0, pet);
+    this.setPets(d.owner, list);
+    if (pet.mine) {
+      const it = this.petItem(pet), ms = this.moveStats();
+      if (it?.pet?.attribute & 1) { pet.speed = ms.speed; pet.jump = ms.jump; }   // keeps up with its owner
+    }
   }
-  myPets() { return [...this.pets.values()].filter((p) => p.mine); }
-  /** The pet's closeness level, from its cash-inventory item. */
-  petLevel(pet) {
-    const it = Object.values(this.inventory?.[5] || {}).find((i) => i.pet && Number(BigInt.asIntN(32, BigInt(i.cashId ?? 0))) === pet.uid);
-    return it?.pet?.level || 1;
+  /** A pet goes home: those after it move up. */
+  removePet(owner, slot, reason = 0) {
+    const list = this.petsOf(owner);
+    if (!list[slot]) return;
+    list.splice(slot, 1);
+    this.setPets(owner, list);
+    if (owner !== this.player.id) return;
+    const msg = PET_GONE[reason];
+    if (msg) this.hud.message(msg, CHAT_COLORS.notice);
   }
+  petsOf(owner) { const a = []; for (const p of this.pets.values()) if (p.owner === owner) a[p.slot] = p; return a; }
+  setPets(owner, list) {
+    for (const [k, p] of this.pets) if (p.owner === owner) this.pets.delete(k);
+    list.slice(0, 3).forEach((p, i) => { if (p) { p.slot = i; this.pets.set(p.key, p); } });
+    if (owner !== this.player.id) return;
+    // their places in the line: one pet stays on you; of two, the lead stays and the other runs ahead; of three, one ahead, one behind
+    const mine = this.petsOf(owner).filter(Boolean), places = mine.length === 1 ? [0] : mine.length === 2 ? [1, 2] : [5, 3, 4];
+    mine.forEach((p, i) => { p.formation = places[i] ?? 0; });
+    this.petFlagCache = null;
+  }
+  myPets() { return this.petsOf(this.player.id).filter(Boolean); }
+  /** The pet's own cash item (level, closeness, fullness...). */
+  petItem(pet) { return Object.values(this.inventory?.[5] || {}).find((i) => i.pet && Number(BigInt.asIntN(32, BigInt(i.cashId ?? 0))) === pet.uid) || null; }
+  petLevel(pet) { return this.petItem(pet)?.pet?.level || 1; }
+
+  /** What a pet's equipment lets it do, from Character/PetEquip/<id>.img/info: its own slots and the shared potion pouches. */
+  petFlags(pet) {
+    if (!pet.mine) return {};
+    const c = (this.petFlagCache ??= new Map());
+    if (c.has(pet.slot)) return c.get(pet.slot);
+    const f = {}, eq = this.inventory?.equipped || {}, s = PET_SLOTS[pet.slot];
+    if (pet.mine && s) {
+      let pending = false;
+      for (const pos of [...s.ability, ...SHARED_PET_SLOTS]) {
+        const it = eq[pos];
+        if (!it) continue;
+        const info = this.petEquipInfo(it.id);
+        if (!info) { pending = true; continue; }
+        for (const k of PET_FLAGS) if (Number(info[k])) f[k] = true;
+      }
+      if (pending) return f;
+    }
+    c.set(pet.slot, f);
+    return f;
+  }
+  petEquipInfo(id) {
+    const m = (this.petEquipInfos ??= new Map());
+    if (!m.has(id)) { m.set(id, null); this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`).then((n) => { m.set(id, n?.info || {}); this.petFlagCache = null; }); }
+    return m.get(id);
+  }
+  petRing(pet, ring) { return pet.mine ? !!this.inventory?.equipped?.[PET_SLOTS[pet.slot]?.[ring]] : ring === 'label' ? pet.nameTagOn : pet.balloonOn; }
+
+  /** Double-click a pet: send it home, or summon it (with Follow the Lead, asking whether it becomes the Boss Pet). */
+  async summonPet(slot, it) {
+    if (this.player.ladder) return;
+    const n = await this.assets.json(`Item/Pet/${it.id}.img`), info = n?.info || {};
+    const dead = Number(info.limitedLife) ? it.pet.life < 1 : BigInt(it.pet.dead ?? 0) >= PET_DOLL_TIME;
+    if (dead) {
+      if (!Number(info.noRevive)) { this.windows.notice("The time has run out, so it can't move."); return; }
+      if (await this.windows.confirm('You cannot revive this pet.\r\nYou can purchase a new pet\r\nin the Cash Shop. Would you like\r\nto move to the Cash Shop?')) this.enterCashShop?.();
+      return;
+    }
+    const mine = this.myPets(), out = mine.some((p) => Number(BigInt.asIntN(32, BigInt(it.cashId ?? 0))) === p.uid);
+    const follow = this.skills?.level(FOLLOW_THE_LEAD[Math.floor((this.stats?.job || 0) / 1000)] ?? 8) > 0;
+    let lead = false;
+    if (!out && follow && mine.length) {
+      if (mine.length >= 3) { this.windows.notice('You have exceeded the maximum number\r\n of pets that can accompany you.\r\nPlease try again after \r\nyou change the living pet back into a doll.'); return; }
+      lead = await this.windows.confirm('Would you like to change your Boss Pet?\r\n (The "Item Ignore" skill, as well as \r\nthe stats for speed and jump will \r\nfollow that of the Lead Pet)');
+    }
+    this.net.spawnPet(slot, lead);
+  }
+
+  /** Pet food: the server feeds the hungriest; it is the one heard eating. */
   feedPet(slot, id) {
-    if (!this.myPets().length) { this.notice('You have no pet out to feed.'); return; }
     this.net.petFood(slot, id);
+    let pet = null;
+    for (const p of this.myPets()) if (!pet || (this.petItem(p)?.pet?.fullness ?? 100) < (this.petItem(pet)?.pet?.fullness ?? 100)) pet = p;
+    if (pet) sfx.play(`Pet/${pet.id}/eat`);
   }
-  /** Saying a pet command word in chat ("sit", "poop", "iloveyou" ...) asks every pet of yours that knows it at its level. */
+
+  /**
+   * A chat line said to your pets: each one standing still (and not busy) checks it, after its name if it has been
+   * named, against the command words of its level; a match asks the server how it went.
+   */
   petCommandWord(text) {
-    const word = text.trim().toLowerCase();
-    if (!word || typeof this.petDialog !== 'object' || !this.petDialog) return;
+    if (typeof this.petDialog !== 'object' || !this.petDialog || this.dead) return;
     for (const pet of this.myPets()) {
+      if (pet.forced || pet.cmdWaiting || pet.idleMs <= 499 || !pet.data) continue;
+      let line = text.trim(), called = false;
+      const def = this.windows.itemName(pet.id);
+      if (def && pet.name !== def && line.length > pet.name.length && line.startsWith(pet.name)) {
+        line = line.slice(pet.name.length).trim();
+        while (/^[!,~]/.test(line)) line = line.slice(1).trim();
+        called = true;
+      }
       const lv = this.petLevel(pet), words = this.petDialog[pet.id] || {};
-      for (const [n, c] of Object.entries(pet.data?.interact || {})) {
+      for (const [n, c] of Object.entries(pet.data.interact || {})) {
         if (lv < (c.l0 ?? 1) || lv > (c.l1 ?? 30)) continue;
-        if (String(words[c.command] || '').toLowerCase().split('|').includes(word)) { this.net.petCommand(pet.uid, Number(n)); break; }
+        if (String(words[c.command] || '').split('|').map((w) => w.trim()).includes(line)) { this.net.petCommand(pet.sn, called, Number(n)); pet.cmdWaiting = true; break; }
       }
     }
   }
-  /** PET_COMMAND answers: interact/<cmd> (or the food entry for the pet's level) gives the action and lines. */
-  petAnswer(pet, kind, cmd, ok) {
-    if (!pet?.data) return;
-    let node = null;
-    if (kind === 'interact') node = pet.data.interact?.[cmd];
-    else { const lv = pet.mine ? this.petLevel(pet) : 1; node = Object.values(pet.data.food || {}).find((f) => lv >= f.l0 && lv <= f.l1); }
-    const { act, text } = petLines(pet, node, ok, typeof this.petDialog === 'object' ? this.petDialog : null);
-    if (act) pet.play(act);
-    pet.say(text);
+  /** PET_COMMAND: how your command (0) or food (1) went; your pet answers and everyone sees it through PET_CHAT. */
+  onPetCommand(owner, slot, type, cmd, ok, balloon) {
+    const pet = this.pets.get(`${owner}:${slot}`);
+    if (!pet?.mine || !pet.data) return;
+    const lv = this.petLevel(pet);
+    let entry;
+    if (type === 0) { pet.cmdWaiting = false; entry = pet.data.interact?.[cmd]; if (!entry || lv < entry.l0 || lv > entry.l1) return; }
+    else entry = Object.values(pet.data.food || {}).find((f) => lv >= f.l0 && lv <= f.l1);
+    const { act, text } = pickReaction(entry?.[ok ? 'success' : 'fail'], this.petDialog, pet.id);
+    this.petSay(pet, type, act ? pet.actionIndex(act) : -1, text, balloon || this.petRing(pet, 'quote'));
   }
-  /** Your pets try for items lying near them (Cosmic only lets them with an Item Pouch / Meso Magnet on). */
-  petLoot(dt) {
-    if ((this.petLootT = (this.petLootT || 0) + dt) < 0.25) return;
-    this.petLootT = 0;
-    const tried = (this.petTried ??= new Set());
+  /** Your pet does something and says it, for everyone (idle chatter, type 3, stays yours). */
+  petSay(pet, type, action, text, balloon = this.petRing(pet, 'quote')) {
+    pet.react(type, action, text, balloon);
+    if (pet.mine && type !== 3 && this.net) this.net.petChat(pet.sn, type, action >= 9 ? action : 0, text);
+  }
+  /** /pet <text>: pets that know slang answer it (level 15 on); the others repeat it (over level 14). */
+  petTalk(text) {
+    if (typeof this.petDialog !== 'object' || !this.petDialog) return;
     for (const pet of this.myPets()) {
+      const lv = this.petLevel(pet);
+      if (!pet.data || lv < 15) continue;
+      if (pet.data.slang) {
+        if (pet.forced) continue;
+        const e = Object.values(pet.data.slang).find((s) => s && lv >= s.l0 && lv <= s.l1);
+        const { act, text: line } = pickReaction(e ? { 0: e } : null, this.petDialog, pet.id);
+        if (act || line) this.petSay(pet, 2, act ? pet.actionIndex(act) : -1, line);
+      } else this.petSay(pet, 2, -1, text);
+    }
+  }
+  /** Standing about: an idle line from randAction (whatever its level). */
+  petIdleChat(pet) {
+    const list = Object.values(pet.data?.randAction || {}).filter((e) => e && typeof e === 'object');
+    if (!list.length) return;
+    const { act, text } = pickReaction({ 0: list[Math.floor(Math.random() * list.length)] }, this.petDialog, pet.id);
+    this.petSay(pet, 3, act ? pet.actionIndex(act) : -1, text);
+  }
+  petMonolog(pet) {
+    const lines = Object.values(this.petDialog?.[pet.id]?.autoSpekaing || {}).filter((t) => typeof t === 'string');
+    if (lines.length) pet.react(3, -1, lines[Math.floor(Math.random() * lines.length)]);
+  }
+  /** Things your pets remark on (with the auto-speech skill): your level up, nearly levelling, resting, potions. */
+  petEvent(key) {
+    for (const pet of this.myPets()) {
+      if (!((this.petItem(pet)?.pet?.skill || 0) & 0x100)) continue;
+      const text = this.petDialog?.[pet.id]?.[key];
+      if (typeof text === 'string' && text) pet.react(3, -1, text);
+    }
+  }
+  /** autoReact pets: when you attack, now and then they get cross. */
+  petAttackReact() {
+    for (const pet of this.myPets()) if (Number(pet.info.autoReact) && Math.random() * 10 < 2) pet.react(3, pet.actionIndex('angry_short'), '');
+  }
+  /** Effect/PetEff.img: 0 level up, 1 teleport, 2 its own warp (where it was), 3 evolution. */
+  async petEffect(pet, kind, at = null) {
+    const E = this.petEff instanceof Promise ? await this.petEff : this.petEff;
+    const node = kind === 2 ? E?.[pad(pet.id, 7)]?.warp : E?.Basic?.[['LevelUp', 'Teleport', null, 'Evolution'][kind]];
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    if (at) this.fx.push({ anim, x: at.x, y: at.y, flip: !pet.facingLeft });
+    else this.fx.push({ anim, follow: pet, flip: false });
+    if (kind === 0 || kind === 3) sfx.play('Game/LevelUp');
+  }
+  /** The name under a pet: a Label Ring gives it NameTag.img/pet/<its nameTag> instead of the plain tag. */
+  drawPetName(ctx, pet, x, y) {
+    const N = this.petRing(pet, 'label') && !(this.nameTags instanceof Promise) && this.nameTags?.pet?.[pet.info.nameTag];
+    const w = N && this.assets.image(N.w), c = N && this.assets.image(N.c), e = N && this.assets.image(N.e);
+    if (!w || !c || !e) { nameTag(ctx, pet.name, x, y + 2, '#fff'); return; }
+    ctx.save();
+    ctx.font = '12px "Segoe UI", system-ui, sans-serif';
+    const tw = Math.ceil(ctx.measureText(pet.name).width), x0 = Math.round(x - tw / 2), top = y + 2 + 5;
+    ctx.drawImage(w, x0 - (N.w.origin?.[0] ?? w.width), top - (N.w.origin?.[1] ?? 0));
+    ctx.drawImage(c, x0, top - (N.c.origin?.[1] ?? 0), tw, c.height);
+    ctx.drawImage(e, x0 + tw - (N.e.origin?.[0] ?? 0), top - (N.e.origin?.[1] ?? 0));
+    ctx.fillStyle = `#${((N.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(pet.name, x0, top - 3);
+    ctx.restore();
+  }
+  /** Its accessory, from Character/PetEquip/<id>.img/<pet id>/<action>/<frame>, over the pet's frame. */
+  drawPetEquip(ctx, pet, x, y, o, node) {
+    const id = pet.mine ? this.inventory?.equipped?.[PET_SLOTS[pet.slot]?.acc]?.id : this.others.get(pet.owner)?.lookData?.equips?.[[14, 30, 38][pet.slot]];
+    if (!id || pet.drawAct() === 'basket') return;
+    const m = (this.petEquipArt ??= new Map()), k = `${id}`;
+    if (!m.has(k)) { m.set(k, null); this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`).then(async (n) => { if (n) await this.assets.preload(allCanvases(n)); m.set(k, n); }); }
+    const fr = frames(m.get(k)?.[pet.id]?.[pet.drawAct()]), f = fr[pet.frame];
+    const img = f && this.assets.image(f);
+    if (!img) return;
+    const eo = f.origin || [0, 0];
+    ctx.save();
+    if (!pet.facingLeft && pet.act !== 'hang') { ctx.translate(x, y); ctx.scale(-1, 1); ctx.drawImage(img, -eo[0], -eo[1]); }
+    else ctx.drawImage(img, x - eo[0], y - eo[1]);
+    ctx.restore();
+  }
+
+  /**
+   * Pet looting, every 30ms step: each pet takes the first drop in its reach (25px either side, 50 up, 10 down) that
+   * its pouch / magnet lets it, that is its owner's (or anyone's after 15s with Magic Scales), has landed, isn't
+   * ignored and wasn't tried in the last 3s. With Wing Boots it also walks toward drops near you.
+   */
+  petLootStep(dt) {
+    if ((this.petLootAcc = (this.petLootAcc || 0) + dt * 1000) < TICK) return;
+    this.petLootAcc %= TICK;
+    const mine = this.myPets();
+    if (!mine.length || this.dead || this.map?.id === NO_LOOT_MAP) { for (const p of mine) p.lootDir = 0; return; }
+    const now = performance.now();
+    const can = (pet, d, f) => {
+      if (d.pickedBy || !d.landed || d.petOk === false) return false;
+      if (d.meso ? !f.pickupMeso : (!f.pickupItem && !(f.sweep && f.pickupOthers)) || Number(this.windows.info(d.id)?.pickUpBlock)) return false;
+      const me = this.player.id;
+      const ours = (f.pickupOthers && now - (d.born || 0) > 15000) || !d.dropper || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || d.type >= 2;
+      return ours && now - (d.petTry || -Infinity) >= 3000 && !this.petIgnores(d);
+    };
+    for (const pet of mine) {
+      const f = this.petFlags(pet);
+      if (pet.lootPauseAt && now - pet.lootPauseAt >= 500) continue;
       for (const d of this.drops.values()) {
-        if (d.pickedBy || tried.has(d.oid) || !d.landed) continue;
-        // within reach of the pet (it trails ~72px behind you, so items at your feet count)
-        if (Math.abs(d.x - pet.x) < PET_LOOT_X && Math.abs(d.y - pet.y) < 40 && (!d.owner || d.owner === this.player.id || d.type >= 2)) {
-          tried.add(d.oid);
-          this.net.petLoot(pet.uid, d.oid, Math.round(pet.x), Math.round(pet.y));
-        }
+        if (!can(pet, d, f)) continue;
+        if (!(d.x >= pet.x - 25 && d.x < pet.x + 25 && d.y >= pet.y - 50 && d.y < pet.y + 10)) continue;
+        d.petTry = now;
+        this.net.petLoot(pet.sn, Math.round(pet.x), Math.round(pet.y), d.oid, f);
+        break;
       }
     }
+    // Wing Boots: each drop near you goes to the nearest sweeping pet without one
+    const sweepers = mine.filter((p) => this.petFlags(p).sweepForDrop);
+    for (const p of sweepers) p.lootDir = 0;
+    if (!sweepers.length) return;
+    const p = this.player;
+    for (const d of this.drops.values()) {
+      let best = null;
+      for (const pet of sweepers) {
+        const f = this.petFlags(pet), reach = f.longRange ? 275 : 125;
+        if (pet.lootDir || Math.abs(d.x - p.x) >= reach || !(d.y > pet.y - 50 && d.y < pet.y + 10)) continue;
+        if (!can(pet, d, { ...f, sweep: true })) continue;
+        if (!best || Math.abs(d.x - pet.x) < Math.abs(d.x - best.x)) best = pet;
+      }
+      if (best) best.lootDir = d.x <= best.x ? -1 : 1;
+    }
+  }
+  /** The ignore list counts while the lead pet wears an Item Ignore Pendant: anything on any pendant-wearing pet's list. */
+  petIgnores(d) {
+    const mine = this.myPets();
+    if (!mine[0] || mine[0].slot !== 0 || !this.petFlags(mine[0]).ignorePickup) return false;
+    const id = d.meso ? MESO_ID : d.id;
+    return mine.some((pet) => this.petFlags(pet).ignorePickup && (this.petExcluded?.get(pet.uid) || []).includes(id));
+  }
+
+  /**
+   * A monster's blow is what sets the pet's potions off: HP is checked against what the blow will take from it, and a
+   * blow that also went elsewhere (Magic Guard's share to MP, Power Guard's reflected share) starts the MP checks,
+   * which then run on every stat update until an MP potion goes. Spending HP / MP on skills sets off nothing.
+   */
+  petHitPots(m, damage, from) {
+    const now = Date.now(), on = (ids) => ids.find((id) => this.buffs?.some((b) => b.source === id && b.until > now));
+    let hp = damage, flag = 0;
+    const pg = from === -1 && damage > 0 && on(POWER_GUARDS);
+    if (pg) {
+      let back = Math.min(Math.trunc((damage * (this.skills.levelData(pg)?.x || 0)) / 100), Math.trunc((m.maxHp || Infinity) / 10));
+      if (m.src?.info?.boss) back = Math.trunc(back / 2);
+      if (back > 0) { hp -= back; flag = 1; }
+    }
+    const mg = damage > 0 && on(MAGIC_GUARDS);
+    if (mg) {
+      const mp = Math.min(Math.trunc((damage * (this.skills.levelData(mg)?.x || 0)) / 100), this.stats?.mp || 0);
+      if (mp > 0) { hp -= mp; flag ||= 4; }
+    }
+    this.petAutoPot('hp', Math.max(0, hp), flag);
+    if (flag) { this.petMpArmed = true; this.petAutoPot('mp'); }
+  }
+  /**
+   * Auto HP / MP Potion Pouch: the lead pet drinks the set potion when HP (MP) is under your alert setting (HP counting
+   * the blow just taken), at most every 200ms. Without one left it says so.
+   */
+  petAutoPot(kind, pending = 0, flag = 0) {
+    if (kind === 'mp' && !this.petMpArmed) return;
+    const lead = this.myPets()[0], s = this.stats;
+    if (!lead || lead.slot !== 0 || !this.net || this.dead || !s || s.hp <= 0) return;
+    if (!this.petFlags(lead)[kind === 'hp' ? 'consumeHP' : 'consumeMP']) return;
+    const max = kind === 'hp' ? this.maxHpShown() : this.maxMpShown(), alert = settings[`${kind}Alert`];
+    if (!alert || !max || ((kind === 'hp' ? s.hp - pending : s.mp) * 100) / max >= alert * 100) return;
+    const id = this.petPotions?.[kind];
+    if (!id || (this.map?.info?.fieldLimit || 0) & 0x400) return;
+    const slot = Object.entries(this.inventory?.[2] || {}).find(([, it]) => it.id === id)?.[0];
+    const said = (this.petPotSaid ??= { hp: 0, mp: 0 });
+    if (!slot) {
+      this.notice(`You are lacking the ${kind === 'hp' ? 'HP' : 'MP'} Potion that your pet is supposed to use.`);
+      if (said[kind] < 3) { said[kind]++; this.petEvent(kind === 'hp' ? 'e_NOHPPotion' : 'e_NOMPPotion'); }
+      return;
+    }
+    const t = (this.petPotT ??= { hp: 0, mp: 0 }), now = performance.now();
+    if (now - t[kind] < 200) return;
+    t[kind] = now;
+    this.net.petAutoPot(lead.sn, Number(slot), id, flag);
+    if (kind === 'mp') this.petMpArmed = false;
+  }
+  /** Set the potion a pet drinks (dropped on PET HP / PET MP): the lead pet needs the pouch, the potion must restore it. */
+  async setPetPotion(kind, id) {
+    const lead = this.myPets()[0];
+    if (!lead || !this.petFlags(lead)[kind === 'hp' ? 'consumeHP' : 'consumeMP']) return false;
+    const spec = await itemSpec(this.assets, id);
+    const ok = kind === 'hp' ? Number(spec?.hp) || Number(spec?.hpR) : Number(spec?.mp) || Number(spec?.mpR);
+    if (!ok) { this.windows.notice(`Only usable on Auto ${kind === 'hp' ? 'HP' : 'MP'} Potion Pouch.`); return false; }
+    this.net.petPotion(kind === 'hp' ? 1 : 2, id);
+    (this.petPotions ??= {})[kind] = id;
+    this.hud.message(`Your pet will consume the Potion once when your ${kind === 'hp' ? 'HP' : 'MP'} goes below ${kind === 'hp' ? 'HP' : 'MP'} alert setting.`, CHAT_COLORS.notice);
+    return true;
+  }
+  /** Standing about for 10 minutes (then every 2), your pets remark on it. */
+  petRestCheck(dt) {
+    const p = this.player, m = this.map?.id || 0, still = this.restAt && Math.abs(p.x - this.restAt.x) < 1 && Math.abs(p.y - this.restAt.y) < 1;
+    if (!still) { this.restAt = { x: p.x, y: p.y }; this.restMs = 0; this.restNext = 600000; return; }
+    if ((this.restMs += dt * 1000) < this.restNext) return;
+    this.restNext += 120000;
+    if (m < 910000000 || m > 910000022) this.petEvent('e_rest');
+  }
+  /** Change a pet's ignore list (at most 10, mesos as 2147483647) and tell the server. */
+  setPetExcluded(pet, ids) {
+    const list = [...new Set(ids)].slice(0, 10);
+    (this.petExcluded ??= new Map()).set(pet.uid, list);
+    this.net?.petExcludeItems(pet.sn, list);
   }
 
   weaponId() { return this.inventory?.equipped[-11]?.id || 0; }
@@ -1151,14 +1453,23 @@ export class Game {
       cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
       removePlayer: later((id) => { this.others.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
       petSpawn: later((d) => this.addPet(d)),
-      petRemove: later((owner, slot, hunger) => {
-        this.pets.delete(`${owner}:${slot}`);
-        if (owner === this.player.id && hunger) this.windows.notice('Your pet went back home because it was hungry.');
+      petRemove: later((owner, slot, reason) => this.removePet(owner, slot, reason)),
+      petMove: later((owner, slot, moves) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.applyMovement(moves); }),
+      // others' pets act out what their owner's client says; yours already did
+      petChat: later((owner, slot, type, act, text, balloon) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.react(type, act, text, balloon); }),
+      petCommand: later((owner, slot, type, cmd, ok, balloon) => this.onPetCommand(owner, slot, type, cmd, ok, balloon)),
+      petName: later((owner, slot, name, tag) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet) { pet.name = name; pet.nameTagOn = tag; } }),
+      petExceptions: later((owner, slot, sn, ids) => {
+        const pet = this.pets.get(`${owner}:${slot}`);
+        if (pet?.mine && BigInt.asIntN(64, sn) === BigInt.asIntN(64, pet.sn)) (this.petExcluded ??= new Map()).set(pet.uid, ids);
       }),
-      petMove: later((owner, slot, moves) => this.pets.get(`${owner}:${slot}`)?.applyMovement(moves)),
-      petChat: later((owner, slot, act, text) => this.pets.get(`${owner}:${slot}`)?.say(text)),
-      petCommand: later((owner, slot, cmd, ok) => this.petAnswer(this.pets.get(`${owner}:${slot}`), 'interact', cmd, ok)),
-      petFood: later((owner, slot, ok) => this.petAnswer(this.pets.get(`${owner}:${slot}`), 'food', null, ok)),
+      cashPetFood: later((slot) => {
+        if (slot < 0) { this.windows.notice('Your pet cannot consume this food.\r\nPlease check again.'); return; }
+        const pet = this.pets.get(`${this.player.id}:${slot}`);
+        if (pet) sfx.play(`Pet/${pet.id}/eat`);
+      }),
+      petPotion: (kind, id) => { (this.petPotions ??= {})[kind] = id || null; },
+      petEffect: later((owner, slot, effect) => { const pet = this.pets.get(`${owner ?? this.player.id}:${slot}`); if (pet) this.petEffect(pet, effect); }),
       movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
       playerLook: later((id, look) => this.updateOtherLook(id, look)),
       attack: later((a) => this.onRemoteAttack(a)),
@@ -1344,8 +1655,11 @@ export class Game {
 
   onStats(s, enable) {
     if (!this.stats) return;
-    const before = this.stats.level;
+    const before = this.stats.level, exp0 = this.stats.exp;
     Object.assign(this.stats, s);
+    if (s.level > before) this.petEvent('e_levelup');
+    else if (s.exp > exp0 && s.exp >= (EXP[this.stats.level] || Infinity) * 0.9 && performance.now() - (this.petPreLevelT ?? -Infinity) >= 420000) { this.petPreLevelT = performance.now(); this.petEvent('e_prelevelup'); }
+    this.petAutoPot('mp');
     if (s.meso !== undefined) this.meso = s.meso;
     if (s.level > before) { this.hud.message(`Level up! You are now level ${s.level}.`, '#ffe08a'); this.levelUpEffect(); sfx.play('Game/LevelUp'); }
     if (s.job !== undefined && this.skills && s.job !== this.skills.job) {
@@ -1381,6 +1695,7 @@ export class Game {
     // A newer SET_FIELD can arrive while a map is still loading: only the latest load wins.
     const seq = this.loadSeq = (this.loadSeq || 0) + 1;
     const current = () => seq === this.loadSeq;
+    this.petMpArmed = false;
     this.loading = true; this.loadingId = id;
     // the old map fades to black while the new one loads; the loading screen only shows if that takes a while
     this.fadeOut();
@@ -1489,6 +1804,7 @@ export class Game {
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
+    rp.lookData = d.look;
     rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
     this.others.set(d.id, rp);
@@ -1499,7 +1815,7 @@ export class Game {
     const rp = this.others.get(id); if (!rp) return;
     const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, equips: visibleEquips(lookData) });
     await look.load();
-    rp.look = look;
+    rp.look = look; rp.lookData = lookData;
   }
 
   onChat(c) {
@@ -1606,7 +1922,7 @@ export class Game {
     // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
     const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
-    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
+    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
       spin: !d.meso, angle: 0, speed, flight });
   }
 
@@ -1629,7 +1945,14 @@ export class Game {
     let lookChanged = false;
     const box = (t, pos) => (pos < 0 ? inv.equipped : inv[t]);
     for (const op of ops) {
-      if (op.mode === 0) box(op.inv, op.pos)[op.pos] = { ...op.item, pos: op.pos };
+      if (op.mode === 0) {
+        const old = box(op.inv, op.pos)[op.pos];
+        box(op.inv, op.pos)[op.pos] = { ...op.item, pos: op.pos };
+        // a pet's item refreshed: how its closeness changed
+        const d = old?.pet && op.item.pet && old.cashId === op.item.cashId ? op.item.pet.closeness - old.pet.closeness : 0;
+        if (d > 0) this.hud.message(`The closeness increased (+${d})`, CHAT_COLORS.notice);
+        else if (d < 0) this.hud.message(`The closeness decreased (${d})`, CHAT_COLORS.notice);
+      }
       else if (op.mode === 1) { const it = box(op.inv, op.pos)[op.pos]; if (it) it.quantity = op.quantity; }
       else if (op.mode === 2) {
         const from = box(op.inv, op.pos), to = box(op.inv, op.to);
@@ -1640,6 +1963,8 @@ export class Game {
       } else if (op.mode === 3) { delete box(op.inv, op.pos)[op.pos]; if (op.pos < 0) lookChanged = true; }
     }
     if (lookChanged) this.rebuildLook();
+    this.petFlagCache = null;
+    for (const p of this.myPets()) p.lootPauseAt = 0;
     this.hud.renderInventory();
     this.questWin?.render();
   }
@@ -1689,8 +2014,8 @@ export class Game {
     return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
   }
 
-  useInventoryItem(tab, slot, it) {
-    if (tab === 5 && it.pet) { this.net.spawnPet(slot); return; }        // summon / send the pet home
+  useInventoryItem(tab, slot, it, pet) {
+    if (tab === 5 && it.pet) { this.summonPet(slot, it); return; }        // summon / send the pet home
     if (tab === 5 && Math.floor(it.id / 10000) === 514) { this.openShop(it.id); return; }      // a Shop Permit
     if (tab === 5 && Math.floor(it.id / 10000) === 503) { this.openMerchant(it.id); return; }   // a Hired Merchant
     if (tab === 5 && (Math.floor(it.id / 10000) === 507 || Math.floor(it.id / 10000) === 539)) { this.openMegaphone(slot, it.id); return; }
@@ -1707,6 +2032,7 @@ export class Game {
     }
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
+      if (isPetEquip(it.id)) { this.equipPet(slot, it, pet ?? this.windows.wins?.equip?.petSel ?? 0); return; }
       const dst = equipSlotFor(it.id);
       if (!dst) return;
       if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
@@ -1714,6 +2040,23 @@ export class Game {
     }
   }
 
+  petSlots(i) { return PET_SLOTS[i] || PET_SLOTS[0]; }
+  /**
+   * Put pet equipment on pet `i`: it must be out; an accessory must be made for it (its img has a node for the
+   * pet), the rings need its name tag / balloon. The potion pouches go on whatever pets are out.
+   */
+  async equipPet(slot, it, i) {
+    const id = it.id, pet = this.petsOf(this.player.id)[i], cat = Math.floor(id / 10000);
+    if (id !== 1812002 && id !== 1812003) {
+      if (!pet) { this.windows.notice('You do not currently have a pet that is alive.'); return; }
+      const art = cat === 180 && id !== 1802100 ? await this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`) : null;
+      const fits = cat === 180 && id !== 1802100 ? !!art?.[pet.id]
+        : id === 1802100 || cat === 182 ? Number(pet.info.nameTag) > 0 : cat === 183 ? Number(pet.info.chatBalloon) > 0 : true;
+      if (!fits) { this.windows.notice('The pet is unable to wear the equipment.'); return; }
+      if (id >= 1812004 && id <= 1812006) pet.lootPauseAt = performance.now();
+    }
+    this.net.moveItem(1, slot, equipSlotFor(id, i), 1);
+  }
   /**
    * Your level, stats and fame as an equip's requirements see them: your own stats plus the bonuses of what you would
    * still be wearing once it is on (not its own, nor those of what it takes off: the piece in its slot, a top and
@@ -1845,9 +2188,12 @@ export class Game {
     if (m) { if (this.lastWhisperFrom) this.whisperTo(this.lastWhisperFrom, m[1]); else this.hud.message('There is no whisper to reply to.', CHAT_COLORS.notice); return; }
     m = text.match(/^\/find\s+(\S+)$/i);
     if (m) { this.net.find(m[1]); return; }
+    m = text.match(/^\/pet\s+(.+)$/i);
+    if (m) { this.petTalk(m[1]); return; }
+    if (!text.startsWith('/')) this.petCommandWord(text);   // your pets hear every line
     // the chat target from the drop-up list beside the chat line
     const target = this.statusBar?.chatTarget || 'all', note = (t) => this.hud.message(t, CHAT_COLORS.notice);
-    if (target === 'all' || text.startsWith('!')) { this.net.chat(text); if (target === 'all') this.petCommandWord(text); return; }
+    if (target === 'all' || text.startsWith('!')) { this.net.chat(text); return; }
     if (target === 'whisper') { const to = this.statusBar.whisperTo; if (to) this.whisperTo(to, text); else note('Choose who to whisper to first.'); return; }
     if (target === 'spouse') { this.net.spouseChat(text); return; }
     const mode = { buddy: 0, group: 0, party: 1, guild: 2, alliance: 3 }[target];
@@ -2001,9 +2347,10 @@ export class Game {
     if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
     for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
-    for (const pet of this.pets.values()) { pet.update(dt); pet.sync(dt); }
+    if (this.player.fh) this.ownerGroup = this.player.fh.group;
+    for (const pet of this.pets.values()) pet.update(dt);
     for (const [oid, sm] of this.summons) { sm.update(dt); if (sm.gone) this.summons.delete(oid); }
-    if (this.net) this.petLoot(dt);
+    if (this.net) { this.petLootStep(dt); this.petRestCheck(dt); }
     if (this.player.chat && (this.player.chat.t -= dt) <= 0) this.player.chat = null;
     this.updateDrops(dt);
     this.updateFx(dt);
@@ -2158,6 +2505,7 @@ export class Game {
       action = l.l ? 'ladder' : 'rope';
       if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
         p.ladder = null; p.vy = -JUMP * 0.5; p.vx = dir * WALK * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
+        this.lastJumpDir = dir;
         p.regrabT = 0.35;              // jumping off with up still held must not catch the same rope again
         sfx.play('Game/Jump');
       } else if (p.y < l.y1) {
@@ -2238,6 +2586,7 @@ export class Game {
           if (dir * p.vx < WALK * 0.8) p.vx += dir * WALK * 0.8;
           if (dir * p.vx > WALK) p.vx = dir * WALK;
           p.fh = null; p.vy = -JUMP;
+          this.lastJumpDir = dir;
           sfx.play('Game/Jump');
         }
       } else {
@@ -2418,6 +2767,7 @@ export class Game {
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
+    this.petAttackReact();
     // Assassinate's first stage brings you out of Dark Sight; it strikes harder the longer you were in it
     if (skillId === ASSASSINATE && !opts.stage2) {
       const dsb = this.darkSight();
@@ -4077,6 +4427,7 @@ export class Game {
     }
     if (damage <= 0) {   // MISS: no knockback or blinking, but the same 1.5s before the next blow as a hit
       this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.petHitPots(m, 0, from);
       this.vfx?.damage(p, [0], 'violet');
       this.invincible = HIT_PROTECTION; this.missed = true;
       return;
@@ -4090,6 +4441,7 @@ export class Game {
       if (this.meso < Math.trunc((absorbed * guard.x) / 100)) absorbed = Math.trunc((this.meso * 100) / guard.x);
       if (absorbed > 0) { lost = damage - absorbed; this.playSkillEffect(MESO_GUARD, p, false, 'special'); }
     }
+    this.petHitPots(m, lost, from);
     this.vfx?.damage(p, [lost], 'violet');
     if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
     setExpression(p, 1, HIT_FACE_TIME);
@@ -4396,7 +4748,7 @@ export class Game {
       if (l === playerLayer && !inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); }
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
-    for (const pet of this.pets.values()) if (pet.onBack) pet.draw(ctx, cam);   // riding on a climber's back
+    for (const pet of this.pets.values()) if (pet.onBack) pet.draw(ctx, cam);   // up the ladder with its owner
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
@@ -4497,7 +4849,7 @@ export class Game {
 
   drawBalloons(ctx, cam) {
     // pets talk from just over their heads, without a name in front
-    for (const pet of this.pets.values()) if (pet.chat) this.vfx?.drawBalloon(ctx, cam, { x: pet.x, y: pet.y + 44 }, pet.chat.text);
+    for (const pet of this.pets.values()) if (pet.chat && !pet.hidden) this.vfx?.drawBalloon(ctx, cam, { x: pet.x, y: pet.y + 44 }, pet.chat.text, pet.chat.style ? `pet/${pet.chat.style}` : '0');
     // NPCs: the arrow just over the head; not while a quest icon is there
     for (const e of this.map.life) {
       if (!e.chat || this.vfx?.questIcons.has(e)) continue;
@@ -4537,8 +4889,9 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 /** Item ids to draw from an avatar look packet (cash items replace the regular one in their slot). */
+const isPetPart = (n) => n === 14 || (n >= 21 && n <= 48);   // what pets wear: never drawn on the character
 function visibleEquips(look) {
-  const slots = { ...look.equips };
+  const slots = Object.fromEntries(Object.entries(look.equips).filter(([k]) => !isPetPart(Number(k))));
   if (look.cashWeapon) slots[11] = look.cashWeapon;
   return Object.values(slots);
 }
@@ -4552,23 +4905,31 @@ export function equippedIds(equipped) {
   }
   for (const [k, it] of Object.entries(equipped)) {
     const s = Number(k);
-    if (s <= -100 && s !== -111) bySlot[-s - 100] = it.id;
+    if (s <= -100 && s !== -111 && !isPetPart(-s - 100)) bySlot[-s - 100] = it.id;
   }
   if (equipped[-111]) bySlot[11] = equipped[-111].id;
   return Object.values(bySlot);
 }
 
 /**
- * Where an equip goes when worn: the character's slots (Equip window), and the pet's (its pet panel):
- * the pet accessory at -114 (where Cosmic's CHAR_INFO reads it) and the pet ability items
- * 1812000-1812007 (Meso Magnet, Item Pouch, Auto HP / MP, Wing Boots, Binocular, Magic Scales,
- * Item Ignore) at -121 .. -128. Cosmic recognises those by id wherever they sit.
+ * Where an equip goes when worn: the character's slots (Equip window), or pet `pet`'s (its pet panel): accessory,
+ * Label Ring (or Pet Collar), Quote Ring and the ability items; the potion pouches are shared.
  */
-export function equipSlotFor(id) {
-  const cat = Math.floor(id / 10000);
+export function equipSlotFor(id, pet = 0) {
+  const cat = Math.floor(id / 10000), P = PET_SLOTS[pet] || PET_SLOTS[0];
   const map = { 100: -1, 101: -2, 102: -3, 103: -4, 104: -5, 105: -5, 106: -6, 107: -7, 108: -8, 109: -10, 110: -9, 111: -12,
-    112: -17, 113: -50, 114: -49, 180: -114, 190: -18, 191: -19 };
+    112: -17, 113: -50, 114: -49, 190: -18, 191: -19 };
   if (cat >= 130 && cat < 170) return -11;
-  if (id >= 1812000 && id <= 1812007) return -121 - (id - 1812000);
+  if (id === 1802100 || cat === 182) return P.label;
+  if (cat === 180) return P.acc;
+  if (cat === 183) return P.quote;
+  const ability = { 1812000: P.magnet, 1812001: P.pouch, 1812002: SHARED_PET_SLOTS[0], 1812003: SHARED_PET_SLOTS[1], 1812004: P.boots,
+    1812005: P.binocular, 1812006: P.scales, 1812007: P.ignore };
+  if (ability[id]) return ability[id];
   return map[cat] ?? null;
+}
+/** Which pet an equipped slot belongs to (-1: not a pet's; the potion pouches are the lead pet's). */
+export function petOfSlot(pos) {
+  if (SHARED_PET_SLOTS.includes(pos)) return 0;
+  return PET_SLOTS.findIndex((s) => Object.values(s).includes(pos));
 }

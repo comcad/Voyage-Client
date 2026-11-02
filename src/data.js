@@ -81,6 +81,14 @@ export async function itemInfo(assets, id) {
   return (n.key ? img?.[n.key] : img)?.info || null;
 }
 
+/** A consumable's spec node (hp, mp, hpR...). */
+export async function itemSpec(assets, id) {
+  const n = itemNode(id);
+  if (!n?.path) return null;
+  const img = await assets.json(n.path);
+  return (n.key ? img?.[n.key] : img)?.spec || null;
+}
+
 /** The icon canvas node for an item id (info/icon). */
 export async function itemIcon(assets, id, raw = false) {
   const n = itemNode(id);

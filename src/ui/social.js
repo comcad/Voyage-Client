@@ -318,7 +318,7 @@ const INFO_PANELS = {
   pet: { bg: 'backgrnd2', band: 374 },
   book: { bg: 'backgrnd7', band: 377 },
 };
-const SIDE_X = 271, SIDE_ROWS = 3, SIDE_ROW_Y = 31;
+const SIDE_X = 271, SIDE_ROWS = 3, SIDE_ROW_Y = 31, MESO = 2147483647;
 export class CharInfoWin extends Win {
   constructor(mgr, info) {
     const U = mgr.W.UserInfo;
@@ -345,9 +345,16 @@ export class CharInfoWin extends Win {
     band(U.BtTamingShow, U.BtTamingHide, 5, 'taming');
     band(U.BtPetShow, U.BtPetHide, 93, 'pet');
     band(U.BtCollectionShow, U.BtCollectionHide, 145, 'book');
-    const exc = this.button(U.BtExceptionShow, 197, 0, () => {});
-    exc.enabled = false;                       // pet loot exclusions are not in CHAR_INFO
+    // your pets' item ignore lists (EXCEPTION LIST beside the window)
+    const exc = this.button(U.BtExceptionShow, 197, 0, () => this.toggleSide('exc'));
+    exc.enabled = !other;
     this.bandBtns.push({ on: exc, off: null, panel: null });
+    this.excBtns = [
+      this.button(U.BtMeso, SIDE_X + 10, 124, () => this.addExcluded(MESO)),
+      this.button(U.BtRegister, SIDE_X + 60, 124, () => this.registerExcluded()),
+      this.button(U.BtDelete, SIDE_X + 118, 124, () => this.deleteExcluded()),
+    ];
+    this.excHide = this.button(U.BtExceptionHide, SIDE_X + 159 - 17, 5, () => this.toggleSide('exc'));
     this.petBtns = [U.BtPet1, U.BtPet2, U.BtPet3].map((n, k) => this.button(n, 188 + k * 33, 196, () => { this.petSel = k; }));   // the art's origin sits 16,19 into it
     this.sideClose = this.button(mgr.B.BtClose, SIDE_X + 240 - 17, 6, () => this.toggleSide(this.side));
     // pet portraits and the wish list's catalogue
@@ -370,7 +377,7 @@ export class CharInfoWin extends Win {
   layout() {
     const P = INFO_PANELS[this.panel], bg = this.U[P.bg];
     this.h = bg?._h || 199;
-    this.w = this.side ? SIDE_X + 240 : 275;
+    this.w = this.side ? SIDE_X + (this.side === 'exc' ? 159 : 240) : 275;
     for (const b of this.bandBtns) {
       const open = this.panel === b.panel;
       b.on.y = P.band + 5; b.on.visible = !open || !b.off;
@@ -378,7 +385,49 @@ export class CharInfoWin extends Win {
     }
     const pets = this.info.pets || [];
     this.petBtns.forEach((b, k) => { b.visible = this.panel === 'pet' && k < pets.length; });
-    this.sideClose.visible = !!this.side;
+    this.sideClose.visible = !!this.side && this.side !== 'exc';
+    for (const b of this.excBtns) b.visible = this.side === 'exc';
+    this.excHide.visible = this.side === 'exc';
+  }
+
+  // ---------------------------------------------------------------- exception list
+  /** The pet whose list shows: the one picked in the pet panel. */
+  excPet() { return this.g.myPets()[this.petSel] || this.g.myPets()[0] || null; }
+  excList() { const p = this.excPet(); return p ? [...(this.g.petExcluded?.get(p.uid) || [])] : []; }
+  excName(id) { return id === MESO ? ' mesos' : this.mgr.itemName(id) || String(id); }
+  addExcluded(id) {
+    const pet = this.excPet(), list = this.excList();
+    if (!pet || list.includes(id) || list.length >= 10) return;
+    list.push(id);
+    list.sort((a, b) => this.excName(a).localeCompare(this.excName(b)));
+    this.g.setPetExcluded(pet, list);
+  }
+  async registerExcluded() {
+    const name = (await this.mgr.askText('Enter the name of the item to ignore.'))?.trim().toLowerCase();
+    if (!name) return;
+    const inv = this.g.inventory || {};
+    for (const t of [1, 2, 3, 4, 5]) for (const it of Object.values(inv[t] || {})) if (this.mgr.itemName(it.id).toLowerCase() === name) { this.addExcluded(it.id); return; }
+    this.g.notice('That item could not be found.');
+  }
+  deleteExcluded() {
+    const pet = this.excPet(), list = this.excList();
+    if (!pet || this.excSel === undefined || this.excSel >= list.length) return;
+    list.splice(this.excSel, 1);
+    this.excSel = undefined;
+    this.g.setPetExcluded(pet, list);
+  }
+  drawExc(ctx) {
+    const m = this.mgr, panel = m.image(this.U.backgrnd6);
+    if (panel) ctx.drawImage(panel, SIDE_X, 0);
+    const pet = this.excPet(), list = this.excList();
+    if (!pet) { this.text(ctx, 'No pets are out.', SIDE_X + 80, 60, { align: 'center', color: '#555' }); return; }
+    for (let k = 0; k < 6; k++) {
+      const i = this.sideFirst + k, id = list[i];
+      if (id === undefined) break;
+      if (i === this.excSel) { ctx.fillStyle = 'rgba(80,120,200,0.35)'; ctx.fillRect(SIDE_X + 8, 24 + k * 14, 140, 14); }
+      this.text(ctx, this.excName(id), SIDE_X + 10, 25 + k * 14, { size: 12 });
+    }
+    this.scrollbar(ctx, SIDE_X + 147, 22, 90, this.sideFirst, list.length, 6);
   }
 
   // ---------------------------------------------------------------- lists
@@ -413,7 +462,8 @@ export class CharInfoWin extends Win {
     if (this.panel === 'pet') this.drawPet(ctx);
     else if (this.panel === 'taming') this.drawTaming(ctx);
     else if (this.panel === 'book') this.drawBook(ctx);
-    if (this.side) this.drawSide(ctx);
+    if (this.side === 'exc') this.drawExc(ctx);
+    else if (this.side) this.drawSide(ctx);
   }
   /** Name over a rule, a smaller line under it: the rows of every list here. */
   listRow(ctx, x, y, id, sub) {
@@ -482,8 +532,14 @@ export class CharInfoWin extends Win {
     const idx = this.sideFirst + k;
     return idx < this.sideRows().length ? idx : -1;
   }
+  drop(lx, ly, c) { if (this.side === 'exc' && lx >= SIDE_X && c.kind === 'item') this.addExcluded(c.id); }
   down(lx, ly) {
-    if (this.side) {
+    if (this.side === 'exc') {
+      const s = this.scrollClick(lx, ly, SIDE_X + 147, 22, 90, this.sideFirst, this.excList().length, 6);
+      if (s !== null) { this.sideFirst = s; return; }
+      const k = Math.floor((ly - 24) / 14);
+      if (lx >= SIDE_X + 8 && lx < SIDE_X + 147 && k >= 0 && k < 6) this.excSel = this.sideFirst + k;
+    } else if (this.side) {
       const s = this.scrollClick(lx, ly, SIDE_X + 220, 27, 122, this.sideFirst, this.sideRows().length, SIDE_ROWS);
       if (s !== null) { this.sideFirst = s; return; }
     }
@@ -494,10 +550,12 @@ export class CharInfoWin extends Win {
   }
   wheel(dy) {
     const d = Math.sign(dy), lx = this.mgr.mouse.x - this.x;
-    if (this.side && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.sideRows().length - SIDE_ROWS, this.sideFirst + d));
+    if (this.side === 'exc' && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.excList().length - 6, this.sideFirst + d));
+    else if (this.side && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.sideRows().length - SIDE_ROWS, this.sideFirst + d));
     else if (this.panel === 'book') this.medalFirst = Math.max(0, Math.min((this.info.medalQuests || []).length - 4, (this.medalFirst || 0) + d));
   }
   tooltip(lx, ly) {
+    if (this.side === 'exc') return null;
     const r = this.sideRowAt(lx, ly);
     return r >= 0 ? { item: { id: this.sideRows()[r].id } } : null;
   }
