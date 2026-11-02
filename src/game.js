@@ -432,8 +432,8 @@ const FADE_MS = 600;   // map changes: the old map dims to black over this, the 
  * and Charged Blow. Others with only a range keep to the swing.
  */
 const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 1211002]);
-/** Drop hop heights (the original uses 100px for both) and the pickup's length; see updateDrops. */
-const DROP_HOP = 64, THROW_HOP = 93, PICKUP_TIME = 0.7;
+/** How long a pickup takes (s); see updateDrops. */
+const PICKUP_TIME = 0.7;
 
 /** Chat line colours, as in the v83 chat log. */
 const CHAT_COLORS = { spouse: '#ff9ec7', whisper: '#7cfc5a', buddy: '#ffb36b', party: '#ff9ed6', guild: '#d6a4ff', alliance: '#9fe6c2', find: '#ffe08a', notice: '#ff9e9e' };
@@ -1596,19 +1596,18 @@ export class Game {
     const anim = new Anim(node || null);
     await this.assets.preload(anim.frames);
     if (!this.map) return;
-    const fh = this.map.fh.below(d.x, d.y - 40, 200);
-    const y = fh ? Footholds.yAt(fh, d.x) : d.y;
-    const fromX = d.fromX ?? d.x, fromY = d.fromY ?? y;
+    const y = d.y;
+    // monster loot leaves from where the monster is now
+    const mob = this.lifeByOid.get(d.dropper) || this.dying?.get(d.dropper);
+    const fromMob = mob?.kind === 'Mob';
+    const fromX = fromMob ? mob.x : d.fromX ?? d.x, fromY = fromMob ? mob.y : d.fromY ?? y;
     pending.delete(d.oid);
-    // a fresh drop sounds as it appears (not one already lying there), at most once every 300ms
-    if (d.mode !== 2 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem'); }
-    const thrown = !d.meso && (d.dropper === this.player.id || this.others.has(d.dropper));   // dropped by a character, not a monster
-    // launch speed for the hop height (Y = Ys - V t + 400 t^2 peaks at V^2/1600); the flight lasts until it is back at its
-    // starting height, or until it comes down on a higher floor
-    const speed = Math.sqrt(1600 * (thrown ? THROW_HOP : DROP_HOP)), sy = fromY - 4;
-    const up = sy - y, flight = up > 0 && up < speed * speed / 1600 ? (speed + Math.sqrt(speed * speed - 1600 * up)) / 800 : speed / 400;
-    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, cx: fromX, cy: sy, fromY: sy, alpha: 1, phase: Math.random() * 6,
-      spin: thrown, angle: 0, speed, flight });
+    if (d.mode === 1 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem'); }
+    // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
+    const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
+    const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
+    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
+      spin: !d.meso, angle: 0, speed, flight });
   }
 
   removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
@@ -2054,12 +2053,12 @@ export class Game {
   }
 
   /**
-   * Drops, as the original client moves them (openms' recovery of its drop routine, docs/drop-motion.md):
-   *   flight: Y = Ys - V*t + 400*t^2 (t in s) while X drifts across, then a destination below the
-   *     source is reached by falling straight down at V; the original launches at V = 400 (a 100px hop),
-   *     here monster loot hops DROP_HOP and a player's throw THROW_HOP, as tuned for this client
-   *   items a player throws spin a full turn every 300ms until they land (monster loot and meso bags don't)
-   *   resting: Y = Yg + 3*sin(phase), phase advancing pi per second (a 2s, 3px bob)
+   * Drops:
+   *   flight: Y = Ys - V*t + 400*t^2 (t in s, V = 400, or 720 for explosive drops) while X covers half the way
+   *     in the first 500ms and the rest by the end; a destination below the source is then reached by falling
+   *     straight down at V
+   *   items (not mesos) spin a full turn every 300ms until they land
+   *   resting: Y = Yg + 3*sin(phase), phase starting at 0 on landing and advancing pi per second
    *   pickup (700ms): straight from the landing spot to the middle of the looter's body, lifted by a
    *     40px arc, -40 + (ms-350)^2 * 160/490000; fully opaque until 420ms, then fading to 63/255
    */
@@ -2071,7 +2070,6 @@ export class Game {
   updateDrops(dt) {
     for (const [oid, d] of this.drops) {
       d.anim.update(dt * 1000);
-      d.phase += dt * Math.PI;
       d.age += dt;
       if (d.pickedBy) {
         const L = d.pickedBy, u = Math.min(PICKUP_TIME, d.age), k = u / PICKUP_TIME, ms = u * 1000;
@@ -2083,6 +2081,7 @@ export class Game {
         continue;
       }
       if (d.landed) {
+        d.phase += dt * Math.PI;
         // mode 3: an item that cannot be dropped (untradeable / quest) lands, fades and is gone
         if (d.mode === 3 && (d.vanish = (d.vanish || 0) + dt) > 0) {
           d.alpha = Math.max(0, 1 - d.vanish / 0.5);
@@ -2094,16 +2093,16 @@ export class Game {
       if (d.falling) {                                  // straight down to a lower floor
         d.cx = d.x; d.cy = d.fromY + V * (t - d.flight);
         if (d.cy >= d.y) this.land(d);
-      } else {
-        const k = Math.min(1, t / d.flight);
-        d.cx = d.fromX + (d.x - d.fromX) * k;
+      } else if (t < d.flight) {
+        const k = Math.min(1, t * 2) + (t > 0.5 ? Math.min(1, (t - 0.5) / (d.flight - 0.5)) : 0);
+        d.cx = d.fromX + (d.x - d.fromX) * k / 2;
         d.cy = d.fromY - V * t + 400 * t * t;
-        if (t >= d.flight) { if (d.y > d.fromY + 1) d.falling = true; else this.land(d); }
-      }
+      } else if (d.y > d.fromY) d.falling = true;
+      else this.land(d);
       if (d.spin && !d.landed) d.angle += (2 * Math.PI / 0.3) * dt;
     }
   }
-  land(d) { d.landed = true; d.falling = false; d.cx = d.x; d.cy = d.y; d.angle = 0; }
+  land(d) { d.landed = true; d.falling = false; d.cx = d.x; d.cy = d.y; d.angle = 0; d.phase = 0; }
 
   updatePlayer(dt) {
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
@@ -4483,7 +4482,7 @@ export class Game {
       const node = d.anim.node;
       const img = this.assets.image(node);
       if (!img) continue;
-      const x = d.cx, y = d.landed && !d.pickedBy ? d.y + Math.trunc(3 * Math.sin(d.phase)) : d.cy;
+      const x = d.cx, y = d.landed && !d.pickedBy ? Math.trunc(d.y + 3 * Math.sin(d.phase)) : d.cy;
       // icons hang from their left edge (origin x ~0), so centre them on the spot they lie on
       const oy = node.origin?.[1] ?? img.height;
       ctx.globalAlpha = d.alpha;
