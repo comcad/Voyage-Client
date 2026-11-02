@@ -7,8 +7,8 @@ import { WebSocketServer } from 'ws';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
-// Output of tools/wz-extract.mjs (one level up from webclient/)
-const ASSETS_DIR = process.env.ASSETS_DIR || path.resolve(__dirname, '../assets');
+// Output of tools/wz-extract.mjs (lives alongside server.js at repo root)
+const ASSETS_DIR = process.env.ASSETS_DIR || path.resolve(__dirname, 'assets');
 // Cosmic servers the bridge may connect to: "name=host,name2=host2". The first is the default.
 const SERVERS = Object.fromEntries((process.env.COSMIC_SERVERS || 'cosmic=192.168.2.2,dev=127.0.0.1')
   .split(',').map((s) => s.split('=').map((x) => x.trim())));
