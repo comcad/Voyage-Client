@@ -36,11 +36,14 @@ Voyage-Client/
 
 - Node.js ≥ 18
 - A folder of MapleStory v83 GMS `*.wz` files
+- Cosmic client `*.wz` files
 - A Cosmic v83 server to log in and play against
 
 ## 1. Extract assets
 
-The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero deps).
+The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero deps). 
+
+NOTE: You will need to use the .wz files provided by cosmic for full compatibility
 
 ```sh
 - git clone https://github.com/comcad/Voyage-Wz-Extractor
