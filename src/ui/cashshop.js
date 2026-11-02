@@ -1167,7 +1167,7 @@ export class CashShopWin extends Win {
   }
   /** A catalogue item's tooltip: the item, with its period ("AVAILABLE FOR n DAYS."). */
   tipItem(c) {
-    const t = { id: c.ItemId, price: c.Price };
+    const t = { id: c.ItemId, price: c.Price, cs: true };
     if (c.Period > 0) t.period = c.Period;
     if (c.Discount > 0) { t.discount = c.Discount; t.origPrice = c.OrigPrice; }
     return t;

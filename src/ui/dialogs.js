@@ -1,4 +1,4 @@
-import { pad } from '../assets.js';
+import { pad, frames } from '../assets.js';
 import { invType, itemInfo } from '../data.js';
 import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
@@ -189,6 +189,46 @@ export async function npcMenu(mgr, npcId, text, options) {
   const body = `${text}\n${options.map((o, i) => (o.header ? `#f${o.header}#` : `#L${i}#${o}#l`)).join('\n')}`;
   const r = await npcTalk(mgr, { npc: npcId, type: 4, text: body });
   return r.action === 1 ? r.sel : null;
+}
+
+// ==================================================================== pet select
+/**
+ * Choosing one of your pets: UIWindow.img/UtilDlgEx_Pet (419x297) centred on (400, 300). The text is 280 wide at x 110,
+ * centred in a 100px body from y 28. The pet stands (stand0) with its feet at (209, 218) over UtilDlgEx_Avatar/nameTag,
+ * its name in white 12px Arial centred on x 210, y 224, its level and closeness in black centred on x 194 / 280, y 243.
+ * UtilDlgEx_Avatar BtPrev / BtNext go round the pets; Basic BtOK2 / BtCancel2. Resolves with the pet's index or null.
+ * pets: [{ name, level, closeness, stand }].
+ */
+export class PetSelectDialog extends Win {
+  constructor(mgr, text, pets, done) {
+    const A = mgr.W.UtilDlgEx_Avatar, B = mgr.B;
+    super(mgr, mgr.W.UtilDlgEx_Pet.backgrnd, 400 - 209, 300 - 148);
+    this.buttons = [];
+    this.A = A; this.pets = pets; this.done = done; this.modal = true; this.sel = 0; this.t0 = performance.now();
+    this.layout = richText(scratch(), text, 280, textRef(mgr), NPC_TEXT);
+    this.textY = 28 + (this.layout.height > 100 ? -6 : Math.trunc((100 - this.layout.height - 6) / 2));
+    const turn = (d) => { this.sel = (this.sel + d + pets.length) % pets.length; this.t0 = performance.now(); };
+    this.button(A.BtPrev, 15, 187, () => turn(-1));
+    this.button(A.BtNext, 340, 187, () => turn(1));
+    this.button(B.BtOK2, 307, 270, () => this.finish(this.sel));
+    this.button(B.BtCancel2, 358, 270, () => this.finish(null));
+  }
+  frames() { return [...super.frames(), this.A.nameTag, ...this.pets.flatMap((p) => frames(p.stand))]; }
+  finish(i) { this.mgr.close(this); this.done(i); }
+  key(e) { if (e.key === 'Enter') this.finish(this.sel); else if (e.key === 'Escape') this.finish(null); }
+  body(ctx) {
+    const m = this.mgr, p = this.pets[this.sel];
+    drawRich(ctx, this.layout, 110, this.textY, { size: NPC_TEXT.size, drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
+    const fr = frames(p.stand), total = fr.reduce((t, f) => t + (f.delay || 120), 0);
+    let t = total ? (performance.now() - this.t0) % total : 0, f = fr[0];
+    for (const x of fr) { f = x; if ((t -= x.delay || 120) < 0) break; }
+    const img = f && m.image(f), tag = m.image(this.A.nameTag);
+    if (img) { const o = f.origin || [img.width / 2, img.height]; ctx.drawImage(img, 209 - o[0], 218 - o[1]); }
+    if (tag) ctx.drawImage(tag, 124, 219);
+    uiText(ctx, p.name || '', 210, 224, { color: '#fff', size: 12, align: 'center' });
+    uiText(ctx, String(p.level), 194, 243, { color: '#000', size: 12, align: 'center' });
+    uiText(ctx, String(p.closeness), 280, 243, { color: '#000', size: 12, align: 'center' });
+  }
 }
 
 // ==================================================================== notices
@@ -696,9 +736,10 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
   ctx.restore();
 }
 
+const tipIsCanvas = (n) => !!n && typeof n === 'object' && '_canvas' in n;
 function equipTip(ctx, mgr, it, info, mx, my) {
   const g = mgr.game, T = mgr.W.ToolTip?.Equip || {}, id = it.id, cat = Math.floor(id / 10000);
-  const cs = it.period > 0 || it.periodHours > 0, full = it.str !== undefined, f = tipNum(it.flag);
+  const cs = !!it.cs || it.period > 0 || it.periodHours > 0, full = it.str !== undefined, f = tipNum(it.flag);
   const sex = Math.floor(id / 1000) % 10;
   let title = mgr.itemName(id) || '...';
   if (it.level > 0) title += ` (+${it.level})`;
@@ -739,7 +780,10 @@ function equipTip(ctx, mgr, it, info, mx, my) {
   const ownH = owner ? 19 : 0, tagW = tags[0] ? tipW(ctx, tags[0], TIP_FONT.body) : 0;
   const tagN = tags[0] ? Math.floor(tagW / 236) + 1 : 0, tagH = tagN * 19 * (tags[1] ? 2 : 1);
   const base = ownH + tagH + lines.length * 16;
-  const H = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0);
+  // the Cash Shop's tooltip shows the item's sample picture (info/sample) centred above the description
+  const sample = cs && tipIsCanvas(info.sample) ? info.sample : null, sImg = sample && mgr.image(sample);
+  const sampleH = sample ? (sImg?.height || sample._h || 0) + 5 : 0;
+  const H = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0) + sampleH;
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
@@ -779,6 +823,7 @@ function equipTip(ctx, mgr, it, info, mx, my) {
     if (v) tipText(ctx, v, x + 16 + tipW(ctx, l, TIP_FONT.small), ry, fo, '#fff');
   });
   if (sale) tipSale(ctx, it, x, y + H - descH - 39, W);
+  if (sImg) ctx.drawImage(sImg, x + ((W - sImg.width) >> 1), y + H - descH - (sale ? 35 : 0) - 3 - sampleH);
   tipDrawWrap(ctx, desc, x + 10, y + H - descH - (cs ? 3 : 5));
 }
 

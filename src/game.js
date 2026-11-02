@@ -5,7 +5,7 @@ import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scro
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
-import { npcTalk, MessageBox, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
+import { npcTalk, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
 import { npcQuestMenu } from './ui/quests-ui.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
@@ -1419,6 +1419,7 @@ export class Game {
     wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
+    wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new MessageBox(wm, 'number', text, r, { def, min, max })));
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new MessageBox(wm, 'text', text, r, { def, ...opts })));
     Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
@@ -2121,7 +2122,7 @@ export class Game {
     return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
   }
 
-  useInventoryItem(tab, slot, it, pet) {
+  useInventoryItem(tab, slot, it) {
     if (tab === 5 && it.pet) { this.summonPet(slot, it); return; }        // summon / send the pet home
     if (tab === 5 && Math.floor(it.id / 10000) === 514) { this.openShop(it.id); return; }      // a Shop Permit
     if (tab === 5 && Math.floor(it.id / 10000) === 503) { this.openMerchant(it.id); return; }   // a Hired Merchant
@@ -2141,8 +2142,8 @@ export class Game {
     }
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
-      if (this.dead) { this.notice("You can't do it once you're dead."); return; }
-      if (isPetEquip(it.id)) { this.equipPet(slot, it, pet ?? this.windows.wins?.equip?.petSel ?? 0); return; }
+      if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+      if (isPetEquip(it.id)) { this.equipPet(slot, it); return; }
       const dst = this.equipDest(it.id, it.cash);
       if (!dst) return;
       this.equipChecked(slot, it, dst);
@@ -2151,20 +2152,56 @@ export class Game {
 
   petSlots(i) { return PET_SLOTS[i] || PET_SLOTS[0]; }
   /**
-   * Put pet equipment on pet `i`: it must be out; an accessory must be made for it (its img has a node for the
-   * pet), the rings need its name tag / balloon. The potion pouches go on whatever pets are out.
+   * Double-click pet equipment: it goes on the lead pet; with two or more out, on one of the pets it can go on (an
+   * accessory made for it, an ability item, the Label / Quote Ring), picked in the pet dialog when there are several.
+   * The potion pouches are shared.
    */
-  async equipPet(slot, it, i) {
-    const id = it.id, pet = this.petsOf(this.player.id)[i], cat = Math.floor(id / 10000);
-    if (id !== 1812002 && id !== 1812003) {
-      if (!pet) { this.windows.notice('You do not currently have a pet that is alive.'); return; }
-      const art = cat === 180 && id !== 1802100 ? await this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`) : null;
-      const fits = cat === 180 && id !== 1802100 ? !!art?.[pet.id]
-        : id === 1802100 || cat === 182 ? Number(pet.info.nameTag) > 0 : cat === 183 ? Number(pet.info.chatBalloon) > 0 : true;
-      if (!fits) { this.windows.notice('The pet is unable to wear the equipment.'); return; }
-      if (id >= 1812004 && id <= 1812006) pet.lootPauseAt = performance.now();
+  async equipPet(slot, it) {
+    const id = it.id, pets = this.petsOf(this.player.id);
+    let dst = equipSlotFor(id);
+    if (!dst) return;
+    if (pets[1] && !SHARED_PET_SLOTS.includes(dst)) {
+      const cat = Math.floor(id / 10000), ks = [];
+      for (let k = 0; k < 3; k++) if (pets[k] && ((await this.petWears(id, pets[k])) || cat === 181 || id === 1822000 || id === 1832000)) ks.push(k);
+      if (!ks.length) return;
+      let k = ks[0];
+      if (ks.length > 1) {
+        const i = await this.windows.selectPet('Please select the pet you would like to put the pet equipment on.', ks.map((k) => {
+          const p = pets[k], own = this.petItem(p)?.pet;
+          return { name: p.name, level: own?.level ?? this.petLevel(p), closeness: own?.closeness ?? 0, stand: p.data?.stand0 };
+        }));
+        if (i == null) return;
+        k = ks[i];
+      }
+      dst = equipSlotFor(id, k);
     }
-    this.net.moveItem(1, slot, equipSlotFor(id, i), 1);
+    this.equipChecked(slot, it, dst);
+  }
+  /** Pet equipment dropped on a cell of the Equip window's pet panel: it only goes into the cell it belongs in, for the pet shown. */
+  equipPetCell(slot, it, cell, pet) {
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (equipSlotFor(it.id, pet) === cell) this.equipChecked(slot, it, cell);
+  }
+  /** Whether an accessory (1802000-1802099) is made for a pet: its Character/PetEquip img has a node for one with the same id % 1000. */
+  async petWears(id, pet) {
+    if (!pet || Math.floor(id / 10000) !== 180 || id % 1000 >= 100 || Math.floor(pet.id / 10000) !== 500) return false;
+    const art = await this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`);
+    return Object.keys(art || {}).some((k) => Math.floor(k / 10000) === 500 && k % 1000 === pet.id % 1000);
+  }
+  /**
+   * What stops pet equipment going into pet slot `dst`, or null: the accessory must be made for that pet, the rings
+   * need its name tag / balloon, the pouch, magnet and Item Ignore Pendant need it out. Wing Boots, Binocular and
+   * Magic Scales need no pet; going on one that is out, they pause its looting.
+   */
+  async petSlotRefusal(id, dst) {
+    const k = PET_SLOTS.findIndex((s) => Object.values(s).includes(dst));
+    if (k < 0) return null;
+    const S = PET_SLOTS[k], pet = this.petsOf(this.player.id)[k];
+    const none = 'You do not currently have a pet that is alive.', cant = 'The pet is unable to wear the equipment.';
+    if (dst === S.acc) return (await this.petWears(id, pet)) ? null : cant;
+    if (dst === S.label || dst === S.quote) return !pet ? none : Number(pet.info[dst === S.label ? 'nameTag' : 'chatBalloon']) ? null : cant;
+    if (dst === S.boots || dst === S.binocular || dst === S.scales) { if (pet) pet.lootPauseAt = performance.now(); return null; }
+    return pet ? null : none;
   }
   /**
    * Your level, stats and fame as an equip's requirements see them: your own stats plus the bonuses of what you would
@@ -2286,21 +2323,21 @@ export class Game {
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
   /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
   equipRing(slot, it, cell) {
-    if (this.dead) { this.notice("You can't do it once you're dead."); return; }
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
     const cash = it.cash || !!this.windows?.info(it.id)?.cash, dst = cash ? cell - 100 : cell, clash = this.ringClash(it.id, dst, true);
-    if (clash) { this.notice(clash); return; }
-    if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
+    if (clash) { this.windows.notice(clash); return; }
+    if (!this.canEquip(it.id)) { this.windows.notice('Your stats are too low to equip this item.'); return; }
     this.net.moveItem(1, slot, dst, 1);
   }
   /**
    * Putting on an equip from the inventory (double-click / drop), in this order: one of each Unique Equipped Item,
    * one couple / friendship / wedding ring, a cash weapon needs a weapon it has art for (and a weapon must suit the
-   * cash weapon worn), a cash shield needs a shield, the requirements, a cash taming mob / saddle needs a real one,
-   * and an item that can't be traded once worn asks first.
+   * cash weapon worn), a cash shield needs a shield, pet equipment needs its pet (petSlotRefusal), the requirements, a
+   * cash taming mob / saddle needs a real one, and an item that can't be traded once worn asks first.
    */
   async equipChecked(slot, it, dst) {
     const id = it.id, cat = Math.floor(id / 10000), worn = this.inventory?.equipped || {}, info = this.windows?.info(id) || {};
-    const refuse = (t) => { this.notice(t); };
+    const refuse = (t) => { this.windows.notice(t); };
     if (Number(info.onlyEquip) && Object.values(worn).some((w) => w?.id === id)) return refuse('You can only be equipped with 1 Unique Equipped Item.');
     const clash = this.ringClash(id, dst);
     if (clash) return refuse(clash);
@@ -2312,7 +2349,14 @@ export class Game {
       return refuse("You may not use the item with the\ncash item you're currently equipped with.\nPlease unequip that item and try again.");
     }
     if (dst === -110 && !worn[-10]) return refuse('You are able to use this only\nwhen you are wearing a shield.');
-    if (!this.canEquip(id)) return refuse('Your stats are too low to equip this item.');
+    const petMsg = await this.petSlotRefusal(id, dst);
+    if (petMsg) return refuse(petMsg);
+    // an accessory is checked against the level of the pet it goes on
+    const acc = cat === 180 && id !== 1802100, ai = PET_SLOTS.findIndex((s) => s.acc === dst), accPet = ai >= 0 ? this.petsOf(this.player.id)[ai] : null;
+    const wears = acc && (await this.petWears(id, accPet));
+    if ((acc && !wears) || !this.canEquip(id, wears ? this.petLevel(accPet) : undefined)) {
+      return refuse(acc && !wears ? 'This item cannot be equipped with your current pet.' : 'Your stats are too low to equip this item.');
+    }
     if (dst === -118 && !worn[-18]) return refuse('You must have a tamed monster\nin order to equip this.');
     if (dst === -119 && !worn[-19]) return refuse('You must be equipped with a saddle\nto equip this.');
     if (Number(info.equipTradeBlock) && !(it.flag & 0x08) && !(await this.windows.confirm("You cannot trade this item after equipping.\n Do you still wish to equip?"))) return;
@@ -2321,14 +2365,14 @@ export class Game {
   /**
    * Only one couple ring, one friendship ring and one wedding ring can be worn: the refusal, or null. Put on by
    * double-click, couple / friendship rings are checked against the cash ring slots and a wedding ring against the
-   * other normal ring slots; dragged onto a cell, all against the cash ring slots, unless that cell holds one of the
-   * same kind already.
+   * other normal ring slots; dragged onto a cell, all against the cash ring slots, the target cell included, so a
+   * worn couple / friendship ring can't be swapped for another.
    */
   ringClash(id, dst, dragged = false) {
     const kind = (x) => (Math.floor(x / 100) === 11120 && x !== 1112000 ? 'couple'
       : Math.floor(x / 100) === 11128 && x % 10 < 3 ? 'friend' : WEDDING_RINGS.includes(x) ? 'wedding' : null);
     const k = kind(id), worn = this.inventory?.equipped || {}, CASH = [-112, -113, -115, -116];
-    if (!k || (dragged && worn[dst] && kind(worn[dst].id) === k)) return null;
+    if (!k) return null;
     const slots = dragged || k !== 'wedding' ? CASH : [-12, -13, -15, -16].filter((s) => s !== dst);
     if (!slots.some((s) => worn[s] && kind(worn[s].id) === k)) return null;
     return { couple: 'Only one couple-ring can be equipped.', friend: 'You may only equip\none Friendship Ring at a time.', wedding: 'You may only equip ONE wedding ring.' }[k];
@@ -2348,7 +2392,7 @@ export class Game {
    * equipStats) and its jobs (reqJob: 0 anyone, -1 beginners, else a bit per branch: 1 warrior, 2 magician, 4 bowman,
    * 8 thief, 16 pirate). A GM (jobs 800 / 900) can wear anything.
    */
-  canEquip(id) {
+  canEquip(id, level) {
     const s = this.stats, info = this.windows?.info(id);
     if (!s || !info) return true;
     const branch = Math.floor((s.job % 1000) / 100);
@@ -2356,6 +2400,7 @@ export class Game {
     const g = Math.floor(id / 1000) % 10, gender = Math.floor(id / 1000000) === 1 && g < 2 ? g : 2;
     if (s.gender !== 2 && gender !== 2 && gender !== s.gender) return false;
     const have = this.equipStats(id);
+    if (level !== undefined) have.level = level;
     const reqs = [['reqLevel', 'level'], ['reqSTR', 'str'], ['reqDEX', 'dex'], ['reqINT', 'int'], ['reqLUK', 'luk'], ['reqPOP', 'fame']];
     if (reqs.some(([k, stat]) => (info[k] || 0) > have[stat])) return false;
     const job = info.reqJob || 0, bit = branch ? 1 << (branch - 1) : 0;
