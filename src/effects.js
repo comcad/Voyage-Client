@@ -1,7 +1,7 @@
 import { isCanvas, frames } from './assets.js';
 import { Anim } from './map.js';
 import { itemIcon } from './data.js';
-import { uiText, wrapText } from './ui/wzui.js';
+import { uiText } from './ui/wzui.js';
 import { settings } from './settings.js';
 
 /**
@@ -34,6 +34,26 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   return line * 120;
 }
 const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear' };
+
+/** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
+function balloonLines(ctx, text, max) {
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const t = line ? `${line} ${word}` : word;
+      if (ctx.measureText(t).width <= max) { line = t; continue; }
+      if (line) out.push(line);
+      line = '';
+      for (const ch of word) {
+        if (line && ctx.measureText(line + ch).width > max) { out.push(line); line = ''; }
+        line += ch;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+}
 
 export class WorldFx {
   constructor(game) {
@@ -185,25 +205,25 @@ export class WorldFx {
     const B = String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
     if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
     const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
-    if (Object.values(p).some((v) => !v)) return false;
+    if (Object.values(p).some((v) => !v)) return style !== '0' && style !== 'npc' ? this.drawBalloon(ctx, cam, ent, text) : false;   // a quote ring's, until its art is in
     ctx.save();
     ctx.font = '12px Arial, sans-serif';
-    // ChatBalloon.img/0 round the text: 12px lines on the white, 5px in from its left and 6px from its right, the
-    // arrow (origin 1, 0) laid over the bottom edge at the centre so the tail grows out of it, leaning left
-    // an NPC's or a pet's: centred 14px lines wrapped at 89px, in its clr (dark red for both by default)
-    const npc = style === 'npc' || String(style).startsWith('pet/'), lh = npc ? 14 : 12;
-    const lines = wrapText(ctx, text, npc ? 89 : 150, 12);
+    // centred 14px lines wrapped at 89px (a word too long for a line is broken up), in the balloon's clr; the arrow
+    // laid over the bottom edge at the centre so the tail grows out of it
+    const lh = 14, lines = balloonLines(ctx, text, 89);
     const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
+    // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
+    const o = (k) => B[k]?.origin || [0, 0];
     ctx.drawImage(p.c, x0, y0, W, H);
-    ctx.drawImage(p.nw, x0 - 6, y0 - 6); ctx.drawImage(p.n, x0, y0 - 6, W, 6); ctx.drawImage(p.ne, x0 + W, y0 - 6);
-    ctx.drawImage(p.w, x0 - 6, y0, 6, H); ctx.drawImage(p.e, x0 + W, y0, 6, H);
-    ctx.drawImage(p.sw, x0 - 6, y0 + H); ctx.drawImage(p.s, x0, y0 + H, W, 6); ctx.drawImage(p.se, x0 + W, y0 + H);
-    const ao = B.arrow.origin || [0, 0];
+    ctx.drawImage(p.n, x0, y0 - o('n')[1], W, p.n.height); ctx.drawImage(p.s, x0, y0 + H - o('s')[1], W, p.s.height);
+    ctx.drawImage(p.w, x0 - o('w')[0], y0, p.w.width, H); ctx.drawImage(p.e, x0 + W - o('e')[0], y0, p.e.width, H);
+    ctx.drawImage(p.nw, x0 - o('nw')[0], y0 - o('nw')[1]); ctx.drawImage(p.ne, x0 + W - o('ne')[0], y0 - o('ne')[1]);
+    ctx.drawImage(p.sw, x0 - o('sw')[0], y0 + H - o('sw')[1]); ctx.drawImage(p.se, x0 + W - o('se')[0], y0 + H - o('se')[1]);
+    const ao = o('arrow');
     ctx.drawImage(p.arrow, cx - ao[0] + 1, y0 + H - ao[1]);
     const color = `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
-    if (npc) lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
-    else lines.forEach((l, i) => uiText(ctx, l, x0 - 1, y0 + i * 12 + 2, { color, size: 12 }));
+    lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
     ctx.restore();
     return true;
   }
@@ -262,6 +282,73 @@ export class WorldFx {
     this.icons ??= new Map();
     if (!this.icons.has(id)) { this.icons.set(id, null); itemIcon(this.assets, id).then((n) => this.icons.set(id, n)); }
     return this.icons.get(id);
+  }
+}
+
+/**
+ * An equip's own effect (its info/effect: the effect rings and a few others), from the art at `path`
+ * (Effect/CharacterEff.img/<id>). With `animate` that art just plays on the character. Otherwise every `interval` ms
+ * one of its animations, picked at random, appears and lives `delay` ms, fading out: at a random spot of the
+ * left/top/right/bottom box drifting (dx..dx1, dy..dy1), or with `emission` thrown out from the middle - at a
+ * (dx..dx1) radius on an angle that turns `theta` degrees each time (random without one), or from its `genPoint`s in
+ * turn - moving (dy..dy1) further out. `follow` ones move with the character; `genOnMove` ones only come while it
+ * moves; z < 0 is behind it. A ring's, a cap's or an accessory's hangs from the head, the rest from the feet.
+ */
+export class EquipEffect {
+  constructor(id, e, art) {
+    const n = (k, d) => (e[k] === undefined ? d : Number(e[k]) || 0);
+    this.id = id; this.art = art;
+    this.follow = !!n('follow', 0); this.emission = !!n('emission', 0); this.genOnMove = !!n('genOnMove', 0);
+    this.noFlip = !!n('noFlip', 1); this.fixed = !!n('fixed', 0); this.z = n('z', 0);
+    this.box = [n('left', -25), n('top', -25), n('right', 25), n('bottom', 25)];
+    this.dx = n('dx', 0); this.dy = n('dy', this.follow ? 0 : -20); this.dx1 = n('dx1', this.dx); this.dy1 = n('dy1', this.dy);
+    this.delay = n('delay', 1000) || 1000; this.interval = n('interval', 250) || 250; this.theta = n('theta', 0);
+    this.genPoint = frames(e.genPoint);
+    const cat = Math.floor(id / 10000);
+    this.head = this.emission || [100, 101, 102, 103, 110, 111].includes(cat);
+    this.anim = n('animate', 0) && frames(art).length ? new Anim(frames(art)[0]) : null;
+    this.parts = []; this.t = 0; this.next = 0; this.angle = Math.floor(Math.random() * 360); this.gi = 0;
+  }
+  update(dt, at, right, moving) {
+    const ms = dt * 1000;
+    this.t += ms;
+    if (this.anim) { this.anim.update(ms); return; }
+    for (const p of this.parts) { p.age += ms; p.anim.update(ms); }
+    this.parts = this.parts.filter((p) => p.age < this.delay);
+    if (this.t < this.next) return;
+    this.next += this.interval;
+    if (this.genOnMove && !moving) return;
+    const art = frames(this.art);
+    if (!art.length) return;
+    const rnd = (a, b) => (b > a ? a + Math.floor(Math.random() * (b - a)) : a);
+    const ddx = rnd(this.dx, this.dx1), ddy = rnd(this.dy, this.dy1), g = this.genPoint.length ? this.genPoint[this.gi++ % this.genPoint.length] : null;
+    let a;
+    if (g) a = Math.atan2(g[1], g[0]);
+    else if (this.theta) { a = this.angle; this.angle = (this.angle + 360 + this.theta) % 360; } else a = Math.floor(Math.random() * 360);
+    if (!g) a *= Math.PI / 180;
+    let x, y, mx, my;
+    const [l, t, r, b] = this.box, flip = !this.noFlip && right;
+    if (!this.emission) { x = l + rnd(0, r - l); y = t + rnd(0, b - t); mx = flip ? -ddx : ddx; my = ddy; }
+    else { [x, y] = g || [ddx * Math.cos(a), ddx * Math.sin(a)]; y += 10; mx = ddy * Math.cos(a); my = ddy * Math.sin(a); }
+    const anim = new Anim(art[Math.floor(Math.random() * art.length)]);
+    this.parts.push({ anim, age: 0, x: this.follow ? x : at.x + x, y: this.follow ? y : at.y + y, mx, my, flip });
+  }
+  /** Behind the character (front false) or in front of it; `at` is where it hangs from, on screen. */
+  draw(ctx, assets, at, right, front, camX = 0, camY = 0) {
+    if ((this.z >= 0) !== front) return;
+    const one = (node, x, y, flip, alpha) => {
+      const img = node && assets.image(node);
+      if (!img || alpha <= 0) return;
+      const o = node.origin || [0, 0];
+      ctx.save(); ctx.globalAlpha = alpha; ctx.translate(Math.round(x), Math.round(y));
+      if (flip) ctx.scale(-1, 1);
+      ctx.drawImage(img, -o[0], -o[1]); ctx.restore();
+    };
+    if (this.anim) { one(this.anim.node, at.x, at.y, right && !this.fixed, this.anim.alpha); return; }
+    for (const p of this.parts) {
+      const k = p.age / this.delay, x = (this.follow ? at.x : -camX) + p.x + p.mx * k, y = (this.follow ? at.y : -camY) + p.y + p.my * k;
+      one(p.anim.node, x, y, p.flip, p.anim.alpha * (1 - k));
+    }
   }
 }
 

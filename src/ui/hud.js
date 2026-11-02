@@ -13,7 +13,7 @@ export class Hud {
     // level, name, job and the HP / MP / EXP gauges are drawn on the canvas by StatusBar
     // chat log and input belong to the canvas status bar; the map name is on the minimap
     addEventListener('keydown', (e) => {
-      if (document.activeElement instanceof HTMLInputElement || document.querySelector('.modal-overlay')) return;
+      if (document.activeElement instanceof HTMLInputElement || document.querySelector('.modal-overlay') || game.inCashShop) return;
       // window hotkeys (I, S, K, Q, M...) come from the server keymap via Game.handleHotkeys
       if (e.key === 'Enter') { e.preventDefault(); game.statusBar?.focusChat(); }
       else if (e.key === 'Escape') this.closeWindows();

@@ -1,5 +1,5 @@
 import { isCanvas } from '../assets.js';
-import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll } from '../data.js';
+import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { richText, drawRich } from './richtext.js';
@@ -25,7 +25,8 @@ export class WindowManager {
 
   async load() {
     const a = this.assets;
-    [this.W, this.B] = await Promise.all([a.json('UI/UIWindow.img'), a.json('UI/Basic.img')]);
+    [this.W, this.B, this.CS] = await Promise.all([a.json('UI/UIWindow.img'), a.json('UI/Basic.img'), a.json('UI/CashShop.img')]);
+    if (this.CS?.CashItem) a.preload(allCanvases(this.CS.CashItem));
     const make = { inventory: InventoryWin, equip: EquipWin, stat: StatWin, skill: SkillWin, quest: QuestWin, minimap: MiniMapWin, keyconfig: KeyConfigWin };
     for (const [k, C] of Object.entries(make)) this.wins[k] = new C(this);
     await a.preload([...Object.values(this.wins).flatMap((w) => w.frames()), ...allCanvases(this.B.VScr), ...allCanvases(this.B.ItemNo),
@@ -68,6 +69,7 @@ export class WindowManager {
     if (!top) return;
     const typing = e.target instanceof HTMLInputElement;
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); top.key?.(e); return; }
+    if (!typing && top === this.modal && top.keys?.(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }   // a dialog's own keys (arrows, Tab)
     if (!typing && this.modal) e.stopImmediatePropagation();   // no walking or attacking under a dialog
   }
   raise(w) { const i = this.order.indexOf(w); if (i >= 0 && i !== this.order.length - 1) { this.order.splice(i, 1); this.order.push(w); } }
@@ -95,7 +97,7 @@ export class WindowManager {
   desc(id) {
     if (!this.descs.has(id)) {
       this.descs.set(id, '');
-      const t = invType(id), file = { 1: 'Eqp', 2: 'Consume', 3: 'Ins', 4: 'Etc', 5: 'Cash' }[t];
+      const t = invType(id), pet = Math.floor(id / 10000) === 500, file = pet ? 'Pet' : { 1: 'Eqp', 2: 'Consume', 3: 'Ins', 4: 'Etc', 5: 'Cash' }[t];
       this.assets.json(`String/${file}.img`).then((s) => {
         let n = null;
         if (t === 1) { for (const cat of Object.values(s?.Eqp || {})) if (cat?.[id]) n = cat[id]; } else n = t === 4 ? s?.Etc?.[id] : s?.[id];
@@ -105,12 +107,21 @@ export class WindowManager {
     return this.descs.get(id);
   }
   image(n) { return n ? this.assets.image(n) : null; }
-  /** Item / skill icon in the 32x32 box at (x, y), placed by its origin like the client. */
-  drawIcon(ctx, node, x, y) {
+  /** Item / skill icon in the 32x32 box at (x, y), placed by its origin like the client; a cash item gets its coin. */
+  drawIcon(ctx, node, x, y, id = 0) {
     const im = this.image(node);
     if (!im) return;
     const o = node.origin || [0, 32];
     ctx.drawImage(im, x - o[0], y + 32 - o[1]);
+    if (id) this.drawCashMark(ctx, id, x + 32, y + 32);
+  }
+  isCash(id) { return Number(this.info(id)?.cash) === 1; }
+  /** CashShop.img/CashItem/0: the gold coin on a cash item's icon, hung from the icon's bottom-right corner. */
+  drawCashMark(ctx, id, x, y, scale = 1) {
+    const n = this.CS?.CashItem?.[0], im = n && this.isCash(id) && this.image(n);
+    if (!im) return;
+    const o = n.origin || [im.width, im.height];
+    ctx.drawImage(im, Math.round(x - o[0] * scale), Math.round(y - o[1] * scale), im.width * scale, im.height * scale);
   }
 
   /** Basic.img/ItemNo digits: item counts on icons. */
@@ -159,7 +170,7 @@ export class WindowManager {
     if (type === 'wheel') this.tipHeld = true;
     else if (type === 'move' && (x !== this.tipAt?.x || y !== this.tipAt?.y)) this.tipHeld = false;
     this.tipAt = { x, y };
-    this.tip = w && !over && !this.carry && !this.tipHeld ? w.tooltip?.(x - w.x, y - w.y) : null;
+    this.tip = w && !this.carry && !this.tipHeld ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : null;
     if (w) w.move?.(x - w.x, y - w.y);
 
     if (type === 'down') {
@@ -196,7 +207,7 @@ export class WindowManager {
       if (!w) return false;
       const target = w.buttons.find((b) => b.down && b === over);
       for (const b of w.buttons) b.down = false;
-      target?.onClick();
+      if (target?.enabled) target.onClick();
       return true;
     }
     if (type === 'wheel') {
@@ -358,7 +369,7 @@ class InventoryWin extends Win {
       if (slot > this.limit) { const d = m.image(this.W.disabled); if (d) ctx.drawImage(d, x, y); continue; }
       const it = items[slot];
       if (!it || (m.carry?.slot === slot && m.carry.tab === this.tab)) continue;
-      m.drawIcon(ctx, m.icon(it.id), x, y);
+      m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
       if (this.tab !== 1 && it.quantity > 1) m.count(ctx, it.quantity, x, y + 21);
     }
     this.scrollbar(ctx, 156, 51, 201, this.first, this.rows, 6);
@@ -451,7 +462,12 @@ class EquipWin extends Win {
       return this.petCells().find(([, cc, rr]) => cc === c && rr === r)?.[0] || 0;
     }
     const c = Math.floor((lx - 5) / 33), r = Math.floor((ly - 35) / 33);
-    return Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0;
+    return this.shown(Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0);
+  }
+  /** A cell shows (and drags, takes off...) the cash item worn over its slot, 100 below it, when there is one. */
+  shown(slot) {
+    const cash = slot - 100;
+    return slot && slot !== -14 && slot > -100 && this.g.inventory?.equipped?.[cash] ? cash : slot;
   }
   body(ctx) {
     const eq = this.g.inventory?.equipped || {}, m = this.mgr;
@@ -463,12 +479,32 @@ class EquipWin extends Win {
       if (panel) ctx.drawImage(panel, PET_X, 0);
       cells.push(...this.petCells().map(([s, c, r]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
     }
-    for (const [slot, x, y] of cells) {
-      if (slot === 'hp' || slot === 'mp') { const id = this.g.petPotions?.[slot]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
-      const it = eq[slot];
-      if (!it || (m.carry?.tab === 'equip' && m.carry.slot === Number(slot))) continue;
-      m.drawIcon(ctx, m.icon(it.id), x, y);
+    for (const [cell, x, y] of cells) {
+      if (cell === 'hp' || cell === 'mp') { const id = this.g.petPotions?.[cell]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
+      const slot = this.shown(Number(cell)), it = eq[slot];
+      if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
+      m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
     }
+    // cells that can't be used now are tinted red, and so is a worn item whose requirements you no longer meet
+    ctx.fillStyle = 'rgba(255,0,0,0.25)';
+    for (const cell of this.unusable(eq)) { const [c, r] = EQUIP_CELLS[cell]; ctx.fillRect(5 + c * 33, 35 + r * 33, 32, 32); }
+    for (const [cell, [c, r]] of Object.entries(EQUIP_CELLS)) {
+      const it = eq[this.shown(Number(cell))];
+      if (it && this.g.canEquip?.(it.id) === false) ctx.fillRect(5 + c * 33, 35 + r * 33, 32, 32);
+    }
+  }
+  /**
+   * The shield cell under a two-handed weapon (14xxxxx) with no shield, the pants cell under an overall (the cash one
+   * over it first) with no pants, and the taming mob cells without the job's Monster Rider skill.
+   */
+  unusable(eq) {
+    const out = [], job = this.g.stats?.job || 0;
+    if (eq[-11] && Math.floor(eq[-11].id / 100000) === 14 && !eq[-10]) out.push(-10);
+    const top = eq[-105] || eq[-5], bottom = eq[-106] || eq[-6];
+    if (top && Math.floor(top.id / 10000) === 105 && !bottom) out.push(-6);
+    const group = Math.floor(job / 100) === 22 || job === 2001 ? 2001 : Math.floor(job / 1000) * 1000;
+    if (!(this.g.skills?.level(group * 10000 + 1004) > 0)) out.push(-18, -19, -20);
+    return out;
   }
   down(lx, ly) {
     const slot = this.slotAt(lx, ly), it = typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot];
@@ -480,7 +516,15 @@ class EquipWin extends Win {
     const slot = this.slotAt(lx, ly);
     if ((slot === 'hp' || slot === 'mp') && c.tab === 2) { this.g.setPetPotion(slot, c.id); return; }
     if (c.tab === 2 && isScroll(c.id)) { if (typeof slot === 'number' && slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
-    if (c.tab === 1) this.g.useInventoryItem(1, c.slot, this.g.inventory[1][c.slot], this.petOpen && lx >= PET_X ? this.petSel : undefined);
+    if (c.tab !== 1) return;
+    const it = this.g.inventory[1][c.slot], cat = Math.floor((it?.id || 0) / 10000);
+    if (this.petOpen && lx >= PET_X) { if (it && typeof slot === 'number' && slot) this.g.equipPetCell(c.slot, it, slot, this.petSel); return; }
+    if (cat >= 180 && cat <= 183) return;   // pet equipment goes in none of your own cells
+    // a ring dropped on one of the ring cells goes into that one
+    const col = Math.floor((lx - 5) / 33), row = Math.floor((ly - 35) / 33);
+    const cell = Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === col && p[1] === row)?.[0]) || 0;
+    if (it && cat === 111 && [-12, -13, -15, -16].includes(cell)) this.g.equipRing(c.slot, it, cell);
+    else this.g.useInventoryItem(1, c.slot, it);
   }
   tooltip(lx, ly) {
     const slot = this.slotAt(lx, ly);
@@ -1187,7 +1231,7 @@ class KeyConfigWin extends Win {
   iconFor(b) {
     if (!b) return null;
     if (b.type === 1) return this.g.skills?.icon(b.action) || null;
-    if (b.type === 2) return this.mgr.icon(b.action);
+    if (b.type === 2 || b.type === 3 || b.type === 7) return this.mgr.icon(b.action);
     if (b.type === 8) return this.mgr.W.SkillMacro?.Macroicon?.[b.action]?.icon || null;
     return this.W.icon[b.action] || null;
   }
@@ -1234,7 +1278,8 @@ class KeyConfigWin extends Win {
   }
   drop(lx, ly, c) {
     const sc = this.capAt(lx, ly);
-    const b = c.kind === 'bind' ? c.b : c.kind === 'skill' ? { type: 1, action: c.id } : c.kind === 'item' && c.tab === 2 ? { type: 2, action: c.id } : null;
+    const it = c.kind === 'item' && itemKeyType(c.tab, c.id);
+    const b = c.kind === 'bind' ? c.b : c.kind === 'skill' ? { type: 1, action: c.id } : it ? { type: it, action: c.id } : null;
     if (!b) return;
     if (sc === null) { if (c.fromSc !== undefined) delete this.draft[c.fromSc]; return; } // dropped off the keys: unbind
     if (c.fromSc !== undefined && c.fromSc !== sc) delete this.draft[c.fromSc];
@@ -1248,23 +1293,30 @@ class KeyConfigWin extends Win {
   tooltip(lx, ly) {
     const sc = this.capAt(lx, ly), b = sc !== null ? this.draft[sc] : null;
     if (!b) return null;
-    const title = b.type === 1 ? this.g.skills.name(b.action) : b.type === 2 ? this.mgr.itemName(b.action) : null;
+    const title = b.type === 1 ? this.g.skills.name(b.action) : [2, 3, 7].includes(b.type) ? this.mgr.itemName(b.action) : null;
     return title ? { title, lines: [] } : null;
   }
 }
 
 // ==================================================================== tooltip
+/** A text tooltip in the client's panel: translucent navy with a white ring, the title centred, lines below. */
 function drawTip(ctx, tip, x, y) {
   ctx.save();
-  ctx.font = '11px Arial, sans-serif';
-  const lines = tip.lines.flatMap((l) => (l ? wrapText(ctx, l, 220, 11) : ['']));
-  const w = Math.max(ctx.measureText(tip.title).width + 16, ...lines.map((l) => ctx.measureText(l).width + 16), 80);
-  const h = 22 + lines.length * 14 + 4;
+  ctx.font = '12px Arial, sans-serif';
+  const lines = tip.lines.flatMap((l) => (l ? wrapText(ctx, l, 255, 12) : ['']));
+  ctx.font = 'bold 12px Arial, sans-serif';
+  const tw = ctx.measureText(tip.title).width;
+  ctx.font = '12px Arial, sans-serif';
+  const w = Math.ceil(Math.max(tw + 20, ...lines.map((l) => ctx.measureText(l).width + 20), 80));
+  const h = 24 + lines.length * 15 + (lines.length ? 4 : 0);
   x = Math.min(x, 800 - w - 2); y = Math.min(y, 600 - h - 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-  uiText(ctx, tip.title, x + w / 2, y + 5, { color: '#fff', bold: true, size: 12, align: 'center' });
-  lines.forEach((l, i) => uiText(ctx, l, x + 8, y + 22 + i * 14, { color: '#fff', size: 11 }));
+  ctx.fillStyle = 'rgba(0,0,64,0.627)';
+  ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
+  ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
+  uiText(ctx, tip.title, x + w / 2, y + 6, { color: '#fff', bold: true, size: 12, align: 'center' });
+  lines.forEach((l, i) => uiText(ctx, l, x + 10, y + 24 + i * 15, { color: '#fff', size: 12 }));
   ctx.restore();
 }
 

@@ -1,15 +1,15 @@
-import { GameMap, nameTag, Anim } from './map.js';
+import { GameMap, nameTag, labelTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
-import { CharacterLook, drawParts, lookCanvases } from './character.js';
+import { CharacterLook, drawParts, lookCanvases, equipPath } from './character.js';
 import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
-import { stanceByte, STANCE_NAMES } from './net/proto.js';
+import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook } from './quests.js';
-import { npcTalk, MessageBox, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
+import { npcTalk, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
 import { npcQuestMenu } from './ui/quests-ui.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
-import { WorldFx, lineDelay } from './effects.js';
+import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
@@ -112,16 +112,16 @@ class Input {
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
 /**
  * Face expressions: the emotion number indexes this list (1 = hit). An expression loops its Face.img frames
- * for EMOTE_TIME, then the face goes back to default - which blinks now and then, as the client's does.
+ * for its own delay (5s when it has none), then the face goes back to default, which blinks now and then.
  */
-const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
-  'wink', 'pain', 'glitter', 'despair', 'love', 'shine', 'blaze', 'hum', 'bowing', 'hot', 'dam', 'qBlue'];
-const EMOTE_TIME = 3, HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s (the client's)
-function setExpression(ent, n, time = EMOTE_TIME) {
+export const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
+  'wink', 'pain', 'glitter', 'blaze', 'shine', 'love', 'despair', 'hum', 'bowing', 'hot', 'dam'];
+const HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s
+export function setExpression(ent, n, time = null) {
   const name = EMOTES[n - 1];
   if (name) ent.expr = { name, frame: 0, t: 0, left: time };
 }
-function stepExpression(ent, look, dt) {
+export function stepExpression(ent, look, dt) {
   let e = ent.expr;
   if (!e) {
     // idle: blink every few seconds
@@ -131,6 +131,7 @@ function stepExpression(ent, look, dt) {
   }
   const node = look?.face?.[e.name];
   if (!node) { ent.expr = null; return; }
+  if (e.left === null) e.left = (Number(node.delay) || 5000) / 1000;   // an expression's own length, else 5s
   const frames = Object.keys(node).filter((k) => /^\d+$/.test(k)).length;
   e.left -= dt; e.t += dt * 1000;
   const delay = node[e.frame]?.delay || 500;
@@ -573,7 +574,9 @@ export class Game {
       const stall = this.boards.at(p[0] + this.cam.x, p[1] + this.cam.y);
       if (stall?.merchant && stall.merchant.owner !== this.player.id) { this.net.pshopVisit(stall.merchant.oid); return; }
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
-      if (rp) this.requestCharInfo(rp.id);
+      if (rp) { this.requestCharInfo(rp.id); return; }
+      // a pet: its owner's
+      for (const pet of this.pets.values()) if (pet.hits(wx, wy)) { this.requestCharInfo(pet.owner); return; }
     });
     c.addEventListener('wheel', (e) => {
       // deltaMode 1 = lines (some mice / Firefox): count each as a pixel step of 40
@@ -609,7 +612,7 @@ export class Game {
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
-    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; }
+    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
     this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
@@ -641,11 +644,14 @@ export class Game {
       this.net = net;
       this.channel = entered.channel;
       const info = entered.info;
-      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; }
+      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
       await loaded;
+      // the server comes back without your item effect: put it back on (or off, if the item is gone)
+      const fx = this.player.itemFxId;
+      if (fx) { if (this.itemCount(fx)) net.useItemEffect(fx); else this.setItemEffect(this.player, 0); }
       if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
       else this.hud.message(`You are now in channel ${this.channel + 1}.`, '#9fd3ff');
       if (this.stats.hp <= 0 && !this.dead) this.die();   // still dead after the switch
@@ -669,7 +675,7 @@ export class Game {
   /** A drawable look from packet look data (loads in the background; draws once ready). */
   lookFrom(d) {
     if (!d) return null;
-    const look = new CharacterLook(this.assets, { skin: d.skin, face: d.face, hair: d.hair, equips: visibleEquips(d) });
+    const look = new CharacterLook(this.assets, { skin: d.skin, face: d.face, hair: d.hair, gender: d.gender, equips: lookEquipIds(d) });
     look.load().then(() => this.assets.preload(lookCanvases(look, [look.standAction()]))).then(() => { look.ready = true; });
     return look;
   }
@@ -712,6 +718,8 @@ export class Game {
       if (!k) continue;
       if (k.type === 4) this.toggleMenu(k.action);
       else if (k.type === 6) this.emote(k.action - 99);
+      else if (k.type === 3) this.useFaceItem(k.action);
+      else if (k.type === 7) this.useItemEffect(k.action);
       else if (k.type === 8) this.runMacro(k.action);
       else if (k.type === 2) this.useItemById(k.action);
     }
@@ -894,10 +902,99 @@ export class Game {
   emote(n) {
     if (!EMOTES[n - 1] || this.player.dead) return;
     const now = performance.now();
-    if (now - (this.lastEmote || 0) < 300) return;   // a held key repeats: once is enough
+    if (now - (this.lastEmote || 0) < 2000) return;   // one every 2s
     this.lastEmote = now;
     setExpression(this.player, n);
+    this.emotionEffect(this.player, n);
     this.net?.faceExpression(n);
+  }
+  /** A facial expression item (516xxxx) from its key or a double-click: expression 8 + the last two digits of its id. */
+  useFaceItem(id) { if (this.itemCount(id) > 0) this.emote((id % 100) + 8); }
+  /** Etc/EmotionEffect.img/<expression>: art some expressions show beside the face. */
+  async emotionEffect(ent, n) {
+    const node = (this.emotionFx ??= await this.assets.json('Etc/EmotionEffect.img'))?.[EMOTES[n - 1]];
+    if (frames(node).length) this.pushEffect(node, ent);
+  }
+
+  /**
+   * An Effect item (501xxxx, or 429xxxx in Etc) from its key or a double-click turns its effect on, or off when it is
+   * the one already on; nothing within 2s of turning one on.
+   */
+  useItemEffect(id) {
+    if (!this.itemCount(id)) return;
+    const now = performance.now();
+    if (now - (this.itemEffectT || 0) < 2000) return;
+    if (this.player.itemFxId === id) id = 0; else this.itemEffectT = now;
+    this.setItemEffect(this.player, id);
+    this.net?.useItemEffect(id);
+  }
+  /**
+   * The effect an Effect item puts on a character, from the item's effect node: one animation (default, or the one
+   * named after the character's action when it has `action`), up to five trailing ones (`follow`), or fading copies
+   * of the character (`spectrum`).
+   */
+  async setItemEffect(ent, id) {
+    ent.itemFxId = id; ent.itemFx = null;
+    if (!id) return;
+    const img = await this.assets.json(Math.floor(id / 10000) === 429 ? 'Item/Etc/0429.img' : 'Item/Cash/0501.img');
+    const node = img?.[pad(id, 8)]?.effect;
+    if (node && ent.itemFxId === id) ent.itemFx = { node, layers: null, action: null };
+  }
+  itemFxLayers(e, action) {
+    const layer = (n) => {
+      const anim = new Anim(n);
+      this.assets.preload(anim.frames);
+      return { anim, z: Number(n.z) || 0, head: Number(n.pos) === 1 || Number(e.follow) === 1, fixed: !!Number(n.fixed), loose: Number(n.loose) || 0 };
+    };
+    if (Number(e.follow)) {
+      const out = [];
+      for (let i = 0; i < 5 && frames(e[i]).length; i++) out.push(layer(e[i]));
+      return out;
+    }
+    let n = Number(e.action) ? e[action] : null;
+    if (!frames(n).length) n = e.default;
+    if (!frames(n).length && frames(e).length) n = e;
+    return frames(n).length ? [layer(n)] : [];
+  }
+  stepItemFx(ent, dt) {
+    const fx = ent.itemFx;
+    if (!fx) return;
+    if (!fx.layers || (Number(fx.node.action) && fx.action !== ent.action)) { fx.action = ent.action; fx.layers = this.itemFxLayers(fx.node, ent.action); }
+    for (const l of fx.layers) l.anim.update(dt * 1000);
+  }
+  /**
+   * A character's item effect behind it (z < 0, and the spectrum's copies) or in front. pos 1 (and the trailing
+   * ones) hang from the head (the brow), the rest from the feet; a `loose` one lags behind by its loose %.
+   */
+  drawItemFx(ctx, cam, ent, parts, front, dx = 0, dy = 0) {
+    const fx = ent.itemFx;
+    if (!fx?.layers) return;
+    const now = performance.now(), e = fx.node, dir = ent.facingRight ? -1 : 1, brow = parts.brow || [0, -55];
+    if (!front && Number(e.spectrum)) {
+      const life = Number(e.delay) || 1000, a = (e.alpha ?? 128) / 255;
+      if (now - (fx.ghostT || 0) >= (Number(e.interval) || 100)) { fx.ghostT = now; (fx.ghosts ??= []).push({ parts, x: ent.x + dx, y: ent.y + dy, right: ent.facingRight, t: now }); }
+      fx.ghosts = (fx.ghosts || []).filter((g) => now - g.t < life);
+      for (const g of fx.ghosts) drawParts(ctx, this.assets, g.parts, g.x - cam.x, g.y - cam.y, g.right, a * (1 - (now - g.t) / life));
+    }
+    for (const l of fx.layers) {
+      if ((l.z >= 0) !== front) continue;
+      let x = ent.x + dx + (l.head ? brow[0] * dir : 0), y = ent.y + dy + (l.head ? brow[1] : 0);
+      if (l.loose) {
+        if (l.x === undefined || Math.hypot(x - l.x, y - l.y) > 600) { l.x = x; l.y = y; }
+        const k = 1 - (l.loose / 100) ** (Math.min(100, now - (l.t || now)) / 16);
+        l.t = now; l.x += (x - l.x) * k; l.y += (y - l.y) * k;
+        x = l.x; y = l.y;
+      }
+      const node = l.anim.node, img = node && this.assets.image(node);
+      if (!img) continue;
+      const o = node.origin || [0, 0];
+      ctx.save();
+      ctx.globalAlpha = l.anim.alpha;
+      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      if (ent.facingRight && !l.fixed) ctx.scale(-1, 1);
+      ctx.drawImage(img, -o[0], -o[1]);
+      ctx.restore();
+    }
   }
 
   /** Skill keys held down (repeat like the real client while held). */
@@ -1308,7 +1405,7 @@ export class Game {
   async goOnline(entered, uiRoot) {
     const info = entered.info;
     sfx.play('Game/GameIn');
-    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso;
+    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
     this.statusBar.layout(VIEW_W, VIEW_H);
@@ -1324,6 +1421,7 @@ export class Game {
     wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
+    wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new MessageBox(wm, 'number', text, r, { def, min, max })));
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new MessageBox(wm, 'text', text, r, { def, ...opts })));
     Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
@@ -1350,17 +1448,26 @@ export class Game {
     Object.assign(h, {
       cashShopOpen: (d) => this.openCashShop(d),
       csCash: (c) => this.csWin?.setCash(c),
-      csInventory: (items) => this.csWin?.setInventory(items),
-      csWish: (sns) => this.csWin?.setWish(sns),
+      csInventory: (items, storageSlots) => this.csWin?.setInventory(items, storageSlots),
+      csWish: (sns, reply) => this.csWin?.setWish(sns, reply),
       csBought: (it) => this.csWin?.bought(it),
-      csBoughtPackage: (items) => this.csWin?.boughtPackage(items),
+      csBoughtPackage: (items, bonus) => this.csWin?.boughtPackage(items, bonus),
+      csCoupon: (c) => this.csWin?.coupon(c),
+      csMesoBought: (got) => this.csWin?.mesoBought(got),
+      csRing: (r) => this.csWin?.ring(r),
+      csExpired: (cashId) => this.csWin?.expired(cashId),
+      csStock: (sn, left) => this.csWin?.setStock(sn, left),
       csGifts: (gifts) => this.csWin?.receivedGifts(gifts),
       csGiftSent: (g) => this.csWin?.giftSent(g),
       notes: (notes) => this.showNotes(notes),
       csTaken: (pos, it) => this.csWin?.taken(pos, it),
       csPut: (it) => this.csWin?.put(it),
-      csError: (code) => this.csWin?.error(code),
+      csError: (reason, op, sn) => this.csWin?.error(reason, op, sn),
       csSlots: (kind, slots, type) => this.csWin?.slots(kind, slots, type),
+      csNameChangeRules: (error, x) => this.csWin?.nameChangeRules(error, x),
+      csNameChecked: (name, taken) => this.csWin?.nameChecked(name, taken),
+      csWorldTransferRules: (error, x, worlds) => this.csWin?.worldTransferRules(error, x, worlds),
+      csTransferBought: (kind, item) => this.csWin?.transferBought(kind, item),
       setField: (f) => {
         if (f.hp !== undefined && this.stats) this.stats.hp = f.hp;
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });
@@ -1471,9 +1578,10 @@ export class Game {
       petPotion: (kind, id) => { (this.petPotions ??= {})[kind] = id || null; },
       petEffect: later((owner, slot, effect) => { const pet = this.pets.get(`${owner ?? this.player.id}:${slot}`); if (pet) this.petEffect(pet, effect); }),
       movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
-      playerLook: later((id, look) => this.updateOtherLook(id, look)),
+      playerLook: later((id, look, rings) => { const rp = this.others.get(id); if (rp) rp.rings = rings; this.updateOtherLook(id, look); }),
       attack: later((a) => this.onRemoteAttack(a)),
-      expression: later((id, emote) => { const rp = this.others.get(id); if (rp) setExpression(rp, emote); }),
+      expression: later((id, emote) => { const rp = this.others.get(id); if (rp) { setExpression(rp, emote); this.emotionEffect(rp, emote); } }),
+      itemEffect: later((id, item) => { const rp = this.others.get(id); if (rp) this.setItemEffect(rp, item); }),
       scrollEffect: later((e) => this.onScrollEffect(e)),
       bookCard: later((id, count) => {
         const b = this.monsterBook;
@@ -1799,22 +1907,23 @@ export class Game {
 
   async spawnPlayer(d) {
     if (d.id === this.player?.id) return;   // the server can spawn you to yourself (a job change): you're already here
-    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, equips: visibleEquips(d.look) });
+    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips: lookEquipIds(d.look) });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look;
-    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.box = d.box; rp.rings = d.rings; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
+    if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     this.others.set(d.id, rp);
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
 
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
-    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, equips: visibleEquips(lookData) });
+    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips: lookEquipIds(lookData) });
     await look.load();
     rp.look = look; rp.lookData = lookData;
   }
@@ -1972,7 +2081,7 @@ export class Game {
 
   async rebuildLook() {
     const s = this.stats;
-    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, equips: equippedIds(this.inventory.equipped) });
+    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, gender: s.gender, equips: equippedIds(this.inventory.equipped) });
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
@@ -2015,13 +2124,15 @@ export class Game {
     return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
   }
 
-  useInventoryItem(tab, slot, it, pet) {
+  useInventoryItem(tab, slot, it) {
     if (tab === 5 && it.pet) { this.summonPet(slot, it); return; }        // summon / send the pet home
     if (tab === 5 && Math.floor(it.id / 10000) === 514) { this.openShop(it.id); return; }      // a Shop Permit
     if (tab === 5 && Math.floor(it.id / 10000) === 503) { this.openMerchant(it.id); return; }   // a Hired Merchant
     if (tab === 5 && (Math.floor(it.id / 10000) === 507 || Math.floor(it.id / 10000) === 539)) { this.openMegaphone(slot, it.id); return; }
     if (tab === 5 && Math.floor(it.id / 10000) === 504) { this.openRock(slot, it.id); return; }          // a Teleport Rock
     if (tab === 5 && Math.floor(it.id / 10000) === 537) { this.openChalkboard(slot, it.id); return; }    // a Chalkboard
+    if (tab === 5 && Math.floor(it.id / 10000) === 516) { this.useFaceItem(it.id); return; }             // a facial expression
+    if (tab === 5 && Math.floor(it.id / 10000) === 501) { this.useItemEffect(it.id); return; }           // a character effect
     if (tab === 3 && Math.floor(it.id / 10000) === 301) { this.sitChair(it.id); return; }        // a chair
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
     if (tab === 2 && isScroll(it.id)) {
@@ -2033,30 +2144,66 @@ export class Game {
     }
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
-      if (isPetEquip(it.id)) { this.equipPet(slot, it, pet ?? this.windows.wins?.equip?.petSel ?? 0); return; }
-      const dst = equipSlotFor(it.id);
+      if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+      if (isPetEquip(it.id)) { this.equipPet(slot, it); return; }
+      const dst = this.equipDest(it.id, it.cash);
       if (!dst) return;
-      if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
-      this.net.moveItem(1, slot, dst, 1);
+      this.equipChecked(slot, it, dst);
     }
   }
 
   petSlots(i) { return PET_SLOTS[i] || PET_SLOTS[0]; }
   /**
-   * Put pet equipment on pet `i`: it must be out; an accessory must be made for it (its img has a node for the
-   * pet), the rings need its name tag / balloon. The potion pouches go on whatever pets are out.
+   * Double-click pet equipment: it goes on the lead pet; with two or more out, on one of the pets it can go on (an
+   * accessory made for it, an ability item, the Label / Quote Ring), picked in the pet dialog when there are several.
+   * The potion pouches are shared.
    */
-  async equipPet(slot, it, i) {
-    const id = it.id, pet = this.petsOf(this.player.id)[i], cat = Math.floor(id / 10000);
-    if (id !== 1812002 && id !== 1812003) {
-      if (!pet) { this.windows.notice('You do not currently have a pet that is alive.'); return; }
-      const art = cat === 180 && id !== 1802100 ? await this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`) : null;
-      const fits = cat === 180 && id !== 1802100 ? !!art?.[pet.id]
-        : id === 1802100 || cat === 182 ? Number(pet.info.nameTag) > 0 : cat === 183 ? Number(pet.info.chatBalloon) > 0 : true;
-      if (!fits) { this.windows.notice('The pet is unable to wear the equipment.'); return; }
-      if (id >= 1812004 && id <= 1812006) pet.lootPauseAt = performance.now();
+  async equipPet(slot, it) {
+    const id = it.id, pets = this.petsOf(this.player.id);
+    let dst = equipSlotFor(id);
+    if (!dst) return;
+    if (pets[1] && !SHARED_PET_SLOTS.includes(dst)) {
+      const cat = Math.floor(id / 10000), ks = [];
+      for (let k = 0; k < 3; k++) if (pets[k] && ((await this.petWears(id, pets[k])) || cat === 181 || id === 1822000 || id === 1832000)) ks.push(k);
+      if (!ks.length) return;
+      let k = ks[0];
+      if (ks.length > 1) {
+        const i = await this.windows.selectPet('Please select the pet you would like to put the pet equipment on.', ks.map((k) => {
+          const p = pets[k], own = this.petItem(p)?.pet;
+          return { name: p.name, level: own?.level ?? this.petLevel(p), closeness: own?.closeness ?? 0, stand: p.data?.stand0 };
+        }));
+        if (i == null) return;
+        k = ks[i];
+      }
+      dst = equipSlotFor(id, k);
     }
-    this.net.moveItem(1, slot, equipSlotFor(id, i), 1);
+    this.equipChecked(slot, it, dst);
+  }
+  /** Pet equipment dropped on a cell of the Equip window's pet panel: it only goes into the cell it belongs in, for the pet shown. */
+  equipPetCell(slot, it, cell, pet) {
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (equipSlotFor(it.id, pet) === cell) this.equipChecked(slot, it, cell);
+  }
+  /** Whether an accessory (1802000-1802099) is made for a pet: its Character/PetEquip img has a node for one with the same id % 1000. */
+  async petWears(id, pet) {
+    if (!pet || Math.floor(id / 10000) !== 180 || id % 1000 >= 100 || Math.floor(pet.id / 10000) !== 500) return false;
+    const art = await this.assets.json(`Character/PetEquip/${pad(id, 8)}.img`);
+    return Object.keys(art || {}).some((k) => Math.floor(k / 10000) === 500 && k % 1000 === pet.id % 1000);
+  }
+  /**
+   * What stops pet equipment going into pet slot `dst`, or null: the accessory must be made for that pet, the rings
+   * need its name tag / balloon, the pouch, magnet and Item Ignore Pendant need it out. Wing Boots, Binocular and
+   * Magic Scales need no pet; going on one that is out, they pause its looting.
+   */
+  async petSlotRefusal(id, dst) {
+    const k = PET_SLOTS.findIndex((s) => Object.values(s).includes(dst));
+    if (k < 0) return null;
+    const S = PET_SLOTS[k], pet = this.petsOf(this.player.id)[k];
+    const none = 'You do not currently have a pet that is alive.', cant = 'The pet is unable to wear the equipment.';
+    if (dst === S.acc) return (await this.petWears(id, pet)) ? null : cant;
+    if (dst === S.label || dst === S.quote) return !pet ? none : Number(pet.info[dst === S.label ? 'nameTag' : 'chatBalloon']) ? null : cant;
+    if (dst === S.boots || dst === S.binocular || dst === S.scales) { if (pet) pet.lootPauseAt = performance.now(); return null; }
+    return pet ? null : none;
   }
   /**
    * Your level, stats and fame as an equip's requirements see them: your own stats plus the bonuses of what you would
@@ -2064,7 +2211,7 @@ export class Game {
    * bottom for an overall, a shield for a two-handed weapon...).
    */
   equipStats(id) {
-    const s = this.stats || {}, worn = this.inventory?.equipped || {}, dst = equipSlotFor(id), cat = Math.floor(id / 10000);
+    const s = this.stats || {}, worn = this.inventory?.equipped || {}, dst = this.equipDest(id), cat = Math.floor(id / 10000);
     const off = new Set([dst]);
     if (cat === 105) off.add(-6);
     if (cat === 106 && Math.floor((worn[-5]?.id || 0) / 10000) === 105) off.add(-5);
@@ -2080,11 +2227,174 @@ export class Game {
     return out;
   }
   /**
+   * The rings you wear, as others see them: a couple (1112001-1112099) or friendship ring (1112800-1112802,
+   * 1112810-1112812) by its serial and its partner ring's, a wedding ring by the spouse's id.
+   */
+  ownRings() {
+    const eq = this.inventory?.equipped || {}, r = this.rings || {};
+    const worn = (test) => [-112, -113, -115, -116, -12, -13, -15, -16].map((s) => eq[s]).find((it) => it && test(it.id));
+    const pair = (it, list) => { const x = it && list?.find((p) => p.ring === it.cashId); return x ? { ring: x.ring, partner: x.partnerRing, item: it.id } : null; };
+    const wed = worn((id) => WEDDING_RINGS.includes(id)), m = r.marriage;
+    return {
+      couple: pair(worn((id) => Math.floor(id / 100) === 11120 && id !== 1112000), r.couple),
+      friend: pair(worn((id) => Math.floor(id / 100) === 11128 && id % 10 < 3), r.friend),
+      marriage: wed && m ? { id: this.player.id, partner: m.husbandId === this.player.id ? m.wifeId : m.husbandId, item: wed.id } : null,
+    };
+  }
+  /**
+   * Ring effects: two characters on the map wearing the halves of a couple, friendship or wedding ring each show
+   * Effect/ItemEff.img/<ring>/0 while within 700 x 500px of each other, and /1 plays between them (20px over the
+   * middle of their feet) while within 100 x 100.
+   */
+  updateRingFx(dt) {
+    const fx = (this.ringFx ??= new Map()), seen = new Set();
+    if (!this.itemEff) { this.itemEff = this.assets.json('Effect/ItemEff.img').then((j) => { this.itemEff = j || null; }); return; }
+    if (this.itemEff instanceof Promise) return;
+    this.player.rings = this.ownRings();
+    const ents = [this.player, ...this.others.values()];
+    const anim = (n) => { const a = n && frames(n).length ? new Anim(n) : null; if (a) this.assets.preload(a.frames); return a; };
+    for (const kind of ['couple', 'friend', 'marriage']) {
+      for (let i = 0; i < ents.length; i++) {
+        for (let j = i + 1; j < ents.length; j++) {
+          const a = ents[i], b = ents[j], ra = a.rings?.[kind], rb = b.rings?.[kind];
+          if (!ra || !rb) continue;
+          const paired = kind === 'marriage' ? (ra.partner && ra.partner === b.id) || (rb.partner && rb.partner === a.id)
+            : (ra.ring && ra.partner === rb.ring) || (rb.ring && rb.partner === ra.ring);
+          const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+          if (!paired || dx >= 700 || dy >= 500) continue;
+          const key = `${kind}:${a.id}:${b.id}`, node = this.itemEff?.[ra.item || rb.item];
+          if (!node) continue;
+          seen.add(key);
+          let p = fx.get(key);
+          if (!p) fx.set(key, (p = { a, b, on: [anim(node[0]), anim(node[0])], mid: null }));
+          const close = dx < 100 && dy < 100;
+          if (close && !p.mid) p.mid = anim(node[1]);
+          else if (!close) p.mid = null;
+          for (const x of [...p.on, p.mid]) x?.update(dt * 1000);
+        }
+      }
+    }
+    for (const k of fx.keys()) if (!seen.has(k)) fx.delete(k);
+  }
+  /** One character's ring effects (/0, at its feet, in front of it), or with no character the ones between two. */
+  drawRingFx(ctx, cam, ent = null) {
+    const draw = (a, x, y, flip) => {
+      const node = a?.node, img = node && this.assets.image(node);
+      if (!img) return;
+      const o = node.origin || [0, 0];
+      ctx.save();
+      ctx.globalAlpha = a.alpha;
+      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      if (flip) ctx.scale(-1, 1);
+      ctx.drawImage(img, -o[0], -o[1]);
+      ctx.restore();
+    };
+    for (const p of this.ringFx?.values() || []) {
+      if (!ent) draw(p.mid, (p.a.x + p.b.x) / 2, (p.a.y + p.b.y) / 2 - 20, false);
+      else if (p.a === ent || p.b === ent) draw(p.on[p.a === ent ? 0 : 1], ent.x, ent.y, ent.facingRight);
+    }
+  }
+  /** A label ring's name tag (UI/NameTag.img/<n>) for a look wearing one; false for the plain tag. */
+  drawLabelTag(ctx, look, text, x, y) {
+    if (!look?.nameTag) return false;
+    if (!this.nameTags) { this.nameTags = this.assets.json('UI/NameTag.img').then((j) => { this.nameTags = j || null; }); return false; }
+    return !(this.nameTags instanceof Promise) && labelTag(ctx, this.assets, this.nameTags?.[look.nameTag], text, x, y);
+  }
+  /** A character's equip effects (EquipEffect), kept in step with what its look wears. */
+  stepEquipFx(ent, look, dt) {
+    const want = look?.equipFx || [];
+    if (!want.length && !ent.equipFx?.length) return;
+    if (!this.charEff) { this.charEff = this.assets.json('Effect/CharacterEff.img').then((j) => { this.charEff = j || null; }); return; }
+    if (this.charEff instanceof Promise) return;
+    if (want.length !== ent.equipFx?.length || want.some((w, i) => w.id !== ent.equipFx[i].id)) {
+      ent.equipFx = want.map((w) => ent.equipFx?.find((f) => f.id === w.id)
+        || new EquipEffect(w.id, w.effect, String(w.effect.path).split('/').slice(2).reduce((n, k) => n?.[k], this.charEff)));
+    }
+    const moving = ent.equipFxX !== undefined && Math.abs(ent.x - ent.equipFxX) > 0.5;
+    ent.equipFxX = ent.x;
+    for (const f of ent.equipFx) f.update(dt, f.head ? ent.browAt || { x: ent.x, y: ent.y - 55 } : ent, ent.facingRight, moving);
+  }
+  drawEquipFx(ctx, cam, ent, parts, front, dx = 0, dy = 0) {
+    const brow = parts.brow || [0, -55], x = ent.x + dx, y = ent.y + dy;
+    ent.browAt = { x: x + brow[0] * (ent.facingRight ? -1 : 1), y: y + brow[1] };
+    for (const f of ent.equipFx || []) {
+      const at = f.head ? ent.browAt : { x, y };
+      f.draw(ctx, this.assets, { x: at.x - cam.x, y: at.y - cam.y }, ent.facingRight, front, cam.x, cam.y);
+    }
+  }
+  /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
+  /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
+  equipRing(slot, it, cell) {
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    const cash = it.cash || !!this.windows?.info(it.id)?.cash, dst = cash ? cell - 100 : cell, clash = this.ringClash(it.id, dst, true);
+    if (clash) { this.windows.notice(clash); return; }
+    if (!this.canEquip(it.id)) { this.windows.notice('Your stats are too low to equip this item.'); return; }
+    this.net.moveItem(1, slot, dst, 1);
+  }
+  /**
+   * Putting on an equip from the inventory (double-click / drop), in this order: one of each Unique Equipped Item,
+   * one couple / friendship / wedding ring, a cash weapon needs a weapon it has art for (and a weapon must suit the
+   * cash weapon worn), a cash shield needs a shield, pet equipment needs its pet (petSlotRefusal), the requirements, a
+   * cash taming mob / saddle needs a real one, and an item that can't be traded once worn asks first.
+   */
+  async equipChecked(slot, it, dst) {
+    const id = it.id, cat = Math.floor(id / 10000), worn = this.inventory?.equipped || {}, info = this.windows?.info(id) || {};
+    const refuse = (t) => { this.windows.notice(t); };
+    if (Number(info.onlyEquip) && Object.values(worn).some((w) => w?.id === id)) return refuse('You can only be equipped with 1 Unique Equipped Item.');
+    const clash = this.ringClash(id, dst);
+    if (clash) return refuse(clash);
+    const fits = async (cashWeapon, weapon) => !!(await this.assets.json(equipPath(cashWeapon)))?.[Math.floor(weapon / 10000) % 100];
+    if (cat === 170) {
+      if (!worn[-11]) return refuse('You need to equip yourself with an item\nto use it.');
+      if (!(await fits(id, worn[-11].id))) return refuse("This item is not available with the weapon\nyou're currenly using.");
+    } else if (dst === -11 && worn[-111] && !(await fits(worn[-111].id, id))) {
+      return refuse("You may not use the item with the\ncash item you're currently equipped with.\nPlease unequip that item and try again.");
+    }
+    if (dst === -110 && !worn[-10]) return refuse('You are able to use this only\nwhen you are wearing a shield.');
+    const petMsg = await this.petSlotRefusal(id, dst);
+    if (petMsg) return refuse(petMsg);
+    // an accessory is checked against the level of the pet it goes on
+    const acc = cat === 180 && id !== 1802100, ai = PET_SLOTS.findIndex((s) => s.acc === dst), accPet = ai >= 0 ? this.petsOf(this.player.id)[ai] : null;
+    const wears = acc && (await this.petWears(id, accPet));
+    if ((acc && !wears) || !this.canEquip(id, wears ? this.petLevel(accPet) : undefined)) {
+      return refuse(acc && !wears ? 'This item cannot be equipped with your current pet.' : 'Your stats are too low to equip this item.');
+    }
+    if (dst === -118 && !worn[-18]) return refuse('You must have a tamed monster\nin order to equip this.');
+    if (dst === -119 && !worn[-19]) return refuse('You must be equipped with a saddle\nto equip this.');
+    if (Number(info.equipTradeBlock) && !(it.flag & 0x08) && !(await this.windows.confirm("You cannot trade this item after equipping.\n Do you still wish to equip?"))) return;
+    this.net.moveItem(1, slot, dst, 1);
+  }
+  /**
+   * Only one couple ring, one friendship ring and one wedding ring can be worn: the refusal, or null. Put on by
+   * double-click, couple / friendship rings are checked against the cash ring slots and a wedding ring against the
+   * other normal ring slots; dragged onto a cell, all against the cash ring slots, the target cell included, so a
+   * worn couple / friendship ring can't be swapped for another.
+   */
+  ringClash(id, dst, dragged = false) {
+    const kind = (x) => (Math.floor(x / 100) === 11120 && x !== 1112000 ? 'couple'
+      : Math.floor(x / 100) === 11128 && x % 10 < 3 ? 'friend' : WEDDING_RINGS.includes(x) ? 'wedding' : null);
+    const k = kind(id), worn = this.inventory?.equipped || {}, CASH = [-112, -113, -115, -116];
+    if (!k) return null;
+    const slots = dragged || k !== 'wedding' ? CASH : [-12, -13, -15, -16].filter((s) => s !== dst);
+    if (!slots.some((s) => worn[s] && kind(worn[s].id) === k)) return null;
+    return { couple: 'Only one couple-ring can be equipped.', friend: 'You may only equip\none Friendship Ring at a time.', wedding: 'You may only equip ONE wedding ring.' }[k];
+  }
+  equipDest(id, cash = !!this.windows?.info(id)?.cash) {
+    // a ring takes the first free one of the four ring slots (12, 13, 15, 16); with all four worn it can't go on
+    if (Math.floor(id / 10000) === 111) {
+      const worn = this.inventory?.equipped || {};
+      for (const s of [12, 13, 15, 16]) { const d = -(s + (cash ? 100 : 0)); if (!worn[d]) return d; }
+      return null;
+    }
+    const dst = equipSlotFor(id);
+    return dst && cash && dst > -100 ? dst - 100 : dst;
+  }
+  /**
    * Whether you can wear an item: its gender, its level, STR, DEX, INT, LUK and fame requirements (against
    * equipStats) and its jobs (reqJob: 0 anyone, -1 beginners, else a bit per branch: 1 warrior, 2 magician, 4 bowman,
    * 8 thief, 16 pirate). A GM (jobs 800 / 900) can wear anything.
    */
-  canEquip(id) {
+  canEquip(id, level) {
     const s = this.stats, info = this.windows?.info(id);
     if (!s || !info) return true;
     const branch = Math.floor((s.job % 1000) / 100);
@@ -2092,6 +2402,7 @@ export class Game {
     const g = Math.floor(id / 1000) % 10, gender = Math.floor(id / 1000000) === 1 && g < 2 ? g : 2;
     if (s.gender !== 2 && gender !== 2 && gender !== s.gender) return false;
     const have = this.equipStats(id);
+    if (level !== undefined) have.level = level;
     const reqs = [['reqLevel', 'level'], ['reqSTR', 'str'], ['reqDEX', 'dex'], ['reqINT', 'int'], ['reqLUK', 'luk'], ['reqPOP', 'fame']];
     if (reqs.some(([k, stat]) => (info[k] || 0) > have[stat])) return false;
     const job = info.reqJob || 0, bit = branch ? 1 << (branch - 1) : 0;
@@ -2346,8 +2657,11 @@ export class Game {
     this.updateDiseases(dt);
     if (this.net) this.touchReactors();
     if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
-    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); }
+    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
+    this.stepItemFx(this.player, dt);
+    this.stepEquipFx(this.player, this.look, dt);
+    this.updateRingFx(dt);
     if (this.player.fh) this.ownerGroup = this.player.fh.group;
     for (const pet of this.pets.values()) pet.update(dt);
     for (const [oid, sm] of this.summons) { sm.update(dt); if (sm.gone) this.summons.delete(oid); }
@@ -4753,6 +5067,7 @@ export class Game {
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
+    this.drawRingFx(ctx, cam);
     this.drawFx(ctx, cam);
     map.drawBacks(ctx, cam, true);
     this.drawBalloons(ctx, cam);
@@ -4814,16 +5129,21 @@ export class Game {
     const dead = ent.action === 'dead', t = performance.now() / 700;
     const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
+    this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
+    this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
     const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
+    this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
+    this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
+    this.drawRingFx(ctx, cam, ent);
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
-    nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
+    if (!this.drawLabelTag(ctx, look, ent.name, Math.round(sx), Math.round(sy) + 4)) nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
     const guild = local ? this.guild?.name : ent.guild;
     if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);
   }
@@ -4860,8 +5180,8 @@ export class Game {
     const list = [this.player, ...this.others.values()].filter((e) => e.chat);
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
     for (const e of list) {
-      const text = `${e.name} : ${e.chat.text}`;
-      if (this.vfx?.drawBalloon(ctx, cam, e, text)) continue;   // ChatBalloon.img; the drawn box is the offline fallback
+      const text = `${e.name} : ${e.chat.text}`, quote = (e === this.player ? this.look : e.look)?.chatBalloon;
+      if (this.vfx?.drawBalloon(ctx, cam, e, text, quote ? String(quote) : '0')) continue;   // a quote ring's balloon   // ChatBalloon.img; the drawn box is the offline fallback
       const lines = wrap(ctx, text, 160);
       const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14, h = lines.length * 15 + 8;
       const x = Math.round(e.x - cam.x - w / 2), y = Math.round(e.y - cam.y - 90 - h);
@@ -4889,15 +5209,14 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
 }
 
-/** Item ids to draw from an avatar look packet (cash items replace the regular one in their slot). */
-const isPetPart = (n) => n === 14 || (n >= 21 && n <= 48);   // what pets wear: never drawn on the character
-function visibleEquips(look) {
-  const slots = Object.fromEntries(Object.entries(look.equips).filter(([k]) => !isPetPart(Number(k))));
-  if (look.cashWeapon) slots[11] = look.cashWeapon;
-  return Object.values(slots);
-}
+/** What pets wear (look slots 14 and 21-48): never drawn on the character. */
+const isPetPart = (n) => n === 14 || (n >= 21 && n <= 48);
+const WEDDING_RINGS = [1112803, 1112806, 1112807, 1112809];
 
-/** Same rule for our own equipped inventory (slot -N normal, -(N+100) cash cover). */
+/**
+ * Item ids to draw from our own equipped inventory: slot -N regular, -(N+100) its cash cover, -111 the cash weapon (kept
+ * alongside the weapon). Pet equipment is not the character's.
+ */
 export function equippedIds(equipped) {
   const bySlot = {};
   for (const [k, it] of Object.entries(equipped)) {
@@ -4908,8 +5227,9 @@ export function equippedIds(equipped) {
     const s = Number(k);
     if (s <= -100 && s !== -111 && !isPetPart(-s - 100)) bySlot[-s - 100] = it.id;
   }
-  if (equipped[-111]) bySlot[11] = equipped[-111].id;
-  return Object.values(bySlot);
+  const ids = Object.values(bySlot);
+  if (equipped[-111]) ids.push(equipped[-111].id);
+  return ids;
 }
 
 /**
@@ -4920,7 +5240,7 @@ export function equipSlotFor(id, pet = 0) {
   const cat = Math.floor(id / 10000), P = PET_SLOTS[pet] || PET_SLOTS[0];
   const map = { 100: -1, 101: -2, 102: -3, 103: -4, 104: -5, 105: -5, 106: -6, 107: -7, 108: -8, 109: -10, 110: -9, 111: -12,
     112: -17, 113: -50, 114: -49, 190: -18, 191: -19 };
-  if (cat >= 130 && cat < 170) return -11;
+  if (cat >= 130 && cat <= 170) return -11;
   if (id === 1802100 || cat === 182) return P.label;
   if (cat === 180) return P.acc;
   if (cat === 183) return P.quote;

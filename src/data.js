@@ -44,6 +44,14 @@ export const ACTIONS = [
 
 export const INV_NAMES = { 1: 'Equip', 2: 'Use', 3: 'Set-up', 4: 'Etc', 5: 'Cash' };
 export const invType = (id) => Math.floor(id / 1000000);
+/** The key type an item dragged from inventory tab `tab` binds as: 2 a Use item, 3 a facial expression (516), 7 an effect (501, 429). */
+export function itemKeyType(tab, id) {
+  const cat = Math.floor(id / 10000);
+  if (tab === 2) return 2;
+  if (tab === 5 && cat === 516) return 3;
+  if ((tab === 5 && cat === 501) || (tab === 4 && cat === 429)) return 7;
+  return null;
+}
 
 /** WZ path of an item's .img and the node holding it. */
 export function itemNode(id) {
@@ -54,6 +62,7 @@ export function itemNode(id) {
     const dir = [112, 113, 114].includes(cat) ? 'Accessory' : cat === 180 || cat === 181 ? 'PetEquip' : cat >= 190 && cat < 200 ? 'TamingMob' : cat === 170 ? 'Weapon' : null;
     return { path: equipPath(id) || (dir && `Character/${dir}/${pad(id, 8)}.img`), key: null };
   }
+  if (t === 9) return { path: `Item/Special/${pad(Math.floor(id / 10000), 4)}.img`, key: String(id) };   // packages, slot items
   const dir = { 2: 'Consume', 3: 'Install', 4: 'Etc', 5: 'Cash' }[t];
   if (Math.floor(id / 10000) === 500) return { path: `Item/Pet/${pad(id, 7)}.img`, key: null };
   return dir ? { path: `Item/${dir}/${pad(Math.floor(id / 10000), 4)}.img`, key: pad(id, 8) } : null;
@@ -63,6 +72,7 @@ const STRING_FILES = { 1: 'Eqp', 2: 'Consume', 3: 'Ins', 4: 'Etc', 5: 'Cash' };
 export async function itemName(assets, id) {
   const t = invType(id);
   if (Math.floor(id / 10000) === 500) return (await assets.json('String/Pet.img'))?.[id]?.name || `#${id}`;   // pets
+  if (t === 9) return (await assets.json(itemNode(id).path))?.[id]?.name || `#${id}`;
   const s = await assets.json(`String/${STRING_FILES[t]}.img`);
   if (!s) return `#${id}`;
   if (t === 1) {
@@ -95,7 +105,7 @@ export async function itemIcon(assets, id, raw = false) {
   if (!n?.path) return null;
   const img = await assets.json(n.path);
   const node = n.key ? img?.[n.key] : img;
-  return node?.info?.[raw ? 'iconRaw' : 'icon'] || node?.info?.icon || null;
+  return node?.info?.[raw ? 'iconRaw' : 'icon'] || node?.info?.icon || node?.icon || null;
 }
 
 /** Meso drop icon frames by amount (Item/Special/0900.img). */

@@ -35,11 +35,21 @@ export function readCharLook(r) {
   return look;
 }
 
-/** Item ids to render: visible slots, cash weapon sticker replaces the weapon. */
+/** Item ids to render: the visible slots (not the pet's equip, 14), and the cash weapon drawn over the weapon. */
 export function lookEquipIds(look) {
-  const ids = Object.values(look.equips);
-  if (look.cashWeapon && look.equips[11]) ids[ids.indexOf(look.equips[11])] = look.cashWeapon;
+  const ids = Object.entries(look.equips).filter(([s]) => Number(s) !== 14 && !(Number(s) >= 21 && Number(s) <= 48)).map(([, id]) => id);   // not what pets wear
+  if (look.cashWeapon) ids.push(look.cashWeapon);
   return ids;
+}
+
+/**
+ * The rings a character wears, as the map sees them: a couple and a friendship ring (its serial, its partner ring's
+ * serial, the item) and a wedding ring (whose, the spouse's id - both 0 when you are the spouse - and the item).
+ */
+export function readRingLook(r) {
+  const pair = () => (r.ubyte() ? { ring: r.long(), partner: r.long(), item: r.int() } : null);
+  const couple = pair(), friend = pair();
+  return { couple, friend, marriage: r.ubyte() ? { id: r.int(), partner: r.int(), item: r.int() } : null };
 }
 
 export function readCharEntry(r) {
@@ -155,15 +165,20 @@ export function readCharacterInfo(r) {
   const quests = readQuests(r);
   // minigame, rings, teleport rocks, monster book (new year / area info not needed)
   r.short();                                    // minigame
-  const crush = r.short(); r.skip(crush * 33);
-  const friend = r.short(); r.skip(friend * 37);
-  if (r.short() === 1) r.skip(4 + 4 + 4 + 2 + 4 + 4 + 13 + 13);
+  // rings: couple and friendship ones (partner, the ring's cash serial, the partner's), then a marriage
+  const rings = { couple: [], friend: [], marriage: null };
+  for (let n = r.short(); n > 0; n--) { const partnerId = r.int(), partner = r.paddedString(13), ring = r.long(); rings.couple.push({ ring, partner, partnerId, partnerRing: r.long() }); }
+  for (let n = r.short(); n > 0; n--) { const partnerId = r.int(), partner = r.paddedString(13), ring = r.long(), partnerRing = r.long(); rings.friend.push({ ring, partner, partnerId, partnerRing, item: r.int() }); }
+  if (r.short() === 1) {
+    r.int(); const husbandId = r.int(), wifeId = r.int(); r.short(); const item = r.int(); r.int();
+    rings.marriage = { husbandId, wifeId, item, husband: r.paddedString(13), wife: r.paddedString(13) };
+  }
   const rocks = []; for (let i = 0; i < 15; i++) rocks.push(r.int());
   // monster book: the cover card, then each card (item id % 10000) with its count 1-5
   const book = { cover: r.int(), cards: {} };
   r.ubyte();
   for (let n = r.short(); n > 0; n--) { const id = 2380000 + r.short(); book.cards[id] = r.ubyte(); }
-  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book };
+  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book, rings };
 }
 
 /** Movement fragments (AbstractMovementPacketHandler.parseMovement). */

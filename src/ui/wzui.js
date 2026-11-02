@@ -62,12 +62,15 @@ export class WzButton {
   }
   draw(ctx, assets) {
     if (!this.visible) return;
-    const a = this.anims[this.state] || this.anims.normal;
-    const n = a?.node;
-    const img = n && assets.image(n);
-    if (!img) return;
-    const o = n.origin || [0, 0];
-    ctx.drawImage(img, Math.round(this.x - o[0]), Math.round(this.y - o[1]));
+    const st = this.state, ring = this.focusRing && st === 'keyFocused';
+    const put = (a) => {
+      const n = a?.node, img = n && assets.image(n);
+      if (!img) return;
+      const o = n.origin || [0, 0];
+      ctx.drawImage(img, Math.round(this.x - o[0]), Math.round(this.y - o[1]));
+    };
+    put((ring ? this.anims.normal : this.anims[st]) || this.anims.normal);
+    if (ring) put(this.anims.keyFocused);   // an outline-only focus frame goes over the button
   }
 }
 

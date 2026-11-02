@@ -42,7 +42,7 @@ async function online(assets) {
   const entered = await net.enter(pick.charId);
   const s = entered.info.stats;
   hooks.onLoading(true, 'Loading character...');
-  const look = new CharacterLook(assets, { skin: s.skin, face: s.face, hair: s.hair, equips: equippedIds(entered.info.inventory.equipped) });
+  const look = new CharacterLook(assets, { skin: s.skin, face: s.face, hair: s.hair, gender: s.gender, equips: equippedIds(entered.info.inventory.equipped) });
   await look.load();
   await assets.preload(lookCanvases(look, PRELOAD));
 

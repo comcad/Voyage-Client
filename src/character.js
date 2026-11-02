@@ -16,7 +16,7 @@ const EQUIP_DIRS = {
 
 export function equipPath(id) {
   const cat = Math.floor(id / 10000);
-  const dir = cat >= 130 && cat < 170 ? 'Weapon' : EQUIP_DIRS[cat];
+  const dir = cat >= 130 && cat <= 170 ? 'Weapon' : EQUIP_DIRS[cat];
   return dir ? `Character/${dir}/${pad(id, 8)}.img` : null;
 }
 
@@ -49,8 +49,8 @@ const ATTACK_POSES = {
 const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
 
 export class CharacterLook {
-  constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [] } = {}) {
-    this.assets = assets;
+  constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [], gender = null } = {}) {
+    this.assets = assets; this.gender = gender;
     this.skin = skin; this.faceId = face; this.hairId = hair; this.equipIds = equips;
     this.equips = [];
   }
@@ -68,14 +68,54 @@ export class CharacterLook {
     // only the first skin's body has the skill poses (alert2, somersault, brandish1...): frames pointing at the basic
     // poses, which every skin has, so another skin takes them from there and draws them in its own colour
     if (base && this.body) this.body = { ...base, ...this.body };
-    const eq = await Promise.all(this.equipIds.map((id) => equipPath(id) && a.json(equipPath(id))));
-    this.equips = eq.filter(Boolean);
+    const load = (id) => equipPath(id) && a.json(equipPath(id));
+    const ids = [...this.equipIds], eq = await Promise.all(ids.map(load));
+    // the top and pants shown: an overall over pants hides them, unless the overall is a normal one and the pants
+    // are cash - then the pants show with the undershirt; nothing on top / bottom shows the Blue-Striped Undershirt /
+    // Boxers (when the gender is known)
+    const k = (id) => Math.floor(id / 10000), cash = (i) => Number(eq[i]?.info?.cash) === 1;
+    let ti = ids.findIndex((id) => k(id) === 104 || k(id) === 105), bi = ids.findIndex((id) => k(id) === 106);
+    let needTop = ti < 0;
+    if (ti >= 0 && bi >= 0 && k(ids[ti]) === 105) {
+      const drop = cash(ti) || !cash(bi) ? bi : ti;
+      if (drop === ti) needTop = true;
+      ids.splice(drop, 1); eq.splice(drop, 1);
+      ti = ids.findIndex((id) => k(id) === 104 || k(id) === 105); bi = ids.findIndex((id) => k(id) === 106);
+    }
+    const g = this.gender, add = [];
+    if (g === 0 || g === 1) {
+      if (needTop) add.push(g ? 1041046 : 1040036);
+      if (bi < 0 && !(ti >= 0 && k(ids[ti]) === 105)) add.push(g ? 1061039 : 1060026);
+    }
+    ids.push(...add); eq.push(...(await Promise.all(add.map(load))));
+    this.shownIds = ids;
+    const cat = (i) => Math.floor(ids[i] / 10000);
+    const wi = eq.findIndex((n, i) => n && cat(i) >= 130 && cat(i) < 170), ci = eq.findIndex((n, i) => n && cat(i) === 170);
+    this.weapon = eq[wi];
+    // a cash weapon (170) is drawn in the weapon's place, with its art for that kind of weapon (its 30, 33, 47... node)
+    const drawn = [...eq], art = ci >= 0 && wi >= 0 ? eq[ci][cat(wi) % 100] : null;
+    if (ci >= 0) drawn[ci] = null;
+    if (art) drawn[wi] = art;
+    else if (ci >= 0 && wi < 0) {   // no weapon under it: the first kind of weapon it has art for
+      const k = Object.keys(eq[ci] || {}).find((x) => /^\d+$/.test(x));
+      if (k) { drawn[ci] = eq[ci][k]; this.weapon = eq[ci][k]; }
+    }
+    this.equips = drawn.filter(Boolean);
     // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
-    this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
-    this.weapon = this.equips.find((e, i) => Math.floor(this.equipIds[i] / 10000) >= 130);
+    this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(cat(i)) ? n : null).filter(Boolean));
     // what stays on a dead character: the headgear (cap, face / eye accessory, earrings); clothes and weapon come off
-    this.deadKeep = new Set(eq.map((n, i) => n && [100, 101, 102, 103].includes(Math.floor(this.equipIds[i] / 10000)) ? n : null).filter(Boolean));
-    this.hasCap = this.equipIds.some((id) => Math.floor(id / 10000) === 100);
+    this.deadKeep = new Set(eq.map((n, i) => n && [100, 101, 102, 103].includes(Math.floor(ids[i] / 10000)) ? n : null).filter(Boolean));
+    this.hasCap = ids.some((id) => Math.floor(id / 10000) === 100);
+    // a label / quote ring changes the name tag / chat balloon (the last ring with one wins); some equips (the effect
+    // rings) carry an effect of their own
+    this.nameTag = 0; this.chatBalloon = 0; this.equipFx = [];
+    eq.forEach((n, i) => {
+      const info = n?.info;
+      if (!info) return;
+      if (cat(i) === 111 && Number(info.nameTag)) this.nameTag = Number(info.nameTag);
+      if (cat(i) === 111 && Number(info.chatBalloon)) this.chatBalloon = Number(info.chatBalloon);
+      if (info.effect?.path && !this.equipFx.some((f) => f.id === ids[i])) this.equipFx.push({ id: ids[i], effect: info.effect });
+    });
     // the face's expressions (blink, smile...) load in the background; until a frame is ready the default shows
     const exprs = [this.face, ...this.faceAcc].flatMap((n) => Object.entries(n || {}).filter(([k]) => k !== 'info')
       .flatMap(([, e]) => [e, ...Object.values(e || {})]).flatMap((f) => [f, ...Object.values(f || {})]));
@@ -213,6 +253,7 @@ export class CharacterLook {
     if (ref?.flip) out.flip = true;
     if (ref?.move) out.move = [Number(ref.move[0]) || 0, Number(ref.move[1]) || 0];
     if (ref?.rotate) out.rotate = Number(ref.rotate) || 0;
+    out.brow = anchors.get('brow');
     return out;
   }
 }

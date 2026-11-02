@@ -524,7 +524,7 @@ export class LoginScene {
     const CS = this.L.CharSelect, C = this.L.Common;
     const objCS = (await this.assets.json('Map/Obj/login.img'))?.CharSelect;
     const looks = await Promise.all(list.chars.map(async (c) => {
-      const cl = new CharacterLook(this.assets, { skin: c.look.skin, face: c.look.face, hair: c.look.hair, equips: lookEquipIds(c.look) });
+      const cl = new CharacterLook(this.assets, { skin: c.look.skin, face: c.look.face, hair: c.look.hair, gender: c.look.gender, equips: lookEquipIds(c.look) });
       await cl.load();
       await this.assets.preload(lookCanvases(cl, ['stand1', 'walk1']));
       return cl;
