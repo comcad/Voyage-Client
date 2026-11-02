@@ -25,7 +25,8 @@ export class WindowManager {
 
   async load() {
     const a = this.assets;
-    [this.W, this.B] = await Promise.all([a.json('UI/UIWindow.img'), a.json('UI/Basic.img')]);
+    [this.W, this.B, this.CS] = await Promise.all([a.json('UI/UIWindow.img'), a.json('UI/Basic.img'), a.json('UI/CashShop.img')]);
+    if (this.CS?.CashItem) a.preload(allCanvases(this.CS.CashItem));
     const make = { inventory: InventoryWin, equip: EquipWin, stat: StatWin, skill: SkillWin, quest: QuestWin, minimap: MiniMapWin, keyconfig: KeyConfigWin };
     for (const [k, C] of Object.entries(make)) this.wins[k] = new C(this);
     await a.preload([...Object.values(this.wins).flatMap((w) => w.frames()), ...allCanvases(this.B.VScr), ...allCanvases(this.B.ItemNo),
@@ -95,7 +96,7 @@ export class WindowManager {
   desc(id) {
     if (!this.descs.has(id)) {
       this.descs.set(id, '');
-      const t = invType(id), file = { 1: 'Eqp', 2: 'Consume', 3: 'Ins', 4: 'Etc', 5: 'Cash' }[t];
+      const t = invType(id), pet = Math.floor(id / 10000) === 500, file = pet ? 'Pet' : { 1: 'Eqp', 2: 'Consume', 3: 'Ins', 4: 'Etc', 5: 'Cash' }[t];
       this.assets.json(`String/${file}.img`).then((s) => {
         let n = null;
         if (t === 1) { for (const cat of Object.values(s?.Eqp || {})) if (cat?.[id]) n = cat[id]; } else n = t === 4 ? s?.Etc?.[id] : s?.[id];
@@ -105,12 +106,21 @@ export class WindowManager {
     return this.descs.get(id);
   }
   image(n) { return n ? this.assets.image(n) : null; }
-  /** Item / skill icon in the 32x32 box at (x, y), placed by its origin like the client. */
-  drawIcon(ctx, node, x, y) {
+  /** Item / skill icon in the 32x32 box at (x, y), placed by its origin like the client; a cash item gets its coin. */
+  drawIcon(ctx, node, x, y, id = 0) {
     const im = this.image(node);
     if (!im) return;
     const o = node.origin || [0, 32];
     ctx.drawImage(im, x - o[0], y + 32 - o[1]);
+    if (id) this.drawCashMark(ctx, id, x + 32, y + 32);
+  }
+  isCash(id) { return Number(this.info(id)?.cash) === 1; }
+  /** CashShop.img/CashItem/0: the gold coin on a cash item's icon, hung from the icon's bottom-right corner. */
+  drawCashMark(ctx, id, x, y, scale = 1) {
+    const n = this.CS?.CashItem?.[0], im = n && this.isCash(id) && this.image(n);
+    if (!im) return;
+    const o = n.origin || [im.width, im.height];
+    ctx.drawImage(im, Math.round(x - o[0] * scale), Math.round(y - o[1] * scale), im.width * scale, im.height * scale);
   }
 
   /** Basic.img/ItemNo digits: item counts on icons. */
@@ -159,7 +169,7 @@ export class WindowManager {
     if (type === 'wheel') this.tipHeld = true;
     else if (type === 'move' && (x !== this.tipAt?.x || y !== this.tipAt?.y)) this.tipHeld = false;
     this.tipAt = { x, y };
-    this.tip = w && !over && !this.carry && !this.tipHeld ? w.tooltip?.(x - w.x, y - w.y) : null;
+    this.tip = w && !this.carry && !this.tipHeld ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : null;
     if (w) w.move?.(x - w.x, y - w.y);
 
     if (type === 'down') {
@@ -196,7 +206,7 @@ export class WindowManager {
       if (!w) return false;
       const target = w.buttons.find((b) => b.down && b === over);
       for (const b of w.buttons) b.down = false;
-      target?.onClick();
+      if (target?.enabled) target.onClick();
       return true;
     }
     if (type === 'wheel') {
@@ -358,7 +368,7 @@ class InventoryWin extends Win {
       if (slot > this.limit) { const d = m.image(this.W.disabled); if (d) ctx.drawImage(d, x, y); continue; }
       const it = items[slot];
       if (!it || (m.carry?.slot === slot && m.carry.tab === this.tab)) continue;
-      m.drawIcon(ctx, m.icon(it.id), x, y);
+      m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
       if (this.tab !== 1 && it.quantity > 1) m.count(ctx, it.quantity, x, y + 21);
     }
     this.scrollbar(ctx, 156, 51, 201, this.first, this.rows, 6);
@@ -467,7 +477,7 @@ class EquipWin extends Win {
       if (slot === 'hp' || slot === 'mp') { const id = this.g.petPotions?.[slot]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
       const it = eq[slot];
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === Number(slot))) continue;
-      m.drawIcon(ctx, m.icon(it.id), x, y);
+      m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
     }
   }
   down(lx, ly) {
@@ -1254,17 +1264,24 @@ class KeyConfigWin extends Win {
 }
 
 // ==================================================================== tooltip
+/** A text tooltip in the client's panel: translucent navy with a white ring, the title centred, lines below. */
 function drawTip(ctx, tip, x, y) {
   ctx.save();
-  ctx.font = '11px Arial, sans-serif';
-  const lines = tip.lines.flatMap((l) => (l ? wrapText(ctx, l, 220, 11) : ['']));
-  const w = Math.max(ctx.measureText(tip.title).width + 16, ...lines.map((l) => ctx.measureText(l).width + 16), 80);
-  const h = 22 + lines.length * 14 + 4;
+  ctx.font = '12px Arial, sans-serif';
+  const lines = tip.lines.flatMap((l) => (l ? wrapText(ctx, l, 255, 12) : ['']));
+  ctx.font = 'bold 12px Arial, sans-serif';
+  const tw = ctx.measureText(tip.title).width;
+  ctx.font = '12px Arial, sans-serif';
+  const w = Math.ceil(Math.max(tw + 20, ...lines.map((l) => ctx.measureText(l).width + 20), 80));
+  const h = 24 + lines.length * 15 + (lines.length ? 4 : 0);
   x = Math.min(x, 800 - w - 2); y = Math.min(y, 600 - h - 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(x, y, w, h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-  uiText(ctx, tip.title, x + w / 2, y + 5, { color: '#fff', bold: true, size: 12, align: 'center' });
-  lines.forEach((l, i) => uiText(ctx, l, x + 8, y + 22 + i * 14, { color: '#fff', size: 11 }));
+  ctx.fillStyle = 'rgba(0,0,64,0.627)';
+  ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
+  ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
+  uiText(ctx, tip.title, x + w / 2, y + 6, { color: '#fff', bold: true, size: 12, align: 'center' });
+  lines.forEach((l, i) => uiText(ctx, l, x + 10, y + 24 + i * 15, { color: '#fff', size: 12 }));
   ctx.restore();
 }
 

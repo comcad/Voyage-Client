@@ -474,77 +474,281 @@ const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
 
 // ==================================================================== item tooltip
 /**
- * The v83 item tooltip: name, then the icon beside the REQ LEV / STR / DEX / INT / LUK / POP lines
- * drawn with ToolTip/Equip Can (met) or Cannot (not met) sprites and digits, the job row
- * (beginner .. pirate), then category, attack speed, stats, upgrade slots and the description.
+ * The v83 item tooltip, on a translucent navy box with a 1px light ring.
+ * Equips, 236 wide: dot + title, trade tags (orange, centred), the period / expiry line, then from y 32 the
+ * icon at 2x in a 68px white box beside the REQ LEV..FAM rows (ToolTip/Equip Can / Cannot) and greyed
+ * ITEM LEV / ITEM EXP (GrowthDisabled), the job row at +133, a rule at +152 and "• LABEL : value" rows
+ * (category, attack speed, stats, upgrades), then the description.
+ * Other items, 290 wide: title, tags, period, the icon box at the left and the description at x 92.
+ * Descriptions take #c...# (or #...#) for orange.
  */
-const JOBS = [['beginner', 0], ['warrior', 1], ['magician', 2], ['bowman', 4], ['thief', 8], ['pirate', 16]];
+const TIP_FONT = { title: 'bold 12px Arial, sans-serif', body: '12px Arial, sans-serif',
+  small: '9px Tahoma, Verdana, sans-serif', smallB: 'bold 9px Tahoma, Verdana, sans-serif' };
+const TIP_TITLE = { 1: '#fff', 2: '#fdf514', 3: '#ff8a18', 4: '#bcbcbc', 5: '#5ca1ff', 6: '#c261ff' };
+const TIP_ORANGE = '#ff8a18', TIP_LABEL = '#fae8cb', TIP_HI = '#ff9900';
+const JOBS = [['beginner', 0, 10], ['warrior', 1, 52], ['magician', 2, 92], ['bowman', 4, 132], ['thief', 8, 171], ['pirate', 16, 197]];
 const REQS = [['reqLEV', 'reqLevel', 'level'], ['reqSTR', 'reqSTR', 'str'], ['reqDEX', 'reqDEX', 'dex'], ['reqINT', 'reqINT', 'int'], ['reqLUK', 'reqLUK', 'luk'], ['reqPOP', 'reqPOP', 'fame']];
-const STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK'], ['hp', 'MaxHP'], ['mp', 'MaxMP'], ['watk', 'Weapon Attack'],
-  ['matk', 'Magic Attack'], ['wdef', 'Weapon Defense'], ['mdef', 'Magic Defense'], ['acc', 'Accuracy'], ['avoid', 'Avoidability'],
-  ['hands', 'Hands'], ['speed', 'Speed'], ['jump', 'Jump']];
-const BASE_STATS = { str: 'incSTR', dex: 'incDEX', int: 'incINT', luk: 'incLUK', hp: 'incMHP', mp: 'incMMP', watk: 'incPAD', matk: 'incMAD',
-  wdef: 'incPDD', mdef: 'incMDD', acc: 'incACC', avoid: 'incEVA', hands: 'incCraft', speed: 'incSpeed', jump: 'incJump' };
-const CATEGORY = { 130: 'One-Handed Sword', 131: 'One-Handed Axe', 132: 'One-Handed Blunt Weapon', 133: 'Dagger', 137: 'Wand', 138: 'Staff',
-  140: 'Two-Handed Sword', 141: 'Two-Handed Axe', 142: 'Two-Handed Blunt Weapon', 143: 'Spear', 144: 'Pole Arm', 145: 'Bow', 146: 'Crossbow',
-  147: 'Claw', 148: 'Knuckle', 149: 'Gun', 100: 'Hat', 101: 'Face Accessory', 102: 'Eye Accessory', 103: 'Earrings', 104: 'Top', 105: 'Overall',
-  106: 'Bottom', 107: 'Shoes', 108: 'Gloves', 109: 'Shield', 110: 'Cape', 111: 'Ring', 112: 'Pendant', 113: 'Belt', 114: 'Medal' };
-const SPEED = { 2: 'Faster', 3: 'Faster', 4: 'Fast', 5: 'Fast', 6: 'Normal', 7: 'Slow', 8: 'Slow', 9: 'Slower' };
+// [item field, base value in info, label, shown as " %d" instead of " +%d"]
+const TIP_STATS = [['str', 'incSTR', 'STR :'], ['dex', 'incDEX', 'DEX :'], ['int', 'incINT', 'INT :'], ['luk', 'incLUK', 'LUK :'],
+  ['hp', 'incMHP', 'HP :'], ['mp', 'incMMP', 'MP :'], ['watk', 'incPAD', 'WEAPON ATTACK :', 1], ['matk', 'incMAD', 'MAGIC ATTACK :', 1],
+  ['wdef', 'incPDD', 'WEAPON DEF. :', 1], ['mdef', 'incMDD', 'MAGIC DEF. :', 1], ['acc', 'incACC', 'ACCURACY :'], ['avoid', 'incEVA', 'AVOIDABILITY :'],
+  ['hands', 'incCraft', 'HANDS :'], ['speed', 'incSpeed', 'SPEED :'], ['jump', 'incJump', 'JUMP :']];
+const WEAPON_CATEGORY = { 30: ' ONE-HANDED SWORD', 31: ' ONE-HANDED AXE', 32: ' ONE_HANDED MACE', 33: ' DAGGER', 37: ' WAND', 38: ' STAFF',
+  40: ' TWO-HANDED SWORD', 41: ' TWO-HANDED AXE', 42: ' TWO-HANDED MACE', 43: ' SPEAR', 44: ' POLE ARM', 45: ' BOW', 46: ' CROSSBOW',
+  47: ' CLAW', 48: 'KNUCKLE', 49: 'GUN' };
+const EQUIP_CATEGORY = { 100: 'HAT', 101: 'FACE ACCESSORY', 102: 'EYE ACCESSORY', 103: 'EARRING', 104: 'TOP', 105: 'OVERALL', 106: 'BOTTOM',
+  107: 'SHOES', 108: 'GLOVE', 109: 'SHIELD', 110: 'CAPE', 111: 'RING', 112: 'PENDANT', 113: 'BELT', 114: 'MEDAL', 119: 'SHIELD',
+  180: 'PET EQUIP.', 182: 'PET RING', 183: 'PET RING', 190: 'TAMED MONSTER', 191: 'SADDLE', 192: 'MONSTER EQUIP.',
+  194: 'Dragon Hat', 195: 'Dragon Pendant', 196: 'Dragon Wing Accessory', 197: 'Dragon Tail Accessory' };
+const ATTACK_SPEED = [' FASTEST', ' FASTEST', ' FASTER', ' FASTER', ' FAST', ' FAST', ' NORMAL', ' SLOW', ' SLOW', ' SLOWER', ' SLOWER', ' SLOWEST', ' SLOWEST'];
+const FT_MIN = 94354848000000000n, FT_MAX = 150842304000000000n, FT_EPOCH = 116444736000000000n;
+
+const tipNum = (v) => Number(v) || 0;
+const p2 = (n) => String(n).padStart(2, '0');
+
+function equipCategory(id) {
+  const cat = Math.floor(id / 10000);
+  if (cat >= 130 && cat < 150) return WEAPON_CATEGORY[cat % 100] || null;
+  if (id === 1802100) return 'PET RING';
+  if (cat === 181) return id >= 1812000 && id <= 1812007 ? 'PET EQUIP.' : null;
+  return EQUIP_CATEGORY[cat] || null;
+}
+
+/** A FILETIME (BigInt or number) as a Date, or null for none / permanent. */
+function tipDate(ft) {
+  let v;
+  try { v = BigInt(ft ?? 0); } catch { return null; }
+  return v > FT_MIN && v < FT_MAX ? new Date(Number((v - FT_EPOCH) / 10000n)) : null;
+}
+
+/** The period line: a Cash Shop commodity's term, else when the item runs out. */
+function tipPeriod(it, cash) {
+  if (it.periodHours > 0) return `AVAILABLE FOR ${it.periodHours} HOURS.`;
+  if (it.period > 0) return `AVAILABLE FOR ${it.period} DAYS.`;
+  const d = tipDate(it.expiration);
+  if (!d) return null;
+  const mo = d.getUTCMonth() + 1, da = d.getUTCDate(), yr = d.getUTCFullYear(), h = p2(d.getUTCHours()), mi = p2(d.getUTCMinutes());
+  return cash ? `Available until ${mo}/${da}/${yr} at ${h}:${mi}` : `USABLE UNTIL ${mo}-${da}-${yr} AT ${h} : ${mi}`;
+}
+
+function tipPetLife(it, info) {
+  const permanent = tipNum(info.permanent) > 0;
+  if (it.period > 0) return permanent ? 'PERMANENT' : `DAYS OF MAGIC : ${tipNum(info.life)}`;
+  let raw;
+  try { raw = BigInt(it.expiration ?? 0); } catch { return null; }
+  if (!raw) return null;
+  const d = tipDate(raw);
+  if (d && d.getTime() < Date.now()) return 'THE WATER OF LIFE HAS DRIED UP.';
+  if (permanent || !d) return 'PERMANENT';
+  return `WATER OF LIFE DRIES UP ON ${d.getUTCMonth() + 1}-${d.getUTCDate()}-${d.getUTCFullYear()} AT ${p2(d.getUTCHours())} : 00`;
+}
+
+/** Trade tags, one or two lines joined by ", ". */
+function tipTags(info, equip) {
+  const on = (k) => tipNum(info[k]) > 0, a = [];
+  let b = '';
+  if (on('only')) a.push('One-of-a-kind Item');
+  if (on('quest')) a.push('Quest Item');
+  if (on('pquest')) a.push('Party Quest Item');
+  if (on('tradeBlock')) a.push('Untradeable');
+  if (equip) {
+    if (on('equipTradeBlock')) a.push('Trade disabled when equipped');
+    if (on('onlyEquip')) { if (a.length) b = 'Unique Equipped Item'; else a.push('Unique Equipped Item'); }
+    if (on('accountSharable')) a.push('Movement is possible only within the account');
+  }
+  return [a.join(', '), b].filter(Boolean);
+}
+
+/** Title colour: +N scrolled items orange, then by how far the stats sit from the item's base. */
+function tipTitleColor(it, info) {
+  let c = it.level > 0 ? 3 : 1;
+  if (it.str === undefined || tipNum(info.cash) || Math.floor(it.id / 100000) === 19) return c;
+  let diff = 0;
+  for (const [k, base] of TIP_STATS) {
+    if (k === 'hands') continue;
+    const d = tipNum(it[k]) - tipNum(info[base]);
+    diff += k === 'hp' || k === 'mp' ? Math.trunc(d / 10) : d;
+  }
+  if (diff < 0) c = 4;
+  else if (diff >= 40) c = 2;
+  else if (diff >= 23) c = 6;
+  else if (diff >= 6) c = 5;
+  return c;
+}
+
+function tipText(ctx, s, x, y, font, color) { ctx.font = font; ctx.fillStyle = color; ctx.fillText(s, x, y); }
+function tipW(ctx, s, font) { ctx.font = font; return ctx.measureText(s).width; }
+/** A ToolTip sprite placed by its origin. */
+function tipSprite(ctx, mgr, n, x, y) {
+  const im = mgr.image(n);
+  if (im) ctx.drawImage(im, x - (n.origin?.[0] || 0), y - (n.origin?.[1] || 0));
+  return im;
+}
+function tipDigits(ctx, mgr, set, n, x, y) {
+  for (const ch of String(n)) { const im = tipSprite(ctx, mgr, set?.[ch], x, y); if (im) x += im.width + 1; }
+}
+
+/** Description lines: words wrapped to `width`, '#' toggling the orange run ("#c" opens one). */
+function tipWrap(ctx, text, width) {
+  const lines = [[]];
+  let x = 0, hi = false;
+  ctx.font = TIP_FONT.body;
+  const put = (seg) => {
+    for (const w of seg.split(/(\s+)/)) {
+      if (!w) continue;
+      const ww = ctx.measureText(w).width;
+      if (x + ww > width && x > 0 && w.trim()) { lines.push([]); x = 0; }
+      if (!x && !w.trim()) continue;
+      lines[lines.length - 1].push({ t: w, x, hi });
+      x += ww;
+    }
+  };
+  const src = String(text).replace(/\\r\\n|\\n|\r\n|\r/g, '\n');
+  for (const tk of src.split(/(#c|#|\n)/)) {
+    if (!tk) continue;
+    if (tk === '\n') { lines.push([]); x = 0; } else if (tk === '#c') { if (hi) put('c'); hi = !hi; } else if (tk === '#') hi = !hi; else put(tk);
+  }
+  while (lines.length && !lines[lines.length - 1].length) lines.pop();
+  return lines;
+}
+/** Height of wrapped text: the first line 13, each more 16. */
+const tipWrapH = (lines) => (lines.length ? 13 + (lines.length - 1) * 16 : 0);
+function tipDrawWrap(ctx, lines, x, y) {
+  lines.forEach((l, i) => { for (const r of l) tipText(ctx, r.t, x + r.x, y + i * 16, TIP_FONT.body, r.hi ? TIP_HI : '#fff'); });
+}
+
+function tipFrame(ctx, x, y, w, h) {
+  ctx.fillStyle = 'rgba(0,0,64,0.627)';
+  ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
+  ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
+}
+function tipIcon(ctx, mgr, id, x, y) {
+  ctx.fillStyle = '#fff'; ctx.fillRect(x, y, 68, 68);
+  const n = mgr.icon(id), im = mgr.image(n);
+  if (!im) return;
+  const o = n.origin || [0, 32];
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(im, x + 2 - o[0] * 2, y + 66 - o[1] * 2, im.width * 2, im.height * 2);
+  mgr.drawCashMark(ctx, id, x + 66, y + 66, 2);
+  ctx.imageSmoothingEnabled = true;
+}
+/** Dot + title, the tag lines and the period line; returns the y the icon block hangs from. */
+function tipHead(ctx, mgr, D, x, y, W, title, color, tags, period, periodStep) {
+  tipSprite(ctx, mgr, D?.[0], x + 10, y + 14);
+  tipText(ctx, title, x + 18, y + 10, TIP_FONT.title, color);
+  tags.forEach((l, i) => tipText(ctx, l, x + (W - tipW(ctx, l, TIP_FONT.body)) / 2, y + 29 + 19 * i, TIP_FONT.body, TIP_ORANGE));
+  const ty = tags.length * 19;
+  if (!period) return ty;
+  tipSprite(ctx, mgr, D?.[1], x + 10, y + ty + 33);
+  tipText(ctx, period, x + 16, y + ty + 29, TIP_FONT.small, '#fff');
+  return ty + periodStep;
+}
+const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, 799 - W)), Math.max(0, Math.min(my, 599 - H))];
 
 export function drawItemTip(ctx, mgr, it, mx, my) {
-  const T = mgr.W.ToolTip?.Equip, g = mgr.game, s = g.stats || {};
-  const info = mgr.info(it.id), equip = invType(it.id) === 1;
-  const name = (mgr.itemName(it.id) || '...') + (it.level > 0 ? ` (+${it.level})` : '');   // successful scrolls
-  const desc = String(mgr.desc(it.id) || '').replace(/\\n/g, '\n');
+  const info = mgr.info(it.id) || {};
   ctx.save();
-  ctx.font = '11px Arial, sans-serif';
-  const W = 236;
-  const lines = [];
-  if (equip) {
-    const cat = CATEGORY[Math.floor(it.id / 10000)];
-    if (cat) lines.push(`Category : ${cat}`);
-    if (info?.attackSpeed) lines.push(`Attack Speed : ${SPEED[info.attackSpeed] || 'Normal'}`);
-    for (const [k, label] of STATS) { const v = it[k] ?? info?.[BASE_STATS[k]]; if (v) lines.push(`${label} : +${v}`); }
-    const slots = it.slots ?? info?.tuc;
-    if (slots !== undefined) lines.push(`Number of upgrades available : ${slots}`);
-  }
-  const descLines = desc ? richText(ctx, desc, W - 16, textRef(mgr), { base: '#fff' }) : null;
-  const reqRows = equip ? REQS.filter(([, key]) => key === 'reqLevel' || info?.[key]) : [];
-  const head = equip ? Math.max(38, reqRows.length * 9 + 4) + 18 : 38;
-  const h = 26 + head + lines.length * 14 + (descLines ? descLines.height + 4 : 0) + 6;
-  const x = Math.min(mx, 800 - W - 2), y = Math.min(my, 600 - h - 2);
-  ctx.fillStyle = 'rgba(10,14,28,0.86)'; ctx.fillRect(x, y, W, h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.strokeRect(x + 0.5, y + 0.5, W - 1, h - 1);
-  uiText(ctx, name, x + W / 2, y + 6, { color: '#fff', bold: true, size: 12, align: 'center' });
-  let cy = y + 26;
-  // icon box
-  ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fillRect(x + 8, cy, 38, 38);
-  const ic = mgr.icon(it.id);
-  if (ic) mgr.drawIcon(ctx, ic, x + 11, cy + 3);
-  if (equip && T) {
-    // requirement lines: label + value in Can (met, white) or Cannot (red) sprites, against what equipping it would see
-    const have = g.equipStats?.(it.id) || s;
-    reqRows.forEach(([sprite, key, stat], i) => {
-      const need = info?.[key] || 0, ok = (have[stat] ?? 0) >= need;
-      const set = ok ? T.Can : T.Cannot;
-      const label = mgr.image(set[sprite]);
-      if (label) ctx.drawImage(label, x + 56, cy + i * 9);
-      let dx = x + 56 + 48;
-      for (const ch of String(need)) { const d = mgr.image(set[ch]); if (d) { ctx.drawImage(d, dx, cy + i * 9); dx += d.width + 1; } }
-    });
-    // job row
-    // job row: jobs the item allows in Can, the rest in Cannot (reqJob 0 = everyone, -1 = beginners)
-    const req = info?.reqJob || 0;
-    let jx = x + 8;
-    const jy = cy + head - 16;
-    for (const [job, bit] of JOBS) {
-      const allowed = req === 0 || (bit ? (req > 0 && (req & bit)) : req === -1);
-      const sp = mgr.image((allowed ? T.Can : T.Cannot)[job]);
-      if (sp) { ctx.drawImage(sp, jx, jy); jx += sp.width + 4; }
-    }
-  }
-  cy += head;
-  for (const l of lines) { uiText(ctx, l, x + 10, cy, { color: '#fff', size: 11 }); cy += 14; }
-  if (descLines) drawRich(ctx, descLines, x + 8, cy + 2, { drawIcon: (n, ix, iy) => mgr.drawIcon(ctx, n, ix, iy) });
+  ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  if (invType(it.id) === 1) equipTip(ctx, mgr, it, info, mx, my);
+  else itemTip(ctx, mgr, it, info, mx, my);
   ctx.restore();
+}
+
+function equipTip(ctx, mgr, it, info, mx, my) {
+  const g = mgr.game, T = mgr.W.ToolTip?.Equip || {}, id = it.id, cat = Math.floor(id / 10000);
+  const cs = it.period > 0 || it.periodHours > 0, full = it.str !== undefined;
+  const sex = Math.floor(id / 1000) % 10;
+  let title = mgr.itemName(id) || '...';
+  if (it.level > 0) title += ` (+${it.level})`;
+  else if (sex < 2) title += sex ? ' (Female)' : ' (Male)';
+  const tags = cs ? [] : tipTags(info, true);
+  const period = tipPeriod(it, !!it.cashId || tipNum(info.cash) > 0);
+  // "• LABEL : value" rows: [label, value, value font]
+  const rows = [], tuc = tipNum(info.tuc);
+  const category = equipCategory(id);
+  if (category) rows.push(['CATEGORY :', category, TIP_FONT.small]);
+  if (cat >= 130 && cat < 150) {
+    const sp = ATTACK_SPEED[info.attackSpeed === undefined ? 6 : tipNum(info.attackSpeed)];
+    if (sp) rows.push(['ATTACK SPEED :', sp, TIP_FONT.small]);
+  }
+  for (const [k, base, label, plain] of TIP_STATS) {
+    const v = full ? tipNum(it[k]) : tipNum(info[base]);
+    if (v > 0) rows.push([label, plain ? ` ${v}` : ` +${v}`, TIP_FONT.smallB]);
+  }
+  if (tipNum(info.knockback) > 0) rows.push(['THE RATE OF KNOCK-BACK :', ` ${tipNum(info.knockback)}%`, TIP_FONT.smallB]);
+  if (it.flag & 0x02) rows.push(['ADD PREVENT SLIPPING', '', TIP_FONT.small]);
+  if (it.flag & 0x04) rows.push(['ADD PREVENT COLDNESS', '', TIP_FONT.small]);
+  if (tuc > 0) rows.push(['NUMBER OF UPGRADES AVAILABLE :', ` ${full ? tipNum(it.slots) : tuc}`, TIP_FONT.smallB]);
+  if (!cs && tuc > 0 && Math.floor(id / 100000) !== 18 && id !== 1122000) {
+    const n = tipNum(it.vicious);
+    rows.push([`NUMBER OF VICIOUS' HAMMER APPLIED : ${n >= 2 ? '2(MAX)' : n}`, '', TIP_FONT.smallB]);
+  }
+  for (const r of rows) if (r[1] && !r[1].startsWith(' ')) r[1] = ` ${r[1]}`;
+  // width: 236, or wider for a long title or row
+  let W = 236;
+  W = Math.max(W, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
+  for (const [l, v, f] of rows) W = Math.max(W, Math.ceil(tipW(ctx, l, TIP_FONT.small) + tipW(ctx, v, f)) + 20);
+  const desc = tipWrap(ctx, mgr.desc(id) || '', 208);
+  const base = tags.length * 19 + (period ? 16 : 0);
+  const H = base + 166 + rows.length * 13 + tipWrapH(desc);
+  const [x, y] = tipPlace(mx, my, W, H);
+
+  tipFrame(ctx, x, y, W, H);
+  const by = y + tipHead(ctx, mgr, T.Dot, x, y, W, title, TIP_TITLE[tipTitleColor(it, info)], tags, period, 16);
+  tipIcon(ctx, mgr, id, x + 10, by + 32);
+  // requirements against the stats the character would have with it on
+  const have = g.equipStats?.(id) || g.stats || {};
+  REQS.forEach(([spr, key, stat], i) => {
+    const need = tipNum(info[key]), set = need <= tipNum(have[stat]) ? T.Can : T.Cannot, ry = by + 32 + 12 * i;
+    tipSprite(ctx, mgr, set?.[spr], x + 94, ry);
+    if (spr === 'reqPOP' && !need) tipSprite(ctx, mgr, T.Can?.none, x + 144, ry);
+    else tipDigits(ctx, mgr, set, need, x + 144, ry);
+  });
+  const growth = info.level && typeof info.level === 'object', G = growth ? T.GrowthEnabled : T.GrowthDisabled;
+  tipSprite(ctx, mgr, G?.itemLEV, x + 94, by + 104);
+  tipSprite(ctx, mgr, G?.itemEXP, x + 94, by + 116);
+  if (growth && it.itemLevel) tipDigits(ctx, mgr, G, it.itemLevel, x + 148, by + 104);
+  else tipSprite(ctx, mgr, G?.none, x + 148, by + 104);
+  tipSprite(ctx, mgr, G?.none, x + 148, by + 116);
+  // jobs: reqJob 0 lets everyone, -1 beginners only, else a bit per branch
+  const req = tipNum(info.reqJob);
+  for (const [job, bit, jx] of JOBS) {
+    const ok = bit ? req === 0 || (req > 0 && (req & bit)) : req <= 0;
+    tipSprite(ctx, mgr, (ok ? T.Can : T.Cannot)?.[job], x + jx, by + 133);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(x + 10, by + 152, W - 20, 1);
+  rows.forEach(([l, v, f], i) => {
+    const ry = by + 159 + 13 * i;
+    tipSprite(ctx, mgr, T.Dot?.[1], x + 10, ry + 4);
+    tipText(ctx, l, x + 16, ry, TIP_FONT.small, TIP_LABEL);
+    if (v) tipText(ctx, v, x + 16 + tipW(ctx, l, TIP_FONT.small), ry, f, '#fff');
+  });
+  tipDrawWrap(ctx, desc, x + 10, y + H - tipWrapH(desc) - (cs ? 3 : 5));
+}
+
+function itemTip(ctx, mgr, it, info, mx, my) {
+  const T = mgr.W.ToolTip?.Equip || {}, id = it.id, name = mgr.itemName(id) || '...';
+  const pet = Math.floor(id / 10000) === 500;
+  let title = name;
+  if (pet && it.pet?.name && it.pet.name !== name) title = `${it.pet.name} (${name})`;
+  const tags = pet ? [] : tipTags(info, false);
+  const period = pet ? tipPetLife(it, info) : tipPeriod(it, !!it.cashId || tipNum(info.cash) > 0);
+  const reqLv = pet ? 0 : tipNum(info.reqLevel), showReq = reqLv > 0 || Math.floor(id / 10000) === 301;
+  const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
+  const desc = tipWrap(ctx, mgr.desc(id) || '', W - 20 - 92 - 3);
+  const head = tags.length * 19 + (period ? (pet ? 16 : 20) : 0), top = head + (showReq ? 44 : 32);
+  const H = Math.max(head + 116 + (showReq ? 12 : 0), top + tipWrapH(desc) + 8);
+  const [x, y] = tipPlace(mx, my, W, H);
+
+  tipFrame(ctx, x, y, W, H);
+  tipHead(ctx, mgr, T.Dot, x, y, W, title, TIP_TITLE[1], tags, period, pet ? 16 : 20);
+  tipIcon(ctx, mgr, id, x + 10, y + head + 32);
+  if (showReq) {
+    const set = reqLv <= tipNum(mgr.game.stats?.level) ? T.Can : T.Cannot;
+    tipSprite(ctx, mgr, set?.reqLEV, x + 92, y + head + 32);
+    tipDigits(ctx, mgr, set, reqLv, x + 142, y + head + 32);
+  }
+  tipDrawWrap(ctx, desc, x + 92, y + top);
 }

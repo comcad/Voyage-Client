@@ -49,8 +49,14 @@ const ATTACK_POSES = {
 const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
 
 export class CharacterLook {
-  constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [] } = {}) {
+  constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [], gender = null } = {}) {
     this.assets = assets;
+    // with a gender given, nothing on top / bottom shows the Blue-Striped Undershirt / Boxers
+    if (gender === 0 || gender === 1) {
+      const cats = new Set(equips.map((id) => Math.floor(id / 10000)));
+      if (!cats.has(104) && !cats.has(105)) equips = [...equips, gender ? 1041046 : 1040036];
+      if (!cats.has(106) && !cats.has(105)) equips = [...equips, gender ? 1061039 : 1060026];
+    }
     this.skin = skin; this.faceId = face; this.hairId = hair; this.equipIds = equips;
     this.equips = [];
   }

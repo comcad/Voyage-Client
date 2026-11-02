@@ -10,7 +10,19 @@ function readCashItem(r) {
   r.long();
   return it;
 }
-const lo32 = (v) => Number(BigInt.asIntN(32, BigInt(v ?? 0)));
+/** CASHSHOP_OPERATION results that carry a failure reason (each sits next to its action's success code). */
+const CS_FAILS = new Set([0x4C, 0x4E, 0x50, 0x56, 0x58, 0x5C, 0x5F, 0x61, 0x63, 0x65, 0x67, 0x69, 0x6B, 0x6D, 0x86, 0x88, 0x8A, 0x8C, 0x8E, 0x92, 0xA1]);
+/** A Commodity override from SET_CASH_SHOP: a flag mask, then each flagged field in this order. */
+const COMMODITY_FIELDS = [[0x1, 'ItemId', 'int'], [0x2, 'Count', 'short'], [0x10, 'Priority', 'ubyte'], [0x4, 'Price', 'int'],
+  [0x8, 'Bonus', 'ubyte'], [0x20, 'Period', 'short'], [0x40, 'MaplePoint', 'int'], [0x80, 'Meso', 'int'], [0x100, 'Premium', 'ubyte'],
+  [0x200, 'Gender', 'byte'], [0x400, 'OnSale', 'ubyte'], [0x800, 'Class', 'byte'], [0x1000, 'Limit', 'ubyte'],
+  [0x2000, 'PbCash', 'short'], [0x4000, 'PbPoint', 'short'], [0x8000, 'PbGift', 'short']];
+function readCommodityMod(r) {
+  const c = { SN: r.int() }, flags = r.uint();
+  for (const [bit, key, type] of COMMODITY_FIELDS) if (flags & bit) c[key] = r[type]();
+  if (flags & 0x10000) { c.Package = []; for (let n = r.ubyte(); n > 0; n--) c.Package.push(r.int()); }
+  return c;
+}
 
 /** Guild emblem: background, its colour, mark, its colour. */
 const readEmblem = (r) => ({ bg: r.short(), bgColor: r.ubyte(), logo: r.short(), logoColor: r.ubyte() });
@@ -150,14 +162,20 @@ export class ChannelSession {
         r.int(); r.int(); r.string(); r.bool(); r.long(); r.int(); r.string(); r.bool(); r.bool(); r.long(); r.string();
       }
       for (let n = r.short(); n > 0; n--) { r.short(); r.string(); }   // area info
-      r.short(); r.ubyte();
-      const account = r.string();
-      r.int();
-      for (let n = r.short(); n > 0; n--) { r.int(); r.int(); r.ubyte(); }   // specials
-      r.skip(121);
-      const best = [];                                               // most sellers: (tab, gender, SN) until the 11-byte tail
-      while (r.available > 11) { r.int(); const j = r.int(), sn = r.int(); if (j === 0 && !best.includes(sn)) best.push(sn); }
-      this.emit('cashShopOpen', { info, account, best });
+      r.short();
+      const available = r.ubyte(), d = { info, available, account: available ? r.string() : '', removed: [], mods: [], discounts: [], best: [], stock: new Map(), level: 0 };
+      try {
+        for (let n = r.int(); n > 0; n--) d.removed.push(r.int());
+        for (let n = r.short(); n > 0; n--) d.mods.push(readCommodityMod(r));
+        for (let n = r.ubyte(); n > 0; n--) d.discounts.push({ cat: r.ubyte(), sub: r.ubyte(), rate: r.ubyte() });
+        // best sellers: 9 tabs x 2 genders x 5 of (category, gender, SN)
+        for (let i = 0; i < 90; i++) { r.int(); r.int(); d.best.push(r.int()); }
+        for (let n = r.short(); n > 0; n--) d.stock.set(r.int(), r.int());   // 1 sold out, 2 not at this hour
+        for (let n = r.short(); n > 0; n--) r.skip(0x68);                      // limited goods
+        for (let n = r.short(); n > 0; n--) r.skip(0x44);                      // free-trial windows
+        r.ubyte(); d.level = r.int();
+      } catch (e) { console.warn('SET_CASH_SHOP: short packet', e); }
+      this.emit('cashShopOpen', d);
     });
     // MEMO_RESULT 3: notes waiting for you (gift notices and the like): id, sender, text, time, fame
     on(S.MEMO_RESULT, (r) => {
@@ -169,16 +187,29 @@ export class ChannelSession {
     on(S.QUERY_CASH_RESULT, (r) => this.emit('csCash', { credit: r.int(), maplePoint: r.int(), prepaid: r.int() }));
     on(S.CASHSHOP_OPERATION, (r) => {
       const op = r.ubyte(), list = (n) => { const out = []; for (; n > 0; n--) out.push(readCashItem(r)); return out; };
-      if (op === 0x4B) this.emit('csInventory', list(r.short()));
-      else if (op === 0x4F || op === 0x55) { const sns = []; for (let i = 0; i < 10; i++) sns.push(r.int()); this.emit('csWish', sns.filter(Boolean)); }
+      if (op === 0x4B) { const items = list(r.short()); this.emit('csInventory', items, r.available >= 4 ? r.short() : null, r.available >= 2 ? r.short() : null); }
+      else if (op === 0x4F || op === 0x55) { const sns = []; for (let i = 0; i < 10; i++) sns.push(r.int()); this.emit('csWish', sns.filter(Boolean), op === 0x55); }
       else if (op === 0x57) this.emit('csBought', readCashItem(r));
       else if (op === 0x4D) {                                    // gifts waiting: cash id, item, sender, message
         const gifts = [];
         for (let n = r.short(); n > 0; n--) gifts.push({ cashId: r.long(), itemId: r.int(), from: r.paddedString(13), message: r.paddedString(73), quantity: 1 });
         this.emit('csGifts', gifts);
       } else if (op === 0x5E) this.emit('csGiftSent', { to: r.string(), itemId: r.int(), count: r.short(), price: r.int() });
-      else if (op === 0x89) this.emit('csBoughtPackage', list(r.ubyte()));
-      else if (op === 0x5C) this.emit('csError', r.ubyte());
+      else if (op === 0x89) { const items = list(r.ubyte()); this.emit('csBoughtPackage', items, r.available >= 2 ? r.short() : 0); }
+      else if (op === 0x59) {                                   // a coupon: items into the locker, Maple Points, items into the inventory, mesos
+        const items = list(r.ubyte()), maplePoints = r.int(), got = [];
+        for (let n = r.int(); n > 0; n--) got.push({ count: r.short(), pos: r.short(), itemId: r.int() });
+        this.emit('csCoupon', { items, maplePoints, got, mesos: r.int() });
+      }
+      else if (op === 0x8D) { const got = []; for (let n = r.int(); n > 0; n--) got.push({ count: r.short(), pos: r.short(), itemId: r.int() }); this.emit('csMesoBought', got); }
+      else if (op === 0x87 || op === 0x91) { const item = readCashItem(r); this.emit('csRing', { item, to: r.string(), itemId: r.int(), count: r.short() }); }
+      else if (op === 0x6E) this.emit('csExpired', r.long());
+      else if (op === 0x47) { r.int(); const sn = r.int(); this.emit('csStock', sn, r.int()); }
+      // a failure: the reason, and for 0xBF / 0xC0 (not at this hour / sold out) the SN
+      else if (CS_FAILS.has(op)) {
+        const reason = r.ubyte(), sn = (reason === 0xBF || reason === 0xC0) && r.available >= 4 ? r.int() : 0;
+        this.emit('csError', reason, op, sn);
+      }
       else if (op === 0x68) { const pos = r.short(); this.emit('csTaken', pos, readItem(r, false)); }
       else if (op === 0x6A) this.emit('csPut', readCashItem(r));
       else if (op === 0x60) { const type = r.ubyte(); this.emit('csSlots', 'inventory', r.short(), type); }
@@ -1117,28 +1148,37 @@ export class ChannelSession {
   partyDeny(name) { this.send(new PacketWriter(C.DENY_PARTY_REQUEST).byte(0).string(name)); }
   pickup(oid, pos) { this.send(new PacketWriter(C.ITEM_PICKUP).int(Date.now() | 0).byte(0).pos(pos).int(oid)); }
   /** The Cash Shop: entering is a bare ENTER_CASHSHOP, leaving a bare CHANGE_MAP (the server answers with a channel change) */
-  enterCashShop() { this.send(new PacketWriter(C.ENTER_CASHSHOP)); }
+  enterCashShop() { this.send(new PacketWriter(C.ENTER_CASHSHOP).int(Date.now() | 0)); }
   leaveCashShop() { this.send(new PacketWriter(C.CHANGE_MAP)); }
   checkCash() { this.send(new PacketWriter(C.CHECK_CASH)); }
   /**
-   * CASHSHOP_OPERATION buys (wallet 1 NX credit / 2 maple points / 4 prepaid): 3 an item, 0x1E a package (910xxxx),
-   * 6 inventory slots (9111000-9114000), 7 storage slots (9110000), 8 a character slot (543xxxx).
-   * Then 5 wish list, 0xD take out, 0xE put in.
+   * CASHSHOP_OPERATION buys (wallet 1 NX credit / 2 maple points / 4 prepaid, each led by a "paid with Maple Points"
+   * byte): 3 an item, 0x1E a package (910xxxx), 6 / 7 an inventory / storage slot item (911xxxx), 8 a character
+   * slot (543xxxx); 0x20 a meso item (SN 8xxxxxxx). Then 5 wish list, 0xD take out, 0xE put in.
    */
   csBuy(wallet, sn, itemId) {
-    const k = Math.floor(itemId / 10000), w = new PacketWriter(C.CASHSHOP_OPERATION);
-    if (k === 911) w.byte(itemId === 9110000 ? 7 : 6).byte(0).int(wallet).byte(1).int(sn);
-    else if (k === 543) w.byte(8).byte(0).int(wallet).int(sn);
-    else w.byte(k === 910 ? 0x1E : 3).byte(0).int(wallet).int(sn);
+    const k = Math.floor(itemId / 10000), mp = wallet === 2 ? 1 : 0, w = new PacketWriter(C.CASHSHOP_OPERATION);
+    if (Math.floor(sn / 10000000) === 8) w.byte(0x20).int(sn);
+    else if (k === 911) w.byte(Math.floor(itemId / 1000) === 9110 ? 7 : 6).byte(mp).int(wallet).byte(1).int(sn);
+    else if (k === 543) w.byte(8).byte(mp).int(wallet).int(sn);
+    else if (k === 910) w.byte(0x1E).byte(mp).int(wallet).int(sn);
+    else w.byte(3).byte(mp).int(wallet).int(sn).int(0);
     this.send(w);
   }
+  /** The +Slot buttons: 4 more slots for 4,000 NX - an inventory (type 1-4), or storage. */
+  csAddSlots(wallet, type) {
+    const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(type ? 6 : 7).byte(wallet === 2 ? 1 : 0).int(wallet).byte(0);
+    if (type) w.byte(type);
+    this.send(w);
+  }
+  coupon(code) { this.send(new PacketWriter(C.COUPON_CODE).string('').string(code)); }
   /** A gift: paid from NX Prepaid, confirmed with the account's birthday (YYYYMMDD) */
   csGift(birthday, sn, to, message) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(4).int(birthday).int(sn).string(to).string(message)); }
   /** NOTE_ACTION 1: discard read notes (count, then each id with a 0 fame byte) */
   discardNotes(ids) { const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(ids.length).byte(0).byte(0); for (const id of ids) w.int(id).byte(0); this.send(w); }
   csWish(sns) { const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(5); for (let i = 0; i < 10; i++) w.int(sns[i] || 0); this.send(w); }
-  csTake(cashId, type) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0D).int(lo32(cashId)).int(0).byte(type).short(0)); }
-  csPut(cashId, type) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0E).int(lo32(cashId)).int(0).byte(type)); }
+  csTake(cashId, type, slot) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0D).long(cashId).byte(type).short(slot)); }
+  csPut(cashId, type) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0E).long(cashId).byte(type)); }
   enterPortal(name) { this.send(new PacketWriter(C.CHANGE_MAP).byte(0).int(-1).string(name).byte(0).byte(0).byte(0)); }
   scriptPortal(name) { this.send(new PacketWriter(C.CHANGE_MAP_SPECIAL).byte(0).string(name).short(0)); }
   innerPortal(name, from, to) { this.send(new PacketWriter(C.USE_INNER_PORTAL).byte(0).string(name).pos(from).pos(to)); }
