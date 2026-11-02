@@ -495,7 +495,12 @@ class EquipWin extends Win {
     const slot = this.slotAt(lx, ly);
     if ((slot === 'hp' || slot === 'mp') && c.tab === 2) { this.g.setPetPotion(slot, c.id); return; }
     if (c.tab === 2 && isScroll(c.id)) { if (typeof slot === 'number' && slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
-    if (c.tab === 1) this.g.useInventoryItem(1, c.slot, this.g.inventory[1][c.slot], this.petOpen && lx >= PET_X ? this.petSel : undefined);
+    if (c.tab !== 1) return;
+    // a ring dropped on one of the ring cells goes into that one
+    const it = this.g.inventory[1][c.slot], col = Math.floor((lx - 5) / 33), row = Math.floor((ly - 35) / 33);
+    const cell = Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === col && p[1] === row)?.[0]) || 0;
+    if (it && Math.floor(it.id / 10000) === 111 && [-12, -13, -15, -16].includes(cell) && !(this.petOpen && lx >= PET_X)) this.g.equipRing(c.slot, it, cell);
+    else this.g.useInventoryItem(1, c.slot, it, this.petOpen && lx >= PET_X ? this.petSel : undefined);
   }
   tooltip(lx, ly) {
     const slot = this.slotAt(lx, ly);

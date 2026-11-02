@@ -2276,7 +2276,19 @@ export class Game {
     }
   }
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
+  /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
+  equipRing(slot, it, cell) {
+    if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
+    const cash = it.cash || !!this.windows?.info(it.id)?.cash;
+    this.net.moveItem(1, slot, cash ? cell - 100 : cell, 1);
+  }
   equipDest(id, cash = !!this.windows?.info(id)?.cash) {
+    // a ring takes the first free one of the four ring slots (12, 13, 15, 16); with all four worn it can't go on
+    if (Math.floor(id / 10000) === 111) {
+      const worn = this.inventory?.equipped || {};
+      for (const s of [12, 13, 15, 16]) { const d = -(s + (cash ? 100 : 0)); if (!worn[d]) return d; }
+      return null;
+    }
     const dst = equipSlotFor(id);
     return dst && cash && dst > -100 ? dst - 100 : dst;
   }
