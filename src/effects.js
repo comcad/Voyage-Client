@@ -179,8 +179,9 @@ export class WorldFx {
     return true;
   }
 
-  /** ChatBalloon.img/0 (or /npc): a 9-slice around the text with the arrow under it, pointing at the speaker. */
+  /** ChatBalloon.img/0 (or /npc, /pet/<n>): a 9-slice around the text with the arrow under it, pointing at the speaker. */
   drawBalloon(ctx, cam, ent, text, style = '0') {
+    if (String(style).startsWith('pet/') && !this.CB?.pet?.[style.slice(4)]) style = 'pet/0';
     const B = String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
     if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
     const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
@@ -189,8 +190,8 @@ export class WorldFx {
     ctx.font = '12px Arial, sans-serif';
     // ChatBalloon.img/0 round the text: 12px lines on the white, 5px in from its left and 6px from its right, the
     // arrow (origin 1, 0) laid over the bottom edge at the centre so the tail grows out of it, leaning left
-    // an NPC's: centred 14px lines wrapped at 89px, in its clr (dark red)
-    const npc = style === 'npc', lh = npc ? 14 : 12;
+    // an NPC's or a pet's: centred 14px lines wrapped at 89px, in its clr (dark red for both by default)
+    const npc = style === 'npc' || String(style).startsWith('pet/'), lh = npc ? 14 : 12;
     const lines = wrapText(ctx, text, npc ? 89 : 150, 12);
     const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);

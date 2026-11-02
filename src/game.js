@@ -4849,7 +4849,7 @@ export class Game {
 
   drawBalloons(ctx, cam) {
     // pets talk from just over their heads, without a name in front
-    for (const pet of this.pets.values()) if (pet.chat && !pet.hidden) this.vfx?.drawBalloon(ctx, cam, { x: pet.x, y: pet.y + 44 }, pet.chat.text, pet.chat.style ? `pet/${pet.chat.style}` : '0');
+    for (const pet of this.pets.values()) if (pet.chat && !pet.hidden) this.vfx?.drawBalloon(ctx, cam, { x: pet.x, y: pet.y + 44 }, pet.chat.text, `pet/${pet.chat.style || 0}`);
     // NPCs: the arrow just over the head; not while a quest icon is there
     for (const e of this.map.life) {
       if (!e.chat || this.vfx?.questIcons.has(e)) continue;
