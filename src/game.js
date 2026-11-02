@@ -1,6 +1,6 @@
 import { GameMap, nameTag, labelTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
-import { CharacterLook, drawParts, lookCanvases } from './character.js';
+import { CharacterLook, drawParts, lookCanvases, equipPath } from './character.js';
 import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
@@ -2141,13 +2141,11 @@ export class Game {
     }
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
+      if (this.dead) { this.notice("You can't do it once you're dead."); return; }
       if (isPetEquip(it.id)) { this.equipPet(slot, it, pet ?? this.windows.wins?.equip?.petSel ?? 0); return; }
       const dst = this.equipDest(it.id, it.cash);
       if (!dst) return;
-      const clash = this.ringClash(it.id, dst);
-      if (clash) { this.notice(clash); return; }
-      if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
-      this.net.moveItem(1, slot, dst, 1);
+      this.equipChecked(slot, it, dst);
     }
   }
 
@@ -2288,9 +2286,36 @@ export class Game {
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
   /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
   equipRing(slot, it, cell) {
-    if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
+    if (this.dead) { this.notice("You can't do it once you're dead."); return; }
     const cash = it.cash || !!this.windows?.info(it.id)?.cash, dst = cash ? cell - 100 : cell, clash = this.ringClash(it.id, dst, true);
     if (clash) { this.notice(clash); return; }
+    if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
+    this.net.moveItem(1, slot, dst, 1);
+  }
+  /**
+   * Putting on an equip from the inventory (double-click / drop), in this order: one of each Unique Equipped Item,
+   * one couple / friendship / wedding ring, a cash weapon needs a weapon it has art for (and a weapon must suit the
+   * cash weapon worn), a cash shield needs a shield, the requirements, a cash taming mob / saddle needs a real one,
+   * and an item that can't be traded once worn asks first.
+   */
+  async equipChecked(slot, it, dst) {
+    const id = it.id, cat = Math.floor(id / 10000), worn = this.inventory?.equipped || {}, info = this.windows?.info(id) || {};
+    const refuse = (t) => { this.notice(t); };
+    if (Number(info.onlyEquip) && Object.values(worn).some((w) => w?.id === id)) return refuse('You can only be equipped with 1 Unique Equipped Item.');
+    const clash = this.ringClash(id, dst);
+    if (clash) return refuse(clash);
+    const fits = async (cashWeapon, weapon) => !!(await this.assets.json(equipPath(cashWeapon)))?.[Math.floor(weapon / 10000) % 100];
+    if (cat === 170) {
+      if (!worn[-11]) return refuse('You need to equip yourself with an item\nto use it.');
+      if (!(await fits(id, worn[-11].id))) return refuse("This item is not available with the weapon\nyou're currenly using.");
+    } else if (dst === -11 && worn[-111] && !(await fits(worn[-111].id, id))) {
+      return refuse("You may not use the item with the\ncash item you're currently equipped with.\nPlease unequip that item and try again.");
+    }
+    if (dst === -110 && !worn[-10]) return refuse('You are able to use this only\nwhen you are wearing a shield.');
+    if (!this.canEquip(id)) return refuse('Your stats are too low to equip this item.');
+    if (dst === -118 && !worn[-18]) return refuse('You must have a tamed monster\nin order to equip this.');
+    if (dst === -119 && !worn[-19]) return refuse('You must be equipped with a saddle\nto equip this.');
+    if (Number(info.equipTradeBlock) && !(it.flag & 0x08) && !(await this.windows.confirm("You cannot trade this item after equipping.\n Do you still wish to equip?"))) return;
     this.net.moveItem(1, slot, dst, 1);
   }
   /**
