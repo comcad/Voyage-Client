@@ -372,6 +372,15 @@ export class Pet {
     if (f?.layer !== undefined) this.lastLayer = f.layer;
     return this.lastLayer ?? 7;
   }
+  /** Whether a map point is on the pet's current frame. */
+  hits(wx, wy) {
+    if (this.hidden) return false;
+    const fr = frames(this.node()), node = fr[this.frame] || fr[0], img = node && this.g.assets.image(node);
+    if (!img) return false;
+    const o = node.origin || [img.width / 2, img.height], flip = !this.facingLeft && this.act !== 'hang';
+    const left = flip ? this.x + o[0] - img.width : this.x - o[0], top = this.y - o[1];
+    return wx >= left && wx < left + img.width && wy >= top && wy < top + img.height;
+  }
   draw(ctx, cam) {
     if (this.hidden) return;
     const fr = frames(this.node()), node = fr[this.frame] || fr[0], img = node && this.g.assets.image(node);

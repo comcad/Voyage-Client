@@ -574,7 +574,9 @@ export class Game {
       const stall = this.boards.at(p[0] + this.cam.x, p[1] + this.cam.y);
       if (stall?.merchant && stall.merchant.owner !== this.player.id) { this.net.pshopVisit(stall.merchant.oid); return; }
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
-      if (rp) this.requestCharInfo(rp.id);
+      if (rp) { this.requestCharInfo(rp.id); return; }
+      // a pet: its owner's
+      for (const pet of this.pets.values()) if (pet.hits(wx, wy)) { this.requestCharInfo(pet.owner); return; }
     });
     c.addEventListener('wheel', (e) => {
       // deltaMode 1 = lines (some mice / Firefox): count each as a pixel step of 40

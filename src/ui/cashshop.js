@@ -1295,23 +1295,27 @@ class CsNoticeDialog extends Win {
     const put = (node, y, h) => { const img = im(node); if (img) ctx.drawImage(img, 0, y, img.width, h ?? img.height); };
     put(P[0], 0);
     for (let i = 0; i < n; i++) put(P[1], 21 + 40 * i);
-    const fillTop = 21 + 40 * n, fillH = H - 104 - 19 - fillTop;
-    if (fillH > 0) put(P[2], fillTop, fillH);
-    put(P[3], H - 104 - 19);
-    put(P[4], H - 104);
+    // no items: rows of 3 from the top; else 2 under the items and 3 once, plus once per mode; then 4 at H - 111
+    if (this.mode === 3) for (let y = 21; y < H - 111; y += 19) put(P[3], y);
+    else {
+      put(P[2], 21 + 40 * n);
+      for (let i = 0; i <= this.mode; i++) put(P[3], 26 + 40 * n + 19 * i);
+    }
+    put(P[4], H - 111);
     this.items.forEach((c, i) => {
       const icon = m.icon(c.ItemId);
       if (icon) m.drawIcon(ctx, icon, 22, 21 + 40 * i + 4);
       uiText(ctx, clipText(ctx, this.shop.nameOf(c), 200), 63, 27 + 40 * i - 4, { color: '#fff' });
       uiText(ctx, isMesoSN(c.SN) ? `${c.Price} mesos` : `${c.Price} NX`, 63, 43 + 40 * i - 4, { color: '#fff' });
     });
-    const start = H - [123, 142, 158, 144][this.mode];
+    const lines = String(this.message).split('\n').length;
+    const start = H - (this.mode === 3 && lines === 3 ? 152 : [123, 142, 158, 144][this.mode]);
     String(this.message).split('\n').forEach((line, i) => uiText(ctx, line, 143, start + i * 16, { color: '#fff', align: 'center' }));
     if (this.wallets) {
       for (const [bit, y] of this.boxes) {
         const on = this.picked.has(bit), enabled = !!(this.wallets & bit);
         const img = im(m.B.CheckBox[enabled ? (on ? 1 : 0) : (on ? 3 : 2)]) || im(m.B.CheckBox[on ? 1 : 0]);
-        if (img) ctx.drawImage(img, 25, y);
+        if (img) ctx.drawImage(img, 27, y + 1);
       }
     }
   }
@@ -1413,7 +1417,7 @@ class ComboBox {
   }
   /** Text in the box's font, cut to `width` with "..". */
   text(ctx, t, width, x, y, color) {
-    ctx.save(); ctx.font = `${this.font.size}px ${this.font.face}, Arial, sans-serif`; ctx.textBaseline = 'top'; ctx.fillStyle = color;
+    ctx.save(); ctx.font = `${this.font.size}px ${this.font.face}, Arial, sans-serif`; ctx.textBaseline = 'top'; ctx.textAlign = 'left'; ctx.fillStyle = color;
     if (ctx.measureText(t).width > width) { while (t && ctx.measureText(`${t}..`).width > width) t = t.slice(0, -1); t += '..'; }
     ctx.fillText(t, x, y);
     ctx.restore();

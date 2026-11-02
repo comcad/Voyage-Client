@@ -311,7 +311,6 @@ export class PlayerMenu extends Win {
  *   backgrnd4 ITEM LIST / backgrnd3 WISH LIST (240x162) open beside it: rows every 40 from y 31, icon cell
  *     x 15-50, name from x 55 over a rule at +17, ReqLv / price under it; scrollbar at x 220.
  */
-const INFO_ROWS = [84, 102, 120, 138, 156];
 const INFO_PANELS = {
   none: { bg: 'backgrnd', band: 170 },
   taming: { bg: 'backgrnd5', band: 336 },
@@ -328,7 +327,8 @@ export class CharInfoWin extends Win {
     super(mgr, null, 200, 60);
     this.w = 275; this.h = 199;
     this.closePinned = true; this.closeBtn.x = 275 - 17;
-    this.U = U; this.info = info; this.panel = 'none'; this.side = null; this.sideFirst = 0; this.petSel = 0;
+    // with a pet out it opens on PET INFO
+    this.U = U; this.info = info; this.panel = info.pets?.length ? 'pet' : 'none'; this.side = null; this.sideFirst = 0; this.petSel = 0;
     const g = this.g, other = info.id !== g.player.id;
     const party = this.button(U.BtParty, 148, 21, () => {
       if (!g.party) g.net?.partyOp(1);
@@ -456,15 +456,28 @@ export class CharInfoWin extends Win {
     if (bg) ctx.drawImage(bg, 0, 0);
     const me = i.id === g.player.id, ent = me ? g.player : g.others.get(i.id), look = me ? g.look : ent?.look;
     if (look) {
+      // standing, animated
+      const a = (this.anim ??= { frame: 0, back: false, t: 0, at: performance.now() }), act = look.standAction(), now = performance.now();
+      a.t += Math.min(1000, now - a.at); a.at = now;
+      for (let n = 0; a.t >= look.delay(act, a.frame) && n < 10; n++) {
+        a.t -= look.delay(act, a.frame);
+        const f = look.nextFrame(act, a.frame, a.back); a.frame = f.frame; a.back = f.back;
+      }
+      if (a.frame >= look.frameCount(act)) a.frame = 0;
       ctx.save(); ctx.beginPath(); ctx.rect(8, 27, 90, 118); ctx.clip();
-      drawParts(ctx, g.assets, look.compose(look.standAction(), 0), 52, 133, false);
+      drawParts(ctx, g.assets, look.compose(act, a.frame), 52, 133, false);
       ctx.restore();
     }
     const hn = U.Marry?.[i.married ? 'married' : 'unmarried'], heart = im(hn?._canvas ? hn : hn?.[0]);
     if (heart) ctx.drawImage(heart, 12, 31);
-    this.text(ctx, this.name(), 52, 147, { color: '#fff', bold: true, align: 'center', size: 12 });   // inside the bar (y 147-163)
-    [String(i.level), jobName(i.job).toUpperCase(), String(i.fame), i.guild || '', i.alliance || '']
-      .forEach((v, k) => this.text(ctx, v, 157, INFO_ROWS[k] - 7, { size: 12 }));
+    // the name in white Arial 12 centred on the bar; level, fame and guild in black Arial 12, the job in Tahoma 9
+    this.text(ctx, this.name(), 52, 144, { color: '#fff', align: 'center', size: 12 });
+    this.text(ctx, String(i.level), 160, 77, { size: 12 });
+    ctx.save(); ctx.font = '9px Tahoma, Verdana, sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'left'; ctx.fillStyle = '#000';
+    ctx.fillText(jobName(i.job).toUpperCase(), 160, 96); ctx.restore();
+    this.text(ctx, String(i.fame), 160, 113, { size: 12 });
+    this.text(ctx, i.guild || '', 160, 131, { size: 12 });
+    this.text(ctx, i.alliance || '', 160, 149, { size: 12 });
     if (this.panel === 'pet') this.drawPet(ctx);
     else if (this.panel === 'taming') this.drawTaming(ctx);
     else if (this.panel === 'book') this.drawBook(ctx);
