@@ -82,7 +82,7 @@ setInterval(() => {
 wss.on('connection', (ws, req) => {
   ws.alive = true;
   ws.on('pong', () => { ws.alive = true; });
-  const q = new URL(req.url, 'httpx').searchParams;
+  const q = new URL(req.url, 'http://x').searchParams;
   const host = SERVERS[q.get('server')] ?? Object.values(SERVERS)[0];
   const port = Number(q.get('port'));
   if (!portAllowed(port)) { ws.close(1008, 'port not allowed'); return; }
