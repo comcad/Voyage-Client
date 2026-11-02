@@ -15,10 +15,10 @@ const lo32 = (v) => Number(BigInt.asIntN(32, BigInt(v ?? 0)));
 /** Guild emblem: background, its colour, mark, its colour. */
 const readEmblem = (r) => ({ bg: r.short(), bgColor: r.ubyte(), logo: r.short(), logoColor: r.ubyte() });
 
-/** addPetInfo: item id, name, unique id, position, stance, foothold */
+/** A pet: item id, name, cash SN, position, stance, foothold, Label Ring and Quote Ring on */
 function readPet(r) {
-  const id = r.int(), name = r.string(), uid = Number(BigInt.asIntN(32, r.long())), pos = r.pos2(), stance = r.ubyte(), fh = r.int();
-  return { id, name, uid, x: pos.x, y: pos.y, stance, fh };
+  const id = r.int(), name = r.string().replace(/\t/g, ' '), sn = r.long(), pos = r.pos2(), stance = r.ubyte(), fh = r.short(), nameTag = r.ubyte(), balloon = r.ubyte();
+  return { id, name, sn, uid: Number(BigInt.asIntN(32, sn)), x: pos.x, y: pos.y, stance, fh, nameTag, balloon };
 }
 
 /** STAT_CHANGED mask bits (client/Stat.java). */
@@ -535,16 +535,29 @@ export class ChannelSession {
     // ---- pets: SPAWN_PET (summon / send home), MOVE_PET, PET_CHAT, PET_COMMAND (0 command answer, 1 food answer)
     on(S.SPAWN_PET, (r) => {
       const owner = r.int(), slot = r.ubyte();
-      if (r.ubyte() === 1) { r.ubyte(); this.emit('petSpawn', { owner, slot, ...readPet(r) }); }
-      else this.emit('petRemove', owner, slot, r.available ? r.bool() : false);
+      if (slot > 2) return;
+      if (r.ubyte() === 1) { const replace = r.bool(); this.emit('petSpawn', { owner, slot, replace, ...readPet(r) }); }
+      else this.emit('petRemove', owner, slot, r.available ? r.ubyte() : 0);
     });
     on(S.MOVE_PET, (r) => { const owner = r.int(), slot = r.ubyte(); r.int(); this.emit('petMove', owner, slot, readMovement(r)); });
-    on(S.PET_CHAT, (r) => { const owner = r.int(), slot = r.ubyte(); r.ubyte(); const act = r.ubyte(); this.emit('petChat', owner, slot, act, r.string()); });
-    on(S.PET_COMMAND, (r) => {
-      const owner = r.int(), slot = r.ubyte(), type = r.ubyte();
-      if (type === 0) { const cmd = r.ubyte(); this.emit('petCommand', owner, slot, cmd, r.bool()); }
-      else this.emit('petFood', owner, slot, r.bool());
+    on(S.PET_CHAT, (r) => {
+      const owner = r.int(), slot = r.ubyte(), type = r.ubyte(), act = r.ubyte(), text = r.string();
+      this.emit('petChat', owner, slot, type, act, text, r.available ? r.bool() : false);
     });
+    // 0: a command's answer (its interact index, success), 1: food's; then the Quote Ring
+    on(S.PET_COMMAND, (r) => {
+      const owner = r.int(), slot = r.ubyte(), type = r.ubyte(), cmd = type === 0 ? r.ubyte() : -1, ok = r.bool();
+      this.emit('petCommand', owner, slot, type, cmd, ok, r.available ? r.bool() : false);
+    });
+    on(S.PET_NAMECHANGE, (r) => { const owner = r.int(), slot = r.ubyte(), name = r.string(); this.emit('petName', owner, slot, name, r.available ? r.bool() : false); });
+    on(S.PET_EXCEPTION_LIST, (r) => {
+      const owner = r.int(), slot = r.ubyte(), sn = r.long(), ids = [];
+      for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
+      this.emit('petExceptions', owner, slot, sn, ids);
+    });
+    on(S.CASH_PET_FOOD_RESULT, (r) => { const fail = r.ubyte(); this.emit('cashPetFood', fail ? -1 : r.ubyte()); });
+    on(S.AUTO_HP_POT, (r) => this.emit('petPotion', 'hp', r.int()));
+    on(S.AUTO_MP_POT, (r) => this.emit('petPotion', 'mp', r.int()));
     on(S.MOVE_PLAYER, (r) => { const id = r.int(); r.int(); this.emit('movePlayer', id, readMovement(r)); });
     on(S.UPDATE_CHAR_LOOK, (r) => { const id = r.int(); r.ubyte(); this.emit('playerLook', id, readCharLook(r)); });
     on(S.FACIAL_EXPRESSION, (r) => this.emit('expression', r.int(), r.int()));
@@ -681,6 +694,7 @@ export class ChannelSession {
       if (effect === 1 && r.available >= 4) this.emit('foreignSkill', id, r.int());
       else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
+      else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
       else if (effect === 0 || effect === 8 || effect === 9) this.emit('foreignEffect', id, effect); // level up / job change / quest clear
     });
     on(S.SKILL_EFFECT, (r) => this.emit('foreignCharge', r.int(), r.int()));   // charging / winding up a skill
@@ -690,6 +704,7 @@ export class ChannelSession {
       const type = r.ubyte();
       if (type === 2 && r.available >= 4) this.emit('affected', null, r.int());
       else if (type === 0x0a && r.available >= 1) this.emit('healNumber', null, r.ubyte());
+      else if (type === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', null, r.ubyte(), e); }
     });
     // another player's curse (giveForeignDebuff): the masks, then per stat (Poison's value first) the mob skill as
     // short id + short level; an ordinary foreign buff has values and zeros there instead, so the id tells them apart
@@ -783,6 +798,8 @@ export class ChannelSession {
       const to = r.pos2(); const dropper = r.int();
       const d = { mode, oid, meso, id, owner, type, x: to.x, y: to.y, dropper };
       if (mode !== 2) { const from = r.pos2(); d.fromX = from.x; d.fromY = from.y; d.delay = r.short(); }
+      if (!meso && r.available >= 8) r.long();
+      d.petOk = r.available ? r.bool() : true;   // a pet may pick it up (not a player's drop)
       this.emit('drop', d);
     });
     // reactors: spawn (oid, id, state, position, facing), hit (oid, new state, position, stance), destroy (oid, state)
@@ -1185,11 +1202,19 @@ export class ChannelSession {
   shopClose() { this.send(new PacketWriter(C.NPC_SHOP).byte(3)); }
   /** STORAGE: 4 take out (type, index), 5 store (slot, id, qty), 6 arrange, 7 mesos (+ out / - in), 8 close */
   /** pets: summon / send home toggles by cash-inventory slot; ids are the pet's unique id (low 32 bits) */
-  spawnPet(slot) { this.send(new PacketWriter(C.SPAWN_PET).int(Date.now() | 0).byte(slot).byte(0).byte(0)); }
-  movePet(uid, start, moves) { const w = new PacketWriter(C.MOVE_PET).int(uid).pos(start).int(0); writeMovement(w, moves); this.send(w); }
-  petCommand(uid, cmd) { this.send(new PacketWriter(C.PET_COMMAND).int(uid).int(0).byte(0).byte(cmd)); }
+  spawnPet(slot, lead = false) { this.send(new PacketWriter(C.SPAWN_PET).int(Date.now() | 0).short(slot).byte(lead ? 1 : 0)); }
+  movePet(sn, start, moves) { const w = new PacketWriter(C.MOVE_PET).long(sn).pos(start); writeMovement(w, moves); this.send(w); }
+  petCommand(sn, nameCalled, cmd) { this.send(new PacketWriter(C.PET_COMMAND).long(sn).bool(nameCalled).byte(cmd)); }
+  petChat(sn, type, act, text) { this.send(new PacketWriter(C.PET_CHAT).long(sn).byte(type).byte(act).string(text)); }
   petFood(slot, id) { this.send(new PacketWriter(C.PET_FOOD).int(Date.now() | 0).short(slot).int(id)); }
-  petLoot(uid, oid, x, y) { this.send(new PacketWriter(C.PET_LOOT).int(uid).byte(0).int(0).pos({ x, y }).int(0).int(oid)); }
+  petLoot(sn, x, y, oid, f) {
+    this.send(new PacketWriter(C.PET_LOOT).long(sn).byte(0).int(Date.now() | 0).pos({ x, y }).int(oid).int(0)
+      .bool(f.pickupOthers).bool(f.sweepForDrop).bool(f.longRange));
+  }
+  petAutoPot(sn, slot, id, flag = 0) { this.send(new PacketWriter(C.PET_AUTO_POT).long(sn).byte(flag).int(Date.now() | 0).short(slot).int(id)); }
+  petExcludeItems(sn, ids) { const w = new PacketWriter(C.PET_EXCLUDE_ITEMS).long(sn).byte(ids.length); for (const id of ids) w.int(id); this.send(w); }
+  /** The potion your pet drinks for HP (1) or MP (2); 0 clears it. */
+  petPotion(mode, id) { this.send(new PacketWriter(C.CHANGE_KEYMAP).int(mode).int(id)); }
   dropMeso(v) { this.send(new PacketWriter(C.MESO_DROP).int(Date.now() | 0).int(v)); }
   storageTakeOut(type, slot) { this.send(new PacketWriter(C.STORAGE).byte(4).byte(type).byte(slot)); }
   storageStore(pos, id, qty) { this.send(new PacketWriter(C.STORAGE).byte(5).short(pos).int(id).short(qty)); }
