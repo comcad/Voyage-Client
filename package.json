@@ -4,8 +4,8 @@
   "description": "Pure JS MapleStory v83 web client",
   "type": "module",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "build": "esbuild server.js --bundle --minify --platform=node --outfile=index.js",
+    "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.21.0",
