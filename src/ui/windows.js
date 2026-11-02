@@ -484,6 +484,22 @@ class EquipWin extends Win {
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
     }
+    // cells that can't be used now are tinted red
+    ctx.fillStyle = 'rgba(255,0,0,0.25)';
+    for (const cell of this.unusable(eq)) { const [c, r] = EQUIP_CELLS[cell]; ctx.fillRect(5 + c * 33, 35 + r * 33, 32, 32); }
+  }
+  /**
+   * The shield cell under a two-handed weapon (14xxxxx) with no shield, the pants cell under an overall (the cash one
+   * over it first) with no pants, and the taming mob cells without the job's Monster Rider skill.
+   */
+  unusable(eq) {
+    const out = [], job = this.g.stats?.job || 0;
+    if (eq[-11] && Math.floor(eq[-11].id / 100000) === 14 && !eq[-10]) out.push(-10);
+    const top = eq[-105] || eq[-5], bottom = eq[-106] || eq[-6];
+    if (top && Math.floor(top.id / 10000) === 105 && !bottom) out.push(-6);
+    const group = Math.floor(job / 100) === 22 || job === 2001 ? 2001 : Math.floor(job / 1000) * 1000;
+    if (!(this.g.skills?.level(group * 10000 + 1004) > 0)) out.push(-18, -19, -20);
+    return out;
   }
   down(lx, ly) {
     const slot = this.slotAt(lx, ly), it = typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot];

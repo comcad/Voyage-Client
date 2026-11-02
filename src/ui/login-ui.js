@@ -157,7 +157,7 @@ export class LoginFlow {
   }
 
   async preview(canvas, look, action = 'stand1') {
-    const cl = new CharacterLook(this.assets, { skin: look.skin, face: look.face, hair: look.hair, equips: lookEquipIds(look) });
+    const cl = new CharacterLook(this.assets, { skin: look.skin, face: look.face, hair: look.hair, gender: look.gender, equips: lookEquipIds(look) });
     await cl.load();
     await this.assets.preload(lookCanvases(cl, [action]));
     const ctx = canvas.getContext('2d');

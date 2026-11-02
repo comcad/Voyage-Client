@@ -112,12 +112,12 @@ class Input {
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
 /**
  * Face expressions: the emotion number indexes this list (1 = hit). An expression loops its Face.img frames
- * for EMOTE_TIME, then the face goes back to default - which blinks now and then, as the client's does.
+ * for its own delay (5s when it has none), then the face goes back to default, which blinks now and then.
  */
 export const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
   'wink', 'pain', 'glitter', 'blaze', 'shine', 'love', 'despair', 'hum', 'bowing', 'hot', 'dam'];
-const EMOTE_TIME = 3, HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s (the client's)
-export function setExpression(ent, n, time = EMOTE_TIME) {
+const HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s
+export function setExpression(ent, n, time = null) {
   const name = EMOTES[n - 1];
   if (name) ent.expr = { name, frame: 0, t: 0, left: time };
 }
@@ -131,6 +131,7 @@ export function stepExpression(ent, look, dt) {
   }
   const node = look?.face?.[e.name];
   if (!node) { ent.expr = null; return; }
+  if (e.left === null) e.left = (Number(node.delay) || 5000) / 1000;   // an expression's own length, else 5s
   const frames = Object.keys(node).filter((k) => /^\d+$/.test(k)).length;
   e.left -= dt; e.t += dt * 1000;
   const delay = node[e.frame]?.delay || 500;
@@ -646,6 +647,9 @@ export class Game {
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
       await loaded;
+      // the server comes back without your item effect: put it back on (or off, if the item is gone)
+      const fx = this.player.itemFxId;
+      if (fx) { if (this.itemCount(fx)) net.useItemEffect(fx); else this.setItemEffect(this.player, 0); }
       if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
       else this.hud.message(`You are now in channel ${this.channel + 1}.`, '#9fd3ff');
       if (this.stats.hp <= 0 && !this.dead) this.die();   // still dead after the switch
@@ -669,7 +673,7 @@ export class Game {
   /** A drawable look from packet look data (loads in the background; draws once ready). */
   lookFrom(d) {
     if (!d) return null;
-    const look = new CharacterLook(this.assets, { skin: d.skin, face: d.face, hair: d.hair, equips: lookEquipIds(d) });
+    const look = new CharacterLook(this.assets, { skin: d.skin, face: d.face, hair: d.hair, gender: d.gender, equips: lookEquipIds(d) });
     look.load().then(() => this.assets.preload(lookCanvases(look, [look.standAction()]))).then(() => { look.ready = true; });
     return look;
   }
@@ -896,7 +900,7 @@ export class Game {
   emote(n) {
     if (!EMOTES[n - 1] || this.player.dead) return;
     const now = performance.now();
-    if (now - (this.lastEmote || 0) < 300) return;   // a held key repeats: once is enough
+    if (now - (this.lastEmote || 0) < 2000) return;   // one every 2s
     this.lastEmote = now;
     setExpression(this.player, n);
     this.emotionEffect(this.player, n);
@@ -1896,7 +1900,7 @@ export class Game {
 
   async spawnPlayer(d) {
     if (d.id === this.player?.id) return;   // the server can spawn you to yourself (a job change): you're already here
-    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, equips: lookEquipIds(d.look) });
+    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips: lookEquipIds(d.look) });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
     if (!this.map) return;
@@ -1912,7 +1916,7 @@ export class Game {
 
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
-    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, equips: lookEquipIds(lookData) });
+    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips: lookEquipIds(lookData) });
     await look.load();
     rp.look = look; rp.lookData = lookData;
   }
@@ -2070,7 +2074,7 @@ export class Game {
 
   async rebuildLook() {
     const s = this.stats;
-    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, equips: equippedIds(this.inventory.equipped) });
+    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, gender: s.gender, equips: equippedIds(this.inventory.equipped) });
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
