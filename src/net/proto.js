@@ -42,6 +42,16 @@ export function lookEquipIds(look) {
   return ids;
 }
 
+/**
+ * The rings a character wears, as the map sees them: a couple and a friendship ring (its serial, its partner ring's
+ * serial, the item) and a wedding ring (whose, the spouse's id - both 0 when you are the spouse - and the item).
+ */
+export function readRingLook(r) {
+  const pair = () => (r.ubyte() ? { ring: r.long(), partner: r.long(), item: r.int() } : null);
+  const couple = pair(), friend = pair();
+  return { couple, friend, marriage: r.ubyte() ? { id: r.int(), partner: r.int(), item: r.int() } : null };
+}
+
 export function readCharEntry(r) {
   const stats = readCharStats(r);
   const look = readCharLook(r);
@@ -157,9 +167,12 @@ export function readCharacterInfo(r) {
   r.short();                                    // minigame
   // rings: couple and friendship ones (partner, the ring's cash serial, the partner's), then a marriage
   const rings = { couple: [], friend: [], marriage: null };
-  for (let n = r.short(); n > 0; n--) { r.int(); const partner = r.paddedString(13), ring = r.long(); r.long(); rings.couple.push({ ring, partner }); }
-  for (let n = r.short(); n > 0; n--) { r.int(); const partner = r.paddedString(13), ring = r.long(); r.long(); r.int(); rings.friend.push({ ring, partner }); }
-  if (r.short() === 1) { r.skip(4 + 4 + 4 + 2 + 4 + 4); rings.marriage = { husband: r.paddedString(13), wife: r.paddedString(13) }; }
+  for (let n = r.short(); n > 0; n--) { const partnerId = r.int(), partner = r.paddedString(13), ring = r.long(); rings.couple.push({ ring, partner, partnerId, partnerRing: r.long() }); }
+  for (let n = r.short(); n > 0; n--) { const partnerId = r.int(), partner = r.paddedString(13), ring = r.long(), partnerRing = r.long(); rings.friend.push({ ring, partner, partnerId, partnerRing, item: r.int() }); }
+  if (r.short() === 1) {
+    r.int(); const husbandId = r.int(), wifeId = r.int(); r.short(); const item = r.int(); r.int();
+    rings.marriage = { husbandId, wifeId, item, husband: r.paddedString(13), wife: r.paddedString(13) };
+  }
   const rocks = []; for (let i = 0; i < 15; i++) rocks.push(r.int());
   // monster book: the cover card, then each card (item id % 10000) with its count 1-5
   const book = { cover: r.int(), cards: {} };

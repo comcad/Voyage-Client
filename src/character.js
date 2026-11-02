@@ -82,6 +82,10 @@ export class CharacterLook {
     const drawn = [...eq], art = ci >= 0 && wi >= 0 ? eq[ci][cat(wi) % 100] : null;
     if (ci >= 0) drawn[ci] = null;
     if (art) drawn[wi] = art;
+    else if (ci >= 0 && wi < 0) {   // no weapon under it: the first kind of weapon it has art for
+      const k = Object.keys(eq[ci] || {}).find((x) => /^\d+$/.test(x));
+      if (k) { drawn[ci] = eq[ci][k]; this.weapon = eq[ci][k]; }
+    }
     this.equips = drawn.filter(Boolean);
     // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
     this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(cat(i)) ? n : null).filter(Boolean));

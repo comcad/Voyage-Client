@@ -1,7 +1,7 @@
 import { Connection } from './connection.js';
 import { PacketWriter } from './packet.js';
 import { C, S, S_NAMES } from './opcodes.js';
-import { readCharacterInfo, readCharLook, readItem, readMovement, writeMovement } from './proto.js';
+import { readCharacterInfo, readCharLook, readRingLook, readItem, readMovement, writeMovement } from './proto.js';
 
 /** CashShop item records (addCashItemInformation): cash id, account, item, SN, count, gift sender, expiry. */
 function readCashItem(r) {
@@ -530,12 +530,13 @@ export class ChannelSession {
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
-      let chalk = null;
+      let chalk = null, rings = null;
       if (r.available >= 13) {
         r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
         if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
+        if (r.available >= 3) rings = readRingLook(r);
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, rings, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -590,7 +591,7 @@ export class ChannelSession {
     on(S.AUTO_HP_POT, (r) => this.emit('petPotion', 'hp', r.int()));
     on(S.AUTO_MP_POT, (r) => this.emit('petPotion', 'mp', r.int()));
     on(S.MOVE_PLAYER, (r) => { const id = r.int(); r.int(); this.emit('movePlayer', id, readMovement(r)); });
-    on(S.UPDATE_CHAR_LOOK, (r) => { const id = r.int(); r.ubyte(); this.emit('playerLook', id, readCharLook(r)); });
+    on(S.UPDATE_CHAR_LOOK, (r) => { const id = r.int(); r.ubyte(); const look = readCharLook(r); this.emit('playerLook', id, look, r.available >= 3 ? readRingLook(r) : null); });
     on(S.FACIAL_EXPRESSION, (r) => this.emit('expression', r.int(), r.int()));
     on(S.SHOW_ITEM_EFFECT, (r) => this.emit('itemEffect', r.int(), r.int()));
 

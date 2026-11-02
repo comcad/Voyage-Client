@@ -4,6 +4,7 @@ import { sfx } from '../audio.js';
 import { PHYS } from '../physics.js';
 import { ACTION } from '../keymap.js';
 import { nameTag } from '../map.js';
+import { EMOTES, setExpression, stepExpression } from '../game.js';
 import { uiText, TextField, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
 
@@ -490,7 +491,7 @@ export class CashShopWin extends Win {
     const base = this.g.look;
     if (!base) return;
     this.tried.clear();
-    this.pvPet = null;   // both put the pet away too
+    this.pvPet = null; this.pvFx = null; this.av.expr = null;   // both put the pet, effect and face away too
     this.worn = equips === null ? [...base.equipIds] : equips;
     this.pkgPreview = false;
     if (this.btBuyAvatar) this.btBuyAvatar.enabled = true;
@@ -506,7 +507,10 @@ export class CashShopWin extends Win {
   /** Try an item on (double-click its icon): an equip goes on, or comes off again; a package puts on its equips. */
   async tryOn(c) {
     if (!c || !this.worn) return;
-    if (Math.floor(c.ItemId / 10000) === 500) { this.togglePet(c.ItemId); return; }
+    const kind = Math.floor(c.ItemId / 10000);
+    if (kind === 500) { this.togglePet(c.ItemId); return; }
+    if (kind === 516) { this.tryFace(c.ItemId); return; }
+    if (kind === 501) { this.tryEffect(c.ItemId); return; }
     const pkg = this.isPackage(c), g = this.stats.gender ?? 0;
     const forMe = (id) => { const d = Math.floor(id / 1000) % 10; return d > 1 || d === g; };
     const ids = pkg ? this.contents(c).map((x) => x.ItemId).filter((id) => invType(id) === 1 && forMe(id)) : [c.ItemId];
@@ -582,6 +586,20 @@ export class CashShopWin extends Win {
       if (a.attack && a.frame + 1 >= n) { a.attack = null; break; }   // the swing plays once
       a.frame = (a.frame + 1) % n;
     }
+  }
+  /** A facial expression item: the preview character makes the face (expression 8 + the id's last two digits). */
+  async tryFace(id) {
+    const n = (id % 100) + 8, node = this.preview?.face?.[EMOTES[n - 1]];
+    if (!node) return;
+    await this.mgr.assets.preload(allCanvases(node));
+    setExpression(this.av, n);
+  }
+  /** An effect item: its effect plays round the preview character; trying it again takes it off. */
+  tryEffect(id) {
+    if (this.pvFx?.itemFxId === id) { this.pvFx = null; return; }
+    const ent = { x: 0, y: 0, facingRight: false, action: 'stand1' };
+    this.pvFx = ent;
+    this.g.setItemEffect?.(ent, id);
   }
   /** A pet tried on walks beside the character (one at a time); trying the same pet again puts it away. */
   async togglePet(id) {
@@ -659,11 +677,17 @@ export class CashShopWin extends Win {
     if (this.preview) {
       const before = this.avAt || performance.now();
       this.moveAvatar();
-      this.movePet(Math.min(0.05, (this.avAt - before) / 1000));
-      const a = this.av, x = PREVIEW.x + PV_MAP.ox + a.x, y = PREVIEW.y + PV_MAP.oy + a.y;
+      const dt = Math.min(0.05, (this.avAt - before) / 1000);
+      this.movePet(dt);
+      const a = this.av, x = PREVIEW.x + PV_MAP.ox + a.x, y = PREVIEW.y + PV_MAP.oy + a.y, fx = this.pvFx, cam = { x: 0, y: 0 };
+      stepExpression(a, this.preview, dt);
+      const parts = this.preview.compose(a.action, a.frame, a.expr);
+      if (fx) { Object.assign(fx, { x, y, facingRight: a.right, action: a.action }); this.g.stepItemFx?.(fx, dt); }
       ctx.save(); ctx.beginPath(); ctx.rect(PREVIEW.x, PREVIEW.y, PREVIEW.w, PREVIEW.h); ctx.clip();
       this.drawPet(ctx);
-      drawParts(ctx, m.assets, this.preview.compose(a.action, a.frame), x, y, a.right);
+      if (fx) this.g.drawItemFx?.(ctx, cam, fx, parts, false);
+      drawParts(ctx, m.assets, parts, x, y, a.right);
+      if (fx) this.g.drawItemFx?.(ctx, cam, fx, parts, true);
       nameTag(ctx, this.g.player?.name || '', x, y + 2);
       ctx.restore();
       if (this.avChat && performance.now() < this.avChat.until) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y }, `${this.g.player?.name || ''} : ${this.avChat.text}`);

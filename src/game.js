@@ -114,14 +114,14 @@ class Input {
  * Face expressions: the emotion number indexes this list (1 = hit). An expression loops its Face.img frames
  * for EMOTE_TIME, then the face goes back to default - which blinks now and then, as the client's does.
  */
-const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
+export const EMOTES = ['hit', 'smile', 'troubled', 'cry', 'angry', 'bewildered', 'stunned', 'vomit', 'oops', 'cheers', 'chu',
   'wink', 'pain', 'glitter', 'blaze', 'shine', 'love', 'despair', 'hum', 'bowing', 'hot', 'dam'];
 const EMOTE_TIME = 3, HIT_FACE_TIME = 1.5;   // a hit that does damage shows the hit face for 1.5s (the client's)
-function setExpression(ent, n, time = EMOTE_TIME) {
+export function setExpression(ent, n, time = EMOTE_TIME) {
   const name = EMOTES[n - 1];
   if (name) ent.expr = { name, frame: 0, t: 0, left: time };
 }
-function stepExpression(ent, look, dt) {
+export function stepExpression(ent, look, dt) {
   let e = ent.expr;
   if (!e) {
     // idle: blink every few seconds
@@ -1567,7 +1567,7 @@ export class Game {
       petPotion: (kind, id) => { (this.petPotions ??= {})[kind] = id || null; },
       petEffect: later((owner, slot, effect) => { const pet = this.pets.get(`${owner ?? this.player.id}:${slot}`); if (pet) this.petEffect(pet, effect); }),
       movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
-      playerLook: later((id, look) => this.updateOtherLook(id, look)),
+      playerLook: later((id, look, rings) => { const rp = this.others.get(id); if (rp) rp.rings = rings; this.updateOtherLook(id, look); }),
       attack: later((a) => this.onRemoteAttack(a)),
       expression: later((id, emote) => { const rp = this.others.get(id); if (rp) { setExpression(rp, emote); this.emotionEffect(rp, emote); } }),
       itemEffect: later((id, item) => { const rp = this.others.get(id); if (rp) this.setItemEffect(rp, item); }),
@@ -1903,7 +1903,7 @@ export class Game {
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look;
-    rp.box = d.box; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.box = d.box; rp.rings = d.rings; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     if (rp.chair) this.chairArt(rp.chair);
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     this.others.set(d.id, rp);
@@ -2178,6 +2178,74 @@ export class Game {
       for (const k of ['str', 'dex', 'int', 'luk']) out[k] += it[k] || 0;
     }
     return out;
+  }
+  /**
+   * The rings you wear, as others see them: a couple (1112001-1112099) or friendship ring (1112800-1112802,
+   * 1112810-1112812) by its serial and its partner ring's, a wedding ring by the spouse's id.
+   */
+  ownRings() {
+    const eq = this.inventory?.equipped || {}, r = this.rings || {};
+    const worn = (test) => [-112, -113, -115, -116, -12, -13, -15, -16].map((s) => eq[s]).find((it) => it && test(it.id));
+    const pair = (it, list) => { const x = it && list?.find((p) => p.ring === it.cashId); return x ? { ring: x.ring, partner: x.partnerRing, item: it.id } : null; };
+    const wed = worn((id) => WEDDING_RINGS.includes(id)), m = r.marriage;
+    return {
+      couple: pair(worn((id) => Math.floor(id / 100) === 11120 && id !== 1112000), r.couple),
+      friend: pair(worn((id) => Math.floor(id / 100) === 11128 && id % 10 < 3), r.friend),
+      marriage: wed && m ? { id: this.player.id, partner: m.husbandId === this.player.id ? m.wifeId : m.husbandId, item: wed.id } : null,
+    };
+  }
+  /**
+   * Ring effects: two characters on the map wearing the halves of a couple, friendship or wedding ring each show
+   * Effect/ItemEff.img/<ring>/0 while within 700 x 500px of each other, and /1 plays between them (20px over the
+   * middle of their feet) while within 100 x 100.
+   */
+  updateRingFx(dt) {
+    const fx = (this.ringFx ??= new Map()), seen = new Set();
+    if (!this.itemEff) { this.itemEff = this.assets.json('Effect/ItemEff.img').then((j) => { this.itemEff = j || null; }); return; }
+    if (this.itemEff instanceof Promise) return;
+    this.player.rings = this.ownRings();
+    const ents = [this.player, ...this.others.values()];
+    const anim = (n) => { const a = n && frames(n).length ? new Anim(n) : null; if (a) this.assets.preload(a.frames); return a; };
+    for (const kind of ['couple', 'friend', 'marriage']) {
+      for (let i = 0; i < ents.length; i++) {
+        for (let j = i + 1; j < ents.length; j++) {
+          const a = ents[i], b = ents[j], ra = a.rings?.[kind], rb = b.rings?.[kind];
+          if (!ra || !rb) continue;
+          const paired = kind === 'marriage' ? (ra.partner && ra.partner === b.id) || (rb.partner && rb.partner === a.id)
+            : (ra.ring && ra.partner === rb.ring) || (rb.ring && rb.partner === ra.ring);
+          const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
+          if (!paired || dx >= 700 || dy >= 500) continue;
+          const key = `${kind}:${a.id}:${b.id}`, node = this.itemEff?.[ra.item || rb.item];
+          if (!node) continue;
+          seen.add(key);
+          let p = fx.get(key);
+          if (!p) fx.set(key, (p = { a, b, on: [anim(node[0]), anim(node[0])], mid: null }));
+          const close = dx < 100 && dy < 100;
+          if (close && !p.mid) p.mid = anim(node[1]);
+          else if (!close) p.mid = null;
+          for (const x of [...p.on, p.mid]) x?.update(dt * 1000);
+        }
+      }
+    }
+    for (const k of fx.keys()) if (!seen.has(k)) fx.delete(k);
+  }
+  /** One character's ring effects (/0, at its feet, in front of it), or with no character the ones between two. */
+  drawRingFx(ctx, cam, ent = null) {
+    const draw = (a, x, y, flip) => {
+      const node = a?.node, img = node && this.assets.image(node);
+      if (!img) return;
+      const o = node.origin || [0, 0];
+      ctx.save();
+      ctx.globalAlpha = a.alpha;
+      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      if (flip) ctx.scale(-1, 1);
+      ctx.drawImage(img, -o[0], -o[1]);
+      ctx.restore();
+    };
+    for (const p of this.ringFx?.values() || []) {
+      if (!ent) draw(p.mid, (p.a.x + p.b.x) / 2, (p.a.y + p.b.y) / 2 - 20, false);
+      else if (p.a === ent || p.b === ent) draw(p.on[p.a === ent ? 0 : 1], ent.x, ent.y, ent.facingRight);
+    }
   }
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
   equipDest(id, cash = !!this.windows?.info(id)?.cash) {
@@ -2454,6 +2522,7 @@ export class Game {
     for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); }
     stepExpression(this.player, this.look, dt);
     this.stepItemFx(this.player, dt);
+    this.updateRingFx(dt);
     if (this.player.fh) this.ownerGroup = this.player.fh.group;
     for (const pet of this.pets.values()) pet.update(dt);
     for (const [oid, sm] of this.summons) { sm.update(dt); if (sm.gone) this.summons.delete(oid); }
@@ -4859,6 +4928,7 @@ export class Game {
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
+    this.drawRingFx(ctx, cam);
     this.drawFx(ctx, cam);
     map.drawBacks(ctx, cam, true);
     this.drawBalloons(ctx, cam);
@@ -4927,6 +4997,7 @@ export class Game {
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
+    this.drawRingFx(ctx, cam, ent);
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
@@ -4999,6 +5070,8 @@ function roundRect(ctx, x, y, w, h, r) {
 
 /** What pets wear (look slots 14 and 21-48): never drawn on the character. */
 const isPetPart = (n) => n === 14 || (n >= 21 && n <= 48);
+const WEDDING_RINGS = [1112803, 1112806, 1112807, 1112809];
+
 /**
  * Item ids to draw from our own equipped inventory: slot -N regular, -(N+100) its cash cover, -111 the cash weapon (kept
  * alongside the weapon). Pet equipment is not the character's.
