@@ -417,21 +417,21 @@ const EQUIP_CELLS = {
 /**
  * Equip.img pet (177x181), opened beside the window by BtPetEquipShow: a 4-column grid of 33px cells from
  * (13, 12), labelled HP POC / PET HP / MP POC / PET MP, ITEM POC / MESO MAG, ITEM IGNORE / PICK UP / POS /
- * PET EQUIP, MOVE UP / PET RING x2. Slots as equipSlotFor gives them.
+ * PET EQUIP, MOVE UP / PET RING x2. BtPet1-3 below pick whose equipment it shows. PET HP / PET MP hold the
+ * potions the lead pet drinks.
  */
-const PET_CELLS = {
-  [-123]: [0, 0], [-124]: [2, 0], [-122]: [0, 1], [-121]: [1, 1],
-  [-128]: [0, 2], [-127]: [1, 2], [-126]: [2, 2], [-114]: [3, 2], [-125]: [0, 3],
-};
+const PET_CELL = { pouchHp: [0, 0], potionHp: [1, 0], pouchMp: [2, 0], potionMp: [3, 0], pouch: [0, 1], magnet: [1, 1],
+  ignore: [0, 2], scales: [1, 2], binocular: [2, 2], acc: [3, 2], boots: [0, 3], label: [2, 3], quote: [3, 3] };
 const PET_X = 175;
 class EquipWin extends Win {
   constructor(mgr) {
     super(mgr, mgr.W.Equip.backgrnd, 420, 90);
     const E = mgr.W.Equip;
     this.closePinned = true; this.closeBtn.x = 175 - 17;
-    this.petOpen = false;
+    this.petOpen = false; this.petSel = 0;
     this.petShow = this.button(E.BtPetEquipShow, 175 - 60, 283, () => this.togglePet());
     this.petHide = this.button(E.BtPetEquipHide, 175 - 60, 283, () => this.togglePet());
+    this.petTabs = [E.BtPet1, E.BtPet2, E.BtPet3].map((n, k) => this.button(n, PET_X + 13 + 15 + k * 33, 148 + 13, () => { this.petSel = k; }));
     this.togglePet(false);
   }
   frames() { return [...super.frames(), this.mgr.W.Equip.pet]; }
@@ -440,10 +440,15 @@ class EquipWin extends Win {
     this.w = open ? PET_X + 177 : 175;
     this.petShow.visible = !open; this.petHide.visible = open;
   }
+  /** The pet panel's cells for the chosen pet: [slot or potion kind, column, row]. */
+  petCells() {
+    const S = this.g.petSlots(this.petSel);
+    return Object.entries(PET_CELL).map(([k, [c, r]]) => [k === 'pouchHp' ? -124 : k === 'pouchMp' ? -125 : k === 'potionHp' ? 'hp' : k === 'potionMp' ? 'mp' : S[k], c, r]);
+  }
   slotAt(lx, ly) {
     if (this.petOpen && lx >= PET_X) {
       const c = Math.floor((lx - PET_X - 13) / 33), r = Math.floor((ly - 12) / 33);
-      return Number(Object.entries(PET_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0;
+      return this.petCells().find(([, cc, rr]) => cc === c && rr === r)?.[0] || 0;
     }
     const c = Math.floor((lx - 5) / 33), r = Math.floor((ly - 35) / 33);
     return Number(Object.entries(EQUIP_CELLS).find(([, p]) => p[0] === c && p[1] === r)?.[0]) || 0;
@@ -451,28 +456,38 @@ class EquipWin extends Win {
   body(ctx) {
     const eq = this.g.inventory?.equipped || {}, m = this.mgr;
     const cells = [...Object.entries(EQUIP_CELLS).map(([s, [c, r]]) => [s, 5 + c * 33, 35 + r * 33])];
+    const pets = this.g.myPets().length;
+    this.petTabs.forEach((b, k) => { b.visible = this.petOpen; b.enabled = k < Math.max(1, pets); b.forceState = k === this.petSel ? 'pressed' : null; });
     if (this.petOpen) {
       const panel = m.image(m.W.Equip.pet);
       if (panel) ctx.drawImage(panel, PET_X, 0);
-      cells.push(...Object.entries(PET_CELLS).map(([s, [c, r]]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
+      cells.push(...this.petCells().map(([s, c, r]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
     }
     for (const [slot, x, y] of cells) {
+      if (slot === 'hp' || slot === 'mp') { const id = this.g.petPotions?.[slot]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
       const it = eq[slot];
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === Number(slot))) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y);
     }
   }
   down(lx, ly) {
-    const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.equipped?.[slot];
+    const slot = this.slotAt(lx, ly), it = typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot];
     if (it) this.mgr.startCarry({ kind: 'item', tab: 'equip', slot, id: it.id }, this.mgr.icon(it.id));
   }
-  dblclick(lx, ly) { const slot = this.slotAt(lx, ly); if (slot && this.g.inventory?.equipped?.[slot]) this.g.unequip(slot); }
+  dblclick(lx, ly) { const slot = this.slotAt(lx, ly); if (typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot]) this.g.unequip(slot); }
   drop(lx, ly, c) {
     if (c.kind !== 'item') return;
-    if (c.tab === 2 && isScroll(c.id)) { const slot = this.slotAt(lx, ly); if (slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
-    if (c.tab === 1) this.g.useInventoryItem(1, c.slot, this.g.inventory[1][c.slot]);
+    const slot = this.slotAt(lx, ly);
+    if ((slot === 'hp' || slot === 'mp') && c.tab === 2) { this.g.setPetPotion(slot, c.id); return; }
+    if (c.tab === 2 && isScroll(c.id)) { if (typeof slot === 'number' && slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
+    if (c.tab === 1) this.g.useInventoryItem(1, c.slot, this.g.inventory[1][c.slot], this.petOpen && lx >= PET_X ? this.petSel : undefined);
   }
-  tooltip(lx, ly) { const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.equipped?.[slot]; return it ? { item: it } : null; }
+  tooltip(lx, ly) {
+    const slot = this.slotAt(lx, ly);
+    if (slot === 'hp' || slot === 'mp') { const id = this.g.petPotions?.[slot]; return id ? { item: { id } } : null; }
+    const it = slot && this.g.inventory?.equipped?.[slot];
+    return it ? { item: it } : null;
+  }
 }
 
 // ==================================================================== Character stat

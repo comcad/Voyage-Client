@@ -1,5 +1,5 @@
 import { jobName } from '../data.js';
-import { pad } from '../assets.js';
+import { pad, frames } from '../assets.js';
 import { nameTag } from '../map.js';
 import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
@@ -318,7 +318,10 @@ const INFO_PANELS = {
   pet: { bg: 'backgrnd2', band: 374 },
   book: { bg: 'backgrnd7', band: 377 },
 };
-const SIDE_X = 271, SIDE_ROWS = 3, SIDE_ROW_Y = 31;
+const SIDE_X = 271, SIDE_ROWS = 3, SIDE_ROW_Y = 31, MESO = 2147483647;
+/** Look slots of pet ability items and rings by pet: 31-37 and 47 the second's, 39-45 and 48 the third's, the rest the first's. */
+const lookSlotPet = (i) => (i >= 31 && i <= 37) || i === 47 ? 1 : (i >= 39 && i <= 45) || i === 48 ? 2 : 0;
+const PET_ROWS = 3, PET_ROW_Y = 215;
 export class CharInfoWin extends Win {
   constructor(mgr, info) {
     const U = mgr.W.UserInfo;
@@ -345,23 +348,33 @@ export class CharInfoWin extends Win {
     band(U.BtTamingShow, U.BtTamingHide, 5, 'taming');
     band(U.BtPetShow, U.BtPetHide, 93, 'pet');
     band(U.BtCollectionShow, U.BtCollectionHide, 145, 'book');
-    const exc = this.button(U.BtExceptionShow, 197, 0, () => {});
-    exc.enabled = false;                       // pet loot exclusions are not in CHAR_INFO
+    // your pets' item ignore lists (EXCEPTION LIST beside the window)
+    const exc = this.button(U.BtExceptionShow, 197, 0, () => this.toggleSide('exc'));
+    exc.enabled = !other;
     this.bandBtns.push({ on: exc, off: null, panel: null });
-    this.petBtns = [U.BtPet1, U.BtPet2, U.BtPet3].map((n, k) => this.button(n, 188 + k * 33, 196, () => { this.petSel = k; }));   // the art's origin sits 16,19 into it
+    this.excBtns = [
+      this.button(U.BtMeso, SIDE_X + 10, 124, () => this.addExcluded(MESO)),
+      this.button(U.BtRegister, SIDE_X + 60, 124, () => this.registerExcluded()),
+      this.button(U.BtDelete, SIDE_X + 118, 124, () => this.deleteExcluded()),
+    ];
+    this.excHide = this.button(U.BtExceptionHide, SIDE_X + 159 - 17, 5, () => this.toggleSide('exc'));
+    this.petBtns = [U.BtPet1, U.BtPet2, U.BtPet3].map((n, k) => this.button(n, 168 + 15 + k * 34, 177 + 13, () => { this.petSel = k; this.petFirst = 0; }));
     this.sideClose = this.button(mgr.B.BtClose, SIDE_X + 240 - 17, 6, () => this.toggleSide(this.side));
-    // pet portraits and the wish list's catalogue
-    this.petArt = [];
+    // pet portraits (stand0, with the accessory), what each pet wears, and the wish list's catalogue
+    this.petArt = []; this.petFirst = 0;
     (info.pets || []).forEach((p, k) => mgr.assets.json(`Item/Pet/${p.id}.img`).then(async (n) => {
-      const f = n?.stand0?.[0] || n?.stand0;
-      if (f?._canvas) { await mgr.assets.preload([f]); this.petArt[k] = f; }
+      const body = frames(n?.stand0).filter((f) => f?._canvas);
+      const acc = p.equip ? frames((await mgr.assets.json(`Character/PetEquip/${pad(p.equip, 8)}.img`))?.[p.id]?.stand0) : [];
+      await mgr.assets.preload([...body, ...acc.filter((f) => f?._canvas)]);
+      if (body.length) this.petArt[k] = { body, acc };
     }));
+    this.petItems = (info.pets || []).map((p, k) => this.petEquips(p, k));
     if (info.wish?.length) mgr.assets.json('Etc/Commodity.img').then((c) => { this.commodity = new Map(Object.values(c || {}).map((x) => [x.SN, x])); });
     this.layout();
   }
   frames() {
     const U = this.U;
-    return [...super.frames(), U.backgrnd, U.backgrnd2, U.backgrnd3, U.backgrnd4, U.backgrnd5, U.backgrnd7, U.ReqLv, ...allCanvases(U.Marry)];
+    return [...super.frames(), U.backgrnd, U.backgrnd2, U.backgrnd3, U.backgrnd4, U.backgrnd5, U.backgrnd7, U.ReqLv, U.bossPetCrown, ...allCanvases(U.Marry)];
   }
   name() { return this.info.id === this.g.player.id ? this.g.player.name : this.g.others.get(this.info.id)?.name || ''; }
   key(e) { if (e.key === 'Escape') this.mgr.close(this); }
@@ -370,15 +383,57 @@ export class CharInfoWin extends Win {
   layout() {
     const P = INFO_PANELS[this.panel], bg = this.U[P.bg];
     this.h = bg?._h || 199;
-    this.w = this.side ? SIDE_X + 240 : 275;
+    this.w = this.side ? SIDE_X + (this.side === 'exc' ? 159 : 240) : 275;
     for (const b of this.bandBtns) {
       const open = this.panel === b.panel;
       b.on.y = P.band + 5; b.on.visible = !open || !b.off;
       if (b.off) { b.off.y = P.band + 5; b.off.visible = open; }
     }
     const pets = this.info.pets || [];
-    this.petBtns.forEach((b, k) => { b.visible = this.panel === 'pet' && k < pets.length; });
-    this.sideClose.visible = !!this.side;
+    this.petBtns.forEach((b, k) => { b.visible = this.panel === 'pet'; b.enabled = k < pets.length; });
+    this.sideClose.visible = !!this.side && this.side !== 'exc';
+    for (const b of this.excBtns) b.visible = this.side === 'exc';
+    this.excHide.visible = this.side === 'exc';
+  }
+
+  // ---------------------------------------------------------------- exception list
+  /** The pet whose list shows: the one picked in the pet panel. */
+  excPet() { return this.g.myPets()[this.petSel] || this.g.myPets()[0] || null; }
+  excList() { const p = this.excPet(); return p ? [...(this.g.petExcluded?.get(p.uid) || [])] : []; }
+  excName(id) { return id === MESO ? ' mesos' : this.mgr.itemName(id) || String(id); }
+  addExcluded(id) {
+    const pet = this.excPet(), list = this.excList();
+    if (!pet || list.includes(id) || list.length >= 10) return;
+    list.push(id);
+    list.sort((a, b) => this.excName(a).localeCompare(this.excName(b)));
+    this.g.setPetExcluded(pet, list);
+  }
+  async registerExcluded() {
+    const name = (await this.mgr.askText('Enter the name of the item to ignore.'))?.trim().toLowerCase();
+    if (!name) return;
+    const inv = this.g.inventory || {};
+    for (const t of [1, 2, 3, 4, 5]) for (const it of Object.values(inv[t] || {})) if (this.mgr.itemName(it.id).toLowerCase() === name) { this.addExcluded(it.id); return; }
+    this.g.notice('That item could not be found.');
+  }
+  deleteExcluded() {
+    const pet = this.excPet(), list = this.excList();
+    if (!pet || this.excSel === undefined || this.excSel >= list.length) return;
+    list.splice(this.excSel, 1);
+    this.excSel = undefined;
+    this.g.setPetExcluded(pet, list);
+  }
+  drawExc(ctx) {
+    const m = this.mgr, panel = m.image(this.U.backgrnd6);
+    if (panel) ctx.drawImage(panel, SIDE_X, 0);
+    const pet = this.excPet(), list = this.excList();
+    if (!pet) { this.text(ctx, 'No pets are out.', SIDE_X + 80, 60, { align: 'center', color: '#555' }); return; }
+    for (let k = 0; k < 6; k++) {
+      const i = this.sideFirst + k, id = list[i];
+      if (id === undefined) break;
+      if (i === this.excSel) { ctx.fillStyle = 'rgba(80,120,200,0.35)'; ctx.fillRect(SIDE_X + 8, 24 + k * 14, 140, 14); }
+      this.text(ctx, this.excName(id), SIDE_X + 10, 25 + k * 14, { size: 12 });
+    }
+    this.scrollbar(ctx, SIDE_X + 147, 22, 90, this.sideFirst, list.length, 6);
   }
 
   // ---------------------------------------------------------------- lists
@@ -413,7 +468,8 @@ export class CharInfoWin extends Win {
     if (this.panel === 'pet') this.drawPet(ctx);
     else if (this.panel === 'taming') this.drawTaming(ctx);
     else if (this.panel === 'book') this.drawBook(ctx);
-    if (this.side) this.drawSide(ctx);
+    if (this.side === 'exc') this.drawExc(ctx);
+    else if (this.side) this.drawSide(ctx);
   }
   /** Name over a rule, a smaller line under it: the rows of every list here. */
   listRow(ctx, x, y, id, sub) {
@@ -440,13 +496,49 @@ export class CharInfoWin extends Win {
     if (!rows.length) this.text(ctx, this.side === 'item' ? 'No items equipped.' : 'The wish list is empty.', SIDE_X + 120, 80, { align: 'center', color: '#555' });
     this.scrollbar(ctx, SIDE_X + 220, 27, 122, this.sideFirst, rows.length, SIDE_ROWS);
   }
+  /** A pet's list: its accessory, then the ability items and rings worn for it (not the potion pouches). */
+  petEquips(p, k) {
+    const g = this.g, self = this.info.id === g.player.id, look = g.others.get(this.info.id)?.lookData;
+    const out = p.equip ? [p.equip] : [];
+    for (let i = 0; i <= 51; i++) {
+      const id = self ? g.inventory?.equipped?.[-(100 + i)]?.id : look?.equips?.[i];
+      if (!id || !(Math.floor(id / 10000) === 181 || id === 1822000 || id === 1832000) || id === 1812002 || id === 1812003) continue;
+      if (lookSlotPet(i) === k) out.push(id);
+    }
+    return out;
+  }
+  /** The pet's stand0 frame (and its accessory's) for now. */
+  petFrame(art) {
+    const total = art.body.reduce((t, f) => t + (Number(f.delay) || 100), 0);
+    let t = performance.now() % total, i = 0;
+    while (i < art.body.length - 1 && t >= (Number(art.body[i].delay) || 100)) t -= Number(art.body[i++].delay) || 100;
+    return i;
+  }
   drawPet(ctx) {
     const m = this.mgr, pets = this.info.pets || [], p = pets[this.petSel];
     if (!p) { this.text(ctx, 'No pets are out.', 52, 260, { align: 'center', color: '#555' }); return; }
-    const art = m.image(this.petArt[this.petSel]);
-    if (art) { const o = this.petArt[this.petSel].origin || [art.width / 2, art.height]; ctx.drawImage(art, Math.round(53 - o[0]), Math.round(297 - o[1])); }
+    const art = this.petArt[this.petSel];
+    if (art) {
+      const i = this.petFrame(art);
+      for (const f of [art.body[i], art.acc[i]]) {
+        const img = f && m.image(f);
+        if (img) { const o = f.origin || [img.width / 2, img.height]; ctx.drawImage(img, Math.round(53 - o[0]), Math.round(299 - o[1])); }
+      }
+    }
+    // the lead pet's crown, on the top edge of the portrait box
+    const crown = this.petSel === 0 && m.image(this.U.bossPetCrown);
+    if (crown) { const o = this.U.bossPetCrown.origin || [0, 0]; ctx.drawImage(crown, 53 - o[0], 214 - o[1]); }
     this.text(ctx, p.name, 53, 306, { color: '#fff', bold: true, align: 'center', size: 12 });
-    if (p.equip) this.listRow(ctx, 105, 215, p.equip);
+    const items = this.petItems[this.petSel] || [], reqLv = m.image(this.U.ReqLv);
+    for (let k = 0; k < PET_ROWS; k++) {
+      const id = items[this.petFirst + k];
+      if (!id) break;
+      this.listRow(ctx, 105, PET_ROW_Y + k * 38, id, (x, y) => {
+        if (reqLv) ctx.drawImage(reqLv, x, y + 2);
+        this.text(ctx, String(m.info(id)?.reqLevel ?? 0), x + 36, y, { size: 12 });
+      });
+    }
+    this.scrollbar(ctx, 252, PET_ROW_Y, 112, this.petFirst, items.length, PET_ROWS);
     const v = (t, x, y) => this.text(ctx, t, x, y - 7, { size: 12 });
     v(m.itemName(p.id), 57, 338); v(String(p.level), 57, 356);
     v(String(p.closeness), 190, 338); v(String(p.fullness), 190, 356);
@@ -482,10 +574,20 @@ export class CharInfoWin extends Win {
     const idx = this.sideFirst + k;
     return idx < this.sideRows().length ? idx : -1;
   }
+  drop(lx, ly, c) { if (this.side === 'exc' && lx >= SIDE_X && c.kind === 'item') this.addExcluded(c.id); }
   down(lx, ly) {
-    if (this.side) {
+    if (this.side === 'exc') {
+      const s = this.scrollClick(lx, ly, SIDE_X + 147, 22, 90, this.sideFirst, this.excList().length, 6);
+      if (s !== null) { this.sideFirst = s; return; }
+      const k = Math.floor((ly - 24) / 14);
+      if (lx >= SIDE_X + 8 && lx < SIDE_X + 147 && k >= 0 && k < 6) this.excSel = this.sideFirst + k;
+    } else if (this.side) {
       const s = this.scrollClick(lx, ly, SIDE_X + 220, 27, 122, this.sideFirst, this.sideRows().length, SIDE_ROWS);
       if (s !== null) { this.sideFirst = s; return; }
+    }
+    if (this.panel === 'pet') {
+      const s = this.scrollClick(lx, ly, 252, PET_ROW_Y, 112, this.petFirst, (this.petItems[this.petSel] || []).length, PET_ROWS);
+      if (s !== null) this.petFirst = s;
     }
     if (this.panel === 'book') {
       const s = this.scrollClick(lx, ly, 254, 297, 72, this.medalFirst || 0, (this.info.medalQuests || []).length, 4);
@@ -494,10 +596,17 @@ export class CharInfoWin extends Win {
   }
   wheel(dy) {
     const d = Math.sign(dy), lx = this.mgr.mouse.x - this.x;
-    if (this.side && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.sideRows().length - SIDE_ROWS, this.sideFirst + d));
+    if (this.side === 'exc' && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.excList().length - 6, this.sideFirst + d));
+    else if (this.side && lx >= SIDE_X) this.sideFirst = Math.max(0, Math.min(this.sideRows().length - SIDE_ROWS, this.sideFirst + d));
+    else if (this.panel === 'pet') this.petFirst = Math.max(0, Math.min((this.petItems[this.petSel] || []).length - PET_ROWS, this.petFirst + d));
     else if (this.panel === 'book') this.medalFirst = Math.max(0, Math.min((this.info.medalQuests || []).length - 4, (this.medalFirst || 0) + d));
   }
   tooltip(lx, ly) {
+    if (this.side === 'exc') return null;
+    if (this.panel === 'pet' && lx >= 105 && lx < 141 && ly >= PET_ROW_Y && ly < PET_ROW_Y + PET_ROWS * 38 && (ly - PET_ROW_Y) % 38 < 36) {
+      const id = (this.petItems[this.petSel] || [])[this.petFirst + Math.floor((ly - PET_ROW_Y) / 38)];
+      if (id) return { item: { id } };
+    }
     const r = this.sideRowAt(lx, ly);
     return r >= 0 ? { item: { id: this.sideRows()[r].id } } : null;
   }
