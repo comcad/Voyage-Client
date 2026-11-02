@@ -1187,8 +1187,6 @@ export class Game {
         for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
       }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
-      // damage the server deals by itself (Heaven's Hammer...): its number over the monster
-      mobDamaged: later((oid, dmg) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.vfx?.damage(m, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red'); }),
       spawnMob: later((m) => this.spawnLife('Mob', m, false)),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
@@ -1225,10 +1223,13 @@ export class Game {
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
       }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
-      // one other monsters can hurt: its red bar follows the HP the server sends
+      // damage the server deals by itself (poison, Ninja Ambush) or a heal: its number over the monster; one other
+      // monsters can hurt also has its red bar follow the HP the server sends
       mobDamaged: later((oid, dmg, hp, maxHp) => {
         const e = this.lifeByOid.get(oid);
-        if (e && !e.pending && maxHp > 0 && Number(e.src?.info?.damagedByMob)) { e.hp = Math.round((e.maxHp * hp) / maxHp); e.hpPct = Math.floor((hp * 100) / maxHp); }
+        if (!e || e.pending) return;
+        if (dmg) this.vfx?.damage(e, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red');
+        if (maxHp > 0 && Number(e.src?.info?.damagedByMob)) { e.hp = Math.round((e.maxHp * hp) / maxHp); e.hpPct = Math.floor((hp * 100) / maxHp); }
       }),
       mobHp: later((oid, pct) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { e.hp = Math.round((e.maxHp * pct) / 100); e.hpPct = pct; e.hpShownUntil = performance.now() + 5000; } }),
       bossHp: later((d) => this.vfx?.bossHp(d)),
