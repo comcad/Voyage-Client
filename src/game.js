@@ -2140,6 +2140,8 @@ export class Game {
       if (isPetEquip(it.id)) { this.equipPet(slot, it, pet ?? this.windows.wins?.equip?.petSel ?? 0); return; }
       const dst = this.equipDest(it.id, it.cash);
       if (!dst) return;
+      const clash = this.ringClash(it.id, dst);
+      if (clash) { this.notice(clash); return; }
       if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
       this.net.moveItem(1, slot, dst, 1);
     }
@@ -2283,8 +2285,24 @@ export class Game {
   /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
   equipRing(slot, it, cell) {
     if (!this.canEquip(it.id)) { this.notice('Your stats are too low to equip this item.'); return; }
-    const cash = it.cash || !!this.windows?.info(it.id)?.cash;
-    this.net.moveItem(1, slot, cash ? cell - 100 : cell, 1);
+    const cash = it.cash || !!this.windows?.info(it.id)?.cash, dst = cash ? cell - 100 : cell, clash = this.ringClash(it.id, dst, true);
+    if (clash) { this.notice(clash); return; }
+    this.net.moveItem(1, slot, dst, 1);
+  }
+  /**
+   * Only one couple ring, one friendship ring and one wedding ring can be worn: the refusal, or null. Put on by
+   * double-click, couple / friendship rings are checked against the cash ring slots and a wedding ring against the
+   * other normal ring slots; dragged onto a cell, all against the cash ring slots, unless that cell holds one of the
+   * same kind already.
+   */
+  ringClash(id, dst, dragged = false) {
+    const kind = (x) => (Math.floor(x / 100) === 11120 && x !== 1112000 ? 'couple'
+      : Math.floor(x / 100) === 11128 && x % 10 < 3 ? 'friend' : WEDDING_RINGS.includes(x) ? 'wedding' : null);
+    const k = kind(id), worn = this.inventory?.equipped || {}, CASH = [-112, -113, -115, -116];
+    if (!k || (dragged && worn[dst] && kind(worn[dst].id) === k)) return null;
+    const slots = dragged || k !== 'wedding' ? CASH : [-12, -13, -15, -16].filter((s) => s !== dst);
+    if (!slots.some((s) => worn[s] && kind(worn[s].id) === k)) return null;
+    return { couple: 'Only one couple-ring can be equipped.', friend: 'You may only equip\none Friendship Ring at a time.', wedding: 'You may only equip ONE wedding ring.' }[k];
   }
   equipDest(id, cash = !!this.windows?.info(id)?.cash) {
     // a ring takes the first free one of the four ring slots (12, 13, 15, 16); with all four worn it can't go on

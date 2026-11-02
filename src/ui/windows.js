@@ -69,6 +69,7 @@ export class WindowManager {
     if (!top) return;
     const typing = e.target instanceof HTMLInputElement;
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); top.key?.(e); return; }
+    if (!typing && top === this.modal && top.keys?.(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }   // a dialog's own keys (arrows, Tab)
     if (!typing && this.modal) e.stopImmediatePropagation();   // no walking or attacking under a dialog
   }
   raise(w) { const i = this.order.indexOf(w); if (i >= 0 && i !== this.order.length - 1) { this.order.splice(i, 1); this.order.push(w); } }
@@ -484,9 +485,13 @@ class EquipWin extends Win {
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
     }
-    // cells that can't be used now are tinted red
+    // cells that can't be used now are tinted red, and so is a worn item whose requirements you no longer meet
     ctx.fillStyle = 'rgba(255,0,0,0.25)';
     for (const cell of this.unusable(eq)) { const [c, r] = EQUIP_CELLS[cell]; ctx.fillRect(5 + c * 33, 35 + r * 33, 32, 32); }
+    for (const [cell, [c, r]] of Object.entries(EQUIP_CELLS)) {
+      const it = eq[this.shown(Number(cell))];
+      if (it && this.g.canEquip?.(it.id) === false) ctx.fillRect(5 + c * 33, 35 + r * 33, 32, 32);
+    }
   }
   /**
    * The shield cell under a two-handed weapon (14xxxxx) with no shield, the pants cell under an overall (the cash one
