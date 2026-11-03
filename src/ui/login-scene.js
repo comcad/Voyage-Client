@@ -1068,9 +1068,14 @@ export class LoginScene {
         if (pic === null) return;
         const race = Math.floor(c.stats.job / 1000);
         if (!(await this.notice(race === 1 || race === 2 ? NOTICE.DELETE_CONFIRM_CASH : NOTICE.DELETE_CONFIRM, 'yesno'))) return;
+        // the selection is cleared as the request goes out
+        sel = -1; rollPanel(); refresh();
         const state = await this.s.deleteChar(c.stats.id, pic);
         if (state !== 0) { if (DELETE_NOTICE[state] !== undefined) await this.notice(DELETE_NOTICE[state]); return; }
-        await reload();
+        // deleted: drop it from this list (the ones after it move left), with no new list request
+        const idx = list.chars.indexOf(c);
+        for (const arr of [list.chars, looks, anim, backdrops]) arr.splice(idx, 1);
+        if (store.get(lastKey) === String(c.stats.id)) store.set(lastKey, '');
       };
       btnSelect.action = start; btnNew.action = guard(create); btnDelete.action = guard(remove);
       for (const b of board) b.onClick = b.press;
