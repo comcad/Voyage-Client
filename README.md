@@ -39,7 +39,13 @@ Voyage-Client/
 - Cosmic client `*.wz` files
 - A Cosmic v83 server to log in and play against
 
-## 1. Extract assets
+## 1. Clone the Repo
+
+```sh
+git clone https://github.com/comcad/Voyage-Client.git
+```
+
+## 2. Extract assets
 
 The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero deps). 
 
@@ -50,11 +56,11 @@ NOTE: You will need to use the .wz files provided by cosmic for full compatibili
 - cd voyage-wz-extractor
 - mkdir assets
 - node wz-extract.mjs <path-to-wz-folder> ./assets
-- copy assets folder to the root of the client folder next to the webclient folder
+- copy assets folder to the root of the client folder
 ```
 
 
-## 2. Run the server
+## 3. Run the server
 
 ```sh
 cd Voyage-Client
