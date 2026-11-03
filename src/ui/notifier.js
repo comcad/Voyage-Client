@@ -40,7 +40,7 @@ export class Notifier extends Win {
     this.mgr.close(this);
     this.done(ok);
   }
-  get newest() { return this.mgr.order.findLast((w) => w instanceof Notifier) === this; }
+  get newest() { return this.mgr.order.findLast((w) => w instanceof Notifier || w instanceof QuestNotice) === this; }
   contains(x, y) { return this.newest && super.contains(x, y); }
   draw(ctx) {
     // a waiting one fades back in when it is its turn again
@@ -71,3 +71,53 @@ export function notify(mgr, kind, name) {
     mgr.assets.preload(n.frames()).then(() => { mgr.order.push(n); sfx.play('UI/DlgNotice'); });
   });
 }
+
+/**
+ * "Quest Complete!" (FadeYesNo/backgrnd4 with icon7): raised when a quest in progress can be handed in, one per
+ * quest, the quest's name under it ("You got a title!" for title quests). Clicking it opens the quest on its
+ * page; it goes once the server confirms the quest (or after half a minute).
+ */
+const QUEST_LIFE = 32000;
+export class QuestNotice extends Win {
+  constructor(mgr, qid, title, name, open) {
+    const F = mgr.W.FadeYesNo;
+    super(mgr, F.backgrnd4, 0, 0);
+    Object.assign(this, { F, qid, title, name, open, born: performance.now() });
+    this.fixed = true; this.closeBtn.visible = false; this.closeSound = null;
+  }
+  frames() { return [...super.frames(), this.F.icon7].filter(Boolean); }
+  get newest() { return this.mgr.order.findLast((w) => w instanceof Notifier || w instanceof QuestNotice) === this; }
+  contains(x, y) { return this.newest && super.contains(x, y); }
+  down() { this.mgr.close(this); this.open(this.qid); }
+  draw(ctx) {
+    if (performance.now() - this.born > QUEST_LIFE) { if (!this.gone) { this.gone = true; setTimeout(() => this.mgr.close(this)); } return; }
+    if (!this.newest) return;
+    const bar = this.g.statusBar?.y ?? 529;
+    this.x = NOTICE_ICON.x + NOTICE_ICON.w / 2 - TIP.x + (195 - this.w);
+    this.y = bar + NOTICE_ICON.y - TIP.y;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (performance.now() - this.born) / 1000);
+    super.draw(ctx);
+    ctx.restore();
+  }
+  body(ctx) {
+    const icon = this.mgr.image(this.F.icon7);
+    if (icon) ctx.drawImage(icon, Math.round(13 - icon.width / 2), Math.round(19 - icon.height / 2));
+    ctx.save(); ctx.beginPath(); ctx.rect(26, 3, this.w - 30, 32); ctx.clip();
+    uiText(ctx, this.title, 27, 7, { color: '#fff', size: 12 });
+    if (this.name) uiText(ctx, this.name, 27, 21, { color: '#fff', size: 12 });
+    ctx.restore();
+  }
+}
+
+/** Raise (or replace) the notice for a quest. */
+export function questNotice(mgr, qid, title, name, open) {
+  for (const w of mgr.order.filter((o) => o instanceof QuestNotice && o.qid === qid)) mgr.close(w);
+  const n = new QuestNotice(mgr, qid, title, name, open);
+  mgr.order.push(n); sfx.play('UI/DlgNotice');
+  mgr.assets.preload(n.frames());
+}
+export function dropQuestNotice(mgr, qid) {
+  for (const w of mgr.order.filter((o) => o instanceof QuestNotice && (qid === undefined || o.qid === qid))) mgr.close(w);
+}
+export const hasQuestNotice = (mgr) => mgr.order.some((o) => o instanceof QuestNotice);

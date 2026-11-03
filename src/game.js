@@ -1,12 +1,13 @@
 import { GameMap, nameTag, labelTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath } from './character.js';
-import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
+import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
-import { QuestBook } from './quests.js';
+import { QuestBook, TITLE_AREA } from './quests.js';
 import { npcTalk, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
-import { npcQuestMenu } from './ui/quests-ui.js';
+import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
+import { QuestMessages } from './ui/questmsg.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
@@ -22,7 +23,7 @@ import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify } from './ui/notifier.js';
+import { notify, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
 import { UserListWin, PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
@@ -71,7 +72,7 @@ const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
 /** fieldLimit bit: no movement skills (Teleport, Monster Magnet...) on this map. */
 const FIELD_NO_MOVEMENT_SKILLS = 0x2;
 
-const QUEST_ERRORS = { 0x0a: 'You cannot do that quest right now.', 0x0b: 'You do not have enough mesos.', 0x0d: 'Unequip the item first.', 0x0e: 'You do not have the required items.', 0x0f: 'The quest has expired.' };
+const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST_GREY = '#bbbbbb';
 
 export const VIEW_W = 800, VIEW_H = 600;
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
@@ -1429,13 +1430,14 @@ export class Game {
     this.buddies = []; this.party = null; this.partyHpMarks = true; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
-    if (wm.wins.questalarm.state.ids.length) wm.open('questalarm');   // and the Quest Helper, when it tracks something
     this.bindUiPointer();
     this.hud = new Hud(uiRoot, this);
     this.hud.update(this.stats);
     this.quests = new QuestBook(this.assets);
+    this.questMsg = new QuestMessages(); this.questTimers = new Map();
     await this.quests.load();
     this.quests.setState(info.quests);
+    if (wm.wins.questalarm.state.opened) wm.open('questalarm');   // and the Quest Helper, unless it was closed
     this.monsterBook = info.book || { cover: 0, cards: {} };
     if (this.net) this.net.selfName = info.stats?.name;   // the merchant room tells owner from visitor by name
     this.skills = new SkillBook(this.assets);
@@ -1711,8 +1713,20 @@ export class Game {
         if (frames(node.prepare).length) this.playSkillEffect(skillId, rp, false, 'prepare');
       }),
       foreignSkillCancel: later((chrId) => { const rp = this.others.get(chrId); if (rp) rp.charge = null; }),
-      questResult: (r) => {
-        if (!r.ok) this.hud.message(QUEST_ERRORS[r.mode] || 'The quest could not be updated.', '#ff8080');
+      questResult: (r) => this.onQuestResult(r),
+      questTimer: (id, ms) => this.questTimer(id, ms),
+      questEx: (id, v) => { this.quests.ex[id] = v; },
+      questClear: (id) => { if (!hasQuestNotice(this.windows)) this.questCompleteNotice(id); },
+      scriptProgress: (t) => this.questMsg.script(t),
+      npcScripts: (list) => { this.npcScripts = new Map(list.map((e) => [e.id, e.name])); },
+      questClearEffect: () => { this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); },
+      questItems: async (items) => {
+        for (const { id, qty } of items) {
+          const name = await itemName(this.assets, id), tab = TAB_NAMES[invType(id)] || '';
+          const text = qty === 1 ? `You have gained an item in the ${tab} tab (${name})` : qty > 1 ? `You have gained items in the ${tab} tab (${name} ${qty})`
+            : qty === -1 ? `You have lost an item (${name})` : `You have lost items (${name} ${-qty})`;
+          this.hud.message(text, QUEST_GREY);
+        }
       },
       disconnected: () => this.windows.notice('The connection to the server was closed.').then(() => location.reload()),
     });
@@ -1723,18 +1737,146 @@ export class Game {
     if (this.stats.hp <= 0 && !this.dead) this.die();
   }
 
+  // ---------------------------------------------------------------- quests
+  /** SHOW_STATUS_INFO mode 1: a quest record. Nothing goes to the chat; progress shows as the yellow lines. */
   onQuest(id, status, data) {
-    const before = this.quests.status(id);
-    const prevProgress = this.quests.started[id];
-    this.quests.update(id, status, data);
-    const name = this.quests.name(id);
-    if (status === 1 && before === 0) { this.hud.message(`Quest started: ${name}`, '#9fe07a'); this.windows.wins.questalarm?.started(id); }
-    else if (status === 2 && before !== 2) { this.hud.message(`Quest complete: ${name}`, '#ffe08a'); this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); }
-    else if (status === 0 && before === 1) this.hud.message(`Quest forfeited: ${name}`, '#ff9e9e');
-    else if (status === 1 && prevProgress !== data) {
-      for (const m of this.quests.mobProgress(id)) if (m.have <= m.need) this.hud.message(`${name}: ${m.have} / ${m.need}`, '#c8e6ff');
+    const book = this.quests, old = book.started[id];
+    book.update(id, status, data);
+    const alarm = this.windows.wins.questalarm, ctx = this.textCtx();
+    if (status === 1) {
+      if (old !== data) this.questMobLines(id, old);
+      alarm?.onRecord(id);
+      // a record (or the counter kept under an infoNumber) can make a quest ready to hand in
+      for (const q of Object.keys(book.started).map(Number)) {
+        if ((Number(book.check[q]?.['1']?.infoNumber) || q) === id && book.info[q] && book.canComplete(q, ctx)) this.questCompleteNotice(q);
+      }
+    } else {
+      alarm?.remove(id);
+      if (status === 0) dropQuestNotice(this.windows, id);
+      if (status === 2) {
+        for (const q of Object.keys(book.started).map(Number)) {
+          if (!book.requirements(q).quests.some((r) => r.id === id)) continue;
+          alarm?.offer(q);
+          if (book.canComplete(q, ctx)) this.questCompleteNotice(q);
+        }
+      }
     }
     this.questWin?.render();
+  }
+
+  /** A monster count that changed (and isn't 0) gets its line: "Blue Snail 3 / 10". */
+  questMobLines(id, old) {
+    const was = this.quests.mobProgress(id, old);
+    this.quests.mobProgress(id).forEach((m, i) => {
+      const name = this.windows.strings.mob?.[m.id]?.name;
+      if (m.have !== 0 && m.have !== was[i].have && name) this.questMsg.progress(id, `m${m.id}`, name, m.have, m.need);
+    });
+  }
+
+  /** After an inventory change: the item's line for every quest still short of it, and the helper / notice. */
+  async questItemLines(itemId, was) {
+    const book = this.quests, quests = (book?.byItem.get(itemId) || []).filter((q) => book.status(q) === 1);
+    if (!quests.length) return;
+    const now = this.itemCount(itemId), name = await itemName(this.assets, itemId), ctx = this.textCtx();
+    const alarm = this.windows.wins.questalarm;
+    for (const q of quests) {
+      const need = book.requirements(q).items.find((it) => it.id === itemId)?.count ?? 0;
+      if (now !== was && was < need && name) this.questMsg.progress(q, `i${itemId}`, name, now, need);
+      if (book.canComplete(q, ctx)) {
+        alarm?.keep(q);
+        if (was < need && need <= now) this.questCompleteNotice(q);
+      }
+      if (alarm?.tracked(q)) alarm.touch(q);
+      else if (now > was) alarm?.offer(q);
+    }
+  }
+
+  /** Mesos crossing a quest's endmeso. */
+  questMesoChanged(was) {
+    const book = this.quests, ctx = this.textCtx(), alarm = this.windows.wins.questalarm;
+    if (!book || was === this.meso) return;
+    for (const q of Object.keys(book.started).map(Number)) {
+      const need = book.requirements(q).meso;
+      if (!need) continue;
+      if (alarm?.tracked(q)) alarm.touch(q); else if (this.meso > was) alarm?.offer(q);
+      if (was < need && need <= this.meso && book.canComplete(q, ctx)) { alarm?.keep(q); this.questCompleteNotice(q); }
+    }
+  }
+
+  questCompleteNotice(q) {
+    const book = this.quests;
+    const title = q === 0 ? 'New Quest!' : book.area(q) === TITLE_AREA ? 'You got a title!' : 'Quest Complete!';
+    questNotice(this.windows, q, title, q ? book.name(q) : '', (id) => this.openQuest(id));
+  }
+
+  /** Open the quest log on a quest. */
+  openQuest(id) {
+    const st = this.quests.status(id), w = this.windows.open('quest');
+    if (!w) return;
+    w.tab = st === 1 ? 1 : st === 2 ? 2 : 0; w.first = 0;
+    w.folded[w.tab].delete(this.quests.area(id));
+    if (w.rows().some((r) => r.id === id)) { w.select(id); w.scrollTo(id); }
+  }
+
+  /** UPDATE_QUEST_INFO: mode 8 is the server taking the quest; the rest are errors. */
+  async onQuestResult(r) {
+    const book = this.quests;
+    if (r.ok) {
+      dropQuestNotice(this.windows, r.id);
+      const yes = book.dialogue(r.id, book.status(r.id) === 1 ? '0' : '1').yes;
+      if (yes.length && !(await playQuestLines(this, r.npc, yes))) return;
+      if (r.next) {
+        const npc = this.map?.life.find((e) => e.kind === 'Npc' && Number(e.spawn.id) === r.npc) || { spawn: { id: r.npc } };
+        await questFlow(this, npc, r.next);
+      }
+      return;
+    }
+    const say = (t) => this.windows.notice(t.replace(/\r\n/g, '\n'));
+    if (r.mode === 9) say('The quest has ended\r\ndue to an unknown error.');
+    else if (r.mode === 0x0a) say(this.questInventoryFull(r.id));
+    else if (r.mode === 0x0b) say('You do not have enough mesos.');
+    else if (r.mode === 0x0d) say('Unable to retrieve it due to the equipment\r\n currently being worn by the character.');
+    else if (r.mode === 0x0e) say('You may not possess more than \r\none of this item.');
+    else if (r.mode === 0x0f) {
+      this.questTimer(r.id, 0);
+      this.hud.message(`The [${book.name(r.id)}] quest expired because the time limit ended`, QUEST_GREY);
+    } else if (r.mode === 0x10) this.questTimer(r.id, this.questTimers.get(r.id)?.total ?? 0);
+  }
+  /** "Eqp orUse item inventory is full.": the tabs of the items the quest gives you. */
+  questInventoryFull(id) {
+    const book = this.quests, a = book.act[id]?.[book.status(id) === 1 ? '1' : '0'] || {};
+    const rw = book.rewards(id, this.stats);
+    const tabs = [...new Set([...rw.fixed, ...rw.choose, ...rw.random].map((it) => invType(it.id)))].map((t) => TAB_NAMES[t]).filter(Boolean);
+    const text = `${tabs.join(' or')} item inventory is full.`;
+    return Number(a.money) < 0 ? `Either you don't have enough Mesos or ${text}` : text;
+  }
+  /** Time-limited quests: TimeQuest/TimeBar from (700, 50), 50px apart, its gauge in 48 steps and the alarm clock beside it. */
+  drawQuestTimers(ctx) {
+    if (!this.questTimers?.size) return;
+    const T = this.windows.W.Quest?.TimeQuest, im = (n) => this.windows.image(n), now = performance.now();
+    if (!T) return;
+    let y = 50;
+    for (const t of this.questTimers.values()) {
+      const bg = im(T.TimeBar?.backgrnd), g = T.TimeBar?.TimeGage || {};
+      if (bg) ctx.drawImage(bg, 700, y);
+      const step = Math.min(48, Math.ceil((Math.max(0, t.end - now) / t.total) * 48));
+      const left = im(g[0]), mid = im(g[2]), right = im(g[1]);
+      if (step > 0 && mid) {
+        if (left) ctx.drawImage(left, 702, y + 2);
+        ctx.drawImage(mid, 704, y + 2, step - 1, mid.height);
+        if (right) ctx.drawImage(right, 703 + step, y + 2);
+      }
+      const clock = im(T.AlarmClock?.default?.[0]?.[0]);
+      if (clock) ctx.drawImage(clock, 752, y - 6);
+      y += 50;
+    }
+  }
+  /** A quest's time limit (ms left; 0 removes it). */
+  questTimer(id, ms) {
+    const T = this.windows.W.Quest?.TimeQuest;
+    if (ms > 0 && T) this.assets.preload([...allCanvases(T.TimeBar), ...allCanvases(T.AlarmClock?.default?.[0])]);
+    if (ms > 0) this.questTimers.set(id, { end: performance.now() + ms, total: ms });
+    else this.questTimers.delete(id);
   }
 
   toggleQuests() {
@@ -1752,13 +1894,19 @@ export class Game {
   /** Context for quest checks and NPC text (#c item counts). */
   textCtx() {
     const bookCards = Object.values(this.monsterBook?.cards || {}).filter((n) => n > 0).length;
-    return { stats: this.stats, meso: this.meso, itemCount: (id) => this.itemCount(id), bookCards };
+    const worn = new Set(Object.values(this.inventory?.equipped || {}).map((i) => i.id));
+    const first = this.player ? this.myPets()[0] : null, item = first && this.petItem(first);
+    return {
+      stats: this.stats, meso: this.meso, itemCount: (id) => this.itemCount(id), equipped: (id) => worn.has(id), bookCards,
+      mapId: this.map?.id, skillLevel: (id) => this.skills?.levels?.[id]?.level || 0,
+      pet: first ? { id: first.id, closeness: item?.pet?.closeness ?? 0 } : null,
+    };
   }
 
-  /** Click on an NPC: offer its quests first when it has any (as the v83 client does), else run its script. */
+  /** Click on an NPC: its quests first when it has any, else run its script. */
   interactNpc(npc) {
-    const q = this.quests?.npcQuests(npc.spawn.id, this.textCtx());
-    if (q && (q.start.length || q.complete.length || q.progress.length)) npcQuestMenu(this, npc, q);
+    const q = this.quests?.npcQuests(Number(npc.spawn.id), this.textCtx());
+    if (q?.all) npcQuestMenu(this, npc, q);
     else this.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
   }
 
@@ -1769,7 +1917,7 @@ export class Game {
     if (s.level > before) this.petEvent('e_levelup');
     else if (s.exp > exp0 && s.exp >= (EXP[this.stats.level] || Infinity) * 0.9 && performance.now() - (this.petPreLevelT ?? -Infinity) >= 420000) { this.petPreLevelT = performance.now(); this.petEvent('e_prelevelup'); }
     this.petAutoPot('mp');
-    if (s.meso !== undefined) this.meso = s.meso;
+    if (s.meso !== undefined) { const was = this.meso; this.meso = s.meso; this.questMesoChanged(was); }
     if (s.level > before) { this.hud.message(`Level up! You are now level ${s.level}.`, '#ffe08a'); this.levelUpEffect(); sfx.play('Game/LevelUp'); }
     if (s.job !== undefined && this.skills && s.job !== this.skills.job) {
       this.hud.message('Your job has changed! New skills are available.', '#ffe08a');
@@ -2054,6 +2202,9 @@ export class Game {
     const inv = this.inventory;
     let lookChanged = false;
     const box = (t, pos) => (pos < 0 ? inv.equipped : inv[t]);
+    // counts before the change, for the quest progress lines
+    const was = new Map();
+    for (const op of ops) for (const id of [op.item?.id, box(op.inv, op.pos)?.[op.pos]?.id]) if (id && !was.has(id)) was.set(id, this.itemCount(id));
     for (const op of ops) {
       if (op.mode === 0) {
         const old = box(op.inv, op.pos)[op.pos];
@@ -2077,6 +2228,7 @@ export class Game {
     for (const p of this.myPets()) p.lootPauseAt = 0;
     this.hud.renderInventory();
     this.questWin?.render();
+    for (const [id, n] of was) this.questItemLines(id, n);
   }
 
   async rebuildLook() {
@@ -5090,6 +5242,8 @@ export class Game {
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
     this.vfx?.drawHud(ctx);
     this.drawClock(ctx);
+    this.questMsg?.draw(ctx);           // quest progress, near the top
+    this.drawQuestTimers(ctx);
     this.hud?.draw?.(ctx);              // what you gain, in the lower-right corner
     this.hud?.drawBanner?.(ctx);        // the server's scrolling notice, under the bar and every window
     this.statusBar?.draw(ctx);

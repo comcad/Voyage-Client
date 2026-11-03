@@ -3,8 +3,8 @@ import { uiText } from './wzui.js';
 /**
  * NPC / quest script markup laid out for the canvas:
  *   #b #r #g #d #k colours, #e bold, #n normal, #h player name, #t/#z item, #o mob, #p NPC,
- *   #m map, #c item count, #i/#v item icon (inline, 32px), #L<n># ... #l a clickable option,
- *   #f<path># a UI image (UtilDlgEx/list0 "QUEST IN PROGRESS" and the like).
+ *   #m map, #c item count, #i/#v item icon (inline, 32px), #s skill icon, #q skill name, #L<n># ... #l a clickable option,
+ *   #f<path># / #F<path># a UI image (UtilDlgEx/list0 "QUEST IN PROGRESS" and the like). Ids may end in ':' (#v4000000:#).
  * bullet: indent options this far, leaving room for the dot drawn before each one.
  * ref supplies names and icons: { player, item(id), mob(id), npc(id), map(id), count(id), icon(id) }.
  * Returns { lines, height }; each line is { y, h, runs, opt } with runs of
@@ -19,7 +19,7 @@ export const LIGHT_COLORS = { b: '#9fd6ff', r: '#ff9a9a', g: '#a6f08a', d: '#e2b
 export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0 } = {}) {
   const palette = { ...COLORS, ...colors };
   const tokens = String(text).replace(/\\r\\n|\\n/g, '\n').replace(/\\r/g, '').replace(/\r\n|\r/g, '\n')
-    .split(/(#f[^#\n]+#|#[a-zA-Z](?:\d+#)?|\n)/);
+    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#[a-zA-Z](?:\d+:?#)?|\n)/);
   const lines = [];
   let line = null, color = base, bold = false, opt = null, x = 0;
   const newLine = () => { line = { runs: [], opt, h: lineH, x0: opt !== null ? bullet : 0 }; lines.push(line); x = line.x0; };
@@ -54,8 +54,9 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
   for (const tk of tokens) {
     if (!tk) continue;
     if (tk === '\n') { newLine(); continue; }
-    if (tk.length > 3 && tk.startsWith('#f') && tk.endsWith('#')) { image(ref.image?.(tk.slice(2, -1))); continue; }
-    const m = tk.match(/^#([a-zA-Z])(\d+)?#?$/);
+    if (tk.length > 3 && /^#[fF]/.test(tk) && tk.endsWith('#') && tk.includes('/')) { image(ref.image?.(tk.slice(2, -1))); continue; }
+    if (/^#W[a-zA-Z]+#$/.test(tk)) { image(ref.image?.(tk.slice(2, -1))); continue; }   // a quest heading (Quest/summary, reward, prob)
+    const m = tk.match(/^#([a-zA-Z])(\d+)?:?#?$/);
     if (!m) { put(tk); continue; }
     const [, code, num] = m, id = Number(num);
     if (palette[code]) color = code === 'k' ? base : palette[code];
@@ -68,6 +69,8 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
     else if (code === 'm') put(String(ref.map(id)));
     else if (code === 'c') put(String(ref.count(id)));
     else if (code === 'i' || code === 'v') icon(ref.icon(id));
+    else if (code === 's') { const n = ref.skillIcon?.(id); if (n) icon(n); }
+    else if (code === 'q') put(ref.skill?.(id) ?? '');
     else if (code === 'L') { opt = id; if (x > line.x0) newLine(); line.opt = id; line.x0 = bullet; x = Math.max(x, bullet); }
     else if (code === 'l') { opt = null; }
   }

@@ -22,7 +22,7 @@ function textRef(mgr) {
   return {
     player: g.player.name, item: (id) => mgr.itemName(id) || '...', icon: (id) => mgr.icon(id),
     mob: (id) => s.mob?.[id]?.name || `monster ${id}`, npc: (id) => s.npc?.[id]?.name || `NPC ${id}`,
-    map: mapName, count: (id) => g.itemCount(id),
+    map: mapName, count: (id) => g.itemCount(id), skill: (id) => g.skills?.name(id) ?? '', skillIcon: (id) => { const n = g.skills?.icon(id); if (!n) g.skills?.ensure(id)?.then?.(() => { mgr.namesVersion++; }); return n; },
     // #f paths into the UI files we hold (UI/UIWindow.img/..., UI/Basic.img/...)
     image: (path) => {
       const [, file, ...rest] = path.split('/');
