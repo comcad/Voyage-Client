@@ -101,7 +101,6 @@ export class Hud {
   closeWindows() {
     this.game.windows?.closeAll();
     this.game.questWin?.close();
-    this.game.shopWin?.close();
     this.game.skillWin?.close();
   }
 

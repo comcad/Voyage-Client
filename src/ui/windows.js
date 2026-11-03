@@ -54,7 +54,7 @@ export class WindowManager {
     w.setArg?.(arg);
   }
   closeAll() {
-    const keep = this.order.filter((w) => w.modal || w === this.wins.minimap);
+    const keep = this.order.filter((w) => w.modal || w.keepOnEscape || w === this.wins.minimap);
     for (const w of this.order) if (!keep.includes(w)) w.onClose?.();
     if (this.order.length > keep.length) sfx.play('UI/MenuDown');
     this.order = keep;
@@ -250,12 +250,14 @@ export class WindowManager {
  * The client's tab strip (tab type 1, Basic.img/Tab2), as openms recovered it: `count` tabs share `span` px
  * from x 7 at y 23, each a stretched fill plus an 8px edge (a 4px end on the last), after a 4px left cap.
  * The selected tab uses the "1" pieces and the edge just before it the "2" one; each window's own
- * Tab/enabled|disabled label is centred on its tab. Returns each tab's [x, width] for hit testing.
+ * Tab/enabled|disabled label is centred on its tab. `fixed` gives every tab that width (edge included) when they
+ * fit. Returns each tab's [x, width] for hit testing.
  */
-export function drawTabStrip(ctx, mgr, labels, count, selected, span, y = 23) {
+export function drawTabStrip(ctx, mgr, labels, count, selected, span, y = 23, fixed = 0) {
   const T = mgr.B.Tab2, im = (n) => mgr.image(n), rects = [];
   if (!T || !count) return rects;
-  const width = Math.trunc((span - (count - 1) * 8 - 8) / count), rem = span - (width + 8) * count;
+  if (fixed * count > span) fixed = 0;
+  const width = fixed ? fixed - 8 : Math.trunc((span - (count - 1) * 8 - 8) / count), rem = fixed ? 0 : span - (width + 8) * count;
   const cap = im(T[selected === 0 ? 'left1' : 'left0']);
   if (cap) ctx.drawImage(cap, 3, y);
   let x = 7;

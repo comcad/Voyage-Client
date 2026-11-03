@@ -1660,7 +1660,7 @@ export class Game {
       inventory: (ops) => this.onInventory(ops),
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s)); },
-      shopResult: (code) => this.shopWin?.result(code),
+      shopResult: (code, extra) => this.shopWin?.result(code, extra),
       storageOpen: (s) => {
         if (this.storageWin) this.windows.close(this.storageWin);
         this.storageWin = this.windows.show(new StorageWin(this.windows, s));
