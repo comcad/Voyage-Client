@@ -1,4 +1,4 @@
-import { GameMap, nameTag, labelTag, Anim } from './map.js';
+import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath } from './character.js';
 import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP } from './data.js';
@@ -1043,7 +1043,7 @@ export class Game {
   addPet(d) {
     if (!this.petDialog) this.petDialog = this.assets.json('String/PetDialog.img').then((s) => { this.petDialog = s; return s; });
     this.petEff ??= this.assets.json('Effect/PetEff.img').then(async (n) => { this.petEff = n; if (n?.Basic) await this.assets.preload(allCanvases(n.Basic)); return n; });
-    this.nameTags ??= this.assets.json('UI/NameTag.img').then(async (n) => { this.nameTags = n; if (n?.pet) await this.assets.preload(allCanvases(n.pet)); return n; });
+    this.nameTagArt();
     const pet = new Pet(this, d), list = this.petsOf(d.owner);
     if (d.replace) list[d.slot] = pet; else list.splice(d.slot, 0, pet);
     this.setPets(d.owner, list);
@@ -2294,11 +2294,24 @@ export class Game {
       else if (p.a === ent || p.b === ent) draw(p.on[p.a === ent ? 0 : 1], ent.x, ent.y, ent.facingRight);
     }
   }
-  /** A label ring's name tag (UI/NameTag.img/<n>) for a look wearing one; false for the plain tag. */
+  /** UI/NameTag.img (label rings, pet labels, medals), or null while it loads. */
+  nameTagArt() {
+    this.nameTags ??= this.assets.json('UI/NameTag.img').then(async (n) => { this.nameTags = n || {}; if (n?.pet) await this.assets.preload(allCanvases(n.pet)); return n; });
+    return this.nameTags instanceof Promise ? null : this.nameTags;
+  }
+  /** A label ring's name tag for a look wearing one (White Label, or UI/NameTag.img/<n>); its height, 0 for the plain tag. */
   drawLabelTag(ctx, look, text, x, y) {
-    if (!look?.nameTag) return false;
-    if (!this.nameTags) { this.nameTags = this.assets.json('UI/NameTag.img').then((j) => { this.nameTags = j || null; }); return false; }
-    return !(this.nameTags instanceof Promise) && labelTag(ctx, this.assets, this.nameTags?.[look.nameTag], text, x, y);
+    if (look?.nameTag === 1) return nameTag(ctx, text, x, y, '#000', { white: true }).h;
+    if (!look?.nameTag) return 0;
+    return Math.max(0, artTag(ctx, this.assets, this.nameTagArt()?.[look.nameTag], text, x, y));
+  }
+  /** A character's tags from y down, 1px apart: name, guild, medal. */
+  drawCharTags(ctx, ent, look, local, x, y) {
+    y += (this.drawLabelTag(ctx, look, ent.name, x, y) || nameTag(ctx, ent.name, x, y).h) + 1;
+    const guild = local ? this.guild?.name : ent.guild;
+    if (guild) y += drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, x, y) + 1;
+    const name = look?.medal ? (this.windows.itemName(look.medal) || '').replace("'s Medal", '') : '', art = name && this.nameTagArt();
+    if (art && artTag(ctx, this.assets, art.medal?.[look.medalTag], name, x, y) < 0) nameTag(ctx, name, x, y);
   }
   /** A character's equip effects (EquipEffect), kept in step with what its look wears. */
   stepEquipFx(ent, look, dt) {
@@ -5143,9 +5156,7 @@ export class Game {
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
-    if (!this.drawLabelTag(ctx, look, ent.name, Math.round(sx), Math.round(sy) + 4)) nameTag(ctx, ent.name, Math.round(sx), Math.round(sy) + 4, local ? '#fff' : '#cfe8ff');
-    const guild = local ? this.guild?.name : ent.guild;
-    if (guild) drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, Math.round(sx), Math.round(sy) + 22);
+    this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
   }
 
 
