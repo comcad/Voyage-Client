@@ -635,7 +635,7 @@ class StatWin extends Win {
   async raise(k) {
     const g = this.g, s = g.stats;
     if (!s?.ap || g.apPending) return;
-    if (k === 'hp' || k === 'mp') { if (s.level < 20 || !(await this.mgr.confirm(HPMP_ASK))) return; }
+    if (k === 'hp' || k === 'mp') { if (s.level < 20 || !(await this.mgr.okCancel(HPMP_ASK))) return; }
     g.sendStatRequest(() => g.net?.distributeAp(AP[k]));
   }
   async autoAssign(flag) {
@@ -646,7 +646,7 @@ class StatWin extends Win {
     amounts[1][1] += left;
     const add = (k) => amounts.filter(([a]) => a === k).reduce((n, [, v]) => n + v, 0);
     const text = `    Your AP will be distributed as follows:\n\n${STATS.map((k) => `     ${k.toUpperCase()} : +${add(k)}`).join('\n')}`;
-    if (!(await this.mgr.okCancel(text))) return;
+    if (!(await this.mgr.okCancel(text, 'okcancelLeft'))) return;
     const total = amounts[0][1] + amounts[1][1];
     if (total > 0 && total <= (g.stats?.ap || 0)) g.sendStatRequest(() => g.net?.autoDistributeAp(amounts.map(([k, n]) => [AP[k], n])));
   }
