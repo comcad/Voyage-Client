@@ -442,15 +442,16 @@ export class MessageBox extends Win {
 
 /**
  * The plain message box (Basic.img YesNo3: t 21, c 20 tiled, s 55, 266 wide, centred) with Basic BtOK2 at x 155 and
- * BtCancel2 at 205, 30px off the bottom. 'okcancel': the lines centred, 14px apart, over at least two body tiles.
+ * BtCancel2 at 205, 30px off the bottom. 'okcancel': the lines centred, 14px apart, over at least two body tiles; 'okcancelLeft':
+ * the lines as given (leading spaces kept), left-aligned at x 19 from y 24.
  * 'quantity': the prompt at the top left and a white 226x15 field 73px off the bottom.
  */
-class UtilBox extends Win {
+export class UtilBox extends Win {
   constructor(mgr, kind, text, done, opts = {}) {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.modal = true; this.kind = kind; this.done = done; this.opts = opts;
-    this.lines = wrapText(scratch(), text, 234, 12);
+    this.lines = kind === 'okcancelLeft' ? text.split('\n') : wrapText(scratch(), text, 234, 12);
     const n = this.lines.length;
     this.tiles = Math.max(2, Math.floor((n * 14) / 20) + 1);
     this.w = 266; this.h = kind === 'quantity' ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
@@ -478,6 +479,7 @@ class UtilBox extends Win {
     for (let y = 21; y < this.h - 55; y += 20) ctx.drawImage(c, 0, y);
     ctx.drawImage(s, 0, this.h - 55);
     const line = (str, x, y, align) => uiText(ctx, str, x, y + 11, { color: '#fff', size: 12, base: 'alphabetic', align });
+    if (this.kind === 'okcancelLeft') { this.lines.forEach((l, i) => line(l, 19, 24 + i * 14, 'left')); return; }
     if (this.kind !== 'quantity') {
       const top = (this.tiles * 20 - this.lines.length * 14) / 2 + 24;
       this.lines.forEach((l, i) => line(l, 132, top + i * 14, 'center'));

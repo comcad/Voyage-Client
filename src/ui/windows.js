@@ -539,54 +539,116 @@ class EquipWin extends Win {
 
 // ==================================================================== Character stat
 /**
- * Stat.img backgrnd 175x347: label boxes x 9-55, value fields x 56-165, rows (top y):
- * NAME 32, JOB 50, LEVEL 78, GUILD 96, HP 114, MP 131, EXP 149, FAME 166,
- * ABILITY POINT box x 62-88 y 218-233, STR 246, DEX 264, INT 282, LUK 300, bottom band y 320-345.
- * backgrnd2 (177x203) is the detail panel: 9 rows every 20px from y 8 (ATTACK .. JUMP).
+ * Stat.img backgrnd 175x347, Arial 12 black at x 61 (font cell tops below). backgrnd2 (177x203) is the detail panel,
+ * at (170, 144) behind the main one, values at x 77 every 18px from y 8.
  */
 const AP = { hp: 0x800, mp: 0x2000, str: 0x40, dex: 0x80, int: 0x100, luk: 0x200 };
-const STAT_ROWS = { hp: 114, mp: 131, str: 246, dex: 264, int: 282, luk: 300 };
+const AP_ROWS = { hp: 117, mp: 135, str: 247, dex: 265, int: 283, luk: 301 };
+const STATS = ['str', 'dex', 'int', 'luk'];
+/** The stats each branch doesn't use, shown with greyed labels. */
+const GREY_STATS = { 0: ['int', 'luk'], 1: ['int', 'luk'], 2: ['str', 'dex'], 3: ['int', 'luk'], 4: ['str', 'int'], 5: ['int', 'luk'] };
+const DETAIL_X = 170, DETAIL_Y = 144;
+const HPMP_ASK = 'If you invest your AP in HP or MP, your character may have\ninsufficient stats to become as strong as it could be.\nDo you still wish to raise this skill?';
+const isStarter = (job) => [0, 1000, 2000, 2001].includes(job);
+/** Auto-Assign's two targets [[stat, target], [main stat, target]] for a job at level L, or null; flag 0 picks the gunslinger split at job 500. */
+function autoTargets(job, L, flag) {
+  const jm = job % 1000, branch = Math.floor(jm / 100), line = Math.floor(jm / 10);
+  if (jm === 0 || job === 2001) return [['dex', L], ['str', 4 * L + 12]];
+  if (branch === 1) { const d = L <= 30 ? 2 * L : L + 30; return [['dex', d], ['str', 5 * L - d + 12]]; }
+  if (branch === 2) return [['luk', L + 3], ['int', 4 * L + 9]];
+  if (jm === 300 || (jm >= 310 && jm <= 312)) return [['str', L + 5], ['dex', 5 * L - (L + 5) + 12]];
+  if (jm >= 320 && jm <= 322) return [['str', L], ['dex', 4 * L + 12]];
+  if (branch === 4) { const d = L <= 40 ? 2 * L : L + 40; return [['dex', d], ['luk', 5 * L - d + 12]]; }
+  if (line === 51 || job === 1500 || (job === 500 && flag === 1)) { const d = L <= 20 ? 2 * L : L + 20; return [['dex', d], ['str', 5 * L - d + 12]]; }
+  if (line === 52 || (job === 500 && flag === 0)) return [['str', L], ['dex', 4 * L + 12]];
+  return null;
+}
 class StatWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Stat;
     super(mgr, W.backgrnd, 10, 90);
     this.W = W; this.detail = false;
-    this.ap = Object.entries(STAT_ROWS).map(([k, y]) => {
-      const b = this.button(W.BtApUp, 151, y + 2, () => this.g.net?.distributeAp(AP[k]));
-      return b;
-    });
+    this.ap = Object.entries(AP_ROWS).map(([k, y]) => Object.assign(this.button(W.BtApUp, 153, y, () => this.raise(k)), { stat: k }));
+    this.auto = [this.button(W.BtAuto, 97, 197, () => this.autoAssign(1)), this.button(W.BtAuto1, 97, 197, () => this.autoAssign(1)), this.button(W.BtAuto2, 97, 217, () => this.autoAssign(0))];
     this.button(W.BtDetail, 121, 324, () => { this.detail = !this.detail; });
+    this.hideBtn = this.button(mgr.B.BtHide, DETAIL_X + 155, DETAIL_Y + 182, () => { this.detail = false; });
   }
-  frames() { return [...super.frames(), this.W.backgrnd2]; }
-  contains(x, y) { return super.contains(x, y) || (this.detail && x >= this.x + this.w && x < this.x + this.w + 177 && y >= this.y + 144 && y < this.y + 347); }
+  frames() { return [...super.frames(), this.W.backgrnd2, this.W.basicStat, ...allCanvases(this.W.Job), ...allCanvases(this.W.Disabled)]; }
+  contains(x, y) {
+    const lx = x - this.x, ly = y - this.y;
+    return super.contains(x, y) || (this.detail && lx >= DETAIL_X && lx < DETAIL_X + 177 && ly >= DETAIL_Y && ly < DETAIL_Y + 203);
+  }
+  draw(ctx) {
+    const bg2 = this.detail && this.mgr.image(this.W.backgrnd2);   // behind the main panel
+    if (bg2) ctx.drawImage(bg2, this.x + DETAIL_X, this.y + DETAIL_Y);
+    super.draw(ctx);
+  }
+  /** Arial 12 with its font cell's top at y. */
+  t(ctx, text, x, y, o = {}) { this.text(ctx, text, x, y + 11, { size: 12, base: 'alphabetic', ...o }); }
   body(ctx) {
-    const s = this.g.stats;
+    const g = this.g, s = g.stats;
     if (!s) return;
-    for (const b of this.ap) b.enabled = s.ap > 0;
-    const need = EXP[s.level] || 1;
-    const v = (t, y) => this.text(ctx, t, 62, y + 2);
-    v(s.name, 32); v(jobName(s.job), 50); v(s.level, 78); v(s.guild || '-', 96);
-    v(`${s.hp} / ${this.g.maxHpShown()}`, 114); v(`${s.mp} / ${this.g.maxMpShown()}`, 131);
-    v(`${s.exp} (${((s.exp / need) * 100).toFixed(2)}%)`, 149); v(s.fame, 166);
-    this.text(ctx, s.ap, 75, 220, { align: 'center' });
-    v(s.str, 246); v(s.dex, 264); v(s.int, 282); v(s.luk, 300);
-    if (this.detail) this.drawDetail(ctx, s);
+    const starter = isStarter(s.job) && s.level <= 10, gm = Math.floor((s.job % 1000) / 100) === 9;
+    for (const b of this.ap) { b.visible = !starter; b.enabled = s.ap > 0 && (s.level >= 20 || (b.stat !== 'hp' && b.stat !== 'mp')); }
+    this.auto.forEach((b, i) => { b.visible = !starter && !gm && (s.job === 500 ? i > 0 : i === 0); b.enabled = s.ap > 0; });
+    this.hideBtn.visible = this.detail;
+    const need = EXP[s.level] || 0;
+    this.t(ctx, s.name, 61, 33);
+    this.drawJob(ctx, s.job);
+    this.t(ctx, s.level, 61, 79); this.t(ctx, g.guild?.name || '-', 61, 96);
+    this.t(ctx, `${s.hp} / ${g.maxHpShown()}`, 61, 115); this.t(ctx, `${s.mp} / ${g.maxMpShown()}`, 61, 133);
+    this.t(ctx, `${s.exp} (${need >= 1 ? Math.trunc((s.exp / need) * 100) : 0}%)`, 61, 151); this.t(ctx, s.fame, 61, 169);
+    if (starter) { const n = this.mgr.image(this.W.basicStat); if (n) ctx.drawImage(n, 8, 195); }
+    else {
+      this.t(ctx, s.ap, 85, 215, { align: 'right' });
+      const grey = gm || [1000, 2000, 2001].includes(s.job) ? [] : GREY_STATS[Math.floor((s.job % 1000) / 100)] || [];
+      STATS.forEach((k, i) => {
+        const off = grey.includes(k) && this.mgr.image(this.W.Disabled[k.toUpperCase()]);
+        if (off) ctx.drawImage(off, 8, 244 + 18 * i);
+        const total = g.totalStat(k), d = total - s[k];
+        this.t(ctx, d ? `${total} (${s[k]}${d > 0 ? '+' : ''}${d})` : total, 61, 244 + 18 * i);
+      });
+    }
+    if (this.detail) this.drawDetail(ctx);
   }
-  drawDetail(ctx, s) {
-    const bg = this.mgr.image(this.W.backgrnd2);
-    if (!bg) return;
-    ctx.save(); ctx.translate(this.w, 144);
-    ctx.drawImage(bg, 0, 0);
-    const eq = Object.values(this.g.inventory?.equipped || {});
-    const sum = (k) => eq.reduce((a, it) => a + (it[k] || 0), 0);
-    const max = this.g.maxDamage(), T = (k) => this.g.totalStat(k);   // with equipment
+  /** The job: the branch in caps over [JOB] (art), one line of text for Aran / Evan, "GM / gamemaster" for GMs. */
+  drawJob(ctx, job) {
+    const J = this.W.Job, kind = Math.floor(job / 1000), branch = Math.floor((job % 1000) / 100);
+    const small = (text, x, y) => { ctx.save(); ctx.font = '9px Tahoma, sans-serif'; ctx.fillStyle = '#9c6563'; ctx.textBaseline = 'top'; ctx.fillText(text, x, y); ctx.restore(); };
+    if (branch === 9) { small('GM', 62, 51); small('gamemaster', 62, 61); return; }
+    const main = this.mgr.image(kind === 1 ? J.main.premium?.[branch] : J.main[branch]), subNode = (kind === 1 ? J.sub.premium?.[branch] : J.sub[branch])?.[job];
+    const sub = this.mgr.image(subNode);
+    if (kind > 1 || !main || !sub) { this.t(ctx, jobName(job), 61, 55); return; }
+    ctx.drawImage(main, 62, 53);
+    small('[', 62, 63); ctx.drawImage(sub, 65, 65); small(']', 62 + 4 + sub.width, 63);
+  }
+  drawDetail(ctx) {
+    const g = this.g, d = g.statWindow(), x = DETAIL_X + 77, y = (i) => DETAIL_Y + 8 + 18 * i;
+    const buffed = ([v, b]) => (b ? [`${v + b} (${v}${b > 0 ? '+' : ''}${b})`, b > 0 ? '#ff2020' : '#2000ff'] : [v, '#000']);
     const rows = [
-      `${Math.max(1, Math.floor(max * 0.1))} ~ ${max}`, sum('wdef'), T('int') + sum('matk'), T('int') + sum('mdef'),
-      this.g.accuracy(), this.g.avoidability(),
-      T('dex') + T('int') + T('luk') + sum('hands'), `${100 + sum('speed')}%`, `${100 + sum('jump')}%`,
+      [d.attack ? `${d.attack[0]} ~ ${d.attack[1]}` : 0, g.buffValue('watk') ? '#ff2020' : '#000'],
+      buffed(d.wdef), buffed(d.matk), buffed(d.mdef), buffed(d.acc), buffed(d.avoid), buffed(d.hands),
+      [`${d.speed}%`, '#000'], [`${d.jump}%`, '#000'],
     ];
-    rows.forEach((t, i) => this.text(ctx, t, 90, 10 + i * 20));
-    ctx.restore();
+    rows.forEach(([text, color], i) => this.t(ctx, text, x, y(i), { color }));
+  }
+  async raise(k) {
+    const g = this.g, s = g.stats;
+    if (!s?.ap || g.apPending) return;
+    if (k === 'hp' || k === 'mp') { if (s.level < 20 || !(await this.mgr.okCancel(HPMP_ASK))) return; }
+    g.sendStatRequest(() => g.net?.distributeAp(AP[k]));
+  }
+  async autoAssign(flag) {
+    const g = this.g, s = g.stats, targets = s && autoTargets(s.job, s.level, flag);
+    if (!targets || !s.ap || g.apPending) return;
+    let left = s.ap;
+    const amounts = targets.map(([k, want]) => { const n = Math.min(left, Math.max(0, want - g.totalStat(k))); left -= n; return [k, n]; });
+    amounts[1][1] += left;
+    const add = (k) => amounts.filter(([a]) => a === k).reduce((n, [, v]) => n + v, 0);
+    const text = `    Your AP will be distributed as follows:\n\n${STATS.map((k) => `     ${k.toUpperCase()} : +${add(k)}`).join('\n')}`;
+    if (!(await this.mgr.okCancel(text, 'okcancelLeft'))) return;
+    const total = amounts[0][1] + amounts[1][1];
+    if (total > 0 && total <= (g.stats?.ap || 0)) g.sendStatRequest(() => g.net?.autoDistributeAp(amounts.map(([k, n]) => [AP[k], n])));
   }
 }
 

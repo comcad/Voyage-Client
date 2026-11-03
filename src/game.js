@@ -5,7 +5,7 @@ import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scro
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
+import { npcTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -1422,6 +1422,7 @@ export class Game {
     wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
+    wm.okCancel = (text, kind = 'okcancel') => new Promise((r) => wm.show(new UtilBox(wm, kind, text, r)));
     wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new MessageBox(wm, 'number', text, r, { def, min, max })));
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new MessageBox(wm, 'text', text, r, { def, ...opts })));
@@ -1478,6 +1479,11 @@ export class Game {
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });
       },
       stats: (s, enable) => this.onStats(s, enable),
+      gmHide: (on) => { this.gmHidden = on; },
+      yellowTip: (again, a, b) => {
+        if (this.yellowTipShown && !again) return;
+        if (a) { for (const t of [a, b]) if (t) this.hud.message(t, '#ffff00'); this.yellowTipShown = true; }
+      },
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
       avatarMega: (a) => this.hud.megaphone([`${a.name} : ${a.lines.filter(Boolean).join(' ')}`], { bg: 'rgba(210, 46, 120, 0.9)', channel: a.channel, ear: a.ear }),
@@ -1631,15 +1637,14 @@ export class Game {
       disease: later((d) => this.onDisease(d)),
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
       foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
-      foreignCancel: later((id, m1, m2) => {
-        const rp = this.others.get(id);
-        if (rp?.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
-        if (rp && BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
-        if (rp && (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK)) rp.hidden = false;
-        if (rp && BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
-      }),
-      foreignPartner: later((id) => { const rp = this.others.get(id); if (rp) rp.partner = true; }),
-      foreignHidden: later((id) => { const rp = this.others.get(id); if (rp) rp.hidden = true; }),
+      foreignCancel: later((id, m1, m2) => this.onOther(id, (rp) => {
+        if (rp.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
+        if (BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
+        if (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK) rp.hidden = false;
+        if (BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
+      })),
+      foreignPartner: later((id) => this.onOther(id, (rp) => { rp.partner = true; })),
+      foreignHidden: later((id) => this.onOther(id, (rp) => { rp.hidden = true; })),
       foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
@@ -1685,9 +1690,7 @@ export class Game {
       keymap: (km) => { this.keymap = km; this.dropForeignSkillKeys(); this.keyBar.render(); this.skillWin?.render(); },
       skills: (list) => {
         for (const s of list) {
-          const before = this.skills.level(s.id);
           this.skills.setLevel(s.id, s);
-          if (s.level > before) this.hud.message(`${this.skills.name(s.id)} is now level ${s.level}.`, '#9fd3ff');
         }
         this.skillWin?.render(); this.keyBar.render();
       },
@@ -1696,7 +1699,7 @@ export class Game {
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
-          watk: b.watk, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
+          watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
@@ -1924,6 +1927,7 @@ export class Game {
 
   onStats(s, enable) {
     if (!this.stats) return;
+    if (enable) this.apPending = false;
     const before = this.stats.level, exp0 = this.stats.exp;
     Object.assign(this.stats, s);
     if (s.level > before) this.petEvent('e_levelup');
@@ -2067,8 +2071,17 @@ export class Game {
     if (anim && e.anims.die1) e.kill(); else e.removed = true;
   }
 
+  /** Run fn on another player now, or once their spawn (still loading their look) is done. */
+  onOther(id, fn) { const q = this.spawning?.get(id); if (q) q.push(fn); else { const rp = this.others.get(id); if (rp) fn(rp); } }
   async spawnPlayer(d) {
     if (d.id === this.player?.id) return;   // the server can spawn you to yourself (a job change): you're already here
+    const waiting = [];
+    (this.spawning ??= new Map()).set(d.id, waiting);
+    try { await this.addOther(d); } finally { if (this.spawning.get(d.id) === waiting) this.spawning.delete(d.id); }
+    const rp = this.others.get(d.id);
+    if (rp) for (const fn of waiting) fn(rp);
+  }
+  async addOther(d) {
     const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips: lookEquipIds(d.look) });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
@@ -4204,6 +4217,61 @@ export class Game {
     const base = Math.trunc(luk / 2) + (branch === 51 ? Math.floor(dex * 1.5) : Math.trunc(dex / (branch === 52 ? 8 : 4)));
     return base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0);
   }
+  /** A stat request (AP): one at a time, 500ms apart, while alive; false when it can't go yet. */
+  sendStatRequest(send) {
+    const now = performance.now();
+    if (this.apPending || now - (this.apSentAt ?? -Infinity) < 500 || this.dead || !(this.stats?.hp > 0)) return false;
+    this.apPending = true; this.apSentAt = now;
+    send();
+    return true;
+  }
+  /** The largest live buff value of key k (0 without). */
+  buffValue(k) { const now = Date.now(); return Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k])); }
+  /**
+   * The Stat window's numbers: [unbuffed, buff part] for weapon def., magic, magic def., accuracy, avoid and hands, the
+   * attack range and speed / jump %.
+   */
+  statWindow() {
+    const eq = (k) => this.equipStat(k), cap = (v, m) => Math.max(0, Math.min(m, v));
+    const shield = this.inventory?.equipped?.[-10], shieldMastery = [1110001, 1210001, 4210000].map((id) => this.passive(id, 'x')).find((v) => v) || 100;
+    const wdef = eq('wdef') - (shield?.wdef || 0) + Math.trunc(((shield?.wdef || 0) * shieldMastery) / 100);
+    const blessing = (k) => this.passive(this.blessingId(), k), int = this.totalStat('int');
+    const { speed, jump } = this.moveStats(), mv = (v, m) => Math.round(Math.min(m, v * 100));
+    return {
+      attack: this.statAttack(),
+      wdef: [cap(wdef, 1999), this.buffValue('wdef')],
+      matk: [cap(int + eq('matk') + blessing('y'), 1999), this.buffValue('matk')],
+      mdef: [cap(int + eq('mdef'), 1999), this.buffValue('mdef')],
+      acc: [cap(this.accuracy(), 999), this.buffValue('acc')],
+      avoid: [cap(this.avoidability(), 999), this.buffValue('avoid')],
+      hands: [this.totalStat('dex') + this.totalStat('luk') + int + eq('hands'), this.buffValue('hands')],
+      speed: mv(speed, 140), jump: mv(jump, 123),
+    };
+  }
+  /** The Stat window's attack range [min, max], or null without a weapon. */
+  statAttack() {
+    const job = this.stats?.job || 0, cat = Math.floor(this.weaponId() / 10000) % 100;
+    const T = (k) => this.totalStat(k), str = T('str'), dex = T('dex'), luk = T('luk'), thief = Math.floor((job % 1000) / 100) === 4;
+    const MULT = { 30: [4, 4], 31: [3.2, 4.4], 32: [3.2, 4.4], 37: [3.2, 4.4], 38: [3.2, 4.4], 40: [4.6, 4.6], 41: [3.4, 4.8], 42: [3.4, 4.8],
+      43: [3, 5], 44: [3, 5], 45: [3.4, 3.4], 46: [3.6, 3.6], 47: [3.6, 3.6], 48: [4.8, 4.8], 49: [3.6, 3.6] };
+    let mult = MULT[cat], main = str, other = dex;
+    if (cat === 33) mult = thief ? [3.6, 3.6] : [4, 4];
+    if (!mult) return null;
+    if (cat === 45 || cat === 46 || cat === 49) { main = dex; other = str; } else if (cat === 47 || (cat === 33 && thief)) { main = luk; other = str + dex; }
+    const ms = masterySkills(cat, [45, 46, 47, 49].includes(cat), 0, job) || {};
+    const lv = (id, k) => this.passive(id, k);
+    const over = (ms.over || []).find((id) => this.skills?.level(id));
+    let mastery = over ? lv(over, 'mastery') : (ms.first || []).map((id) => lv(id, 'mastery')).find((v) => v) || 0;
+    if (!over) for (const id of ms.plus || []) mastery += lv(id, 'mastery');
+    const m = (mastery * 5 + 10) * 0.009;
+    let pad = this.watk() + this.passive(this.blessingId(), 'x') + (over ? lv(over, 'x') : 0) + this.buffValue('watk');
+    const ammo = this.ammoItem();
+    if (ammo) pad += this.windows?.info(ammo)?.incPAD || 0;
+    pad = Math.max(0, Math.min(1999, pad));
+    const clamp = (v) => Math.max(1, Math.min(199999, Math.trunc(v)));
+    return [clamp(((main * m * mult[0] + other) * pad) / 100), clamp(((main * mult[1] + other) * pad) / 100)];
+  }
+
   /**
    * Combo Attack's % on every blow while it is on, by the orbs held (its buff value less 1): with one orb the skill's
    * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
@@ -5317,7 +5385,7 @@ export class Game {
     this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
-    const seeThrough = local ? this.hidden() : ent.hidden;   // Dark Sight / Wind Walk: half alpha
+    const seeThrough = local ? this.hidden() || this.gmHidden : ent.hidden;   // Dark Sight / Wind Walk / GM hide: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
     if (blink) ctx.restore();
