@@ -52,10 +52,11 @@ export function readRingLook(r) {
   return { couple, friend, marriage: r.ubyte() ? { id: r.int(), partner: r.int(), item: r.int() } : null };
 }
 
-export function readCharEntry(r) {
+/** viewAll: View All Characters entries have no view-all flag byte. */
+export function readCharEntry(r, viewAll = false) {
   const stats = readCharStats(r);
   const look = readCharLook(r);
-  r.ubyte(); // view-all flag
+  if (!viewAll) r.ubyte(); // view-all flag
   const ranked = r.ubyte();
   const rank = ranked ? { world: r.int(), worldMove: r.int(), job: r.int(), jobMove: r.int() } : null;
   return { stats, look, rank };

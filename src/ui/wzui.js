@@ -34,7 +34,8 @@ export class WzButton {
     this.enabled = true; this.visible = true; this.hover = false; this.down = false; this.focused = false;
     this.anims = {};
     // state animations play once and hold their last frame (e.g. a world tag swings, then hangs still)
-    for (const s of ['normal', 'mouseOver', 'pressed', 'disabled', 'keyFocused']) if (node?.[s]) this.anims[s] = new Anim(firstFrames(node[s]), false);
+    // the keyboard-focus art (e.g. a bobbing leaf) loops
+    for (const s of ['normal', 'mouseOver', 'pressed', 'disabled', 'keyFocused']) if (node?.[s]) this.anims[s] = new Anim(firstFrames(node[s]), s === 'keyFocused');
   }
   get state() {
     if (this.forceState) return this.forceState;
@@ -111,9 +112,9 @@ export class TextField {
 }
 
 /** Draws text the way the client's UI does: small Arial with an optional 1px dark outline. */
-export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'left', bold = false, outline = null, base = 'top' } = {}) {
+export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'left', bold = false, outline = null, base = 'top', font = null } = {}) {
   ctx.save();
-  ctx.font = `${bold ? 'bold ' : ''}${size}px Arial, "Segoe UI", sans-serif`;
+  ctx.font = `${bold ? 'bold ' : ''}${size}px ${font ? `${font}, ` : ''}Arial, "Segoe UI", sans-serif`;
   ctx.textAlign = align; ctx.textBaseline = base;
   if (outline) { ctx.lineWidth = 3; ctx.strokeStyle = outline; ctx.strokeText(text, x, y); }
   ctx.fillStyle = color;

@@ -45,8 +45,8 @@ export class LoginFlow {
 
   titleScreen(servers) {
     return new Promise((resolve) => {
-      const user = el('input', { placeholder: 'Maple ID', value: store.get('maple.user') || '', autocomplete: 'username' });
-      const pass = el('input', { placeholder: 'Password', type: 'password', autocomplete: 'current-password' });
+      const user = el('input', { placeholder: 'Maple ID', value: store.get('maple.user') || '', autocomplete: 'username', maxlength: 12 });
+      const pass = el('input', { placeholder: 'Password', type: 'password', autocomplete: 'current-password', maxlength: 12 });
       const server = el('select', {}, ...servers.map((s) => el('option', { value: s, selected: s === store.get('maple.server') }, s)));
       const submit = () => {
         if (!user.value || !pass.value) return;
@@ -67,11 +67,7 @@ export class LoginFlow {
     this.s = new LoginSession(wsTransport(bridgeUrl(server, 8484)));
     await this.s.ready();
     let res = await this.s.login(user, password);
-    if (!res.ok && res.reason === 23) {
-      const ok = await modal({ title: 'License Agreement', body: 'This is a new account. Do you accept the server\'s terms of use?', buttons: ['Accept', 'Decline'] });
-      if (ok !== 0) return null;
-      res = await this.s.acceptTos();
-    }
+    if (!res.ok && res.reason === 23) res = await this.s.acceptTos();
     if (!res.ok) { await modal({ title: 'Login failed', body: res.message, buttons: ['OK'] }); return null; }
     let account = res.account;
     if (account.gender === 10) {
@@ -122,7 +118,7 @@ export class LoginFlow {
   async charSelect(server, world, channel) {
     for (;;) {
       const list = await this.s.chars(world.id, channel.id);
-      if (list.error) { await modal({ title: world.name, body: list.error, buttons: ['OK'] }); return null; }
+      if (list.full || list.status) { await modal({ title: world.name, body: 'This world is full or the channel is unavailable.', buttons: ['OK'] }); return null; }
       const action = await new Promise((resolve) => {
         const cards = list.chars.map((c) => {
           const canvas = el('canvas', { width: 120, height: 110 });
@@ -150,7 +146,7 @@ export class LoginFlow {
       }
       const res = await this.s.selectChar(c.stats.id, pic);
       if (res.wrongPic) { toast('Wrong PIC'); continue; }
-      if (res.error) { await modal({ title: 'Cannot enter', body: res.error, buttons: ['OK'] }); continue; }
+      if (res.code !== undefined) { await modal({ title: 'Cannot enter', body: `Cannot enter the game (${res.code}).`, buttons: ['OK'] }); continue; }
       this.s.close();
       return { server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, stats: c.stats, look: c.look };
     }
@@ -191,7 +187,7 @@ export class LoginFlow {
       const create = async () => {
         const n = name.value.trim();
         if (!/^[a-zA-Z0-9]{4,12}$/.test(n)) { toast('Names are 4-12 letters or digits'); return; }
-        if (!(await this.s.nameAvailable(n))) { toast('That name is taken'); return; }
+        if ((await this.s.checkName(n)) !== 0) { toast('That name is taken'); return; }
         const c = await this.s.createChar({
           name: n, job: 1, face: value(0), hair: value(1), hairColor: value(2), skin: value(3),
           top: value(4), bottom: value(5), shoes: value(6), weapon: value(7), gender: female ? 1 : 0,

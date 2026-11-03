@@ -14,45 +14,70 @@ import { music, sfx } from '../audio.js';
  * for every signboard, button and dialog.
  */
 export const W = 800, H = 600;
-const STEP = { title: 0, world: -600, char: -1200, race: -1785, create: -2400 };
+// camera y per step; creation adds 600 per race (Knight, Explorer, Aran each have their own scene)
+const STEP = { title: 0, world: -600, char: -1200, race: -1800, create: -2400, vac: -600 };
+const STEP_NO = { title: 0, world: 1, char: 2, race: 3, create: 4, vac: 5 };
 
 /**
- * Per-race creation boards (Login.img NewChar / NewCharKnight / NewCharAran). Offsets are relative
- * to the board's top-left and were measured from each board's sprite. job = CREATE_CHAR job type.
+ * Per-race creation (Login.img NewCharKnight / NewChar / NewCharAran), each in its own scene 600px apart.
+ * Board positions are screen positions with that race's camera; offsets inside a board are from its top-left.
+ * job = CREATE_CHAR race. OK on the settings boards sits about 74px left of Cancel (measured).
  */
 const RACES = {
   knight: {
-    job: 0, ui: 'NewCharKnight', info: 'PremiumChar', board: { x: 476, y: 58 },
-    nameField: [26, 104, 150], nameCheck: [30, 184], nameNo: [100, 176],
-    rows: [14, 112], yes: [35, 329], no: [120, 329],
+    job: 0, ui: 'NewCharKnight', info: 'Info', camY: -2400,
+    name: { x: 485, y: 95, yes: [31, 181], no: [104, 181], field: [36, 110] },
+    set: { x: 469, y: 81, yes: [43, 330], no: [117, 330], left: 70, right: 198, rowY: 116, textX: 140, textY: 117, labelX: 12 },
   },
   normal: {
-    job: 1, ui: 'NewChar', info: 'Char', board: { x: 478, y: 58 },
-    // CHECK beside the label, OK / Cancel on the bottom plank (all cut from charName / charSet)
-    nameField: [32, 104, 142], nameCheck: [131, 66], nameYes: [28, 178], nameNo: [101, 177],
-    rows: [11, 110], yes: [37, 331], no: [110, 330],
+    job: 1, ui: 'NewChar', info: 'Info', camY: -3000,
+    name: { x: 481, y: 95, yes: [27, 178], no: [101, 178], field: [36, 108] },
+    set: { x: 481, y: 95, yes: [37, 330], no: [111, 330], left: 68, right: 196, rowY: 106, textX: 139, textY: 107, labelX: 11 },
   },
   aran: {
-    job: 2, ui: 'NewCharAran', info: 'OrientChar', board: { x: 440, y: 58 },
-    // no room by the label, so CHECK (the Cygnus one, 47x21) sits in the slot's right end
-    nameField: [33, 92, 92], nameCheck: [131, 93], checkUi: 'NewCharKnight', nameNo: [120, 140],
-    rows: [36, 92], yes: [50, 268], no: [150, 268],
+    job: 2, ui: 'NewCharAran', info: 'Orient', camY: -3600,
+    name: { x: 476, y: 106, yes: [34, 138], no: [108, 138], field: [36, 98] },
+    set: { x: 443, y: 105, yes: [64, 265], no: [138, 265], left: 86, right: 229, rowY: 86, textX: 169, textY: 87, labelX: 31 },
   },
 };
-// Delete results (DeleteCharHandler) -> Notice/text
-const DELETE_NOTICE = { 0x14: 42, 0x16: 34, 0x1A: 'This character has a pending world transfer.', 0x1D: 'Leave your family before deleting this character.', 0x09: 25 };
-// world (0, stepY) appears here on screen, so the scene sits inside the book's page
-const VIEW_X = 385, VIEW_Y = 330;
+// job names on the character info panel, where they differ from the in-game ones
+const LOGIN_JOB = {
+  100: 'Swordman', 210: 'Wizard (Fire,Poison)', 211: 'Mage(Fire, Poison)', 212: 'Arch Mage(Fire,Poison)',
+  220: 'Wizard (Ice,Lightning)', 221: 'Mage(Ice,Lightning)', 222: 'Arch Mage(Ice,Lightning)', 320: 'Crossbow man', 910: 'SuperGM',
+};
+const loginJobName = (job) => LOGIN_JOB[job] || (job >= 1000 && job < 2000 && job % 100 ? jobName(Math.floor(job / 100) * 100) : job >= 2100 && job < 2200 ? 'Aran' : jobName(job));
+// DELETE_CHAR_RESPONSE result -> Notice/text
+const DELETE_NOTICE = {
+  6: 15, 9: 18, 10: 19, 0x12: 11, 0x14: 93, 0x16: 34, 0x18: 39, 0x1D: 54,
+  0x1A: 'You cannot delete a character that\r\n is currently going through the transfer.',
+};
+// map point (28, stepY - 8) is the screen centre
+const VIEW_X = 372, VIEW_Y = 308;
+/** Screen position of a map point while the camera is on stepY. */
+const mapAt = (mx, my, stepY) => ({ x: mx + VIEW_X, y: my - stepY + VIEW_Y });
 // world tags (filled or empty) hanging from the world select rod: 15 of them, one under each of its strings (27px apart)
 const WORLD_TAGS = 15, TAG_STEP = 27;
 
 // Login.img/Notice/text/<n> (pre-rendered messages)
 export const NOTICE = {
   WRONG_PASSWORD: 3, NOT_REGISTERED: 20, BLOCKED: 16, ALREADY_LOGGED_IN: 17, UNKNOWN: 18, TOO_MANY: 19,
-  CANT_LOG_GAME: 22, CANT_CONNECT: 23, CONNECT_ERROR: 24, NAME_RESTRICTED: 0, NAME_IN_USE: 5, NAME_OK: 6,
-  NO_MORE_CHARS: 9, DELETE_CONFIRM: 13, SELECT_CHANNEL: 37, PIC_WRONG: 42,
+  CANT_LOG_GAME: 22, CANT_CONNECT: 23, CONNECT_ERROR: 24, NAME_IN_USE: 5, NAME_OK: 6, BAD_NAME: 10,
+  NO_MORE_CHARS: 9, DELETE_CONFIRM: 13, DELETE_CONFIRM_CASH: 55, BAD_ID: 28, CREATE_BLOCKED: 36,
+  PIC_WRONG: 93, NO_PIC: 94, RETURN_TO_TITLE: 7, LAUNCHER: 15,
 };
-const LOGIN_REASON_TO_NOTICE = { 2: 16, 3: 16, 4: 3, 5: 20, 7: 17, 10: 19, 13: 21, 16: 33, 21: 33 };
+// LOGIN_STATUS (and CHARLIST / SERVER_IP) result -> Notice/text
+const LOGIN_NOTICE = { 3: 16, 4: 3, 5: 20, 6: 15, 7: 17, 8: 15, 9: 15, 255: 15, 10: 19, 11: 14, 13: 21, 16: 33, 21: 33, 17: 27, 25: 40 };
+const WORLD_BUSY = 'Since There Are Many\r\nConcurrent Users in This World,\r\nYou May Encounter Some Difficulties During the Game Play.';
+const WORLD_FULL = 'The Concurrent Users in This World\r\nHave Reached the Max.\r\nPlease Try Again Later.';
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const NOTICE_AT = { x: 219, y: 170 }, NOTICE_SLIDE_MS = 150;
+// characters on the select screen
+const CHAR_FACING_RIGHT = true;
+// the selected character walks on the spot, the rest stand (walk1/2 and stand1/2 by weapon)
+const charAct = (look, selected) => (selected ? look.walkAction() : look.standAction());
+
+/** Thrown to drop the session and go back to the title without the can't-connect notice. */
+class BackToTitle extends Error {}
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -87,6 +112,7 @@ export class LoginScene {
     music.play(this.scene.info.bgm || 'BgmUI/Title');
     this.frame = new WzSprite(this.L.Common.frame, W / 2, H / 2); // origin (400, 300)
     await a.preload(this.frame.frames());
+    this.blockReasons = await a.json('Etc/BlockReason.img');
     this.servers = await fetch('/servers.json').then((r) => r.json()).catch(() => ['cosmic']);
     this.bindInput();
     const loop = (t) => {
@@ -116,7 +142,7 @@ export class LoginScene {
     this.canvas.addEventListener('pointerdown', (e) => {
       this.mouse = pos(e); this.hover();
       for (const b of this.buttons()) b.down = b.enabled && b.hit(this.mouse.x, this.mouse.y);
-      this.topLayer()?.onPointer?.(this.mouse.x, this.mouse.y);
+      if (!this.panning() || this.dialogs.length) this.topLayer()?.onPointer?.(this.mouse.x, this.mouse.y);
     });
     addEventListener('pointerup', (e) => {
       this.mouse = pos(e);
@@ -125,16 +151,23 @@ export class LoginScene {
       this.hover();
       if (target) { sfx.play(target.sound || 'UI/BtMouseClick'); target.onClick?.(); }   // a button may have its own click sound
     });
+    this.canvas.addEventListener('wheel', (e) => {
+      if (this.panning() || this.dialogs.length) return;
+      if (this.screen?.onWheel) { e.preventDefault(); this.screen.onWheel(Math.sign(e.deltaY)); }
+    }, { passive: false });
     addEventListener('keydown', (e) => {
+      if (this.panning() && !this.dialogs.length) return;
       const top = this.topLayer();
       if (e.key === 'Enter' && top?.onEnter) { e.preventDefault(); top.onEnter(); }
       else if (e.key === 'Escape' && top?.onEscape) { e.preventDefault(); top.onEscape(); }
+      else if (top?.onKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) { e.preventDefault(); top.onKey(e.key); }
     });
   }
 
   topLayer() { return this.dialogs[this.dialogs.length - 1] || this.screen; }
-  /** Only the top layer (dialog over screen) takes clicks, like the client's modal notices. */
-  buttons() { return this.topLayer()?.buttons || []; }
+  panning() { return !!this.pan; }
+  /** Only the top layer (dialog over screen) takes clicks, like the client's modal notices; nothing does while the camera moves. */
+  buttons() { return this.panning() && !this.dialogs.length ? [] : this.topLayer()?.buttons || []; }
   hover() {
     let any = false;
     for (const l of [this.screen, ...this.dialogs]) for (const b of l?.buttons || []) b.hover = false;
@@ -147,10 +180,19 @@ export class LoginScene {
   }
 
   update(dt) {
-    this.camY += (this.camTarget - this.camY) * (1 - Math.exp(-dt * 6));
-    if (Math.abs(this.camTarget - this.camY) < 0.5) this.camY = this.camTarget;
-    this.scene.update(dt);
     const ms = dt * 1000;
+    if (this.pan) {
+      const p = this.pan; p.t += ms;
+      const k = Math.min(1, p.t / p.ms);
+      // starts at 3.5x the average speed and slows to a stop
+      this.camY = p.from + (p.to - p.from) * (1.5 * k * k * k - 4 * k * k + 3.5 * k);
+      if (k >= 1) { this.camY = this.camTarget; this.pan = null; this.hover(); p.arrive(); }
+    }
+    this.scene.update(dt);
+    for (const d of [...this.dialogs]) {
+      if (d.slide && d.t < NOTICE_SLIDE_MS) d.t = Math.min(NOTICE_SLIDE_MS, d.t + ms);
+      if (d.fade !== undefined && (d.fade += ms) >= NOTICE_SLIDE_MS) { this.dialogs.splice(this.dialogs.indexOf(d), 1); this.hover(); }
+    }
     for (const l of [this.screen, ...this.dialogs]) {
       for (const b of l?.buttons || []) b.update(ms);
       for (const s of l?.sprites || []) s.update(ms);
@@ -166,14 +208,16 @@ export class LoginScene {
     ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
     const cam = { x: -VIEW_X, y: this.camY - VIEW_Y, w: W, h: H };
     this.scene.drawBacks(ctx, cam, false);
+    // while the camera moves, the old step's windows scroll away with the scene and the new step's scroll in
+    const shown = [[this.screen, this.camTarget]];
+    if (this.pan?.leaving && this.pan.leaving !== this.screen && !this.pan.leaving.closeAtOnce) shown.unshift([this.pan.leaving, this.pan.leavingY]);
     // scene layers above the screen's uiLayer (e.g. the title light rays) draw over its buttons
-    const ui = this.screen?.uiLayer ?? 7;
+    const ui = Math.min(...shown.map(([l]) => l?.uiLayer ?? 7));
     for (let l = 0; l <= ui; l++) this.scene.drawLayer(ctx, cam, l);
-    // screen content scrolls with the scene while the camera pans
-    const dy = Math.round(this.camTarget - this.camY);
-    if (this.screen) {
-      ctx.save(); ctx.translate(0, dy);
-      this.drawLayerContent(ctx, this.screen);
+    for (const [layer, y] of shown) {
+      if (!layer) continue;
+      ctx.save(); ctx.translate(0, Math.round(y - this.camY));
+      this.drawLayerContent(ctx, layer);
       ctx.restore();
     }
     for (let l = ui + 1; l < 8; l++) this.scene.drawLayer(ctx, cam, l);
@@ -182,8 +226,14 @@ export class LoginScene {
     // step banner and navigation buttons sit on the book's border, above the frame
     for (const o of this.screen?.over || []) o.draw(ctx, this.assets);
     for (const d of this.dialogs) {
+      // notices slide in from (+20, -20) while fading in, and fade out on close
+      const k = d.fade !== undefined ? 1 - d.fade / NOTICE_SLIDE_MS : d.slide ? d.t / NOTICE_SLIDE_MS : 1;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, k);
       ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(0, 0, W, H);
+      if (d.slide && d.fade === undefined) ctx.translate(Math.round(20 * (1 - k)), Math.round(-20 * (1 - k)));
       this.drawLayerContent(ctx, d);
+      ctx.restore();
     }
   }
 
@@ -213,33 +263,118 @@ export class LoginScene {
     this.fields = this.fields.filter((f) => keep.includes(f));
   }
 
-  async setScreen(layer, step) {
+  async setScreen(layer, step, camY = STEP[step]) {
     const parts = [...(layer.buttons || []), ...(layer.sprites || []), ...(layer.over || [])];
     await this.assets.preload([...parts.flatMap((p) => p.frames()), ...(layer.preload || [])]);
+    const leaving = this.pan ? this.pan.leaving : this.screen;
+    const leavingY = this.pan ? this.pan.leavingY : this.camTarget;
     this.screen = layer;
-    this.camTarget = STEP[step];
+    let arrived = null;
+    if (this.step !== undefined && (camY !== this.camTarget || STEP_NO[step] !== this.step)) {
+      // |steps| x 300 + 500 ms, with the ScrollUp whoosh on every step change
+      this.pan?.arrive();
+      arrived = new Promise((res) => {
+        this.pan = { from: this.camY, to: camY, t: 0, ms: Math.abs(STEP_NO[step] - this.step) * 300 + 500, leaving, leavingY, arrive: res };
+      });
+      sfx.play('UI/ScrollUp');
+    }
+    this.step = STEP_NO[step];
+    this.camTarget = camY;
     this.hover();
+    return arrived;
   }
 
   button(node, x, y, onClick) { return new WzButton(node, x, y, onClick); }
 
+  /**
+   * Screen windows over the book's border: the step banner (slides in from x -149 over 300 ms), the
+   * "Selected world" box under it (400 ms) and the left-hand buttons. Returns { over, buttons }.
+   */
+  chrome(stepImg, { back = null, vac = null, view = null, world = null, channel = null } = {}) {
+    const C = this.L.Common;
+    const over = [slideIn(new WzSprite(C.step[stepImg], 0, 33), 300)];
+    if (world) {
+      const box = new WzSprite(C.selectWorld, 0, 96);
+      // the channel's name split at '-': "Scania-1" -> SCANIA / CH.1
+      const [head, tail] = String(channel?.name || world.name).split(/-(.*)/s);
+      const name = head.toUpperCase(), ch = `CH.${(tail || '1').toUpperCase()}`;
+      over.push(slideIn({
+        frames: () => box.frames(),
+        draw: (ctx, a) => {
+          box.draw(ctx, a);
+          uiText(ctx, name, 100, 110, { color: '#D3CCBD', align: 'center', size: 9, font: 'Tahoma' });
+          uiText(ctx, ch, 100, 125, { color: '#D3CCBD', align: 'center', size: 9, font: 'Tahoma' });
+        },
+      }, 400));
+    }
+    const buttons = [];
+    if (view) buttons.push(view);
+    const vacBtn = this.button(this.L.ViewAllChar.BtVAC, 0, 375, () => vac?.());
+    vacBtn.enabled = !!vac;
+    buttons.push(vacBtn);
+    if (back) buttons.push(this.button(C.BtStart, 0, 425, back));
+    over.push(...buttons);
+    return { over, buttons, vacBtn };
+  }
+
   // ------------------------------------------------------------------ dialogs
-  /** Login.img/Notice dialog. text: Notice/text index or a string. buttons: 'ok' | 'yesno'. */
-  async notice(text, buttons = 'ok') {
+  /**
+   * Login.img/Notice dialog. text: Notice/text index or a string.
+   * kind: 'error' (crossed-out mushroom, OK), 'info' (OK), 'yesno' (OK / Cancel), 'nexon' (Go to Nexon.net / Cancel).
+   */
+  async notice(text, kind = 'error') {
     const N = this.L.Notice;
-    const x = (W - 362) / 2, y = (H - 219) / 2;
+    const { x, y } = NOTICE_AT;
     return new Promise((resolve) => {
-      const d = { buttons: [], sprites: [new WzSprite(N.backgrnd[buttons === 'yesno' ? 1 : 0], x, y)] };
-      if (typeof text === 'number' && N.text[text]) d.sprites.push(new WzSprite(N.text[text], x + 112, y + 30));
-      else d.drawFront = (ctx) => wrapText(ctx, String(text), 210).slice(0, 7).forEach((ln, i) => uiText(ctx, ln, x + 114, y + 40 + i * 15, { color: '#5a3200' }));
-      const close = (v) => { this.dialogs.splice(this.dialogs.indexOf(d), 1); this.hover(); resolve(v); };
-      if (buttons === 'yesno') {
-        d.buttons.push(this.button(N.BtYes, x + 196, y + 172, () => close(true)), this.button(N.BtNo, x + 276, y + 172, () => close(false)));
+      const d = { buttons: [], sprites: [new WzSprite(N.backgrnd[kind === 'error' ? 1 : 0], x, y)], slide: true, t: 0 };
+      if (typeof text === 'number' && N.text[text]) d.sprites.push(new WzSprite(N.text[text], x + 119, y + 21));
+      else {
+        const lines = String(text).replace(/\r\n?/g, '\n');
+        d.drawFront = (ctx) => wrapText(ctx, lines, 215).slice(0, 7).forEach((ln, i) => uiText(ctx, ln, x + 121, y + 30 + i * 15, { color: '#5a3200' }));
+      }
+      const close = (v) => { this.closeDialog(d); resolve(v); };
+      if (kind === 'yesno' || kind === 'nexon') {
+        const first = kind === 'nexon' ? this.button(N.BtNexon, x + 108, y + 150, () => { window.open('https://maplestory.nexon.net', '_blank', 'noopener'); close(true); })
+          : this.button(N.BtYes, x + 116, y + 150, () => close(true));
+        d.buttons.push(first, this.button(N.BtNo, x + 196, y + 150, () => close(false)));
         d.onEscape = () => close(false);
-      } else d.buttons.push(this.button(N.BtYes, x + 276, y + 172, () => close(true)));
-      d.onEnter = () => close(true);
+      } else {
+        d.buttons.push(this.button(N.BtYes, x + 196, y + 150, () => close(true)));
+      }
+      d.onEnter = () => d.buttons[0]?.onClick();
       this.assets.preload([...d.sprites.flatMap((s) => s.frames()), ...d.buttons.flatMap((b) => b.frames())]).then(() => { this.dialogs.push(d); this.hover(); });
     });
+  }
+
+  /** Stops a dialog taking input and fades it out (or drops it at once if it doesn't slide). */
+  closeDialog(d) {
+    d.buttons = []; d.onEnter = d.onEscape = d.onPointer = null;
+    if (d.slide) d.fade = 0;
+    else { this.dialogs.splice(this.dialogs.indexOf(d), 1); }
+    this.hover();
+  }
+
+  /** Text for a LOGIN_STATUS / CHARLIST / SERVER_IP failure; null when the result shows nothing. */
+  loginResult(res) {
+    if (res.reason === 2) {
+      const ban = res.ban;
+      if (!ban || ban.reason === 0) return 16;
+      const block = this.blockReasons?.[ban.reason > 20 && ban.reason <= 40 ? 12 : ban.reason]?.msg || '';
+      const head = ban.reason === 99 ? 'You have been blocked for typing in an invalid password or pincode 5 times.\r\n' : `${block}\r\n`;
+      const d = ban.until;
+      if (d.getTime() - Date.now() >= 3 * 365.25 * 86400000) return `${head}The ID has been permanently blocked.\r\nSo you won't be able to use this account.`;
+      const h = d.getHours() % 12 || 12, pad = (n, w, c = ' ') => String(n).padStart(w, c);
+      return `${head}You can login after\r\n${MONTHS[d.getMonth()]}/${pad(d.getDate(), 2)}/${pad(d.getFullYear(), 4)} ${pad(h, 2)}:${pad(d.getMinutes(), 2, '0')} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
+    }
+    return LOGIN_NOTICE[res.reason] ?? null;
+  }
+
+  /** Shows a login-table result; result 7 also sends the player back to the title. */
+  async loginFailed(res) {
+    if (res.reason === 14 || res.reason === 15) { await this.notice(res.reason === 14 ? 27 : 26, 'nexon'); return; }
+    const n = this.loginResult(res);
+    if (n !== null) await this.notice(n);
+    if (res.reason === 7) throw new BackToTitle();
   }
 
   /** Pincode-style prompt with one input line. Resolves with the text or null. */
@@ -269,18 +404,6 @@ export class LoginScene {
       d.onEnter = ok; d.onEscape = onCancel;
       this.dialogs.push(d); this.hover();
       setTimeout(() => f.focus(), 50);
-    });
-  }
-
-  /** Terms of service (Login.img/TOS) with Accept / Decline. */
-  async tos() {
-    const T = this.L.TOS[0], N = this.L.Notice;
-    return new Promise((resolve) => {
-      const d = { buttons: [], sprites: [new WzSprite(T, W / 2, H / 2)] };
-      const close = (v) => { this.dialogs.splice(this.dialogs.indexOf(d), 1); this.hover(); resolve(v); };
-      d.buttons.push(this.button(N.BtYes, W / 2 - 80, H / 2 + 165, () => close(true)), this.button(N.BtNo, W / 2 + 5, H / 2 + 165, () => close(false)));
-      d.onEscape = () => close(false);
-      this.assets.preload([...d.sprites.flatMap((s) => s.frames()), ...d.buttons.flatMap((b) => b.frames())]).then(() => { this.dialogs.push(d); this.hover(); });
     });
   }
 
@@ -320,8 +443,10 @@ export class LoginScene {
         const res = await this.session(creds);
         if (res) { this.destroy(); return res; }
       } catch (e) {
-        console.error(e);
-        await this.notice(NOTICE.CANT_CONNECT);
+        if (!(e instanceof BackToTitle)) {
+          console.error(e);
+          await this.notice(NOTICE.CANT_CONNECT);
+        }
       }
       this.s?.close();
     }
@@ -329,18 +454,23 @@ export class LoginScene {
 
   titleScreen() {
     const T = this.L.Title;
-    // the Title signboard object sits at (338, 233) on screen
-    const sx = 338, sy = 233;
+    // the Title signboard's top-left, map (-47, -97)
+    const sx = 325, sy = 211;
     return new Promise((resolve) => {
       this.clearFields();
-      const id = this.field(sx + 116, sy + 24, 145, 22, { max: 13, color: '#fff' });
-      const pw = this.field(sx + 116, sy + 53, 145, 22, { password: true, max: 32, color: '#fff' });
+      const id = this.field(sx + 116, sy + 24, 145, 22, { max: 12, color: '#fff' });
+      const pw = this.field(sx + 116, sy + 53, 145, 22, { password: true, max: 12, color: '#fff' });
       let saveId = store.get('maple.saveid') !== '0';
       if (saveId) id.value = store.get('maple.user') || '';
       let server = this.servers.includes(store.get('maple.server')) ? store.get('maple.server') : this.servers[0];
-      const submit = () => {
-        if (!id.value) { id.focus(); return; }
-        if (!pw.value) { pw.focus(); return; }
+      let sent = false;
+      const submit = async () => {
+        if (sent || this.panning() || this.dialogs.length) return;
+        if (id.value.length < 4 || id.value.length > 12 || /[@.]/.test(id.value)) { await this.notice(NOTICE.BAD_ID); id.focus(); return; }
+        if (pw.value.length < 5 || pw.value.length > 12) { await this.notice(NOTICE.WRONG_PASSWORD); pw.focus(); return; }
+        // the title buttons stay disabled until LOGIN_STATUS arrives
+        sent = true;
+        for (const b of layer.buttons) b.enabled = false;
         store.set('maple.saveid', saveId ? '1' : '0');
         store.set('maple.user', saveId ? id.value : '');
         store.set('maple.server', server);
@@ -355,16 +485,17 @@ export class LoginScene {
         buttons: [
           this.button(T.BtLogin, sx + 270, sy + 12, submit), // tucked against the board edge; also where its wood edges best match the signboard
           this.button(T.BtLoginIDSave, sx + 91, sy + 93, () => { saveId = !saveId; }),
-          this.button(T.BtLoginIDLost, sx + 184, sy + 93, () => this.notice('Please contact the server administrator to recover your ID.')),
-          this.button(T.BtPasswdLost, sx + 283, sy + 93, () => this.notice('Please contact the server administrator to reset your password.')),
-          this.button(T.BtNew, sx + 70, sy + 137, () => this.notice('New IDs are registered automatically: just log in with the ID and password you want.')),
+          this.button(T.BtLoginIDLost, sx + 184, sy + 93, () => this.notice('Please contact the server administrator to recover your ID.', 'info')),
+          this.button(T.BtPasswdLost, sx + 283, sy + 93, () => this.notice('Please contact the server administrator to reset your password.', 'info')),
+          this.button(T.BtNew, sx + 70, sy + 137, () => this.notice('New IDs are registered automatically: just log in with the ID and password you want.', 'info')),
           this.button(T.BtHomePage, sx + 171, sy + 137, () => window.open('https://github.com/P0nk/Cosmic', '_blank', 'noopener')),
-          this.button(T.BtQuit, sx + 271, sy + 137, () => this.notice('You can simply close this browser tab to quit.')),
+          this.button(T.BtQuit, sx + 271, sy + 137, () => this.notice('You can simply close this browser tab to quit.', 'info')),
         ],
         sprites: [],
         hotspots: this.servers.length > 1 ? [serverBox] : [],
         preload: [T.check[0], T.check[1]],
         uiLayer: 3, // signboard is layer 1, the light rays (Title/effect) layer 4
+        enable: () => { for (const b of layer.buttons) b.enabled = true; },
         onEnter: submit,
         onPointer: (mx, my) => {
           if (this.servers.length > 1 && inRect({ x: mx, y: my }, serverBox)) server = this.servers[(this.servers.indexOf(server) + 1) % this.servers.length];
@@ -378,6 +509,7 @@ export class LoginScene {
           }
         },
       };
+      this.titleLayer = layer;
       this.setScreen(layer, 'title').then(() => setTimeout(() => (id.value ? pw : id).focus(), 600));
     });
   }
@@ -386,15 +518,12 @@ export class LoginScene {
     this.s = new LoginSession(wsTransport(bridgeUrl(server, 8484)));
     await this.s.ready();
     let res = await this.s.login(user, password);
-    if (!res.ok && res.reason === 23) {
-      if (!(await this.tos())) return null;
-      res = await this.s.acceptTos();
-    }
-    if (!res.ok) {
-      const n = LOGIN_REASON_TO_NOTICE[res.reason];
-      await this.notice(n !== undefined ? n : res.message);
-      return null;
-    }
+    this.titleLayer?.enable();
+    // the license agreement is accepted without being shown
+    if (!res.ok && res.reason === 23) res = await this.s.acceptTos();
+    if (!res.ok) { await this.loginFailed(res); return null; }
+    if (res.regStatus === 2 || res.regStatus === 3) { await this.notice(31, 'yesno'); return null; }
+    if (res.regStatus > 3) { await this.notice(NOTICE.LAUNCHER); return null; }
     let account = res.account;
     if (account.gender === 10) {
       const g = await this.gender();
@@ -404,7 +533,12 @@ export class LoginScene {
     this.account = account;
     if (account.pinMode === 0 && !(await this.pin())) return null;
     this.worlds = await this.s.worlds();
-    return this.worldSelect(server);
+    for (;;) {
+      const r = await this.worldSelect(server);
+      if (r === 'again') { this.worlds = await this.s.worlds(true); continue; }
+      if (r === 'vac') { const v = await this.viewAll(server); if (v) return v; continue; }
+      return r;
+    }
   }
 
   async pin() {
@@ -430,56 +564,138 @@ export class LoginScene {
   worldSelect(server) {
     const WS = this.L.WorldSelect, C = this.L.Common;
     return new Promise((resolve, reject) => {
-      let world = null, channel = 0;
-      const tabX = 245, tabY = 118;                    // the first tag hangs from the rod's third string past the scroll's left end
+      let world = null, channel = -1, pending = false;
+      const tabX = 232, tabY = 96;                     // the first tag hangs from the rod's third string past the scroll's left end
       // WorldSelect/scroll unrolls over the scene's rolled-up scroll (signboard/2, top-left 171,101);
-      // chBackgrn is that scroll's paper: 38,146 into the open frame
-      const roll = { x: 171, y: 101 };
-      const win = { x: roll.x + 38, y: roll.y + 146 };
+      // chBackgrn is that scroll's paper: 38,141 into the open frame
+      const roll = { x: 158, y: 79 };
+      const win = { x: roll.x + 38, y: roll.y + 141 };
       let scroll = null, closing = false;              // the unroll / roll-up animation while it plays or holds open
       const opened = () => !!world && !!scroll && !closing && scroll.anim.done;
       let chButtons = [];
       const go = async () => {
-        if (!opened()) return;
+        if (!opened() || channel < 0 || pending) return;
+        pending = true;
+        let cancelled = false;
+        const loading = this.loading(() => { cancelled = true; this.s.close(); });
         try {
-          const res = await this.charSelect(server, world, world.channels[channel]);
-          if (res) resolve(res); else this.setScreen(layer, 'world');
-        } catch (e) { reject(e); }
+          const res = await this.charSelect(server, world, world.channels[channel], loading);
+          if (res === 'back') resolve('again'); else if (res) resolve(res);
+        } catch (e) { reject(cancelled ? new BackToTitle() : e); } finally { loading.close(); pending = false; }
       };
       const openWorld = (w) => {
         if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; sfx.play('UI/RollDown'); }
-        world = w; channel = 0;
-        // four columns centred on the paper, rows from just under the header rule (y 52)
-        chButtons = w.channels.map((c, i) => {
-          const node = WS.channel[i] || WS.channel[0];
-          const b = new WzButton({ normal: node.normal, disabled: node.disabled }, win.x + 20 + (i % 4) * 106, win.y + 60 + Math.floor(i / 4) * 31, () => {
+        world = w; channel = -1;
+        // 20 places, 4 columns 94px apart and rows 32px apart; places past the world's channels are disabled
+        chButtons = Array.from({ length: 20 }, (_, i) => {
+          const node = WS.channel[i] || WS.channel[0], c = w.channels[i];
+          const b = new WzButton({ normal: node.normal, disabled: node.disabled }, win.x + 35 + (i % 4) * 94, win.y + 57 + Math.floor(i / 4) * 32, () => {
             if (channel === i && performance.now() - (b.lastClick || 0) < 400) go(); // double-click enters
             if (channel !== i) select.anim.reset();
             channel = i; b.lastClick = performance.now();
           });
-          b.load = c.load; b.sound = 'UI/WorldSelect';
+          b.enabled = !!c; b.users = c?.load || 0; b.sound = 'UI/WorldSelect';
           return b;
         });
         this.assets.preload([...chButtons.flatMap((b) => b.frames()), WS.channel.chgauge, ...select.frames()]).then(() => this.hover());
       };
       const closeWorld = () => {
         if (!world) return;
-        world = null; closing = true;
+        world = null; closing = true; channel = -1;
         scroll = new WzSprite(WS.scroll[1], roll.x, roll.y, { loop: false });
+        sfx.play('UI/RollUp');
+        for (const b of worldButtons) b.enabled = true;
       };
-      const worldButtons = this.worlds.map((w, i) => this.button(WS.BtWorld[w.id] || WS.BtWorld[0], tabX + i * TAG_STEP, tabY, () => openWorld(w)));
+      // a click asks for the world's status first: busy shows a warning, full keeps it closed
+      const clickWorld = async (w, btn) => {
+        if (pending) return;
+        for (const b of worldButtons) b.enabled = true;
+        btn.enabled = false;   // the clicked tag stays pressed
+        focusWorld(w.id);      // and takes the keyboard focus, so no other tag keeps the highlight
+        pending = true;
+        let status;
+        try { status = await this.s.serverStatus(w.id); } catch (e) { reject(e); return; } finally { pending = false; }
+        if (status === 2) { await this.notice(WORLD_FULL, 'info'); btn.enabled = true; return; }
+        if (status === 1) await this.notice(WORLD_BUSY, 'info');
+        openWorld(w);
+      };
+      const hang = WS.BtWorld[0]?.disabled?.[0];
+      const worldButtons = this.worlds.map((w, i) => {
+        const b = this.button(WS.BtWorld[w.id] || WS.BtWorld[0], tabX + i * TAG_STEP, tabY, () => clickWorld(w, b));
+        b.focusRing = true;   // keyFocused is only an outline, drawn over the tag
+        // a selected tag hangs 5px lower; only Scania's art has that, so the others reuse its longer string
+        const normal = b.anims.normal?.node, down = b.anims.disabled?.node;
+        if (normal && down && down._h === normal._h && hang) {
+          const draw = b.draw.bind(b);
+          b.draw = (ctx, assets) => {
+            const img = assets.image(normal), str = assets.image(hang);
+            if (!b.visible || b.state !== 'disabled' || !img || !str) { draw(ctx, assets); return; }
+            ctx.drawImage(img, b.x, b.y + 5);
+            ctx.drawImage(str, 0, 0, str.width, 5, b.x, b.y, str.width, 5);
+          };
+        }
+        return b;
+      });
       // places no world takes hang an empty plank (BtWorld/e), as in the client
       const blanks = Array.from({ length: Math.max(0, WORLD_TAGS - this.worlds.length) },
         (_, i) => new WzSprite(WS.BtWorld.e.normal, tabX + (this.worlds.length + i) * TAG_STEP, tabY));
-      const goBtn = this.button(WS.BtGoworld, win.x + 331, win.y + 6, go);
-      const exitBtn = this.button(C.BtExit, 12, 520, () => { this.s.close(); location.reload(); });
+      const goBtn = this.button(WS.BtGoworld, win.x + 315, win.y + 215, go);   // bottom right of the paper (measured)
+      const nav = this.chrome(1, {
+        back: async () => { if (!pending && await this.notice(NOTICE.RETURN_TO_TITLE, 'yesno')) reject(new BackToTitle()); },
+        vac: () => { if (!pending && !rec) resolve('vac'); },
+      });
+      // the last world played gets the keyboard-focus highlight
+      const focusWorld = (id) => worldButtons.forEach((b, i) => { b.focused = this.worlds[i].id === id; });
+      focusWorld(this.s.lastWorld);
+      // Recommended World window (screen (136, 51)): arrows step through the list, Select highlights that world's tag
+      const recs = (this.s.recommended || []).filter((r) => this.worlds.some((w) => w.id === r.world));
+      let rec = null;
+      const RW = { x: 136, y: 51 }, A = WS.alert;
+      const recStep = (d) => { rec.i = (rec.i + d + recs.length) % recs.length; };
+      const recArrows = [this.button(A.BtArrowL, RW.x + 45, RW.y + 70, () => recStep(-1)), this.button(A.BtArrowR, RW.x + 215, RW.y + 70, () => recStep(1))];
+      for (const b of recArrows) b.enabled = recs.length > 1;
+      const recChoice = this.button(A.BtChoice, RW.x + 113, RW.y + 114, () => { focusWorld(recs[rec.i].world); closeRec(); });
+      const openRec = () => {
+        if (!recs.length || pending) return;
+        closeWorld();
+        rec = { i: 0 };
+      };
+      const closeRec = () => { rec = null; };
+      const viewChoice = this.button(WS.BtViewChoice, 0, 125, openRec), viewAll = this.button(WS.BtViewAll, 0, 125, closeRec);
+      viewChoice.enabled = recs.length > 0;
+      const recLines = (text) => {
+        this.recWrap ??= new Map();
+        if (!this.recWrap.has(text)) this.recWrap.set(text, wrapText(this.ctx, String(text).replace(/\\r|\r\n?/g, '\n'), 200));
+        return this.recWrap.get(text);
+      };
+      const recPanel = {
+        frames: () => [A.backgrd],
+        draw: (ctx) => {
+          if (!rec) return;
+          const bg = this.assets.image(A.backgrd);
+          if (bg) ctx.drawImage(bg, RW.x, RW.y);
+          const r = recs[rec.i], img = WS.world[r.world] && this.assets.image(WS.world[r.world]);
+          if (img) ctx.drawImage(img, RW.x + 145 - Math.round(img.width / 2), RW.y + 61);
+          recLines(r.text).slice(0, 6).forEach((ln, i) => uiText(ctx, ln, RW.x + 280, RW.y + 60 + i * 14, { color: '#000' }));
+          for (const b of [...recArrows, recChoice]) b.draw(ctx, this.assets);
+        },
+      };
+      if (this.s.lastWorld === 0xFF && recs.length) rec = { i: 0 };
+      // the Events balloon draws over the book frame
+      const eventPanel = { frames: () => [], draw: (ctx) => { if (opened() && this.camY === this.camTarget) this.eventBalloon(ctx, world, win); } };
       const select = new WzSprite(WS.channel.chSelect, 0, 0, { loop: false }); // swirls in once per selection
       const layer = {
         // channel window buttons only exist once the scroll is open
-        get buttons() { return opened() ? [...worldButtons, exitBtn, ...chButtons, goBtn] : [...worldButtons, exitBtn]; },
+        get buttons() {
+          nav.vacBtn.enabled = !rec;
+          const left = [rec ? viewAll : viewChoice, ...nav.buttons];
+          if (rec) return [...recArrows, recChoice, ...left];
+          return opened() ? [...worldButtons, ...left, ...chButtons, goBtn] : [...worldButtons, ...left];
+        },
         sprites: blanks,
-        over: [new WzSprite(C.step[1], 0, 36), exitBtn],
-        preload: [WS.chBackgrn, goBtn.frames(), ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
+        get over() { return [eventPanel, ...nav.over, rec ? viewAll : viewChoice, recPanel]; },
+        preload: [WS.chBackgrn, hang, goBtn.frames(), viewChoice.frames(), viewAll.frames(), A.backgrd, ...[...recArrows, recChoice].flatMap((b) => b.frames()),
+          ...Object.values(WS.world).filter((n) => n?._canvas), ...Object.values(this.L.WorldNotice.BalloonForLoginProcess).filter((n) => n?._canvas), ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
           ...new WzSprite(WS.scroll[0]).frames(), ...new WzSprite(WS.scroll[1]).frames()].flat(),
         onEnter: go,
         onEscape: closeWorld,
@@ -500,65 +716,138 @@ export class LoginScene {
           if (name) ctx.drawImage(name, win.x + 12, win.y + 3);
           else uiText(ctx, world.name, win.x + 20, win.y + 16, { color: '#5a3200', bold: true, size: 14 });
         },
-        drawFront: (ctx) => {  // load gauges (on each button's track at 7,15) and the selection swirl round the CH label
+        drawFront: (ctx) => {  // load gauges and the selection swirl round the CH label
           if (!opened()) return;
           const gauge = this.assets.image(WS.channel.chgauge);
           for (const b of chButtons) {
-            if (!gauge) break;
-            const w = Math.max(1, Math.round(gauge.width * Math.min(1, (b.load || 0) / 1000)));
-            ctx.drawImage(gauge, 0, 0, w, gauge.height, b.x + 7, b.y + 15, w, gauge.height);
+            if (!gauge || !b.enabled) continue;
+            // level = users / 60 + 1 (1-14), width = level x 5 + 2 (+1 at 14)
+            const level = Math.min(14, Math.max(1, Math.floor(b.users / 60) + 1));
+            const w = Math.min(gauge.width, level * 5 + 2 + (level === 14 ? 1 : 0));
+            ctx.drawImage(gauge, 0, 0, w, 8, b.x + 7, b.y + 17, w, 8);
           }
           const sb = chButtons[channel];
-          if (sb) { select.x = sb.x + 18; select.y = sb.y + 8; select.draw(ctx, this.assets); }
+          if (sb) { select.x = sb.x + 20; select.y = sb.y + 7; select.draw(ctx, this.assets); }
         },
       };
-      sfx.play('UI/ScrollUp');   // the whoosh as the camera leaves the title for world select
       this.setScreen(layer, 'world');   // no world is open until one is clicked
     });
   }
 
+  /**
+   * The open world's event text in a WorldNotice/BalloonForLoginProcess balloon, its right edge 35px into
+   * the channel window: "Events" title image, centred lines in Arial 12 (#b blue, #r red, #k black).
+   */
+  eventBalloon(ctx, world, win) {
+    let text = world.event || '';
+    if (world.expRate !== undefined && (world.expRate !== 100 || world.dropRate !== 100)) {
+      text += `${text ? '\r' : ''}#kSummer Event\r#b1:00 pm ~ 7:00 pm\r#rEXP x${world.expRate}, Drop Rate x${world.dropRate}`;
+    }
+    if (!text) return;
+    const lines = text.split(/\\r|\r\n?|\n/);
+    ctx.save(); ctx.font = '12px Arial';
+    const plain = (ln) => ln.replace(/#[a-zA-Z]/g, '');
+    const widths = lines.map((ln) => ctx.measureText(plain(ln)).width);
+    ctx.restore();
+    const W0 = Math.max(Math.max(...widths) + 44, 184), Wd = W0 + 7, H = (lines.length + 4) * 16;
+    // its right edge just left of the world's name (measured)
+    const x = win.x + 23 - Wd, y = win.y + (lines.length === 1 ? 21 : 15);
+    const B = this.L.WorldNotice.BalloonForLoginProcess;
+    this.balloon(ctx, B, x, y, Wd, H);
+    const title = this.assets.image(B.Title);
+    if (title) ctx.drawImage(title, x + Math.floor((Wd - 170) / 2) + 3, y + 17);
+    const colors = { b: '#2000FF', r: '#FF2020', k: '#000' };
+    lines.forEach((ln, i) => {
+      let cx = x + Math.floor((W0 - widths[i]) / 2), color = '#000';
+      for (const part of ln.split(/(#[a-zA-Z])/)) {
+        if (/^#[a-zA-Z]$/.test(part)) { color = colors[part[1].toLowerCase()] || color; continue; }
+        if (!part) continue;
+        uiText(ctx, part, cx, y + 38 + 16 * i, { color });
+        ctx.save(); ctx.font = '12px Arial'; cx += ctx.measureText(part).width; ctx.restore();
+      }
+    });
+  }
+
+  /** Notice/Loading: "Connecting to server" with a looping bar and Cancel, until close(). */
+  loading(onCancel) {
+    const Ld = this.L.Notice.Loading;
+    const x = Math.round((W - 282) / 2), y = Math.round((H - 144) / 2);
+    const d = { sprites: [new WzSprite(Ld.backgrnd, x, y), new WzSprite(Ld.bar, x + 132, y + 98)], buttons: [] };
+    let closed = false;
+    d.buttons.push(this.button(Ld.BtCancel, x + 189, y + 44, () => { close(); onCancel(); }));
+    const close = () => { if (closed) return; closed = true; if (this.dialogs.includes(d)) this.closeDialog(d); };
+    this.assets.preload([...d.sprites, ...d.buttons].flatMap((p) => p.frames())).then(() => { if (!closed) { this.dialogs.push(d); this.hover(); } });
+    return { close };
+  }
+
   // ------------------------------------------------------------------ character select
-  async charSelect(server, world, channel) {
+  async charSelect(server, world, channel, loading = null) {
     const list = await this.s.chars(world.id, channel.id);
-    if (list.error) { await this.notice(NOTICE.SELECT_CHANNEL); return null; }
-    const CS = this.L.CharSelect, C = this.L.Common;
-    const objCS = (await this.assets.json('Map/Obj/login.img'))?.CharSelect;
+    loading?.close();
+    if (list.full) { await this.notice(WORLD_FULL, 'info'); return null; }
+    if (list.status) { await this.loginFailed({ reason: list.status }); return null; }
+    const CS = this.L.CharSelect;
     const looks = await Promise.all(list.chars.map(async (c) => {
       const cl = new CharacterLook(this.assets, { skin: c.look.skin, face: c.look.face, hair: c.look.hair, gender: c.look.gender, equips: lookEquipIds(c.look) });
       await cl.load();
-      await this.assets.preload(lookCanvases(cl, ['stand1', 'walk1']));
+      await this.assets.preload(lookCanvases(cl, [cl.standAction(), cl.walkAction()]));
       return cl;
     }));
     return new Promise((resolve, reject) => {
       // the buttons run outside session(): a lost connection or a server that never answers is handed to
       // it through reject (back to the title with the can't-connect notice), and one click runs at a time
-      let busy = false;
+      let busy = false, done = false;
+      const finish = (v) => { done = true; resolve(v); };
       const guard = (fn) => async () => {
-        if (busy) return;
+        if (busy || done) return;
         busy = true;
-        try { await fn(); } catch (e) { reject(e); } finally { busy = false; }
+        try { await fn(); } catch (e) { done = true; reject(e); } finally { busy = false; }
       };
-      let page = 0, sel = list.chars.length ? 0 : -1;
-      const perPage = 3;
-      const shown = Math.min(list.slots, list.chars.length + 1); // characters plus the next free slot
-      const slotX = (i) => 318 + i * 120, footY = 390; // on top of the bridge deck logs (y 391-419)
+      // the character last played on this world is selected, else none
+      const lastKey = `maple.lastchar.${world.id}`;
+      let sel = list.chars.findIndex((c) => String(c.stats.id) === store.get(lastKey));
+      const perPage = 3, pages = Math.floor((Math.max(1, list.slots) - 1) / perPage) + 1;
+      let page = sel >= 0 ? Math.floor(sel / perPage) : 0;
+      // three places 125px apart, feet on the bridge
+      const placeX = (c) => 252 + 125 * c, footY = 370;
       const anim = list.chars.map(() => ({ frame: 0, t: 0 }));
-      const glow = new WzSprite(CS.character[0], 0, 0);
-      const info = new WzSprite(CS.charInfo, 0, 0);
-      // the selected character gets a beam of light (grows once, then holds) with sparkles rising round it;
-      // both anchor 337px above the feet, the beam's full height
+      const backdrop = (job) => (Math.floor(job / 1000) === 1 ? CS.knight : Math.floor(job / 100) === 21 || job === 2000 ? CS.aran : CS.adventure);
       const beam = new WzSprite(CS.effect[1], 0, 0, { loop: false });
       const sparkle = new WzSprite(CS.effect[0], 0, 0);
-      // empty slots show a pulsing ghost on a shadow
-      const ghost = objCS && new WzSprite(objCS.character[1], 0, 0), ghostShadow = objCS && new WzSprite(objCS.character[0], 0, 0);
-      // stats sit on a small scroll that unrolls (scroll/0) on each selection; charInfo is 17,22 into the open scroll
-      const scrollAt = { x: 104, y: 120 };
-      let infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
+      const shadow = new WzSprite(CS.character[0], 0, 0), ghost = new WzSprite(CS.character[1], 0, 0);
+      const panel = { scroll: null, t: 0 };
+      const ranked = () => sel >= 0 && !!list.chars[sel].rank;
+      const panelAt = () => ({ x: 152 + 130 * (sel % perPage), y: ranked() ? 124 : 160 });
+      const rollPanel = () => {
+        panel.scroll = sel >= 0 ? new WzSprite(CS.scroll[ranked() ? 2 : 0], 0, 0, { loop: false }) : null;
+        panel.t = 0; panel.rolled = false;
+      };
+      // lined up with the signboard's planks (measured)
+      const btnSelect = this.button(CS.BtSelect, 576, 149, null), btnNew = this.button(CS.BtNew, 576, 185, null), btnDelete = this.button(CS.BtDelete, 576, 234, null);
+      // Tab moves keyboard focus to the board (a leaf marks the focused button); Up / Down move it, Enter presses it
+      const board = [btnSelect, btnNew, btnDelete];
+      let menu = null, lastMenu = 0;
+      for (const b of board) b.focusRing = true;
+      const focusMenu = (i) => { menu = i; board.forEach((b, k) => { b.focused = k === i; }); };
+      const nextEnabled = (from, d) => {
+        for (let k = 0; k < board.length; k++) { const i = (from + d * k + board.length * 3) % board.length; if (board[i].enabled) return i; }
+        return null;
+      };
+      const refresh = () => {
+        btnSelect.enabled = btnDelete.enabled = sel >= 0;
+        if (menu !== null && !board[menu].enabled) focusMenu(nextEnabled(menu, 1));
+      };
+      // a click on the board drops the keyboard focus
+      for (const [i, b] of board.entries()) {
+        const press = () => { lastMenu = i; focusMenu(null); b.action?.(); };
+        b.press = press;
+      }
       const choose = (idx) => {
-        sfx.play('UI/CharSelect');   // every click on a character, even the one already selected
+        sfx.play('UI/CharSelect');   // every selection, even the one already selected
         if (idx === sel) return;
         sel = idx; beam.anim.reset(); sparkle.anim.reset();
-        infoScroll = new WzSprite(CS.scroll[0], scrollAt.x, scrollAt.y, { loop: false });
+        if (sel >= 0) page = Math.floor(sel / perPage);
+        rollPanel(); refresh();
       };
       const pick = async () => {
         if (sel < 0) return;
@@ -573,127 +862,364 @@ export class LoginScene {
         }
         const res = await this.s.selectChar(c.stats.id, pic);
         if (res.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
-        if (res.error) { await this.notice(res.error); return; }
+        if (res.code !== undefined) { await this.loginFailed({ reason: res.code }); return; }
+        sfx.play('Game/GameIn');
+        store.set(lastKey, String(c.stats.id));
         this.s.close();
-        resolve({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look, gm: !!this.account?.gm });
+        finish({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look, gm: !!this.account?.gm });
       };
       const start = guard(pick);
       const create = async () => {
+        if (world.blockCreate) { await this.notice(NOTICE.CREATE_BLOCKED, 'info'); return; }
         if (list.chars.length >= list.slots) { await this.notice(NOTICE.NO_MORE_CHARS); return; }
-        const race = await this.raceSelect();
-        if (race) await this.creator(race);
-        resolve(await this.charSelect(server, world, channel));
+        // race select <-> name board until a character is made or race select is left
+        for (;;) {
+          const race = await this.raceSelect(world, channel);
+          if (!race) break;
+          const c = await this.creator(race, world, channel);
+          if (c) { store.set(lastKey, String(c.stats.id)); break; }   // the new character is selected
+        }
+        finish(await this.charSelect(server, world, channel));
       };
       const remove = async () => {
         if (sel < 0) return;
         const c = list.chars[sel];
-        if (list.picFlag !== 1) { await this.notice('Register a PIC first: start the game with any character once, then you can delete characters.'); return; }
-        if (!(await this.notice(NOTICE.DELETE_CONFIRM, 'yesno'))) return;
+        if (list.picFlag !== 1) { await this.notice(NOTICE.NO_PIC, 'info'); return; }
+        // the PIC first, then the question (Cygnus and Aran warn about their Cash items)
         const pic = await this.prompt(`Delete ${c.stats.name}\nEnter your PIC to confirm.`);
         if (pic === null) return;
+        const race = Math.floor(c.stats.job / 1000);
+        if (!(await this.notice(race === 1 || race === 2 ? NOTICE.DELETE_CONFIRM_CASH : NOTICE.DELETE_CONFIRM, 'yesno'))) return;
         const state = await this.s.deleteChar(c.stats.id, pic);
-        if (state !== 0) { await this.notice(DELETE_NOTICE[state] ?? `The character could not be deleted (${state}).`); return; }
-        resolve(await this.charSelect(server, world, channel));
+        if (state !== 0) { if (DELETE_NOTICE[state] !== undefined) await this.notice(DELETE_NOTICE[state]); return; }
+        finish(await this.charSelect(server, world, channel));
       };
-      const backBtn = this.button(C.BtWselect, 12, 524, () => resolve(null));
+      btnSelect.action = start; btnNew.action = guard(create); btnDelete.action = guard(remove);
+      for (const b of board) b.onClick = b.press;
+      refresh();
+      const toTitle = guard(async () => { if (await this.notice(NOTICE.RETURN_TO_TITLE, 'yesno')) throw new BackToTitle(); });
+      const nav = this.chrome(2, { world, channel, back: () => { if (!busy && !done) finish('back'); } });
+      // page arrows: left goes to the previous page (wrapping) and its last character, right to the next page and its first place
+      const pageTo = (d) => {
+        page = (page + d + pages) % pages;
+        const first = page * perPage, real = list.chars.length;
+        const idx = d < 0 ? Math.min(first + perPage, real) - 1 : first;
+        choose(idx >= first && idx < real ? idx : -1);
+      };
+      // pageL / pageR: state 0 normal, 1 while the mouse is over the click area
+      const arrow = (node, x, r, d) => ({ r, d, spr: [new WzSprite(node[0], x, 320), new WzSprite(node[1], x, 320)] });
+      const arrows = pages >= 2 ? [arrow(CS.pageL, 152, { x: 112, y: 300, w: 80, h: 40 }, -1), arrow(CS.pageR, 592, { x: 552, y: 300, w: 80, h: 40 }, 1)] : [];
+      const arrowSpr = (a) => a.spr[inRect(this.mouse, a.r) ? 1 : 0];
+      // hit areas: each character's drawn parts
+      const hitChar = (idx, mx, my) => {
+        const look = looks[idx], a = anim[idx], x = placeX(idx % perPage);
+        return look.compose(a.act || look.standAction(), a.frame).some((p) => {
+          const w = p.node?._w || 0, h = p.node?._h || 0;
+          const px = CHAR_FACING_RIGHT ? x - p.x - w : x + p.x;
+          return mx >= px && mx < px + w && my >= footY + p.y && my < footY + p.y + h;
+        });
+      };
+      // the Tab hint shows on arrival; the first Tab fades it out over 1 s for good
+      const hint = { fade: null };
       const layer = {
         hotspots: [],
-        over: [new WzSprite(C.step[2], 0, 36), backBtn],
-        buttons: [
-          // cut from the scene signboard (top-left 572,153) at 17,18 / 17,54 / 17,103
-          this.button(CS.BtSelect, 589, 171, start),
-          this.button(CS.BtNew, 589, 207, guard(create)),
-          this.button(CS.BtDelete, 589, 256, guard(remove)),
-          backBtn,
-          ...(shown > perPage ? [
-            this.button(CS.pageL[0] && { normal: CS.pageL[0], mouseOver: CS.pageL[1] || CS.pageL[0] }, 205, 400, () => { page = Math.max(0, page - 1); }),
-            this.button(CS.pageR[0] && { normal: CS.pageR[0], mouseOver: CS.pageR[1] || CS.pageR[0] }, 690, 400, () => { page = Math.min(Math.floor((shown - 1) / perPage), page + 1); }),
-          ] : []),
-        ],
+        over: nav.over,
+        buttons: [btnSelect, btnNew, btnDelete, ...nav.buttons],
         sprites: [],
-        preload: [...glow.frames(), ...info.frames(), ...beam.frames(), ...sparkle.frames(), ...infoScroll.frames(),
-          ...(ghost ? [...ghost.frames(), ...ghostShadow.frames()] : []),
+        preload: [...beam.frames(), ...sparkle.frames(), ...shadow.frames(), ...ghost.frames(),
+          ...[CS.scroll[0], CS.scroll[2]].flatMap((n) => new WzSprite(n).frames()), CS.charInfo, CS.charInfo1,
+          CS.knight[0], CS.aran[0], CS.adventure[0], ...Object.values(this.L.WorldNotice.Balloon).filter((n) => n?._canvas), CS.icon.up, CS.icon.down, CS.icon.same, ...Object.values(CS.icon.job),
+          ...arrows.flatMap((a) => a.spr.flatMap((sp) => sp.frames())),
           ...Object.values(CS.nameTag[0] || {}), ...Object.values(CS.nameTag[1] || {})],
-        onEnter: start,
+        onEnter: () => { if (menu !== null) { sfx.play('UI/BtMouseClick'); board[menu].press(); } else start(); },
+        onEscape: toTitle,
+        onKey: (key) => {
+          if (busy) return;
+          if (key === 'Tab') {
+            hint.fade ??= 0;
+            focusMenu(menu === null ? nextEnabled(lastMenu, 1) : null);
+          } else if (menu !== null) {
+            if (key === 'ArrowUp' || key === 'ArrowDown') {
+              const i = nextEnabled(menu + (key === 'ArrowUp' ? -1 : 1), key === 'ArrowUp' ? -1 : 1);
+              if (i !== null) focusMenu(i);
+            }
+          } else if (key === 'ArrowLeft' && sel > 0) choose(sel - 1);
+          else if (key === 'ArrowRight' && sel < list.chars.length - 1) choose(sel + 1);
+        },
         onPointer: (mx, my) => {
+          if (busy) return;
+          for (const a of arrows) if (inRect({ x: mx, y: my }, a.r)) { pageTo(a.d); return; }
           for (let i = 0; i < perPage; i++) {
             const idx = page * perPage + i;
-            if (idx >= list.chars.length) break;
-            if (mx > slotX(i) - 35 && mx < slotX(i) + 35 && my > footY - 85 && my < footY + 20) {
-              if (sel === idx && performance.now() - (this.lastCharClick || 0) < 400) start();
-              choose(idx); this.lastCharClick = performance.now();
-            }
+            if (idx >= list.chars.length || !hitChar(idx, mx, my)) continue;
+            if (sel === idx && performance.now() - (this.lastCharClick || 0) < 400) start();   // double-click enters
+            choose(idx); this.lastCharClick = performance.now();
+            return;
           }
         },
         update: (dt) => {
-          glow.update(dt * 1000); beam.update(dt * 1000); sparkle.update(dt * 1000); ghost?.update(dt * 1000);
-          if (this.camY === this.camTarget) { // unroll once the camera has arrived
-            if (sel >= 0 && !infoScroll.rolled) { infoScroll.rolled = true; sfx.play('UI/RollDown'); }
-            infoScroll.update(dt * 1000);
+          const ms = dt * 1000;
+          beam.update(ms); sparkle.update(ms); shadow.update(ms); ghost.update(ms);
+          for (const a of arrows) for (const sp of a.spr) sp.update(ms);
+          if (hint.fade !== null) hint.fade += ms;
+          if (this.camY === this.camTarget && panel.scroll) { // unroll once the camera has arrived
+            if (!panel.rolled) { panel.rolled = true; sfx.play('UI/RollDown'); }
+            panel.scroll.update(ms);
+            if (panel.scroll.anim.done) panel.t += ms;
           }
           list.chars.forEach((c, i) => {
-            const a = anim[i], look = looks[i];
-            const act = i === sel ? 'walk1' : 'stand1';
+            const a = anim[i], look = looks[i], act = charAct(look, i === sel);
             if (a.act !== act) { a.act = act; a.frame = 0; a.t = 0; }
-            a.t += dt * 1000;
+            a.t += ms;
             while (a.t >= look.delay(act, a.frame)) { a.t -= look.delay(act, a.frame); a.frame = (a.frame + 1) % Math.max(1, look.frameCount(act)); }
           });
         },
         drawFront: (ctx) => {
           for (let i = 0; i < perPage; i++) {
-            const idx = page * perPage + i, x = slotX(i);
+            const idx = page * perPage + i, x = placeX(i);
             if (idx >= list.chars.length) {
-              if (idx < list.slots && ghost) { ghostShadow.x = ghost.x = x; ghostShadow.y = ghost.y = footY; ghostShadow.draw(ctx, this.assets); ghost.draw(ctx, this.assets); }
+              if (idx < list.slots) { shadow.x = ghost.x = x; shadow.y = ghost.y = footY; shadow.draw(ctx, this.assets); ghost.draw(ctx, this.assets); }
               continue;
             }
             const c = list.chars[idx], look = looks[idx], a = anim[idx];
-            if (idx === sel) { beam.x = x; beam.y = footY - 372; beam.draw(ctx, this.assets); glow.x = x; glow.y = footY; glow.draw(ctx, this.assets); }
-            drawParts(ctx, this.assets, look.compose(a.act || 'stand1', a.frame), x, footY, false);
-            if (idx === sel) { sparkle.x = x; sparkle.y = footY - 337; sparkle.draw(ctx, this.assets); }
-            this.nameTag(ctx, c.stats.name, x, footY + 4, CS.nameTag[idx === sel ? 1 : 0] || CS.nameTag[0]);
+            new WzSprite(backdrop(c.stats.job)[0] || backdrop(c.stats.job), x, footY).draw(ctx, this.assets);
+            if (idx === sel) { beam.x = 260 + 125 * i; beam.y = 0; beam.draw(ctx, this.assets); }
+            drawParts(ctx, this.assets, look.compose(a.act || look.standAction(), a.frame), x, footY, CHAR_FACING_RIGHT);
+            if (idx === sel) { sparkle.x = 260 + 125 * i; sparkle.y = 0; sparkle.draw(ctx, this.assets); }
+            this.nameTag(ctx, c.stats.name, x, footY + 2, idx === sel);
           }
-          layer.hotspots = Array.from({ length: Math.min(perPage, list.chars.length - page * perPage) }, (_, i) => ({ x: slotX(i) - 35, y: footY - 85, w: 70, h: 105 }));
-          // info panel (origin 45,57) on its scroll, once unrolled
-          if (sel >= 0) {
-            infoScroll.draw(ctx, this.assets);
-            if (infoScroll.anim.done) this.drawCharInfo(ctx, info, list.chars[sel], scrollAt.x + 17 + 45, scrollAt.y + 22 + 57);
+          for (const a of arrows) arrowSpr(a).draw(ctx, this.assets);
+          layer.hotspots = arrows.map((a) => a.r);
+          if (sel >= 0 && panel.scroll) {
+            const at = panelAt();
+            panel.scroll.x = at.x - 20; panel.scroll.y = at.y - 25;
+            panel.scroll.draw(ctx, this.assets);
+            if (panel.scroll.anim.done) this.drawCharInfo(ctx, list.chars[sel], at.x, at.y, Math.min(1, panel.t / 80));
           }
-          uiText(ctx, `${world.name} - Channel ${channel.id + 1}`, 118, 104, { color: '#fff', bold: true, outline: '#3a2200' });
+          if (hint.fade === null || hint.fade < 1000) this.tabHint(ctx, hint.fade === null ? 1 : 1 - hint.fade / 1000);
         },
       };
-      this.setScreen(layer, 'char').then(() => { if (sel >= 0) sfx.play('UI/CharSelect'); });   // the first character is selected on arrival
+      rollPanel();
+      this.setScreen(layer, 'char').then(() => { if (sel >= 0) sfx.play('UI/CharSelect'); });
     });
+  }
+
+  /** "Use the Tab key to toggle the menu." on a WorldNotice/Balloon box, 220x40. */
+  tabHint(ctx, alpha) {
+    ctx.save(); ctx.globalAlpha = alpha;
+    this.balloon(ctx, this.L.WorldNotice.Balloon, 272, 40, 220, 40);
+    uiText(ctx, 'Use the Tab key to toggle the menu.', 282, 55, { color: '#000' });
+    ctx.restore();
+  }
+
+  /** A 9-slice box (nw/n/ne/w/c/e/sw/s/se) with its top-left at x, y. */
+  balloon(ctx, B, x, y, w, h) {
+    const img = (k) => this.assets.image(B[k]);
+    const [nw, ne, sw, se] = ['nw', 'ne', 'sw', 'se'].map(img);
+    if (!nw || !ne || !sw || !se) return;
+    const l = nw.width, t = nw.height, r = ne.width, b = sw.height;
+    const put = (k, dx, dy, dw, dh) => { const i = img(k); if (i && dw > 0 && dh > 0) ctx.drawImage(i, x + dx, y + dy, dw, dh); };
+    put('c', l, t, w - l - r, h - t - b);
+    put('n', l, 0, w - l - r, t); put('s', l, h - b, w - l - r, b);
+    const wi = img('w'), ei = img('e');
+    put('w', l - (wi?.width || l), t, wi?.width || l, h - t - b); put('e', w - r, t, ei?.width || r, h - t - b);
+    ctx.drawImage(nw, x, y); ctx.drawImage(ne, x + w - r, y); ctx.drawImage(sw, x, y + h - b); ctx.drawImage(se, x + w - r, y + h - b);
+  }
+
+
+  // ------------------------------------------------------------------ view all characters
+  /**
+   * Step 5: every world's characters in a 3x3 grid (ViewAllChar/backgrnd/1 at screen (122, 38)), the stats
+   * panel for the selected one and Enter Game. Resolves with the game entry, or null back on world select.
+   */
+  async viewAll(server) {
+    let cancelled = false;
+    const loading = this.loading(() => { cancelled = true; this.s.close(); });
+    let res;
+    try { res = await this.s.viewAll(); } catch (e) { throw cancelled ? new BackToTitle() : e; } finally { loading.close(); }
+    if (res.error === 'none') { await this.notice('Cannot find any characters.', 'info'); return null; }
+    if (res.error) {
+      await this.notice(res.error === 'connected' ? 'You are already connected to server.' : res.error === 'timeout' || res.error === 'unknown' ? 'Unknown Error : View-All-Characters.' : res.error, 'info');
+      throw new BackToTitle();
+    }
+    const chars = res.chars.slice(0, 60);
+    const VA = this.L.ViewAllChar, CS = this.L.CharSelect;
+    const looks = await Promise.all(chars.map(async (c) => {
+      const cl = new CharacterLook(this.assets, { skin: c.look.skin, face: c.look.face, hair: c.look.hair, gender: c.look.gender, equips: lookEquipIds(c.look) });
+      await cl.load();
+      await this.assets.preload(lookCanvases(cl, [cl.standAction(), cl.walkAction()]));
+      return cl;
+    }));
+    return new Promise((resolve, reject) => {
+      const VW = { x: 122, y: 38 }, P = { x: 520, y: 198 };
+      let sel = 0, top = 0, busy = false, done = false;
+      // fewer than 10 characters don't scroll; otherwise n / 3 - 2 rows (a partial last row can't be reached)
+      const maxTop = chars.length < 10 ? 0 : Math.floor(chars.length / 3) - 2;
+      const anim = chars.map(() => ({ frame: 0, t: 0 }));
+      const selFx = new WzSprite(VA.Select, 0, 0);
+      const cell = (i) => { const rel = i - 3 * top; return rel >= 0 && rel <= 8 ? { c: rel % 3, r: Math.floor(rel / 3) } : null; };
+      const choose = (i) => { sfx.play('UI/CharSelect'); sel = i; };
+      const worldName = (id) => this.worlds.find((w) => w.id === id)?.name || '';
+      const enter = async () => {
+        if (busy || done || sel < 0) return;
+        busy = true;
+        try {
+          const c = chars[sel], picMode = this.account?.picMode;
+          let pic = '';
+          if (picMode === 0) {
+            pic = await this.prompt('Register your PIC\nCreate a 6-16 character 2nd password to protect your characters.', { pattern: /^.{6,16}$/ });
+            if (pic === null) return;
+          } else if (picMode === 1) {
+            pic = await this.prompt(`Enter your PIC\nEnter your 2nd password to play ${c.stats.name}.`);
+            if (pic === null) return;
+          }
+          const r = await this.s.selectFromAll(c.stats.id, c.world, pic, picMode);
+          if (r.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
+          if (r.code !== undefined) { await this.loginFailed({ reason: r.code }); return; }
+          sfx.play('Game/GameIn');
+          this.s.close();
+          done = true;
+          const w = this.worlds.find((x) => x.id === c.world);
+          resolve({ server, charId: c.stats.id, port: r.port, world: c.world, channels: w?.channels.length || 1, stats: c.stats, look: c.look, gm: !!this.account?.gm });
+        } catch (e) { done = true; reject(e); } finally { busy = false; }
+      };
+      const back = async () => {
+        if (busy || done) return;
+        done = true;
+        try { this.worlds = await this.s.leaveViewAll(); resolve(null); } catch (e) { reject(e); }
+      };
+      const nav = this.chrome(5, { back });
+      const enterBtn = this.button(VA.BtEnter, 582, 432, enter);
+      const hit = (i, mx, my) => {
+        const at = cell(i);
+        if (!at) return false;
+        const x = VW.x + 74 + 117 * at.c, y = VW.y + 150 + 117 * at.r, a = anim[i], look = looks[i];
+        return look.compose(a.act || look.standAction(), a.frame).some((p) => {
+          const w = p.node?._w || 0, h = p.node?._h || 0, px = CHAR_FACING_RIGHT ? x - p.x - w : x + p.x;
+          return mx >= px && mx < px + w && my >= y + p.y && my < y + p.y + h;
+        });
+      };
+      const layer = {
+        closeAtOnce: true,   // Back closes the window before the step change
+        buttons: [enterBtn, ...nav.buttons],
+        over: nav.over,
+        sprites: [new WzSprite(VA.backgrnd[1], VW.x + 291, VW.y + 220)],   // origin (291, 220): top-left at (122, 38)
+        preload: [...selFx.frames(), ...Object.values(VA.WorldIcons), VA.Job[0], CS.icon.up, CS.icon.down, CS.icon.same, ...Object.values(CS.icon.job),
+          ...Object.values(CS.nameTag[0] || {}), ...Object.values(CS.nameTag[1] || {})],
+        onEnter: enter,
+        onWheel: (d) => {
+          top = Math.max(0, Math.min(maxTop, top + d));
+          // keep the selection in view, in the same column
+          if (sel >= 0 && !cell(sel)) sel = Math.min(chars.length - 1, (sel < 3 * top ? 3 * top : 3 * (top + 2)) + (sel % 3));
+        },
+        onPointer: (mx, my) => {
+          if (busy) return;
+          for (let i = 0; i < chars.length; i++) {
+            if (!hit(i, mx, my)) continue;
+            if (sel === i && performance.now() - (this.lastVacClick || 0) < 400) enter();   // double-click enters
+            choose(i); this.lastVacClick = performance.now();
+            return;
+          }
+        },
+        update: (dt) => {
+          const ms = dt * 1000;
+          selFx.update(ms);
+          chars.forEach((c, i) => {
+            const a = anim[i], look = looks[i], act = charAct(look, i === sel);
+            if (a.act !== act) { a.act = act; a.frame = 0; a.t = 0; }
+            a.t += ms;
+            while (a.t >= look.delay(act, a.frame)) { a.t -= look.delay(act, a.frame); a.frame = (a.frame + 1) % Math.max(1, look.frameCount(act)); }
+          });
+        },
+        drawFront: (ctx) => {
+          chars.forEach((c, i) => {
+            const at = cell(i);
+            if (!at) return;
+            const cx = VW.x + 117 * at.c, cy = VW.y + 117 * at.r;
+            if (i === sel) { selFx.x = cx + 79; selFx.y = cy + 122; selFx.draw(ctx, this.assets); }
+            drawParts(ctx, this.assets, looks[i].compose(anim[i].act || looks[i].standAction(), anim[i].frame), cx + 74, cy + 150, CHAR_FACING_RIGHT);
+            const icon = this.assets.image(VA.WorldIcons[c.world]);
+            if (icon) ctx.drawImage(icon, cx + 26, cy + 155);
+            this.nameTag(ctx, c.stats.name, cx + 47, cy + 159, false, { fromLeft: true });   // grey even when selected
+          });
+          if (sel < 0) return;
+          const c = chars[sel], s = c.stats;
+          // name box (150x22) on nameTag/1, white text
+          this.nameBox(ctx, s.name, VW.x + 409, VW.y + 107);
+          const t = (v, dx, dy, align = 'left') => uiText(ctx, String(v), P.x + dx, P.y + dy, { color: '#000', align });
+          t(worldName(c.world), 39, 64); t(loginJobName(s.job), 39, 82); t(s.level, 39, 100); t(s.fame, 39, 118);
+          t(s.str, 39, 136); t(s.dex, 39, 154); t(s.int, 39, 172); t(s.luk, 39, 190);
+          const rank = c.rank && c.rank.world && c.rank.job ? c.rank : null;
+          // the job word goes in front of the second bar's "RANKING" (art x 485)
+          const labelRight = VW.x + 481, labelY = VW.y + 181;
+          if (!rank) {
+            t('Ranking Not Available', 26, 0); t('Ranking Not Available', 26, 36);
+            const job = this.assets.image(VA.Job[0]);
+            if (job) ctx.drawImage(job, labelRight - job.width, labelY);
+          } else {
+            const section = (pos, move, dy, iconY) => {
+              t(`Ranked at ${pos}`, 5, dy); t(Math.abs(move), 159, dy, 'right');
+              const icon = this.assets.image(move > 0 ? CS.icon.up : move < 0 ? CS.icon.down : CS.icon.same);
+              if (icon) ctx.drawImage(icon, P.x + 160, P.y + iconY(move));
+            };
+            section(rank.world, rank.worldMove, 0, (m) => (m ? 2 : 6));
+            section(rank.job, rank.jobMove, 36, (m) => (m ? 38 : 42));
+            const job = CS.icon.job[Math.floor((s.job % 1000) / 100)], label = job && this.assets.image(job);
+            if (label) ctx.drawImage(label, labelRight - label.width, labelY);
+          }
+        },
+      };
+      this.setScreen(layer, 'vac').then(() => sfx.play('UI/CharSelect'));
+    });
+  }
+
+  /** A 150x22 box of CharSelect/nameTag/1 pieces with the name centred in white. */
+  nameBox(ctx, text, x, y, w = 150) {
+    const node = this.L.CharSelect.nameTag[1];
+    const l = this.assets.image(node[0]), m = this.assets.image(node[1]), r = this.assets.image(node[2]);
+    if (l && m && r) {
+      for (let mx = l.width; mx < w - r.width; mx += m.width) ctx.drawImage(m, x + mx, y);
+      ctx.drawImage(l, x, y); ctx.drawImage(r, x + w - r.width, y);
+    }
+    ctx.save(); ctx.font = '12px Arial';
+    const tw = Math.ceil(ctx.measureText(text).width);
+    ctx.restore();
+    uiText(ctx, text, x + Math.floor((w - tw) / 2) - 1, y + 2, { color: '#fff' });
   }
 
   // ------------------------------------------------------------------ race select
   /** Login.img/RaceSelect: Cygnus Knights / Explorers / Aran. Resolves with a RACES key or null. */
-  raceSelect() {
-    const R = this.L.RaceSelect, C = this.L.Common;
+  raceSelect(world, channel) {
+    const R = this.L.RaceSelect;
     return new Promise((resolve) => {
-      let pick = 'normal';
-      const spots = { knight: { x: 100, y: 88 }, normal: { x: 296, y: 86 }, aran: { x: 525, y: 85 } };
+      let pick = 'normal', fade = null;
+      // window at screen (0, -20)
+      const spots = { knight: { x: 104, y: 59 }, normal: { x: 293, y: 59 }, aran: { x: 511, y: 60 } };
       const btn = { knight: R.knight.BtKnight, normal: R.normal.BtNormal, aran: R.aran.BtAran };
-      const on = Object.fromEntries(Object.keys(spots).map((k) => [k, new WzSprite(R[k].OnAnimation, spots[k].x, spots[k].y)]));
-      const text = Object.fromEntries(Object.keys(spots).map((k) => [k, new WzSprite(R[k].text, 112, 305)]));
-      const buttons = Object.keys(spots).map((k) => this.button(btn[k], spots[k].x, spots[k].y, () => {
-        if (pick === k && performance.now() - (this.lastRaceClick || 0) < 400) resolve(pick);
-        pick = k; this.lastRaceClick = performance.now(); showPick();
-      }));
-      const select = this.button(R.BtSelect, 560, 430, () => resolve(pick)); // centred in the panel's slot (413-483, 112-137)
       const keys = Object.keys(spots);
-      const showPick = () => keys.forEach((k, i) => { buttons[i].forceState = k === pick ? 'disabled' : null; });
-      showPick();
-      const back = this.button(C.BtWselect, 12, 524, () => resolve(null));
+      const on = Object.fromEntries(keys.map((k) => [k, new WzSprite(R[k].OnAnimation, spots[k].x, spots[k].y)]));
+      const text = Object.fromEntries(keys.map((k) => [k, new WzSprite(R[k].text, 118, 291)]));
+      // the buttons keep their normal art (label included); the chosen race's coloured figures draw over it
+      const buttons = keys.map((k) => this.button(btn[k], spots[k].x, spots[k].y, () => {
+        if (pick === k) { if (performance.now() - (this.lastRaceClick || 0) < 400) resolve(pick); this.lastRaceClick = performance.now(); return; }
+        fade = { from: pick, t: 0 }; pick = k; this.lastRaceClick = performance.now();
+      }));
+      for (const b of buttons) b.sound = 'UI/RaceSelect';
+      const select = this.button(R.BtSelect, 566, 416, () => resolve(pick));
+      const nav = this.chrome(3, { world, channel, back: () => resolve(null) });
       this.setScreen({
-        buttons: [...buttons, select, back],
-        sprites: [new WzSprite(R.textGL[0], 405, 62)],
-        over: [new WzSprite(C.step[3], 0, 36), back],
+        buttons: [...buttons, select, ...nav.buttons],
+        sprites: [new WzSprite(R.textGL[0], 408, 51)],
+        over: nav.over,
         preload: [...Object.values(on).flatMap((s) => s.frames()), ...Object.values(text).flatMap((s) => s.frames())],
         onEnter: () => resolve(pick), onEscape: () => resolve(null),
-        update: (dt) => on[pick].update(dt * 1000),
+        update: (dt) => { on[pick].update(dt * 1000); if (fade && (fade.t += dt * 1000) >= 200) fade = null; },
         drawFront: (ctx) => {
-          on[pick].draw(ctx, this.assets);  // the chosen race lights up in colour
-          text[pick].draw(ctx, this.assets);
+          on[pick].draw(ctx, this.assets);
+          // the race text cross-fades over 200 ms
+          const k = fade ? fade.t / 200 : 1;
+          if (fade) { text[fade.from].alpha = 1 - k; text[fade.from].draw(ctx, this.assets); }
+          text[pick].alpha = k; text[pick].draw(ctx, this.assets);
           select.draw(ctx, this.assets);
         },
       }, 'race');
@@ -702,127 +1228,189 @@ export class LoginScene {
 
   // ------------------------------------------------------------------ character creation
   /**
-   * Creation with Login.img NewChar / NewCharKnight / NewCharAran: the name board (name + Check), then
-   * the settings board, whose rows (FACE ... WEAPON) cycle through Etc/MakeCharInfo.img for that race.
-   * Resolves once the character is created or the player backs out.
+   * The name board, then the settings board, whose 9 rows (FACE ... WEAPON, GENDER) step through
+   * Etc/MakeCharInfo.img and show each option's name. Resolves with the new character, or null when
+   * the name board is cancelled (back to race select).
    */
-  async creator(race = 'normal') {
+  async creator(race, world, channel) {
     const cfg = RACES[race], NC = this.L[cfg.ui];
-    const mci = await this.assets.json('Etc/MakeCharInfo.img');
-    const female = this.account.gender === 1;
-    const section = cfg.info === 'Char' ? mci?.Info : mci;
-    const opts = section?.[`${cfg.info}${female ? 'Female' : 'Male'}`];
-    if (!opts) { await this.notice('Etc/MakeCharInfo.img is missing.'); return; }
-    const choices = (k) => Object.values(opts[k] || {});
-    const sel = [0, 0, 0, 0, 0, 0, 0, 0];
-    const value = (k) => choices(k)[sel[k]];
-    const board = cfg.board;
-    const preview = { x: 410, y: 361 }; // on the gazebo's round platform
-    let look = null, frame = 0, frameT = 0, name = '';
-    const at = (o) => [board.x + o[0], board.y + o[1]];
-
+    const [mci, eqp] = await Promise.all([this.assets.json('Etc/MakeCharInfo.img'), this.assets.json('String/Eqp.img')]);
+    const table = (g) => (cfg.info === 'Orient' ? mci?.[`OrientChar${g ? 'Female' : 'Male'}`] : mci?.Info?.[`Char${g ? 'Female' : 'Male'}`]);
+    if (!table(0) || !table(1)) { await this.notice('Etc/MakeCharInfo.img is missing.'); return null; }
+    // lists[gender][row]: option ids, rotated so the current one is first; row 8 is the gender itself
+    const lists = [0, 1].map((g) => Array.from({ length: 9 }, (_, r) => (r === 8 ? [g] : Object.values(table(g)[r] || {}))));
+    let gender = this.account.gender === 1 ? 1 : 0;
+    // the current gender's rows start on a random option
+    for (const l of lists[gender]) if (l.length > 1) l.push(...l.splice(0, Math.floor(Math.random() * l.length)));
+    const value = (r) => lists[gender][r][0];
+    const E = eqp?.Eqp || eqp || {};
+    const itemName = (id) => { for (const c of ['Face', 'Coat', 'Longcoat', 'Pants', 'Shoes', 'Weapon', 'Hair']) if (E[c]?.[id]?.name) return E[c][id].name; return ''; };
+    const optionName = (r) => {
+      if (r === 8) return gender ? 'Female' : 'Male';
+      const id = value(r);
+      if (r >= 1 && r <= 3) return mci?.Name?.[`Char${gender ? 'Female' : 'Male'}`]?.[r]?.[id] ?? (r === 1 ? itemName(id) : '');
+      return itemName(id);
+    };
+    const preview = { x: 394, y: 339 };
+    // the preview stands still on its first frame
+    let look = null, name = '';
     const rebuild = async () => {
-      const l = new CharacterLook(this.assets, { skin: value(3), face: value(0), hair: value(1) + value(2), equips: [value(4), value(5), value(6), value(7)] });
+      const l = new CharacterLook(this.assets, { skin: value(3), face: value(0), hair: value(1) + value(2), gender, equips: [value(4), value(5), value(6), value(7)] });
       await l.load();
       await this.assets.preload(lookCanvases(l, ['stand1']));
-      look = l; frame = 0; frameT = 0;
+      look = l;
     };
     await rebuild();
-    const drawPreview = (ctx) => {
-      if (!look) return;
-      drawParts(ctx, this.assets, look.compose('stand1', frame), preview.x, preview.y, true);
-      if (name) this.nameTag(ctx, name, preview.x, preview.y + 4, this.L.CharSelect.nameTag[1]);
-    };
-    const tick = (dt) => {
-      if (!look) return;
-      frameT += dt * 1000;
-      while (frameT >= look.delay('stand1', frame)) { frameT -= look.delay('stand1', frame); frame = (frame + 1) % Math.max(1, look.frameCount('stand1')); }
-    };
-    const banner = new WzSprite(this.L.Common.step[3], 0, 36);
+    const drawPreview = (ctx) => { if (look) drawParts(ctx, this.assets, look.compose('stand1', 0), preview.x, preview.y, true); };
+    const nav = this.chrome(3, { world, channel, back: () => leave?.() });
+    let leave = null;
 
     for (;;) {
-      // step 1: name
+      // name board
       const chosen = await new Promise((resolve) => {
-        const keep = [...this.fields];
-        const [fx, fy] = at(cfg.nameField);
-        const f = this.field(fx, fy, cfg.nameField[2] || 165, 22, { max: 12, color: '#fff' });
+        const keep = [...this.fields], B = cfg.name, at = (o) => [B.x + o[0], B.y + o[1]];
+        const f = this.field(B.x + B.field[0], B.y + B.field[1] - 3, 120, 20, { max: 12, color: '#fff' });
         f.value = name;
-        const done = (v) => { this.clearFields(keep); resolve(v); };
+        let checking = false;
+        const done = (v) => { this.clearFields(keep); leave = null; resolve(v); };
         const check = async () => {
-          const n = f.value.trim();
-          if (!/^[a-zA-Z0-9]{4,12}$/.test(n)) { await this.notice(NOTICE.NAME_RESTRICTED); f.focus(); return; }
-          if (!(await this.s.nameAvailable(n))) { await this.notice(NOTICE.NAME_IN_USE); f.focus(); return; }
-          done(n);
+          if (checking) return;
+          checking = true;
+          try {
+            const n = f.value;
+            if (!(await this.nameAllowed(n))) { await this.notice(NOTICE.BAD_NAME); f.focus(); return; }
+            const r = await this.s.checkName(n);
+            if (r !== 0) { await this.notice(r === 1 ? NOTICE.NAME_IN_USE : r === 2 ? NOTICE.BAD_NAME : NOTICE.UNKNOWN); f.focus(); return; }
+            done(n);
+          } finally { checking = false; }
         };
+        leave = () => done(null);
         this.setScreen({
-          sprites: [new WzSprite(NC.charName, board.x, board.y)],
-          buttons: [this.button((cfg.checkUi ? this.L[cfg.checkUi] : NC).BtCheck, ...at(cfg.nameCheck), check),
-            ...(cfg.nameYes ? [this.button(NC.BtYes, ...at(cfg.nameYes), check)] : []), // OK checks the name too, then moves on
-            this.button(NC.BtNo, ...at(cfg.nameNo), () => done(null))],
-          over: [banner],
-          onEnter: check, onEscape: () => done(null), update: tick, drawFront: drawPreview,
-        }, 'create').then(() => setTimeout(() => f.focus(), 650));
+          sprites: [new WzSprite(NC.charName, B.x, B.y)],
+          buttons: [this.button(NC.BtYes, ...at(B.yes), check), this.button(NC.BtNo, ...at(B.no), () => done(null)), ...nav.buttons],
+          over: nav.over,
+          onEnter: () => { if (f.value) check(); }, onEscape: () => done(null), drawFront: drawPreview,
+        }, 'create', cfg.camY).then(() => setTimeout(() => f.focus(), 50));
       });
-      if (chosen === null) return;
+      if (chosen === null) return null;
       name = chosen;
 
-      // step 2: settings
+      // settings board
       const created = await new Promise((resolve) => {
-        const [rx, ry] = at(cfg.rows);
-        const rowY = (i) => ry + i * 19;
+        const B = cfg.set, at = (o) => [B.x + o[0], B.y + o[1]];
+        const rowY = (i) => B.y + B.rowY + i * 18;
         const arrows = [];
-        for (let k = 0; k < 8; k++) {
-          if (choices(k).length < 2) continue; // fixed items (Aran gear) have no arrows
-          const step = (d) => { sel[k] = (sel[k] + d + choices(k).length) % choices(k).length; rebuild(); };
-          arrows.push(this.button(NC.BtLeft, rx + 102, rowY(k) + 1, () => step(-1)), this.button(NC.BtRight, rx + 183, rowY(k) + 1, () => step(1)));
+        let busy = false;
+        for (let r = 0; r < 9; r++) {
+          const step = (d) => {
+            if (r === 8) gender = 1 - gender;
+            else {
+              const l = lists[gender][r];
+              if (l.length < 2) return;
+              if (d > 0) l.push(l.shift()); else l.unshift(l.pop());
+            }
+            rebuild();
+          };
+          arrows.push(this.button(NC.BtLeft, B.x + B.left, rowY(r), () => step(-1)), this.button(NC.BtRight, B.x + B.right, rowY(r), () => step(1)));
         }
         const yes = async () => {
-          const c = await this.s.createChar({
-            name, job: cfg.job, face: value(0), hair: value(1), hairColor: value(2), skin: value(3),
-            top: value(4), bottom: value(5), shoes: value(6), weapon: value(7), gender: female ? 1 : 0,
-          });
-          if (!c) { await this.notice('The server refused this character.'); return; }
-          resolve(true);
+          if (busy) return;
+          busy = true;
+          try {
+            const c = await this.s.createChar({
+              name, job: cfg.job, face: value(0), hair: value(1), hairColor: value(2), skin: value(3),
+              top: value(4), bottom: value(5), shoes: value(6), weapon: value(7), gender,
+            });
+            if (!c) { await this.notice(NOTICE.UNKNOWN); return; }
+            leave = null;
+            resolve(c);
+          } finally { busy = false; }
         };
+        leave = () => { leave = null; resolve(false); };
         this.setScreen({
-          sprites: [new WzSprite(NC.charSet, board.x, board.y), ...Array.from({ length: 8 }, (_, k) => new WzSprite(NC.avatarSel[k].normal, rx, rowY(k)))],
-          buttons: [...arrows, this.button(NC.BtYes, ...at(cfg.yes), yes), this.button(NC.BtNo, ...at(cfg.no), () => resolve(false))],
-          over: [banner],
-          onEnter: yes, onEscape: () => resolve(false), update: tick,
+          sprites: [new WzSprite(NC.charSet, B.x, B.y), ...Array.from({ length: 9 }, (_, r) => new WzSprite(NC.avatarSel[r].normal, B.x + B.labelX, rowY(r)))],
+          buttons: [...arrows, this.button(NC.BtYes, ...at(B.yes), yes), this.button(NC.BtNo, ...at(B.no), () => resolve(false)), ...nav.buttons],
+          over: nav.over,
+          onEnter: yes, onEscape: () => resolve(false),
           drawFront: (ctx) => {
             drawPreview(ctx);
-            for (let k = 0; k < 8; k++) uiText(ctx, `${sel[k] + 1} / ${choices(k).length}`, rx + 149, rowY(k) + 3, { color: '#5a3200', align: 'center', size: 11 });
+            for (let r = 0; r < 9; r++) uiText(ctx, optionName(r), B.x + B.textX, B.y + B.textY + r * 18, { color: '#000', align: 'center' });
           },
-        }, 'create');
+        }, 'create', cfg.camY);
       });
-      if (created) return;
-      // "No" on the settings board goes back to the name board
+      if (created) return created;
+      // Cancel on the settings board goes back to the name board
     }
   }
 
-  /** NameTag made of left / middle (stretched) / right pieces, like the in-game tag. */
-  nameTag(ctx, text, x, y, node) {
-    ctx.save(); ctx.font = '12px Arial';
-    const tw = Math.ceil(ctx.measureText(text).width) + 4;
-    ctx.restore();
-    const l = node && this.assets.image(node[0]), m = node && this.assets.image(node[1]), r = node && this.assets.image(node[2]);
-    if (l && m && r) {
-      const left = Math.round(x - tw / 2 - l.width);
-      ctx.drawImage(l, left, y); ctx.drawImage(m, left + l.width, y, tw, m.height); ctx.drawImage(r, left + l.width + tw, y);
-    } else { ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(x - tw / 2, y, tw, 16); }
-    uiText(ctx, text, x, y + 4, { color: '#fff', align: 'center' });
+  /** 4-12 letters or digits, with no word from Etc/ForbiddenName.img or Etc/Curse.img in it. */
+  async nameAllowed(name) {
+    if (!/^[a-zA-Z0-9]{4,12}$/.test(name)) return false;
+    this.badWords ??= await Promise.all(['Etc/ForbiddenName.img', 'Etc/Curse.img'].map((p) => this.assets.json(p)))
+      .then((lists) => lists.flatMap((l) => Object.values(l || {})).filter((w) => typeof w === 'string' && w).map((w) => w.toLowerCase()));
+    const low = name.toLowerCase();
+    return !this.badWords.some((w) => low.includes(w));
   }
 
-  drawCharInfo(ctx, info, c, x, y) {
-    info.x = x; info.y = y; info.draw(ctx, this.assets);
-    const o = [45, 57], left = x - o[0], top = y - o[1], s = c.stats;
-    const v = (t, dx, dy) => uiText(ctx, String(t), left + dx, top + dy, { color: '#5a3200', align: 'right' });
-    v(jobName(s.job), 178, 4);
-    v(s.level, 88, 23); v(s.fame, 178, 23);
-    v(s.str, 88, 42); v(s.int, 178, 42);
-    v(s.dex, 88, 61); v(s.luk, 178, 61);
-    if (c.rank) uiText(ctx, `#${c.rank.world}  (job #${c.rank.job})`, left + 92, top + 102, { color: '#5a3200', align: 'center' });
+  /** Name tag from CharSelect/nameTag/<0|1> (left, middle tiled every 9 px, right); grey text unless selected. */
+  nameTag(ctx, text, x, y, selected, { fromLeft = false } = {}) {
+    const node = this.L.CharSelect.nameTag[selected ? 1 : 0];
+    ctx.save(); ctx.font = '12px Arial';
+    const tw = Math.ceil(ctx.measureText(text).width);
+    ctx.restore();
+    const w = tw < 41 ? 58 : tw + 18, left = fromLeft ? x : Math.round(x - w / 2);
+    const l = this.assets.image(node[0]), m = this.assets.image(node[1]), r = this.assets.image(node[2]);
+    if (l && m && r) {
+      ctx.drawImage(l, left, y);
+      for (let mx = l.width; mx < w - r.width; mx += m.width) ctx.drawImage(m, left + mx, y);
+      ctx.drawImage(r, left + w - r.width, y);
+    } else { ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(left, y, w, 20); }
+    uiText(ctx, text, left + Math.floor((w - tw) / 2) - 1, y + 2, { color: selected ? '#fff' : '#999999' });
   }
+
+  /** Info panel (charInfo, or charInfo1 with both ranking sections when ranked) with its top-left at x, y. */
+  drawCharInfo(ctx, c, x, y, alpha) {
+    const CS = this.L.CharSelect, s = c.stats, rank = c.rank;
+    ctx.save(); ctx.globalAlpha = alpha;
+    const bg = this.assets.image(rank ? CS.charInfo1 : CS.charInfo);
+    if (bg) ctx.drawImage(bg, x, y);
+    const t = (v, dx, dy, align = 'left') => uiText(ctx, String(v), x + dx, y + dy, { color: '#000', align });
+    t(loginJobName(s.job), 46, 1);
+    t(s.level, 46, 19); t(s.fame, 136, 19);
+    t(s.str, 46, 37); t(s.int, 136, 37);
+    t(s.dex, 46, 55); t(s.luk, 136, 55);
+    if (!rank) t('Ranking Not Available', 36, 99);
+    else {
+      const section = (pos, move, ty, iconY) => {
+        t(`Ranked at ${pos}`, 115, ty, 'right');
+        t(Math.abs(move), 165, ty, 'right');
+        const icon = this.assets.image(move > 0 ? CS.icon.up : move < 0 ? CS.icon.down : CS.icon.same);
+        if (icon) ctx.drawImage(icon, x + 170, y + iconY(move));
+      };
+      section(rank.world, rank.worldMove, 99, (m) => (m ? 105 : 101));
+      section(rank.job, rank.jobMove, 135, (m) => (m ? 141 : 137));
+      // BEGINNER / WARRIOR / MAGICIAN / BOWMAN / THIEF goes before the art's "RANKING" (which starts at x 88)
+      const job = CS.icon.job[Math.floor((s.job % 1000) / 100)];
+      const label = job && this.assets.image(job);
+      if (label) ctx.drawImage(label, x + 84 - label.width, y + 120);
+    }
+    ctx.restore();
+  }
+}
+
+/** Wraps a drawable so it slides in from x -149 over ms, timed from its first draw. */
+function slideIn(item, ms) {
+  let t0 = null;
+  return {
+    frames: () => item.frames(),
+    draw(ctx, assets) {
+      t0 ??= performance.now();
+      const k = Math.min(1, (performance.now() - t0) / ms);
+      ctx.save(); ctx.translate(Math.round(-149 * (1 - k)), 0);
+      item.draw(ctx, assets);
+      ctx.restore();
+    },
+  };
 }
 
 function inRect(p, r) { return p.x >= r.x && p.x < r.x + r.w && p.y >= r.y && p.y < r.y + r.h; }
