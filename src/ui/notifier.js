@@ -24,7 +24,7 @@ const KINDS = {
   guildFound: { ...WIDE, icon: 8, lines: (n) => [['Guild founding', 25, 5], [`from '${n}'`, 25, 18]] },
   familySummon: { ...WIDE, icon: 9, lines: (n) => [['Family summons', 25, 5], [`from '${n}'`, 25, 18]] },
 };
-const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, NAME_W = 100;
+const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, LOGIN_HOLD = 6000, NAME_W = 100;
 
 class Balloon extends Win {
   constructor(mgr, kind, art, done, hold) {
@@ -88,6 +88,22 @@ class Invite extends Balloon {
   }
 }
 
+/** A buddy, guild or family member logging in (pink backgrnd2, icon3), or a buddy on your channel now (icon4): X only, 6s. */
+class LoginNote extends Balloon {
+  constructor(mgr, name, sameChannel) {
+    super(mgr, 'login', 'backgrnd2', null, LOGIN_HOLD);
+    Object.assign(this, { name, same: sameChannel });
+    this.button(this.F.BtCancel, ...NARROW.x, () => this.press(false));
+  }
+  frames() { return [...super.frames(), this.F.icon3, this.F.icon4].filter(Boolean); }
+  body(ctx) {
+    this.icon(ctx, this.same ? this.F.icon4 : this.F.icon3);
+    const [a, b] = this.same ? ["You're on the same ch.", `with ${this.name}.`] : [`${this.name} is`, 'logged in.'];
+    uiText(ctx, a, 25, 7, { color: '#fff', size: 11 });
+    uiText(ctx, b, 25, 20, { color: '#fff', size: 11 });
+  }
+}
+
 /** "Quest Complete!" / "You got a title!" (the quest's name under it, cut to 100px), or "New Quest!" for quest 0. */
 export class QuestNotice extends Balloon {
   constructor(mgr, qid, title, name, open) {
@@ -126,6 +142,9 @@ function add(mgr, b, same) {
 export function notify(mgr, kind, name) {
   return new Promise((resolve) => add(mgr, new Invite(mgr, kind, name, resolve), () => !KINDS[kind]?.stack));
 }
+
+/** Someone you know logged in (or, sameChannel, a buddy is on your channel now); replaces the last such note. */
+export function notifyLogin(mgr, name, sameChannel = false) { add(mgr, new LoginNote(mgr, name, sameChannel), () => true); }
 
 /** Raise (or replace) the notice for a quest. open(qid, fromO) is called on O or a click on the body. */
 export function questNotice(mgr, qid, title, name, open) {

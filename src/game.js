@@ -24,7 +24,7 @@ import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
+import { notify, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
 import { UserListWin, PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
@@ -765,7 +765,7 @@ export class Game {
     } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
     else if (e.op === 'senior') { say(`You are now a junior of ${e.name}.`); this.net?.familyOpen(); refresh(); }
     else if (e.op === 'rep') say(`You have gained ${e.gain} reputation${e.from ? ` from ${e.from}` : ''}.`);
-    else if (e.op === 'login') say(`[Family] ${e.name} has logged ${e.online ? 'in' : 'out'}.`);
+    else if (e.op === 'login') { if (e.online) notifyLogin(this.windows, e.name); }
     else if (e.op === 'summon') {
       const ok = await notify(this.windows, 'familySummon', e.from);
       this.net?.familySummonAnswer(e.family, ok);
@@ -1487,7 +1487,14 @@ export class Game {
       whisperResult: (r) => this.onWhisperResult(r),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
-      buddyChannel: (id, ch) => { const b = this.buddies.find((x) => x.id === id); if (b) b.channel = ch; },
+      // a buddy coming online gets its balloon; one moving onto your channel gets the same-channel one
+      buddyChannel: (id, ch) => {
+        const b = this.buddies.find((x) => x.id === id);
+        if (!b) return;
+        const was = b.channel; b.channel = ch;
+        if (was < 0 && ch >= 0) notifyLogin(this.windows, b.name);
+        else if (was !== ch && ch === this.channel) notifyLogin(this.windows, b.name, true);
+      },
       buddyCapacity: () => {},
       buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
       buddyRequest: (b) => notify(this.windows, 'buddy', b.name)
@@ -2715,7 +2722,7 @@ export class Game {
       case 'disband': this.guild = null; msg('The guild has been disbanded.'); break;
       case 'capacity': if (g) g.capacity = d.capacity; break;
       case 'levelJob': { const m = member(d.id); if (m) Object.assign(m, { level: d.level, job: d.job }); break; }
-      case 'online': { const m = member(d.id); if (m) m.online = d.online; break; }
+      case 'online': { const m = member(d.id); if (m) { m.online = d.online; if (d.online && d.id !== me) notifyLogin(this.windows, m.name); } break; }
       case 'ranks': if (g) g.ranks = d.ranks; break;
       case 'rank': { const m = member(d.id); if (m) m.rank = d.rank; break; }
       case 'emblem': if (g) g.emblem = d.emblem; break;
