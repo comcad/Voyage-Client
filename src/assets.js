@@ -70,6 +70,8 @@ function prepare(tree, wz) {
   (function prefix(node) {
     if (!node || typeof node !== 'object' || seen.has(node)) return;
     seen.add(node);
+    // the files' own child order (kept by the extractor) stays readable but out of every key listing
+    if (Array.isArray(node._order)) Object.defineProperty(node, '_order', { value: node._order, enumerable: false, configurable: true, writable: true });
     if (typeof node._canvas === 'string') node._canvas = `${wz}/${node._canvas}`;
     for (const k in node) prefix(node[k]);
   })(tree);
