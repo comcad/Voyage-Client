@@ -47,15 +47,21 @@ function placeField(mgr, f, x, y) {
 
 // ==================================================================== NPC chat
 /**
- * UtilDlgEx: 529 wide. t (28) / c (20, tiled) / s (58). Laid out as the client does (openms' recovery of
- * CUtilDlgEx): the body is at least 120px, text is 12px Arial on 18px lines, 341 wide at x 157 (25 when the
- * speaker is on the right, as in the quest frame it / ic / is) and centred in the body; the portrait is
- * centred on x 80 (450) with UtilDlgEx/bar under it carrying the name in white 12px Arial.
- * Buttons sit in s's band (rows 29-51): End Chat on the left, Prev / Next / OK / Yes / No on the right.
- * d: { npc, type, text, prev, next, def, min, max, styles } as sent in NPC_TALK.
+ * UtilDlgEx, 529 wide: t (28) / c (20, every 20px from y 28) / s (58) - it / ic / is when the speaker is you or the
+ * dialog names another speaker (speaker bits 2 / 4), which also puts the portrait on the right (x 450) and the text
+ * on the left (x 25). The text is Arial 12 on 18px lines, wrapped at 325 inside 8px margins from x 157; the body is
+ * the text's height (8 + lines + 8, +24 for a menu, +18 for a say with Prev / Next) kept to 120-240px (taller text
+ * scrolls in 8px steps), the window that plus 86. The words type out a letter at a time (a click shows them all);
+ * a menu's choices are there at once, the first selected (dot1 and a dashed rule), a click on one picks it, NEXT
+ * picks the selected one. The portrait is the NPC's info/default, else its stand animation (its first own action
+ * when it has more than two), looping, unscaled, with its name on UtilDlgEx/bar under it. Speaker bit 1 drops
+ * END CHAT. The dialog opens where the last one was left (centred on 400, 300 at first).
+ * d: { npc, type, speaker, text, prev, next, def, min, max, styles } as sent in NPC_TALK.
  */
-/** NPC dialogue text: the client's font0, 12px Arial on 18px lines. */
-const NPC_TEXT = { size: 12, lineH: 18, bullet: 18 };
+const NPC_COLORS = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c' };
+const NPC_TEXT = { size: 12, lineH: 18, bullet: 18, colors: NPC_COLORS, imgPad: 2 };
+const DLG = { w: 529, wrap: 341, margin: 8, minBody: 120, maxBody: 240, typeMs: 30, admin: 9010000 };
+const dlgCentre = { x: 400, y: 300 };
 export class NpcDialog extends Win {
   constructor(mgr, d, done) {
     const U = mgr.W.UtilDlgEx;
@@ -63,68 +69,110 @@ export class NpcDialog extends Win {
     this.buttons = [];
     this.U = U; this.d = d; this.done = done; this.modal = true;
     this.closeSound = null;   // answering a line only makes the button's click
-    this.quest = d.type === 12;
-    const F = this.quest ? { t: U.it, c: U.ic, s: U.is } : { t: U.t, c: U.c, s: U.s };
-    this.F = F;
-    this.textX = this.quest ? 25 : 157; this.textW = 341; this.faceX = this.quest ? 450 : 80;
-    let text = d.text;
-    if (d.type === 7) text += '\n' + d.styles.map((s, i) => `#L${i}##bStyle ${i + 1}#k#l`).join('\n');
-    this.layout = richText(scratch(), text, this.textW, textRef(mgr), NPC_TEXT);
-    this.laidOut = mgr.namesVersion;
+    this.mirror = ((d.speaker ?? 0) & 6) !== 0;
+    this.F = this.mirror ? { t: U.it, c: U.ic, s: U.is } : { t: U.t, c: U.c, s: U.s };
+    this.textX = this.mirror ? 25 : 157; this.faceX = this.mirror ? 450 : 80;
+    this.menu = d.type === 4 || d.type === 7;
+    this.sel = this.menu ? 0 : -1; this.scroll = 0;
     const input = d.type === 2 || d.type === 3;
     if (input) {
-      this.field = overlayField(mgr, 117, { max: d.type === 3 ? 10 : 30 });
+      this.field = overlayField(mgr, 213, { max: d.type === 3 ? 10 : d.max > 0 ? d.max : 30, color: '#000' });
       this.field.value = d.type === 3 ? String(d.def ?? 0) : d.def || '';
     }
-    this.size();
+    this.relayout();
+    this.typed = this.field ? Infinity : 0; this.t0 = performance.now();
+    this.w = DLG.w;
+    this.x = Math.max(0, Math.min(800 - this.w, Math.round(dlgCentre.x - this.w / 2)));
+    this.y = Math.max(0, Math.min(600 - this.h, Math.round(dlgCentre.y - this.h / 2)));
     // buttons: replies follow the old DOM dialog (action 1 next/yes/ok, 0 back/no, -1 end)
-    const end = d.type === 4 || d.type === 2 || d.type === 3 || d.type === 7 ? 0 : -1;
-    const by = () => this.bandY + 30;
-    this.btn(U.BtClose, 15, by, () => this.reply(end));
-    const right = [];
-    if (d.type === 0) { if (d.prev) right.push([U.BtPrev, () => this.reply(0)]); right.push(d.next ? [U.BtNext, () => this.reply(1)] : [U.BtOK, () => this.reply(1)]); }
-    else if (d.type === 1) right.push([U.BtYes, () => this.reply(1)], [U.BtNo, () => this.reply(0)]);
-    else if (d.type === 12) right.push([U.BtQYes, () => this.reply(1)], [U.BtQNo, () => this.reply(0)]);
-    else if (input) right.push([U.BtOK, () => this.submit()]);
-    this.primary = right.find(([n]) => n === U.BtNext || n === U.BtOK || n === U.BtYes || n === U.BtQYes)?.[1];
-    let x = 529 - 15;
-    for (const [node, fn] of right.reverse()) { x -= node.normal[0]._w; this.btn(node, x, by, fn); x -= 4; }
-    this.loadPortrait();
+    const W = DLG.w, end = this.menu || input ? 0 : -1, low = () => this.h - 26, mid = () => this.h - 77;
+    const shift = this.mirror ? 130 : 0;
+    if (!((d.speaker ?? 0) & 1)) this.closeBtn2 = this.btn(U.BtClose, 9, low, () => this.reply(end));
+    if (d.type === 0) {
+      if (d.prev) this.btn(U.BtPrev, W - 10 - 122 - shift, mid, () => this.reply(0));
+      if (d.next) this.primary = this.btn(U.BtNext, W - 10 - 68 - shift, mid, () => this.reply(1));
+      else this.primary = this.btn(U.BtOK, W - 54, low, () => this.reply(1));
+    } else if (d.type === 1) { this.btn(U.BtYes, W - 108, low, () => this.reply(1)); this.btn(U.BtNo, W - 54, low, () => this.reply(0)); }
+    else if (d.type === 12) { this.btn(U.BtQYes, W - 130, low, () => this.reply(1)); this.btn(U.BtQNo, W - 65, low, () => this.reply(0)); }
+    else if (input) this.primary = this.btn(U.BtOK, W - 54, low, () => this.submit());
+    else if (this.menu) this.primary = this.btn(U.BtNext, W - 10 - 68 - shift, mid, () => this.pick(this.sel));
+    this.portrait();
   }
   btn(node, x, y, fn) { const b = this.button(node, x, 0, fn); b.yAt = y; return b; }
-  size() {
-    const measured = this.layout.height + (this.field ? 26 : 0);
-    this.tiles = Math.ceil(Math.max(120, measured + 8) / 20);
-    this.bandY = 28 + this.tiles * 20;
-    const body = this.tiles * 20;
-    this.textY = 28 + Math.max(4, Math.trunc((body - measured - (this.field ? 20 : 6)) / 2));
-    this.w = 529; this.h = this.bandY + 58;
-    this.x = Math.round((800 - this.w) / 2); this.y = Math.max(8, Math.round((529 - this.h) / 2));
+  get words() { return this.d.type === 7 ? `${this.d.text}\n${this.d.styles.map((s, i) => `#L${i}##bStyle ${i + 1}#k#l`).join('\n')}` : this.d.text; }
+  /** Lay out the words and size the window round them (kept centred where it was). */
+  relayout() {
+    const d = this.d, m = DLG.margin;
+    this.layout = richText(scratch(), this.words, DLG.wrap - 2 * m, textRef(this.mgr), NPC_TEXT);
+    this.laidOut = this.mgr.namesVersion;
+    this.opts = [...new Set(this.layout.lines.filter((l) => l.opt !== null && l.opt !== undefined).map((l) => l.opt))];
+    this.chars = this.layout.lines.reduce((n, l) => n + (l.opt !== null && l.opt !== undefined ? 0 : l.runs.reduce((k, r) => k + (r.t ? r.t.length : 0), 0)), 0);
+    let textH = m + this.layout.height + m + (this.menu ? 24 : 0) + (d.type === 0 && (d.prev || d.next) ? 18 : 0) + (this.field ? 26 : 0);
+    this.textH = textH;
+    this.scrolls = textH > DLG.maxBody && textH - DLG.maxBody > 8;
+    this.bodyH = this.scrolls ? DLG.maxBody : Math.max(textH, DLG.minBody);
+    if (this.scrolls) textH = this.bodyH;
+    const cx = this.x + (this.w || DLG.w) / 2, cy = this.y + (this.h || 0) / 2, had = !!this.h;
+    this.h = this.bodyH + 86;
+    this.textY = this.scrolls ? 22 : 28 + Math.trunc((this.bodyH - textH - 6) / 2);
+    this.dragH = this.textY;
+    if (had) { this.x = Math.round(cx - this.w / 2); this.y = Math.max(0, Math.min(600 - this.h, Math.round(cy - this.h / 2))); }
   }
-  async loadPortrait() {
-    const a = this.mgr.assets, id = pad(this.d.npc, 7);
-    let n = await a.json(`Npc/${id}.img`);
+  /** info/default, else the stand animation - or its first own action when it has more than two; you when you speak. */
+  async portrait() {
+    const a = this.mgr.assets, d = this.d;
+    this.name = (d.speaker & 2) ? this.g.player?.name : this.mgr.strings.npc?.[d.npc]?.name;
+    if (d.speaker & 2) { this.avatar = true; return; }
+    let n = await a.json(`Npc/${pad(d.npc, 7)}.img`) || await a.json(`Npc/${pad(DLG.admin, 7)}.img`);
     if (n?.info?.link) n = (await a.json(`Npc/${pad(n.info.link, 7)}.img`)) || n;
-    const st = n?.stand?.[0] || n?.stand;
-    if (st?._canvas) { await a.preload([st]); this.face = st; }
+    if (!n) return;
+    const framesOf = (act) => frames(act).filter((f) => f?._canvas);
+    let list;
+    if (n.info?.default?._canvas) list = [n.info.default];
+    else {
+      const extras = Object.keys(n).filter((k) => !['info', 'stand', 'move', 'hide'].includes(k) && !/^\d+$/.test(k) && framesOf(n[k]).length);
+      list = framesOf(extras.length > 2 ? n[extras[0]] : n.stand);
+      if (!list.length && n.stand?._canvas) list = [n.stand];
+    }
+    if (!list.length) return;
+    await a.preload(list);
+    this.face = list;
   }
-  frames() { const U = this.U; return [...allCanvases(this.F), U.dot0, U.dot1, U.list0, U.list1, U.list2, U.list3, ...this.buttons.flatMap((b) => b.frames())]; }
+  frames() { const U = this.U; return [...allCanvases(this.F), U.dot0, U.dot1, U.bar, U.list0, U.list1, U.list2, U.list3, ...this.buttons.flatMap((b) => b.frames())]; }
   reply(action, sel) { this.close(); this.done({ action, sel }); }
+  pick(o) { if (o === null || o === undefined || o < 0) return; sfx.play('UI/BtMouseClick'); this.reply(1, this.opts[o] ?? o); }
   submit() {
     const v = this.field.value;
     if (this.d.type === 3) this.reply(1, Math.max(this.d.min, Math.min(this.d.max, Number(v) || 0)));
     else this.reply(1, v);
   }
-  close() { this.field?.remove(); this.mgr.close(this); }
+  close() { this.field?.remove(); dlgCentre.x = this.x + this.w / 2; dlgCentre.y = this.y + this.h / 2; this.mgr.close(this); }
   key(e) {
-    if (e.key === 'Escape') this.buttons[0].onClick();
-    else if (e.key === 'Enter') { if (this.field) this.submit(); else this.primary?.(); }
+    if (e.key === 'Escape') { if (this.closeBtn2) this.closeBtn2.onClick(); }
+    else if (e.key === 'Enter') { if (this.field) this.submit(); else this.primary?.onClick(); }
   }
+  /** Up / Down move the selected choice. */
+  keys(e) {
+    if (!this.menu || !this.opts.length || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return false;
+    if (e.type !== 'keydown') return true;
+    this.sel = (this.sel + (e.key === 'ArrowDown' ? 1 : -1) + this.opts.length) % this.opts.length;
+    this.keepInView();
+    return true;
+  }
+  /** Scroll (8px steps) so the selected choice shows. */
+  keepInView() {
+    if (!this.scrolls) return;
+    const l = this.layout.lines.find((x) => x.opt === this.opts[this.sel]);
+    if (!l) return;
+    const top = DLG.margin + l.y + 10, bot = top + l.h, view = this.bodyH - 2;
+    if (top - this.scroll * 8 < 0) this.scroll = Math.floor(top / 8);
+    else if (bot - this.scroll * 8 > view) this.scroll = Math.ceil((bot - view) / 8);
+  }
+  get maxScroll() { return this.scrolls ? Math.ceil((this.textH - this.bodyH) / 8) + 1 : 0; }
+  wheel(dy) { if (this.scrolls) this.scroll = Math.max(0, Math.min(this.maxScroll, this.scroll + Math.sign(dy))); }
   draw(ctx) {
-    if (this.laidOut !== this.mgr.namesVersion) {
-      this.layout = richText(scratch(), this.d.type === 7 ? this.d.text + '\n' + this.d.styles.map((s, i) => `#L${i}##bStyle ${i + 1}#k#l`).join('\n') : this.d.text, this.textW, textRef(this.mgr), NPC_TEXT);
-      this.laidOut = this.mgr.namesVersion; this.size();
-    }
+    if (this.laidOut !== this.mgr.namesVersion) this.relayout();
+    if (this.typed < this.chars) this.typed = Math.floor((performance.now() - this.t0) / DLG.typeMs);
     for (const b of this.buttons) b.y = b.yAt();
     super.draw(ctx);
   }
@@ -133,32 +181,93 @@ export class NpcDialog extends Win {
     const t = im(this.F.t), c = im(this.F.c), s = im(this.F.s);
     if (!t || !c || !s) return;
     ctx.drawImage(t, 0, 0);
-    for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 28 + i * 20);
-    ctx.drawImage(s, 0, this.bandY);
-    // portrait and its name bar, centred together in the body (a tall portrait sits on the band instead)
-    const face = im(this.face), bar = im(this.U.bar), name = m.strings.npc?.[this.d.npc]?.name, body = this.tiles * 20;
-    const fh = face ? Math.min(face.height, body - 23) : 0, k = face ? fh / face.height : 1;
-    const top = 28 + Math.max(0, Math.trunc((body - fh - 23) / 2));
-    if (face) ctx.drawImage(face, Math.round(this.faceX - (face.width * k) / 2), top, Math.round(face.width * k), fh);
-    if (name) {
-      if (bar) ctx.drawImage(bar, this.faceX - 60, top + fh + 3);
-      uiText(ctx, name, this.faceX, top + fh + 5, { color: '#fff', size: 12, align: 'center' });
-    }
-    // the client draws every choice in the same muted purple, whatever colour code it carries
-    drawRich(ctx, this.layout, this.textX, this.textY, { drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y), hover: this.hoverOpt, size: NPC_TEXT.size, optColor: '#4f3b98',
-      drawImage: (n, x, y) => { const i = im(n); if (i) ctx.drawImage(i, x, y); },
-      drawBullet: (x, y, on) => { const i = im(on ? this.U.dot1 : this.U.dot0); if (i) ctx.drawImage(i, x, y); } });
+    for (let y = 28; y < this.h - 58; y += 20) ctx.drawImage(c, 0, y);
+    ctx.drawImage(s, 0, this.h - 58);
+    this.drawFace(ctx);
+    // the words, clipped to the text box
+    ctx.save(); ctx.beginPath(); ctx.rect(this.textX + 1, this.textY + 1, 339, this.bodyH - 2); ctx.clip();
+    this.drawText(ctx, this.textX + DLG.margin, this.textY + DLG.margin - this.scroll * 8);
+    ctx.restore();
+    if (this.scrolls) this.scrollbar(ctx, this.textX + 338, this.textY + 2, this.bodyH + 3, this.scroll, this.maxScroll + Math.floor(this.bodyH / 8), Math.floor(this.bodyH / 8));
     if (this.field) {
-      const bar = im(this.U.bar), fy = this.textY + this.layout.height + 6;
-      if (bar) ctx.drawImage(bar, this.textX, fy);
-      placeField(m, this.field, this.x + this.textX + 2, this.y + fy + 1);
+      const fy = this.textY + this.textH - 26 + 2;
+      ctx.fillStyle = '#000'; ctx.fillRect(this.textX - 1, fy, 218, 18);
+      ctx.fillStyle = '#fff'; ctx.fillRect(this.textX, fy + 1, 216, 16);
+      placeField(m, this.field, this.x + this.textX + 2, this.y + fy + 3);
       if (!this.focused) { this.focused = true; setTimeout(() => this.field.focus(), 0); }
     }
   }
-  move(lx, ly) { this.hoverOpt = optionAt(this.layout, lx - this.textX, ly - this.textY); }
+  /** The NPC (looping, unscaled) with its name bar under it: centred in the body, or sat on the band when taller. */
+  drawFace(ctx) {
+    const m = this.mgr, bar = m.image(this.U.bar);
+    let h = 0, draw = null;
+    if (this.avatar && this.g.look) {
+      h = 70;
+      draw = (top) => drawParts(ctx, m.assets, this.g.look.compose(this.g.look.standAction(), 0), this.faceX - 7, top + h, false);
+    } else if (this.face?.length) {
+      const total = this.face.reduce((n, f) => n + (Number(f.delay) || 180), 0);
+      let tt = performance.now() % total, f = this.face[0];
+      for (const x of this.face) { f = x; if ((tt -= Number(x.delay) || 180) < 0) break; }
+      const f0 = this.face[0], i0 = m.image(f0), img = m.image(f);
+      if (!i0 || !img) return;
+      h = i0.height;
+      const o0 = f0.origin || [i0.width / 2, i0.height], o = f.origin || [img.width / 2, img.height];
+      draw = (top) => ctx.drawImage(img, Math.round(this.faceX - i0.width / 2 + o0[0] - o[0]), Math.round(top + o0[1] - o[1]));
+    }
+    const total = h + 23;
+    const top = this.bodyH >= total ? Math.trunc((this.bodyH - total) / 2) + 28 : this.h - total - 62;
+    const barY = this.bodyH >= total ? top + h : this.h - total - 52 + h;
+    draw?.(top);
+    if (!this.name) return;
+    const bx = this.faceX - 60;
+    if (bar) ctx.drawImage(bar, bx + Math.trunc((121 - bar.width) / 2), barY + 3);
+    ctx.save(); ctx.beginPath(); ctx.rect(bx, barY, 121, 23); ctx.clip();
+    uiText(ctx, this.name, this.faceX + 0.5, barY + 5, { color: '#fff', size: 12, align: 'center' });
+    ctx.restore();
+  }
+  /** Typed so far: plain words up to the cursor; choices (and their dots) at once; the selected one dashed. */
+  drawText(ctx, x, y) {
+    const m = this.mgr, im = (n) => m.image(n);
+    let left = this.typed;
+    const all = this.typed >= this.chars;
+    for (const l of this.layout.lines) {
+      const opt = l.opt !== null && l.opt !== undefined, ly = y + l.y + (opt ? 10 : 0), bottom = ly + l.h - 2;
+      if (opt && l.x0) {
+        const on = this.opts.indexOf(l.opt) === this.sel || l.opt === this.hoverOpt;
+        const dot = im(on ? this.U.dot1 : this.U.dot0);
+        if (dot) ctx.drawImage(dot, x + 7, ly + 2);
+        if (this.opts.indexOf(l.opt) === this.sel) {
+          ctx.font = `${NPC_TEXT.size}px Arial, sans-serif`;
+          const end = Math.max(...l.runs.map((r) => r.x + (r.t ? ctx.measureText(r.t).width : r.icon ? 34 : 0)), l.x0);
+          const w = end - l.x0, n = Math.trunc((Math.trunc((w + 8) / 3) + 1) / 2);
+          ctx.fillStyle = '#8c8c8c';
+          for (let k = 0; k < n; k++) ctx.fillRect(x + l.x0 - 4 + k * 6, ly + 15, 3, 1);
+        }
+      }
+      for (const r of l.runs) {
+        // pictures (section titles, item icons) are there from the start; only the words type out
+        if (r.img) { const i = im(r.img); if (i) ctx.drawImage(i, x + r.x, bottom - i.height); continue; }
+        if (r.icon) { m.drawIcon(ctx, r.icon, x + r.x, bottom - 32); continue; }
+        let t = r.t;
+        if (!opt && !all) { if (left <= 0) continue; if (t.length > left) t = t.slice(0, left); left -= r.t.length; }
+        // on a whole-pixel baseline: a 'top' baseline lands glyph edges between pixels and greys out their tops
+        uiText(ctx, t, Math.round(x + r.x), bottom - 4, { color: r.color, bold: r.bold, size: NPC_TEXT.size, base: 'alphabetic' });
+      }
+    }
+  }
+  optAt(lx, ly) {
+    const px = lx - this.textX - DLG.margin, py = ly - this.textY - DLG.margin + this.scroll * 8;
+    for (const l of this.layout.lines) {
+      if (l.opt === null || l.opt === undefined) continue;
+      if (py >= l.y + 10 && py < l.y + 10 + l.h && px >= -2 && px < DLG.wrap) return l.opt;
+    }
+    return null;
+  }
+  move(lx, ly) { this.hoverOpt = this.menu ? this.optAt(lx, ly) : null; }
   down(lx, ly) {
-    const o = optionAt(this.layout, lx - this.textX, ly - this.textY);
-    if (o !== null && (this.d.type === 4 || this.d.type === 7 || this.d.type === 0)) { sfx.play('UI/BtMouseClick'); this.reply(1, o); }
+    if (this.typed < this.chars) { this.typed = this.chars; this.t0 = -Infinity; }
+    const o = this.menu ? this.optAt(lx, ly) : null;
+    if (o !== null) { this.sel = this.opts.indexOf(o); this.pick(this.sel); }
   }
 }
 

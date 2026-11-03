@@ -156,22 +156,19 @@ async function notYet(game, npcId, id, why) {
   const book = game.quests, d = book.dialogue(id, '1'), stop = d.stop || {};
   if (why === 'nopet') { await game.windows.notice('Unable to complete the quest\ndue to a lack of pet.\nPlease try again after summoning a pet.'); return; }
   if (why === 'pet') { await game.windows.notice('Unable to complete the quest\nwith the current pet you have summoned.\nPlease try again with a pet\nthat meets the quest requirement.'); return; }
-  const fallback = () => (stop.default ? Object.values(typeof stop.default === 'string' ? [stop.default] : stop.default) : null) || [game.windows.strings.npc?.[npcId]?.d0].filter(Boolean);
-  const pages = (key) => {
-    const v = stop[key];
-    const lines = typeof v === 'string' ? [v] : v ? Object.keys(v).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => v[k]) : [];
-    return lines.length ? lines : fallback();
-  };
+  const lines = (v) => (typeof v === 'string' ? [v] : v ? Object.keys(v).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => v[k]) : []);
+  const fallback = () => { const l = lines(stop.default); return l.length ? l : [game.windows.strings.npc?.[npcId]?.d0].filter(Boolean); };
+  const pages = (key) => { const l = lines(stop[key]); return l.length ? l : fallback(); };
   if (why === 'npc') {
     const ctx = game.textCtx();
-    const lost = Object.values(book.act[id]?.['0']?.item || {}).filter((it) => (it.count ?? 0) >= 1 && book.held(ctx, it.id) < it.count).map((it) => it.id);
+    const lost = lines(book.act[id]?.['0']?.item).filter((it) => (it.count ?? 0) >= 1 && book.held(ctx, it.id) < it.count).map((it) => it.id);
     if (lost.length) {
-      const lines = d.lost.length ? d.lost : pages('npc');
-      if (lines.length && await playQuestLines(game, npcId, lines)) game.net.questRestore(id, lost);
+      const talk = d.lost.length ? d.lost : pages('npc');
+      if (talk.length && await playQuestLines(game, npcId, talk)) game.net.questRestore(id, lost);
       return;
     }
   }
   const key = { npc: 'npc', item: 'item', quest: 'quest', info: 'info', mob: 'mob' }[why] || 'default';
-  const lines = key === 'default' ? fallback() : pages(key);
-  if (lines.length) await playQuestLines(game, npcId, lines);
+  const say = key === 'default' ? fallback() : pages(key);
+  if (say.length) await playQuestLines(game, npcId, say);
 }

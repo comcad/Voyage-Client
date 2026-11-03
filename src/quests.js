@@ -17,6 +17,70 @@ const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 export const isPartyQuest = (id) => id >= 1200 && id <= 1399;
 export const TITLE_AREA = 51;
 
+/**
+ * Chain parents in the order the quest log meets them: a string-keyed hash table of 31 buckets (h = h * 32 + 1 + c),
+ * new keys at the head of their bucket, grown to size * 2 + 1 once it holds more than size * 100 / 128.
+ */
+function chainOrder(info, ids = Object.keys(info)) {
+  const hash = (s) => { let h = 0; for (const ch of s) h = (Math.imul(h, 32) + 1 + (ch.charCodeAt(0) < 128 ? ch.charCodeAt(0) : 63)) >>> 0; return h; };
+  let buckets = null, size = 0, count = 0, limit = 0;
+  const grow = (n) => {
+    const old = buckets;
+    buckets = Array.from({ length: n }, () => []); size = n; limit = (n * 100) >> 7;
+    if (old) for (const b of old) for (const k of b) buckets[hash(k) % n].unshift(k);
+  };
+  for (const id of ids) {
+    const q = info[id];
+    if (!q?.parent) continue;
+    if (!buckets) grow(31); else if (count > limit) grow(size * 2 + 1);
+    const b = buckets[hash(q.parent) % size];
+    if (!b.includes(q.parent)) { b.unshift(q.parent); count++; }
+  }
+  return buckets ? buckets.flat() : [];
+}
+
+/**
+ * The quest log's sort, kept exactly so equal entries land as they do there: a quicksort (median of three, stopping
+ * under 17) with an insertion pass at the end, comparing with "at most" - so it is not stable. le(x, y): x <= y.
+ */
+export function questSort(a, le) {
+  const n = a.length;
+  if (n < 2) return a;
+  let depth = 0;
+  for (let k = n - 1; k !== 1; k >>= 1) depth++;
+  const swap = (i, j) => { const t = a[i]; a[i] = a[j]; a[j] = t; };
+  const median = (x, y, z) => (!le(x, y) ? (!le(x, z) ? (le(y, z) ? z : y) : x) : le(y, z) ? y : le(x, z) ? z : x);
+  const partition = (first, end, pivot) => {
+    let i = first, j = end;
+    for (;;) {
+      if (i < end && le(a[i], pivot)) { i++; continue; }
+      do { j--; } while (j > first && le(pivot, a[j]));
+      if (j <= i) return i;
+      swap(i, j); i++;
+    }
+  };
+  const insertion = (first, last) => {
+    for (let i = first; i <= last; i++) {
+      const x = a[i];
+      let j = i;
+      while (j > first && le(x, a[j - 1])) { a[j] = a[j - 1]; j--; }
+      a[j] = x;
+    }
+  };
+  const intro = (first, end, d) => {
+    while (end - first >= 17) {
+      if (d === 0) { insertion(first, end - 1); return; }
+      d--;
+      const cut = partition(first, end, median(a[first], a[Math.trunc((end - first) / 2) + first], a[end - 1]));
+      intro(cut, end, d);
+      end = cut;
+    }
+  };
+  intro(0, n - 1, depth * 2);
+  insertion(0, n - 1);
+  return a;
+}
+
 export class QuestBook {
   constructor(assets) {
     this.assets = assets;
@@ -29,8 +93,43 @@ export class QuestBook {
     [this.info, this.check, this.act, this.say] = await Promise.all(
       ['QuestInfo', 'Check', 'Act', 'Say'].map((f) => this.assets.json(`Quest/${f}.img`)));
     this.info ||= {}; this.check ||= {}; this.act ||= {}; this.say ||= {};
+    // the quests in the files' own order (kept as _order by the extractor), which the quest log's lists follow
+    const order = (o) => { const ord = o._order; delete o._order; return (ord || Object.keys(o)).filter((k) => /^\d+$/.test(k)).map(Number); };
+    this.infoOrder = order(this.info); this.checkOrder = order(this.check); order(this.act); order(this.say);
+    this.checkPos = new Map(this.checkOrder.map((id, i) => [id, i]));
     // npc id -> quest ids that start or end there; item id -> quests needing it to complete
     this.byNpc = new Map(); this.byItem = new Map();
+    // chain quests: parent name -> its parts in order
+    this.chains = new Map();
+    for (const id of this.infoOrder) {
+      const q = this.info[id];
+      if (!q?.parent) continue;
+      if (!this.chains.has(q.parent)) this.chains.set(q.parent, []);
+      this.chains.get(q.parent).push(id);
+    }
+    this.chainParents = chainOrder(this.info, this.infoOrder);
+    // parts by order, swapping only when a later one is strictly lower, so equal orders keep the files' order
+    const ord = (id) => (this.info[id].order === undefined ? null : Number(this.info[id].order));
+    for (const ids of this.chains.values()) {
+      for (let i = 0; i < ids.length - 1; i++) {
+        for (let j = i + 1; j < ids.length; j++) {
+          const a = ord(ids[i]), c = ord(ids[j]);
+          if (a !== null && c !== null && c < a) [ids[i], ids[j]] = [ids[j], ids[i]];
+        }
+      }
+    }
+    // what makes an auto-start quest come up: items carried, equips worn, maps entered; and the always-checked ones
+    this.byStartItem = new Map(); this.byEquip = new Map(); this.byField = new Map(); this.normalAutoStart = []; this.autoComplete = [];
+    const add = (map, key, id) => { if (!map.has(key)) map.set(key, []); map.get(key).push(id); };
+    for (const id of this.checkOrder) {
+      const c0 = this.check[id]?.['0'];
+      if (Number(this.info[id]?.autoComplete)) this.autoComplete.push(id);
+      if (!c0) continue;
+      for (const it of list(c0.item)) add(this.byStartItem, it.id, id);
+      if (Number(c0.normalAutoStart)) { this.normalAutoStart.push(id); continue; }
+      for (const e of [...list(c0.equipAllNeed), ...list(c0.equipSelectNeed)]) add(this.byEquip, Number(e), id);
+      for (const m of list(c0.fieldEnter)) add(this.byField, Number(m), id);
+    }
     for (const [id, c] of Object.entries(this.check)) {
       for (const phase of ['0', '1']) {
         const npc = Number(c[phase]?.npc);
@@ -64,6 +163,8 @@ export class QuestBook {
   isAutoStart(id) { return !!Number(this.info[id]?.autoStart); }
   isAutoAccept(id) { return !!Number(this.info[id]?.autoAccept); }
   isAutoComplete(id) { return !!Number(this.info[id]?.autoComplete); }
+  /** Shown under the QuestAlert bulb while in progress (only alongside autoStart). */
+  isAutoPreComplete(id) { return !!Number(this.info[id]?.autoPreComplete) && this.isAutoStart(id); }
   /** Quests started automatically (no position is sent with their QUEST_ACTION). */
   isAuto(id) { return this.isAutoStart(id) || this.isAutoComplete(id); }
 
@@ -205,8 +306,7 @@ export class QuestBook {
 
   /** Every quest you could start now (the quest log's Available tab). */
   available(ctx) {
-    return Object.keys(this.check).map(Number)
-      .filter((id) => this.check[id]?.['0']?.npc && this.area(id) !== TITLE_AREA && this.canStart(id, ctx));
+    return this.checkOrder.filter((id) => this.check[id]?.['0']?.npc && this.area(id) !== TITLE_AREA && this.canStart(id, ctx));
   }
 
   /** Say.img lines for a phase: { lines:[], yes:[], no:[], lost:[], stop, ask } */

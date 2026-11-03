@@ -879,12 +879,15 @@ export class ChannelSession {
 
     on(S.NPC_TALK, (r) => {
       r.ubyte();
-      const npc = r.int(), type = r.ubyte(), speaker = r.ubyte(), text = r.string();
-      const d = { npc, type, speaker, text };
+      // speaker: bit 1 no END CHAT, bit 2 you are speaking, bit 4 (say) another NPC speaks - its id comes first
+      let npc = r.int();
+      const type = r.ubyte(), speaker = r.ubyte();
+      if (type === 0 && speaker & 4) npc = r.int();
+      const d = { npc, type, speaker, text: r.string() };
       if (type === 0) { d.prev = r.ubyte() === 1; d.next = r.ubyte() === 1; }
-      else if (type === 2) { d.def = r.string(); r.int(); }
+      else if (type === 2) { d.def = r.string(); d.min = r.available >= 2 ? r.short() : 0; d.max = r.available >= 2 ? r.short() : 0; }
       else if (type === 3) { d.def = r.int(); d.min = r.int(); d.max = r.int(); }
-      else if (type === 7) { d.styles = []; for (let k = r.ubyte(); k > 0; k--) d.styles.push(r.int()); }
+      else if (type === 7 || type === 8) { d.styles = []; for (let k = r.ubyte(); k > 0; k--) d.styles.push(r.int()); d.type = 7; d.wire = type; }
       this.emit('npcTalk', d);
     });
 
@@ -1236,7 +1239,8 @@ export class ChannelSession {
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */
   npcReply(lastType, action, selection) {
     const w = new PacketWriter(C.NPC_TALK_MORE).byte(lastType).byte(action);
-    if (typeof selection === 'string') w.string(selection);
+    if (lastType === 7) w.byte(action === 1 ? selection ?? 0 : 0);   // a style choice is one byte
+    else if (typeof selection === 'string') w.string(selection);
     else if (selection !== undefined && selection !== null) w.int(selection);
     this.send(w);
   }

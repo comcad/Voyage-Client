@@ -8,6 +8,7 @@ import { QuestBook, TITLE_AREA } from './quests.js';
 import { npcTalk, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
+import { QuestAlert } from './questalert.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
@@ -569,6 +570,8 @@ export class Game {
       // your own chalkboard: put it away
       const cr = this.player.chalk && this.player.chalkRect, wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
       if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.net.closeChalkboard(); return; }
+      // the QuestAlert bulb: its list of quests
+      if (this.questAlert?.hits(wx, wy)) { this.questAlert.open(); return; }
       // a shop sign takes you into the shop
       const signed = this.shopSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
       if (signed && signed !== this.player) { this.net.pshopVisit(signed.box.oid); return; }
@@ -1438,10 +1441,13 @@ export class Game {
     await this.quests.load();
     this.quests.setState(info.quests);
     if (wm.wins.questalarm.state.opened) wm.open('questalarm');   // and the Quest Helper, unless it was closed
+    this.questAlert = new QuestAlert(this);
+    this.assets.preload(allCanvases(this.vfx.E?.QuestAlert));
     this.monsterBook = info.book || { cover: 0, cards: {} };
     if (this.net) this.net.selfName = info.stats?.name;   // the merchant room tells owner from visitor by name
     this.skills = new SkillBook(this.assets);
     await this.skills.load(info.stats.job, info.skills, info.cooldowns);
+    this.windows.wins.quest?.markAllSeen();   // the quest log's NEW marks are for quests that open up from now on
     this.standardPdd(0, 1);   // load the standard defence table before the first blow
     this.rocks = { regular: (info.rocks || []).slice(0, 5), vip: (info.rocks || []).slice(5, 15) };   // Teleport Rock maps
     this.keyBar = this.statusBar; // the quick slots (render() rebuilds them from the keymap)
@@ -1742,6 +1748,7 @@ export class Game {
   onQuest(id, status, data) {
     const book = this.quests, old = book.started[id];
     book.update(id, status, data);
+    this.questAlert?.recordChanged(id, status);
     const alarm = this.windows.wins.questalarm, ctx = this.textCtx();
     if (status === 1) {
       if (old !== data) this.questMobLines(id, old);
@@ -1918,6 +1925,7 @@ export class Game {
     else if (s.exp > exp0 && s.exp >= (EXP[this.stats.level] || Infinity) * 0.9 && performance.now() - (this.petPreLevelT ?? -Infinity) >= 420000) { this.petPreLevelT = performance.now(); this.petEvent('e_prelevelup'); }
     this.petAutoPot('mp');
     if (s.meso !== undefined) { const was = this.meso; this.meso = s.meso; this.questMesoChanged(was); }
+    this.questAlert?.statsChanged();
     if (s.level > before) { this.hud.message(`Level up! You are now level ${s.level}.`, '#ffe08a'); this.levelUpEffect(); sfx.play('Game/LevelUp'); }
     if (s.job !== undefined && this.skills && s.job !== this.skills.job) {
       this.hud.message('Your job has changed! New skills are available.', '#ffe08a');
@@ -1994,6 +2002,7 @@ export class Game {
       this.hooks.onLoading?.(false);
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
+      this.questAlert?.refresh();   // what this map, your items and your level offer
     }
   }
 
@@ -2229,6 +2238,8 @@ export class Game {
     this.hud.renderInventory();
     this.questWin?.render();
     for (const [id, n] of was) this.questItemLines(id, n);
+    for (const id of was.keys()) this.questAlert?.itemChanged(id, false);
+    for (const op of ops) if (op.pos < 0 || op.to < 0) for (const id of [op.item?.id, box(op.inv, op.to ?? op.pos)?.[op.to ?? op.pos]?.id]) if (id) this.questAlert?.itemChanged(id, true);
   }
 
   async rebuildLook() {
@@ -2804,6 +2815,7 @@ export class Game {
     this.statusBar?.update(dt);
     this.windows?.update(dt);
     this.vfx?.update(dt);
+    this.questAlert?.update(dt * 1000); this.questAlert?.tick();
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
@@ -5224,6 +5236,7 @@ export class Game {
     map.drawBacks(ctx, cam, true);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
+    this.questAlert?.draw(ctx, cam);    // the QuestAlert bulb over your head
     drawPartyHp(ctx, this, cam);
     this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
 
