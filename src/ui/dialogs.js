@@ -2,8 +2,9 @@ import { pad, frames } from '../assets.js';
 import { invType, itemInfo } from '../data.js';
 import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
-import { TextField, uiText } from './wzui.js';
+import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases, drawTabStrip } from './windows.js';
+import { Anim } from '../map.js';
 import { richText, drawRich, optionAt, LIGHT_COLORS } from './richtext.js';
 
 /**
@@ -330,89 +331,246 @@ export class MessageBox extends Win {
   }
 }
 
+/**
+ * The plain message box (Basic.img YesNo3: t 21, c 20 tiled, s 55, 266 wide, centred) with Basic BtOK2 at x 155 and
+ * BtCancel2 at 205, 30px off the bottom. 'okcancel': the lines centred, 14px apart, over at least two body tiles.
+ * 'quantity': the prompt at the top left and a white 226x15 field 73px off the bottom.
+ */
+class UtilBox extends Win {
+  constructor(mgr, kind, text, done, opts = {}) {
+    super(mgr, null, 0, 0);
+    this.buttons = [];
+    this.modal = true; this.kind = kind; this.done = done; this.opts = opts;
+    this.lines = wrapText(scratch(), text, 234, 12);
+    const n = this.lines.length;
+    this.tiles = Math.max(2, Math.floor((n * 14) / 20) + 1);
+    this.w = 266; this.h = kind === 'quantity' ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
+    this.x = 267; this.y = (600 - this.h) >> 1;
+    this.button(mgr.B.BtOK2, 155, this.h - 30, () => this.finish(true));
+    this.button(mgr.B.BtCancel2, 205, this.h - 30, () => this.finish(false));
+    if (kind === 'quantity') {
+      this.field = overlayField(mgr, 226, { max: 10, color: '#000' });
+      this.field.rect.h = 15; this.field.value = String(opts.def ?? 1);
+    }
+  }
+  frames() { return [...allCanvases(this.mgr.B.YesNo3), ...super.frames()]; }
+  finish(ok) {
+    if (this.answered) return;
+    this.answered = true; this.field?.remove(); this.mgr.close(this);
+    if (this.kind !== 'quantity') { this.done(ok); return; }
+    const v = Math.floor(Number(this.field.value));
+    this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
+  }
+  key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false); }
+  body(ctx) {
+    const m = this.mgr, F = m.B.YesNo3, t = m.image(F.t), c = m.image(F.c), s = m.image(F.s);
+    if (!t || !c || !s) return;
+    ctx.drawImage(t, 0, 0);
+    for (let y = 21; y < this.h - 55; y += 20) ctx.drawImage(c, 0, y);
+    ctx.drawImage(s, 0, this.h - 55);
+    const line = (str, x, y, align) => uiText(ctx, str, x, y + 11, { color: '#fff', size: 12, base: 'alphabetic', align });
+    if (this.kind !== 'quantity') {
+      const top = (this.tiles * 20 - this.lines.length * 14) / 2 + 24;
+      this.lines.forEach((l, i) => line(l, 132, top + i * 14, 'center'));
+      return;
+    }
+    this.lines.forEach((l, i) => line(l, 19, 28 + i * 14, 'left'));
+    const fy = this.h - 73;
+    ctx.fillStyle = '#000'; ctx.fillRect(18, fy - 1, 228, 17);
+    ctx.fillStyle = '#fff'; ctx.fillRect(19, fy, 226, 15);
+    placeField(m, this.field, this.x + 19, this.y + fy);
+    if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
+  }
+}
+
 // ==================================================================== shop
 /**
- * Shop.img backgrnd 463x339: two panels - the NPC's goods (x 5-225) and your inventory (x 233-453).
- * Headers y 5-83 with a shadow where the NPC / your character stands (feet at x 51 / 279, y 74);
- * meso box x 358-447 y 64-79. Tab strips y 87-115 (red rule ~117). Lists: rows of 35px every 40
- * from y 125 - an icon cell (x +0..35) and the text area, where Shop/select (162x35) marks the choice.
- * The art holds 5 rows; the window is drawn taller by repeating one row band (y 205-245) EXTRA times,
- * so 9 rows show. Each row: the name, a thin rule, then the coin and "<price> meso".
+ * Shop.img backgrnd 463x339: the NPC's goods (left) and your items (right), five rows each. The art already holds
+ * the row cells and their rules and the meso box's coin. Drawn taller here: one row band (y 205-245) repeats
+ * EXTRA times, so 9 rows show. Rows are 40px apart from y 127: a 35px icon cell, then the text cell where
+ * Shop/select marks the choice.
  */
-const SHOP_EXTRA = 4, SHOP_ROWS = 5 + SHOP_EXTRA, SHOP_ROW_Y = 125, SHOP_ROW_H = 40;
+const SHOP_EXTRA = 4, SHOP_ROWS = 5 + SHOP_EXTRA, SHOP_ROW_Y = 127, SHOP_ROW_H = 40;
 const SHOP_W = 463, SHOP_H = 339 + SHOP_EXTRA * SHOP_ROW_H, SHOP_CUT = 245, SHOP_BAND = 205;
-const SHOP_TAB_Y = 95, SHOP_BAR_H = 200 + SHOP_EXTRA * SHOP_ROW_H;
-const SELL_TABS = [1, 2, 3, 4, 5];
-// the goods' tabs: All, and Must - the potions, ammo and other use items
-const BUY_TABS = [() => true, (it) => invType(it.id) === 2];
+const SHOP_TAB_Y = 95, SHOP_BAR_H = 194 + SHOP_EXTRA * SHOP_ROW_H;
+const SELL_TABS = 5, PERFECT_PITCH = 4310000;
+const STOCK = "You don't have enough in stock.", NO_MESOS = 'You do not have enough mesos.';
+const SHOP_RESULTS = {
+  1: STOCK, 5: STOCK, 9: STOCK, 2: NO_MESOS, 10: NO_MESOS, 3: 'Please check if your inventory is full or not.', 0x0D: 'You need more items',
+  0x10: 'Players that are Level 15 and below \nmay only trade 1 million mesos per day. \nYou have reached the limit today,\nplease try again tomorrow.',
+};
+const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
+// Use / Set-up / Etc items other than stars and bullets: these ask how many
+const isStackable = (id) => [2, 3, 4].includes(invType(id)) && !isRechargeable(id);
+const commas = (n) => n.toLocaleString('en-US');
+/** An item name cut to the row's 152px, ending in "..". */
+function rowName(ctx, s) {
+  ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';
+  if (ctx.measureText(s).width > 152) { while (s && ctx.measureText(`${s}..`).width > 152) s = s.slice(0, -1); s += '..'; }
+  ctx.restore();
+  return s;
+}
 export class ShopWin extends Win {
   constructor(mgr, shop) {
     const S = mgr.W.Shop;
-    super(mgr, null, Math.round((800 - SHOP_W) / 2), 15);
-    this.w = SHOP_W; this.h = SHOP_H;
+    super(mgr, null, (800 - SHOP_W) >> 1, (600 - SHOP_H) >> 1);
+    this.w = SHOP_W; this.h = SHOP_H; this.keepOnEscape = true;
     this.buttons = [];
-    this.S = S; this.shop = shop; this.tab = 1; this.buyTab = 0;
-    this.firstBuy = 0; this.firstSell = 0; this.selBuy = -1; this.selSell = -1;
-    this.button(S.BtExit, 132, 14, () => this.close());
-    this.button(S.BtBuy, 132, 42, () => this.buy());
-    this.button(S.BtSell, 362, 42, () => this.sell());
-    this.recharge = this.button(S.BtRecharge, 312, 36, () => this.doRecharge());
+    this.S = S; this.shop = shop; this.tab = 1; this.buyTab = 0; this.buyFirst = [0, 0];
+    this.firstSell = 0; this.selBuy = -1; this.selSell = -1; this.pending = false;
+    // goods with neither a meso nor a Perfect Pitch price (stars kept only to recharge) aren't listed
+    this.all = shop.items.map((it, idx) => ({ it, idx })).filter(({ it }) => it.price || it.token);
+    this.must = [];
+    this.button(mgr.W.PersonalShop.BtExit, 142, 15, () => this.close());
+    this.button(S.BtBuy, 142, 35, () => this.buy());
+    this.button(S.BtSell, 372, 35, () => this.sell());
+    this.rechargeBtns = Array.from({ length: SHOP_ROWS }, (_, i) => {
+      const b = this.button(S.BtRecharge, 404, SHOP_ROW_Y + i * SHOP_ROW_H, () => { this.selSell = this.firstSell + i; this.selBuy = -1; this.recharge(); });
+      b.visible = false;
+      return b;
+    });
     mgr.assets.json(`Npc/${pad(shop.npc, 7)}.img`).then(async (n) => {
       if (n?.info?.link) n = (await mgr.assets.json(`Npc/${pad(n.info.link, 7)}.img`)) || n;
-      const st = n?.stand?.[0] || n?.stand;
-      if (st?._canvas) { await mgr.assets.preload([st]); this.face = st; }
+      const anim = n?.stand ? new Anim(n.stand) : null;
+      if (!anim?.frames.length) return;
+      anim.defaultDelay = 180;
+      await mgr.assets.preload(anim.frames);
+      this.npc = anim; this.npcT = performance.now();
     });
-    for (const it of shop.items) itemInfo(mgr.assets, it.id).then((info) => { it.info = info; });
+    // Must: the equips that suit you; when there are any the shop opens on them
+    Promise.all(shop.items.map((it) => itemInfo(mgr.assets, it.id).then((info) => { it.info = info; }))).then(() => {
+      this.must = this.all.filter(({ it }) => this.suits(it));
+      if (this.must.length) this.buyTab = 1;
+    });
   }
-  frames() { return [...super.frames(), this.S.backgrnd, this.S.select, this.S.meso, ...allCanvases(this.S.TabSell), ...allCanvases(this.S.TabBuy), ...allCanvases(this.mgr.B.Tab2)]; }
+  frames() { return [...super.frames(), this.S.backgrnd, this.S.select, this.S.meso, this.S.token, ...allCanvases(this.S.TabSell), ...allCanvases(this.S.TabBuy), ...allCanvases(this.mgr.B.Tab2)]; }
   close() { this.mgr.close(this); this.g.net?.shopClose(); this.g.shopWin = null; }
-  key(e) { if (e.key === 'Escape') this.close(); }
-  result(code) {
-    const msg = { 2: 'You do not have enough mesos.', 3: 'Please check if your inventory is full.', 5: 'You cannot sell this item.' }[code];
-    if (msg) this.mgr.notice(msg);
+  key() {}   // Esc and Enter do nothing here
+  ask(text) { return new Promise((r) => this.mgr.show(new UtilBox(this.mgr, 'okcancel', text, r))); }
+  askQty(text, def, min, max) { return new Promise((r) => this.mgr.show(new UtilBox(this.mgr, 'quantity', text, r, { def, min, max }))); }
+  /** Shop text: 12px black, `y` the top of its line as the client places it (the baseline 11px below). */
+  rowText(ctx, t, x, y, align = 'left') { this.text(ctx, t, x, y + 11, { size: 12, base: 'alphabetic', align }); }
+  /** Your stand pose, played forward and back as in the field. */
+  standFrame(look, dt) {
+    const a = look.standAction();
+    if (this.av?.look !== look || this.av.action !== a) this.av = { look, action: a, frame: 0, back: false, t: 0 };
+    const v = this.av;
+    v.t += dt;
+    while (v.t >= look.delay(a, v.frame)) { v.t -= look.delay(a, v.frame); ({ frame: v.frame, back: v.back } = look.nextFrame(a, v.frame, v.back)); }
+    return [a, v.frame];
   }
-  /** The goods on the open tab, each with its index in the shop's own list (what BUY sends). */
-  buyItems() { return this.shop.items.map((it, idx) => ({ it, idx })).filter(({ it }) => BUY_TABS[this.buyTab](it)); }
-  sellItems() {
-    const inv = this.g.inventory?.[this.tab] || {};
-    return Object.entries(inv).map(([pos, it]) => ({ pos: Number(pos), it })).sort((a, b) => a.pos - b.pos);
+  get open() { return this.g.shopWin === this; }
+
+  /** An equip for mesos within 5 levels of yours, for your job branch (or any job) and gender. */
+  suits(it) {
+    const s = this.g.stats, info = it.info;
+    if (!s || !info || invType(it.id) !== 1 || it.token) return false;
+    if (Math.abs(s.level - (info.reqLevel || 0)) > 5) return false;
+    const job = info.reqJob || 0, branch = Math.floor((s.job % 1000) / 100);
+    if (job && !(branch && (job & (1 << (branch - 1))))) return false;
+    const g = Math.floor(it.id / 1000) % 10, gender = g < 2 ? g : 2;
+    return s.gender === 2 || gender === 2 || gender === s.gender;
   }
-  async buy(row = this.selBuy) {
-    const r = this.buyItems()[row];
-    if (!r) return;
-    const { it, idx } = r;
+  buyItems() { return this.buyTab === 1 ? this.must : this.all; }
+  get firstBuy() { return this.buyFirst[this.buyTab]; }
+  set firstBuy(v) { this.buyFirst[this.buyTab] = v; }
+  /**
+   * Your items of one inventory type that the shop takes (not quest, notSale or cash ones), each with what it
+   * sells for and, for stars and bullets this shop recharges, the price of topping the stack up.
+   */
+  sellItems(type = this.tab) {
+    const inv = this.g.inventory?.[type] || {}, out = [];
+    for (const [pos, it] of Object.entries(inv).sort((a, b) => a[0] - b[0])) {
+      const info = this.mgr.info(it.id);
+      if (!info || Number(info.quest) || Number(info.notSale) || Number(info.cash) || it.cash) continue;
+      const qty = it.quantity ?? 1, s = isRechargeable(it.id) && this.shop.items.find((x) => x.id === it.id && x.recharge);
+      out.push({ pos: Number(pos), it, qty, price: (info.price || 0) + Math.ceil(qty * (info.unitPrice || 0)), recharge: s ? Math.ceil((s.max - qty) * s.unitPrice) : 0 });
+    }
+    return out;
+  }
+
+  async buy() {
+    const e = this.buyItems()[this.selBuy];
+    if (!e || this.pending) return;
+    const { it, idx } = e, m = this.mgr, lv = this.g.stats?.level ?? 0, limit = it.levelLimit || 0;
+    if (it.price && it.token) return;
+    if (limit < 0 && lv > -limit) { m.notice(`You must be under lv.${-limit} to purchase this item`); return; }
+    if (limit > 0 && lv < limit) { m.notice(`You must be over lv.${limit} to purchase this item`); return; }
+    const timed = it.period ? 'This is a time-restricted item\n' : '';
     let qty = 1;
-    if (!it.recharge && invType(it.id) !== 1) {
-      const max = Math.max(1, Math.min(it.info?.slotMax || 100, Math.floor(this.g.meso / Math.max(1, it.price))));
-      qty = await this.mgr.askNumber(`How many #t${it.id}# would you like to buy?\n(1 ~ ${max})`, 1, 1, max);
-      if (!qty) return;
-    } else if (!(await this.mgr.confirm(`Are you sure you want to buy #t${it.id}#?`))) return;
-    this.g.net?.shopBuy(idx, it.id, qty);
-    sfx.play('UI/BuyShopItem');
+    if (!it.price) {
+      const have = this.g.itemCount(PERFECT_PITCH), name = m.itemName(PERFECT_PITCH);
+      if (!(await this.ask(`${timed}Are you sure you want to purchase?\nYou currently have ${have} ${name}`))) return;
+      if (it.token < 1 || have < it.token) { m.notice(`You need ${it.token - have} more ${name}(s)`); return; }
+    } else {
+      if (isStackable(it.id) && it.quantity < 2) {
+        qty = await this.askQty(`${timed}How many are you willing to buy?`, 1, 1, it.max);
+        if (!qty || qty < 1 || qty > it.max) return;
+      } else if (!(await this.ask(`${timed}Are you sure you want to buy it?`))) return;
+      const cost = it.price * qty;
+      if (cost <= 0 || cost > this.g.meso) { m.notice(NO_MESOS); return; }
+    }
+    if (this.pending || !this.open) return;
+    this.g.net?.shopBuy(idx, it.id, qty, it.price);
+    this.pending = true;
+    // to find the new stack once the purchase lands
+    const type = invType(it.id);
+    this.bought = { type, before: this.sellItems(type) };
   }
-  async sell(idx = this.selSell) {
-    const row = this.sellItems()[idx];
-    if (!row) return;
-    const { pos, it } = row;
-    let qty = 1;
-    if (it.quantity > 1 && !isRechargeable(it.id)) {
-      qty = await this.mgr.askNumber(`How many #t${it.id}# would you like to sell?\n(1 ~ ${it.quantity})`, it.quantity, 1, it.quantity);
-      if (!qty) return;
-    } else if (!(await this.mgr.confirm(`Are you sure you want to sell #t${it.id}#?`))) return;
-    this.g.net?.shopSell(pos, it.id, qty);
+  async sell() {
+    const r = this.sellItems()[this.selSell];
+    if (!r || this.pending) return;
+    const { pos, it, qty } = r, m = this.mgr;
+    if (it.flag & 1) { m.notice('Sealed items cannot be\nsold, traded, or dropped.'); return; }
+    let n = 1;
+    if (isStackable(it.id)) {
+      n = await this.askQty('How many are you willing to sell?', qty, 1, qty);
+      if (!n || n < 1 || n > qty) return;
+    } else if (!(await this.ask('Are you sure you want to sell it?'))) return;
+    if (this.pending || !this.open || this.g.inventory?.[invType(it.id)]?.[pos] !== it) return;
+    this.g.net?.shopSell(pos, it.id, n);
+    this.pending = true;
   }
-  canRecharge() {
-    const row = this.sellItems()[this.selSell];
-    return !!row && isRechargeable(row.it.id) && this.shop.items.some((s) => s.recharge);
+  async recharge() {
+    const r = this.sellItems()[this.selSell];
+    if (!r || this.pending || !r.recharge) return;
+    if (!(await this.ask('Are you sure you want to recharge it?'))) return;
+    if (this.pending || !this.open || this.g.inventory?.[invType(r.it.id)]?.[r.pos] !== r.it) return;
+    this.g.net?.shopRecharge(r.pos);
+    this.pending = true;
   }
-  doRecharge() {
-    if (!this.shop.items.some((s) => s.recharge)) { this.mgr.notice('This shop does not recharge items.'); return; }
-    if (!this.canRecharge()) { this.mgr.notice('Select throwing stars or bullets in your Use tab to recharge them.'); return; }
-    this.g.net?.shopRecharge(this.sellItems()[this.selSell].pos);
+  /** CONFIRM_SHOP_TRANSACTION, only while a request is out. */
+  result(code, extra) {
+    if (!this.pending) return;
+    this.pending = false;
+    if (code === 0) { this.showBought(); return; }
+    if (code === 4 || code === 8) return;
+    let msg = SHOP_RESULTS[code];
+    if (code === 0x0E) msg = `You must be under lv.${-extra} to purchase this item`;
+    else if (code === 0x0F) msg = `You must be over lv.${extra} to purchase this item`;
+    else if (code === 0x11 && extra) msg = extra;
+    this.mgr.notice(msg || 'Due to an error, the trade did not happen.');
   }
+  /** After a purchase: open its tab on your side and select the stack that changed. */
+  showBought() {
+    const b = this.bought;
+    this.bought = null;
+    if (!b || b.type < 1 || b.type > SELL_TABS) return;
+    this.tab = b.type;
+    const now = this.sellItems(), same = (x, y) => x.it.id === y.it.id && x.pos === y.pos && x.qty === y.qty;
+    const n = Math.min(now.length, b.before.length);
+    let i = 0;
+    while (i < n && same(now[i], b.before[i])) i++;
+    if (i === n) i = now.length === b.before.length ? 0 : now.length < b.before.length ? i - 1 : i;
+    if (i < this.firstSell) this.firstSell = i;
+    if (i > this.firstSell + SHOP_ROWS - 1) this.firstSell = i - SHOP_ROWS + 1;
+    this.selSell = i;
+  }
+
+  /** Rows answer clicks over the select image's width from the icon cell (x 6 / 236), 35px tall. */
   rowAt(lx, ly, left) {
-    const x0 = left ? 5 : 233;
-    if (lx < x0 || lx > x0 + 208 || ly < SHOP_ROW_Y) return -1;
+    const x0 = left ? 6 : 236;
+    if (lx < x0 || lx >= x0 + 162 || ly < SHOP_ROW_Y) return -1;
     const i = Math.floor((ly - SHOP_ROW_Y) / SHOP_ROW_H);
     if (i >= SHOP_ROWS || (ly - SHOP_ROW_Y) % SHOP_ROW_H >= 35) return -1;
     const idx = (left ? this.firstBuy : this.firstSell) + i;
@@ -426,76 +584,88 @@ export class ShopWin extends Win {
     for (let j = 0; j < SHOP_EXTRA; j++) ctx.drawImage(bg, 0, SHOP_BAND, SHOP_W, SHOP_ROW_H, 0, SHOP_CUT + j * SHOP_ROW_H, SHOP_W, SHOP_ROW_H);
     ctx.drawImage(bg, 0, SHOP_CUT, SHOP_W, 339 - SHOP_CUT, 0, SHOP_CUT + SHOP_EXTRA * SHOP_ROW_H, SHOP_W, 339 - SHOP_CUT);
   }
-  /** One list row: icon, name, a thin rule, then the coin and the price. */
-  row(ctx, x, y, id, price, selected, qty) {
-    const m = this.mgr, im = (n) => m.image(n);
-    if (selected) { const s = im(this.S.select); if (s) ctx.drawImage(s, x + 35, y); }
-    m.drawIcon(ctx, m.icon(id), x + 2, y + 1);
-    if (qty > 1) m.count(ctx, qty, x + 2, y + 22);
-    ctx.save(); ctx.beginPath(); ctx.rect(x + 38, y, 168, 35); ctx.clip();
-    this.text(ctx, m.itemName(id), x + 41, y + 3, { size: 12 });
-    ctx.restore();
-    ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.fillRect(x + 39, y + 18, 164, 1);
-    if (price === null) return;
-    const coin = im(this.S.meso);
-    if (coin) ctx.drawImage(coin, x + 41, y + 21);
-    this.text(ctx, `${price.toLocaleString('en-US')} meso`, x + 56, y + 21, { size: 12 });
+  /** A goods row: icon, name, then the coin and "<price>meso" (or the Perfect Pitch mark and its count). */
+  goodsRow(ctx, i, { it }, selected) {
+    const m = this.mgr, im = (n) => m.image(n), y = 148 + i * SHOP_ROW_H;
+    if (it.price && it.token) return;
+    const sel = selected && im(this.S.select);
+    if (sel) ctx.drawImage(sel, 43, y - 21);
+    m.drawIcon(ctx, m.icon(it.id), 8, y - 19);
+    if (it.quantity > 1) m.count(ctx, it.quantity, 6, y - 1);
+    this.rowText(ctx, rowName(ctx, m.itemName(it.id)), 49, y - 20);
+    const mark = im(it.price ? this.S.meso : this.S.token);
+    if (mark) ctx.drawImage(mark, 49, y - 1);
+    this.rowText(ctx, it.price ? `${commas(it.price)}meso` : commas(it.token), 64, y);
+  }
+  /** One of your items: icon (with its count for Use / Set-up / Etc), name and price; no coin on this side. */
+  sellRow(ctx, i, r, selected) {
+    const m = this.mgr, y = 146 + i * SHOP_ROW_H, id = r.it.id;
+    const sel = selected && m.image(this.S.select);
+    if (sel) ctx.drawImage(sel, 273, y - 19);
+    m.drawIcon(ctx, m.icon(id), 238, y - 17);
+    if ([2, 3, 4].includes(invType(id))) m.count(ctx, r.qty, 236, y + 1);
+    this.rowText(ctx, rowName(ctx, m.itemName(id)), 279, y - 18);
+    this.rowText(ctx, r.recharge > 0 ? `${commas(r.price)} meso / rechrg : ${r.recharge}` : `${commas(r.price)}meso`, 279, y);
   }
   body(ctx) {
-    const m = this.mgr, im = (n) => m.image(n), g = this.g;
+    const m = this.mgr, g = this.g;
     this.drawFrame(ctx);
-    // the NPC and you, standing on the header shadows
-    const face = im(this.face);
-    if (face) { const o = this.face.origin || [face.width / 2, face.height]; ctx.drawImage(face, Math.round(51 - o[0]), Math.round(74 - o[1])); }
-    if (g.look) drawParts(ctx, m.assets, g.look.compose(g.look.standAction(), 0), 279, 74, false);
-    const meso = im(this.S.meso);
-    if (meso) ctx.drawImage(meso, 345, 66);
-    this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 444, 66, { align: 'right', size: 12 });
-    // tab strips (Basic.img Tab2): All / Must over the goods, Equip .. Cash over yours
-    this.buyTabRects = drawTabStrip(ctx, m, this.S.TabBuy, BUY_TABS.length, this.buyTab, 214, SHOP_TAB_Y);
-    ctx.save(); ctx.translate(228, 0);
-    this.sellTabRects = drawTabStrip(ctx, m, this.S.TabSell, SELL_TABS.length, this.tab - 1, 214, SHOP_TAB_Y);
-    ctx.restore();
-    // goods
-    const goods = this.buyItems();
-    for (let i = 0; i < SHOP_ROWS; i++) {
-      const r = goods[this.firstBuy + i];
-      if (!r) break;
-      this.row(ctx, 5, SHOP_ROW_Y + i * SHOP_ROW_H, r.it.id, r.it.price || 0, this.firstBuy + i === this.selBuy, 0);
+    // the NPC (facing right) and you, both standing animated on the header shadows
+    const now = performance.now(), dt = now - (this.lastT ?? now);
+    this.lastT = now;
+    if (this.npc) {
+      this.npc.update(dt);
+      const f = this.npc.node, img = m.image(f);
+      if (img) {
+        const o = f.origin || [img.width / 2, img.height];
+        ctx.save(); ctx.translate(56, 76); ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); ctx.restore();
+      }
     }
-    this.scrollbar(ctx, 212, 121, SHOP_BAR_H, this.firstBuy, goods.length, SHOP_ROWS);
-    // your items, at what the shop pays for them
+    if (g.look) drawParts(ctx, m.assets, g.look.compose(...this.standFrame(g.look, dt)), 285, 76, false);
+    this.rowText(ctx, commas(g.meso || 0), 447, 64, 'right');
+    // tab strips (Basic.img Tab2): All (and Must) at a fixed 50px over the goods, Equip .. Cash over yours
+    ctx.save(); ctx.translate(2, 0);
+    this.buyTabRects = drawTabStrip(ctx, m, this.S.TabBuy, this.must.length ? 2 : 1, this.buyTab, 222, SHOP_TAB_Y, 50);
+    ctx.restore();
+    ctx.save(); ctx.translate(232, 0);
+    this.sellTabRects = drawTabStrip(ctx, m, this.S.TabSell, SELL_TABS, this.tab - 1, 222, SHOP_TAB_Y);
+    ctx.restore();
+    const goods = this.buyItems();
+    this.firstBuy = Math.max(0, Math.min(this.firstBuy, goods.length - SHOP_ROWS));
+    for (let i = 0; i < SHOP_ROWS && this.firstBuy + i < goods.length; i++) this.goodsRow(ctx, i, goods[this.firstBuy + i], this.firstBuy + i === this.selBuy);
+    this.scrollbar(ctx, 210, SHOP_ROW_Y, SHOP_BAR_H, this.firstBuy, goods.length, SHOP_ROWS);
     const rows = this.sellItems();
+    this.firstSell = Math.max(0, Math.min(this.firstSell, rows.length - SHOP_ROWS));
     for (let i = 0; i < SHOP_ROWS; i++) {
       const r = rows[this.firstSell + i];
-      if (!r) break;
-      const info = m.info(r.it.id);
-      this.row(ctx, 233, SHOP_ROW_Y + i * SHOP_ROW_H, r.it.id, info ? info.price || 0 : null, this.firstSell + i === this.selSell, r.it.quantity);
+      this.rechargeBtns[i].visible = r?.recharge > 0;
+      if (r) this.sellRow(ctx, i, r, this.firstSell + i === this.selSell);
     }
-    this.scrollbar(ctx, 440, 121, SHOP_BAR_H, this.firstSell, rows.length, SHOP_ROWS);
+    this.scrollbar(ctx, 441, SHOP_ROW_Y, SHOP_BAR_H, this.firstSell, rows.length, SHOP_ROWS);
   }
-  tabHit(rects, lx, ly, dx = 0) {
-    return (rects || []).findIndex(([x, w, y]) => lx >= x + dx && lx < x + dx + w && ly >= y && ly < y + 22);
+  tabHit(rects, lx, ly, dx) {
+    return (rects || []).findIndex(([x, w, y]) => lx >= x + dx && lx < x + dx + w && ly >= y && ly < y + 19);
   }
   down(lx, ly) {
-    const b = this.tabHit(this.buyTabRects, lx, ly);
-    if (b >= 0) { if (b !== this.buyTab) { this.buyTab = b; this.firstBuy = 0; this.selBuy = -1; sfx.play('UI/Tab'); } return; }
-    const t = this.tabHit(this.sellTabRects, lx, ly, 228);
+    const b = this.tabHit(this.buyTabRects, lx, ly, 2);
+    if (b >= 0) { if (b !== this.buyTab) { this.buyTab = b; sfx.play('UI/Tab'); } return; }
+    const t = this.tabHit(this.sellTabRects, lx, ly, 232);
     if (t >= 0) { if (t + 1 !== this.tab) { this.tab = t + 1; this.firstSell = 0; this.selSell = -1; sfx.play('UI/Tab'); } return; }
-    let s = this.scrollClick(lx, ly, 212, 121, SHOP_BAR_H, this.firstBuy, this.buyItems().length, SHOP_ROWS);
+    let s = this.scrollClick(lx, ly, 210, SHOP_ROW_Y, SHOP_BAR_H, this.firstBuy, this.buyItems().length, SHOP_ROWS);
     if (s !== null) { this.firstBuy = s; return; }
-    s = this.scrollClick(lx, ly, 440, 121, SHOP_BAR_H, this.firstSell, this.sellItems().length, SHOP_ROWS);
+    s = this.scrollClick(lx, ly, 441, SHOP_ROW_Y, SHOP_BAR_H, this.firstSell, this.sellItems().length, SHOP_ROWS);
     if (s !== null) { this.firstSell = s; return; }
+    // one row is chosen at a time, on either side
     const r = this.rowAt(lx, ly, true);
-    if (r >= 0) { this.selBuy = r; return; }
+    if (r >= 0) { this.selBuy = r; this.selSell = -1; return; }
     const v = this.rowAt(lx, ly, false);
-    if (v >= 0) this.selSell = v;
+    if (v >= 0) { this.selSell = v; this.selBuy = -1; }
   }
   dblclick(lx, ly) {
     const b = this.rowAt(lx, ly, true);
-    if (b >= 0) { this.selBuy = b; this.buy(b); return; }
+    if (b >= 0) { if (b === this.selBuy) this.buy(); return; }
     const v = this.rowAt(lx, ly, false);
-    if (v >= 0) { this.selSell = v; this.sell(v); }
+    if (v >= 0 && v === this.selSell) this.sell();
   }
   wheel(dy) {
     const left = this.mgr.mouse.x - this.x < 230, d = Math.sign(dy);
@@ -504,13 +674,12 @@ export class ShopWin extends Win {
   }
   tooltip(lx, ly) {
     const b = this.rowAt(lx, ly, true);
-    if (b >= 0 && lx < 42) return { item: { id: this.buyItems()[b].it.id } };
+    if (b >= 0) return { item: { id: this.buyItems()[b].it.id } };
     const v = this.rowAt(lx, ly, false);
-    if (v >= 0 && lx < 270) return { item: this.sellItems()[v].it };
+    if (v >= 0) return { item: this.sellItems()[v].it };
     return null;
   }
 }
-const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
 
 // ==================================================================== item tooltip
 /**
