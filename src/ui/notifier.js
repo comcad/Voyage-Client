@@ -1,123 +1,138 @@
 import { sfx } from '../audio.js';
 import { uiText } from './wzui.js';
 import { Win } from './windows.js';
-import { NOTICE_ICON } from './statusbar.js';
 
 /**
- * Invitations from other players (UIWindow.img/FadeYesNo): the blue balloon (195x44) rising out of the status
- * bar's notice pencil (base/iconMemo) - the tip of its pointer (182, 42 in the art) on the pencil's top centre.
- * Measured from the art: the body y 3-35, the divider at x 172, the button column x 174-192. The kind's icon
- * is centred at (13, 19); the two white lines ("Trade request" / "from 'Name'") at x 23, y 6 and 20; the
- * 12x12 O (BtOK, accept) and X (BtCancel, decline) at x 177, y 6 and 20 - 3px above, 2 between, 3 below.
- * Only the newest is shown; the ones before it wait underneath and come back, in turn, once it is answered.
+ * Notification balloons (UIWindow.img/FadeYesNo) above the status bar: invitations and quest notices.
+ * Each sits at x 464, y = bar top - 21 - 5n (n = balloons alive when it came, itself included), all shown at once;
+ * when one goes, those after it drop 5px. A new one replaces the first of its kind (not buddy requests; quests only
+ * for the same quest). Each fades in over 1s, holds until its deadline (counted from creation: 3 min for
+ * invitations, 30s for quests), then fades out over 1s; a click on O or X - taken once the fade in is over -
+ * closes it the same way. Closing without O declines, so an invitation left alone is declined after 3 minutes.
+ * Every balloon plays UI/Invite as it comes. Text is Arial 12 white; the icon sits at (6, (37 - h) >> 1).
  */
+const WIDE = { art: 'backgrnd', ok: [177, 6], x: [177, 20] }, NARROW = { art: 'backgrnd4', ok: [136, 6], x: [136, 20] };
 const KINDS = {
-  trade: { icon: 2, title: 'Trade request' },
-  party: { icon: 1, title: 'Party invitation' },
-  partySearch: { icon: 1, title: 'Party Search invitation' },
-  guild: { icon: 3, title: 'Guild invitation' },
-  guildFound: { icon: 8, title: 'Guild founding' },
-  buddy: { icon: 5, title: 'Buddy request' },
-  family: { icon: 4, title: 'Family invitation' },
-  familySummon: { icon: 9, title: 'Family summons' },
-  messenger: { icon: 0, title: 'Messenger invitation' },
+  messenger: { ...WIDE, icon: 0, lines: (n) => [['An invitation', 25, 5], [`from '${n}'`, 25, 18]] },
+  buddy: { ...WIDE, icon: 1, lines: (n) => [['Buddy request', 25, 5], [`from '${n}'`, 25, 18]], stack: true },
+  trade: { ...WIDE, icon: 2, lines: (n) => [['Trade request', 25, 5], [`from '${n}'`, 25, 18]] },
+  party: { ...WIDE, icon: 5, lines: (n) => [['Party invite', 27, 7], [`from '${n}'`, 27, 20]] },
+  guild: { ...WIDE, icon: 5, lines: (n) => [[`from '${n}'`, 27, 7], ['Guild invite', 27, 20]] },
+  family: { ...WIDE, icon: 8, lines: (n) => [[`from '${n}'`, 27, 7], ["It's a Family Invitation.", 27, 20]] },
+  // shown as balloons here too, though they are other windows in v83
+  partySearch: { ...WIDE, icon: 1, lines: (n) => [['Party Search invitation', 25, 5], [`from '${n}'`, 25, 18]] },
+  guildFound: { ...WIDE, icon: 8, lines: (n) => [['Guild founding', 25, 5], [`from '${n}'`, 25, 18]] },
+  familySummon: { ...WIDE, icon: 9, lines: (n) => [['Family summons', 25, 5], [`from '${n}'`, 25, 18]] },
 };
-const TIP = { x: 182, y: 42 }, FADE = 250;
+const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, NAME_W = 100;
 
-export class Notifier extends Win {
+class Balloon extends Win {
+  constructor(mgr, kind, art, done, hold) {
+    super(mgr, mgr.W.FadeYesNo[art], 464, 0);
+    Object.assign(this, { kind, done, hold, born: performance.now(), deadline: performance.now() + hold, shownAt: null, closing: null, clicked: null, n: 1 });
+    this.fixed = true; this.keepOnEscape = true; this.closeBtn.visible = false; this.closeSound = null;
+  }
+  get F() { return this.mgr.W.FadeYesNo; }
+  get balloons() { return balloonsOf(this.mgr); }
+  /** O / X: taken once the fade in is over; only the first counts. */
+  press(ok) { if (!this.clicked && !this.closing) this.clicked = ok ? 'ok' : 'x'; }
+  update(now) {
+    if (this.shownAt === null) this.shownAt = now;
+    const shown = now - this.shownAt >= FADE;
+    if (!this.closing && shown && (this.clicked || now >= this.deadline)) {
+      this.closing = now;
+      this.done?.(this.clicked === 'ok');
+    }
+    if (this.closing && now - this.closing >= FADE && !this.gone) { this.gone = true; setTimeout(() => this.remove()); }   // not mid-draw
+  }
+  get alpha() {
+    const now = performance.now();
+    if (this.closing) return Math.max(0, 1 - (now - this.closing) / FADE);
+    return this.shownAt === null ? 0 : Math.min(1, (now - this.shownAt) / FADE);
+  }
+  /** Gone: the balloons after it drop 5px. */
+  remove() {
+    const list = this.balloons, i = list.indexOf(this);
+    if (i < 0) return;
+    for (const b of list.slice(i + 1)) b.n--;
+    this.mgr.close(this);
+  }
+  draw(ctx) {
+    const now = performance.now();
+    this.update(now);
+    const bar = this.g.statusBar?.y ?? 529;
+    this.y = bar - 21 - 5 * this.n;
+    ctx.save(); ctx.globalAlpha = this.alpha;
+    super.draw(ctx);
+    ctx.restore();
+  }
+  icon(ctx, node) {
+    const i = this.mgr.image(node);
+    if (i) ctx.drawImage(i, 6, (37 - i.height) >> 1);
+  }
+}
+
+/** An invitation; resolves true for O, false for X or after 3 minutes unanswered. */
+class Invite extends Balloon {
   constructor(mgr, kind, name, done) {
-    const F = mgr.W.FadeYesNo;
-    super(mgr, F.backgrnd, 0, 0);
-    this.F = F; this.k = KINDS[kind] || KINDS.trade; this.name = name; this.done = done;
-    this.fixed = true; this.closeBtn.visible = false; this.born = performance.now();
-    this.button(F.BtOK, 177, 6, () => this.answer(true));
-    this.button(F.BtCancel, 177, 20, () => this.answer(false));
+    const k = KINDS[kind] || KINDS.trade;
+    super(mgr, kind, k.art, done, INVITE_HOLD);
+    this.k = k; this.name = name;
+    this.button(this.F.BtOK, ...k.ok, () => this.press(true));
+    this.button(this.F.BtCancel, ...k.x, () => this.press(false));
   }
   frames() { return [...super.frames(), this.F[`icon${this.k.icon}`]].filter(Boolean); }
-  answer(ok) {
-    if (this.answered) return;
-    this.answered = true;
-    this.mgr.close(this);
-    this.done(ok);
-  }
-  get newest() { return this.mgr.order.findLast((w) => w instanceof Notifier || w instanceof QuestNotice) === this; }
-  contains(x, y) { return this.newest && super.contains(x, y); }
-  draw(ctx) {
-    // a waiting one fades back in when it is its turn again
-    if (!this.newest) { this.shown = false; return; }
-    if (!this.shown) { this.shown = true; this.born = performance.now(); }
-    const bar = this.g.statusBar?.y ?? 529;
-    this.x = NOTICE_ICON.x + NOTICE_ICON.w / 2 - TIP.x;
-    this.y = bar + NOTICE_ICON.y - TIP.y;
-    ctx.save();
-    ctx.globalAlpha = Math.min(1, (performance.now() - this.born) / FADE);
-    super.draw(ctx);
-    ctx.restore();
-  }
   body(ctx) {
-    const icon = this.mgr.image(this.F[`icon${this.k.icon}`]);
-    if (icon) ctx.drawImage(icon, Math.round(13 - icon.width / 2), Math.round(19 - icon.height / 2));
-    ctx.save(); ctx.beginPath(); ctx.rect(22, 3, 148, 32); ctx.clip();
-    uiText(ctx, this.k.title, 23, 6, { color: '#fff', size: 12 });
-    uiText(ctx, `from '${this.name}'`, 23, 20, { color: '#fff', size: 12 });
-    ctx.restore();
+    this.icon(ctx, this.F[`icon${this.k.icon}`]);
+    for (const [t, x, y] of this.k.lines(this.name)) uiText(ctx, t, x, y, { color: '#fff', size: 12 });
   }
 }
 
-/** Show one and resolve with the answer: true for O, false for X. */
-export function notify(mgr, kind, name) {
-  return new Promise((resolve) => {
-    const n = new Notifier(mgr, kind, name, resolve);
-    mgr.assets.preload(n.frames()).then(() => { mgr.order.push(n); sfx.play('UI/DlgNotice'); });
-  });
-}
-
-/**
- * "Quest Complete!" (FadeYesNo/backgrnd4 with icon7): raised when a quest in progress can be handed in, one per
- * quest, the quest's name under it ("You got a title!" for title quests). Clicking it opens the quest on its
- * page; it goes once the server confirms the quest (or after half a minute).
- */
-const QUEST_LIFE = 32000;
-export class QuestNotice extends Win {
+/** "Quest Complete!" / "You got a title!" (the quest's name under it, cut to 100px), or "New Quest!" for quest 0. */
+export class QuestNotice extends Balloon {
   constructor(mgr, qid, title, name, open) {
-    const F = mgr.W.FadeYesNo;
-    super(mgr, F.backgrnd4, 0, 0);
-    Object.assign(this, { F, qid, title, name, open, born: performance.now() });
-    this.fixed = true; this.closeBtn.visible = false; this.closeSound = null;
+    super(mgr, 'quest', NARROW.art, null, QUEST_HOLD);
+    Object.assign(this, { qid, title, name, open });
+    this.button(this.F.BtOK, ...NARROW.ok, () => { this.press(true); this.open(this.qid, true); });
+    this.button(this.F.BtCancel, ...NARROW.x, () => this.press(false));
   }
-  frames() { return [...super.frames(), this.F.icon7].filter(Boolean); }
-  get newest() { return this.mgr.order.findLast((w) => w instanceof Notifier || w instanceof QuestNotice) === this; }
-  contains(x, y) { return this.newest && super.contains(x, y); }
-  down() { this.mgr.close(this); this.open(this.qid); }
-  draw(ctx) {
-    if (performance.now() - this.born > QUEST_LIFE) { if (!this.gone) { this.gone = true; setTimeout(() => this.mgr.close(this)); } return; }
-    if (!this.newest) return;
-    const bar = this.g.statusBar?.y ?? 529;
-    this.x = NOTICE_ICON.x + NOTICE_ICON.w / 2 - TIP.x + (195 - this.w);
-    this.y = bar + NOTICE_ICON.y - TIP.y;
-    ctx.save();
-    ctx.globalAlpha = Math.min(1, (performance.now() - this.born) / 1000);
-    super.draw(ctx);
-    ctx.restore();
-  }
+  frames() { return [...super.frames(), this.F.icon6, this.F.icon7].filter(Boolean); }
+  /** The body opens the quest too. */
+  down() { if (!this.closing) { this.press(true); this.open(this.qid, false); } }
   body(ctx) {
-    const icon = this.mgr.image(this.F.icon7);
-    if (icon) ctx.drawImage(icon, Math.round(13 - icon.width / 2), Math.round(19 - icon.height / 2));
-    ctx.save(); ctx.beginPath(); ctx.rect(26, 3, this.w - 30, 32); ctx.clip();
+    if (!this.qid) { this.icon(ctx, this.F.icon6); uiText(ctx, this.title, 27, 14, { color: '#fff', size: 12 }); return; }
+    this.icon(ctx, this.F.icon7);
     uiText(ctx, this.title, 27, 7, { color: '#fff', size: 12 });
-    if (this.name) uiText(ctx, this.name, 27, 21, { color: '#fff', size: 12 });
-    ctx.restore();
+    ctx.font = '12px Arial, sans-serif';
+    let n = this.name || '';
+    if (ctx.measureText(n).width > NAME_W) { while (n.length > 1 && ctx.measureText(`${n}..`).width > NAME_W) n = n.slice(0, -1); n = `${n}..`; }
+    uiText(ctx, n, 27, 20, { color: '#fff', size: 12 });
   }
 }
 
-/** Raise (or replace) the notice for a quest. */
-export function questNotice(mgr, qid, title, name, open) {
-  for (const w of mgr.order.filter((o) => o instanceof QuestNotice && o.qid === qid)) mgr.close(w);
-  const n = new QuestNotice(mgr, qid, title, name, open);
-  mgr.order.push(n); sfx.play('UI/DlgNotice');
-  mgr.assets.preload(n.frames());
+const balloonsOf = (mgr) => mgr.order.filter((w) => w instanceof Balloon);
+/** Add a balloon: the first of its kind goes at once (no fade, no decline), unless the kind stacks. */
+function add(mgr, b, same) {
+  const old = balloonsOf(mgr).find((w) => w.kind === b.kind && same(w));
+  if (old) old.remove();
+  b.n = balloonsOf(mgr).length + 1;
+  mgr.order.push(b);
+  mgr.assets.preload(b.frames());
+  sfx.play('UI/Invite');
+  return b;
 }
+
+/** An invitation: resolves with the answer (true for O, false for X or no answer in 3 minutes). */
+export function notify(mgr, kind, name) {
+  return new Promise((resolve) => add(mgr, new Invite(mgr, kind, name, resolve), () => !KINDS[kind]?.stack));
+}
+
+/** Raise (or replace) the notice for a quest. open(qid, fromO) is called on O or a click on the body. */
+export function questNotice(mgr, qid, title, name, open) {
+  add(mgr, new QuestNotice(mgr, qid, title, name, open), (w) => w.qid === qid);
+}
+/** The server took the quest: its notice goes. */
 export function dropQuestNotice(mgr, qid) {
-  for (const w of mgr.order.filter((o) => o instanceof QuestNotice && (qid === undefined || o.qid === qid))) mgr.close(w);
+  for (const w of balloonsOf(mgr).filter((o) => o instanceof QuestNotice && (qid === undefined || o.qid === qid))) w.remove();
 }
 export const hasQuestNotice = (mgr) => mgr.order.some((o) => o instanceof QuestNotice);

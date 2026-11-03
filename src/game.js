@@ -5,7 +5,7 @@ import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scro
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
+import { npcTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -571,7 +571,7 @@ export class Game {
       const cr = this.player.chalk && this.player.chalkRect, wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
       if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.net.closeChalkboard(); return; }
       // the QuestAlert bulb: its list of quests
-      if (this.questAlert?.hits(wx, wy)) { this.questAlert.open(); return; }
+      if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
       // a shop sign takes you into the shop
       const signed = this.shopSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
       if (signed && signed !== this.player) { this.net.pshopVisit(signed.box.oid); return; }
@@ -760,7 +760,6 @@ export class Game {
     else if (e.op === 'chart') this.windows.wins.familytree.setChart(e);
     else if (e.op === 'result') { const t = familyResult(e.code, e.mesos); if (t) this.windows.notice(t); refresh(); }
     else if (e.op === 'invite') {
-      sfx.play('UI/DlgNotice');
       const ok = await notify(this.windows, 'family', e.name);
       this.net?.familyAnswer(e.id, e.name, ok);
     } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
@@ -768,7 +767,6 @@ export class Game {
     else if (e.op === 'rep') say(`You have gained ${e.gain} reputation${e.from ? ` from ${e.from}` : ''}.`);
     else if (e.op === 'login') say(`[Family] ${e.name} has logged ${e.online ? 'in' : 'out'}.`);
     else if (e.op === 'summon') {
-      sfx.play('UI/DlgNotice');
       const ok = await notify(this.windows, 'familySummon', e.from);
       this.net?.familySummonAnswer(e.family, ok);
     }
@@ -782,7 +780,6 @@ export class Game {
   async onMessenger(e) {
     const win = this.windows.wins.messenger;
     if (e.op === 'invite') {
-      sfx.play('UI/DlgNotice');
       if (await notify(this.windows, 'messenger', e.from)) win.accept(e.id);
       else this.net?.messengerDecline(e.from);
       return;
@@ -1759,7 +1756,6 @@ export class Game {
       }
     } else {
       alarm?.remove(id);
-      if (status === 0) dropQuestNotice(this.windows, id);
       if (status === 2) {
         for (const q of Object.keys(book.started).map(Number)) {
           if (!book.requirements(q).quests.some((r) => r.id === id)) continue;
@@ -1813,7 +1809,8 @@ export class Game {
   questCompleteNotice(q) {
     const book = this.quests;
     const title = q === 0 ? 'New Quest!' : book.area(q) === TITLE_AREA ? 'You got a title!' : 'Quest Complete!';
-    questNotice(this.windows, q, title, q ? book.name(q) : '', (id) => this.openQuest(id));
+    // O (or the body) opens the quest while it is still in progress
+    questNotice(this.windows, q, title, q ? book.name(q) : '', (id) => { if (this.quests.status(id) === 1) this.openQuest(id); });
   }
 
   /** Open the quest log on a quest. */
@@ -1912,6 +1909,7 @@ export class Game {
 
   /** Click on an NPC: its quests first when it has any, else run its script. */
   interactNpc(npc) {
+    if (this.windows.order.some((w) => w instanceof NpcDialog)) return;   // one conversation at a time: close it first
     const q = this.quests?.npcQuests(Number(npc.spawn.id), this.textCtx());
     if (q?.all) npcQuestMenu(this, npc, q);
     else this.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
