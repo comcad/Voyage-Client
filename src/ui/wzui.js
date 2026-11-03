@@ -21,7 +21,7 @@ export class WzSprite {
     if (!img) return;
     const o = n.origin || [0, 0];
     ctx.save();
-    ctx.globalAlpha = this.alpha * this.anim.alpha;
+    ctx.globalAlpha *= this.alpha * this.anim.alpha;   // inside a fading dialog too
     if (this.anim.blend) ctx.globalCompositeOperation = 'lighter';
     ctx.drawImage(img, Math.round(this.x + ox - o[0]), Math.round(this.y + oy - o[1]));
     ctx.restore();

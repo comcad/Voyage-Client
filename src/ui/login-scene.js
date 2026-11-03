@@ -521,6 +521,13 @@ export class LoginScene {
     });
   }
 
+  /** After REGISTER_PIC the account has a PIC: ask for it (picFlag 1) from now on. */
+  picRegistered(list = null) {
+    if (list) list.picFlag = 1;
+    this.s.picFlag = 1;
+    if (this.account) this.account.picMode = 1;
+  }
+
   /** New PIC: the keyboard twice (the second with "Please re-enter your PIC."), again from the start on a mismatch. */
   async registerPic() {
     for (;;) {
@@ -859,8 +866,6 @@ export class LoginScene {
       const layer = {
         // channel window buttons only exist once the scroll is open
         get buttons() {
-          syncLast(); syncRec();
-          nav.vacBtn.enabled = !rec;
           const left = [rec ? viewAll : viewChoice, ...nav.buttons];
           if (rec) return [...recArrows, recChoice, ...left];
           return opened() ? [...worldButtons, ...left, ...chButtons, goBtn] : [...worldButtons, ...left];
@@ -868,11 +873,13 @@ export class LoginScene {
         sprites: blanks,
         get over() { return [eventPanel, ...nav.over, rec ? viewAll : viewChoice, recPanel]; },
         preload: [WS.chBackgrn, hang, goBtn.frames(), viewChoice.frames(), viewAll.frames(), A.backgrd, ...[...recArrows, recChoice].flatMap((b) => b.frames()),
-          ...Object.values(WS.world).filter((n) => n?._canvas), ...Object.values(this.L.WorldNotice.BalloonForLoginProcess).filter((n) => n?._canvas), ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
+          ...Object.values(this.L.WorldNotice.BalloonForLoginProcess).filter((n) => n?._canvas), ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
           ...new WzSprite(WS.scroll[0]).frames(), ...new WzSprite(WS.scroll[1]).frames()].flat(),
         onEnter: go,
         onEscape: closeWorld,
         update: (dt) => {
+          syncLast(); syncRec();
+          nav.vacBtn.enabled = !rec;
           select.update(dt * 1000);
           // hold the unroll until the camera has arrived, so it is seen
           if (scroll && this.camY === this.camTarget) {
@@ -985,6 +992,7 @@ export class LoginScene {
       const placeX = (c) => 252 + 125 * c, footY = 370;
       const anim = list.chars.map(() => ({ frame: 0, t: 0 }));
       const backdrop = (job) => (Math.floor(job / 1000) === 1 ? CS.knight : Math.floor(job / 100) === 21 || job === 2000 ? CS.aran : CS.adventure);
+      const backdrops = list.chars.map((c) => new WzSprite(backdrop(c.stats.job)[0] || backdrop(c.stats.job), 0, 0));
       const beam = new WzSprite(CS.effect[1], 0, 0, { loop: false });
       const sparkle = new WzSprite(CS.effect[0], 0, 0);
       const shadow = new WzSprite(CS.character[0], 0, 0), ghost = new WzSprite(CS.character[1], 0, 0);
@@ -1028,6 +1036,7 @@ export class LoginScene {
         const pic = await this.picFor(list.picFlag);
         if (pic === null) return;
         const res = await this.s.selectChar(c.stats.id, pic);
+        if (list.picFlag === 0 && !res.wrongPic) this.picRegistered(list);
         if (res.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
         if (res.code !== undefined) { await this.loginFailed({ reason: res.code }); return; }
         sfx.play('Game/GameIn');
@@ -1036,6 +1045,8 @@ export class LoginScene {
         finish({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look, gm: !!this.account?.gm });
       };
       const start = guard(pick);
+      // a new list after a create or delete; if it can't be loaded (world full...), back to world select
+      const reload = async () => finish((await this.charSelect(server, world, channel)) ?? 'back');
       const create = async () => {
         if (world.blockCreate) { await this.notice(NOTICE.CREATE_BLOCKED, 'info'); return; }
         if (list.chars.length >= list.slots) { await this.notice(NOTICE.NO_MORE_CHARS); return; }
@@ -1046,7 +1057,7 @@ export class LoginScene {
           const c = await this.creator(race, world, channel);
           if (c) { store.set(lastKey, String(c.stats.id)); break; }   // the new character is selected
         }
-        finish(await this.charSelect(server, world, channel));
+        await reload();
       };
       const remove = async () => {
         if (sel < 0) return;
@@ -1059,7 +1070,7 @@ export class LoginScene {
         if (!(await this.notice(race === 1 || race === 2 ? NOTICE.DELETE_CONFIRM_CASH : NOTICE.DELETE_CONFIRM, 'yesno'))) return;
         const state = await this.s.deleteChar(c.stats.id, pic);
         if (state !== 0) { if (DELETE_NOTICE[state] !== undefined) await this.notice(DELETE_NOTICE[state]); return; }
-        finish(await this.charSelect(server, world, channel));
+        await reload();
       };
       btnSelect.action = start; btnNew.action = guard(create); btnDelete.action = guard(remove);
       for (const b of board) b.onClick = b.press;
@@ -1078,14 +1089,7 @@ export class LoginScene {
       const arrows = pages >= 2 ? [arrow(CS.pageL, 152, { x: 112, y: 300, w: 80, h: 40 }, -1), arrow(CS.pageR, 592, { x: 552, y: 300, w: 80, h: 40 }, 1)] : [];
       const arrowSpr = (a) => a.spr[inRect(this.mouse, a.r) ? 1 : 0];
       // hit areas: each character's drawn parts
-      const hitChar = (idx, mx, my) => {
-        const look = looks[idx], a = anim[idx], x = placeX(idx % perPage);
-        return look.compose(a.act || look.standAction(), a.frame).some((p) => {
-          const w = p.node?._w || 0, h = p.node?._h || 0;
-          const px = CHAR_FACING_RIGHT ? x - p.x - w : x + p.x;
-          return mx >= px && mx < px + w && my >= footY + p.y && my < footY + p.y + h;
-        });
-      };
+      const hitChar = (idx, mx, my) => hitLook(looks[idx], anim[idx], placeX(idx % perPage), footY, mx, my);
       // the Tab hint shows on arrival; the first Tab fades it out over 1 s for good
       const hint = { fade: null };
       const layer = {
@@ -1134,12 +1138,7 @@ export class LoginScene {
             panel.scroll.update(ms);
             if (panel.scroll.anim.done) panel.t += ms;
           }
-          list.chars.forEach((c, i) => {
-            const a = anim[i], look = looks[i], act = charAct(look, i === sel);
-            if (a.act !== act) { a.act = act; a.frame = 0; a.t = 0; }
-            a.t += ms;
-            while (a.t >= look.delay(act, a.frame)) { a.t -= look.delay(act, a.frame); a.frame = (a.frame + 1) % Math.max(1, look.frameCount(act)); }
-          });
+          advanceLooks(looks, anim, sel, ms);
         },
         drawFront: (ctx) => {
           for (let i = 0; i < perPage; i++) {
@@ -1149,7 +1148,7 @@ export class LoginScene {
               continue;
             }
             const c = list.chars[idx], look = looks[idx], a = anim[idx];
-            new WzSprite(backdrop(c.stats.job)[0] || backdrop(c.stats.job), x, footY).draw(ctx, this.assets);
+            const bd = backdrops[idx]; bd.x = x; bd.y = footY; bd.draw(ctx, this.assets);
             if (idx === sel) { beam.x = 260 + 125 * i; beam.y = 0; beam.draw(ctx, this.assets); }
             drawParts(ctx, this.assets, look.compose(a.act || look.standAction(), a.frame), x, footY, CHAR_FACING_RIGHT);
             if (idx === sel) { sparkle.x = 260 + 125 * i; sparkle.y = 0; sparkle.draw(ctx, this.assets); }
@@ -1235,6 +1234,7 @@ export class LoginScene {
           const pic = await this.picFor(picMode);
           if (pic === null) return;
           const r = await this.s.selectFromAll(c.stats.id, c.world, pic, picMode);
+          if (picMode === 0 && !r.wrongPic) this.picRegistered();
           if (r.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
           if (r.code !== undefined) { await this.loginFailed({ reason: r.code }); return; }
           sfx.play('Game/GameIn');
@@ -1254,11 +1254,7 @@ export class LoginScene {
       const hit = (i, mx, my) => {
         const at = cell(i);
         if (!at) return false;
-        const x = VW.x + 74 + 117 * at.c, y = VW.y + 150 + 117 * at.r, a = anim[i], look = looks[i];
-        return look.compose(a.act || look.standAction(), a.frame).some((p) => {
-          const w = p.node?._w || 0, h = p.node?._h || 0, px = CHAR_FACING_RIGHT ? x - p.x - w : x + p.x;
-          return mx >= px && mx < px + w && my >= y + p.y && my < y + p.y + h;
-        });
+        return hitLook(looks[i], anim[i], VW.x + 74 + 117 * at.c, VW.y + 150 + 117 * at.r, mx, my);
       };
       const layer = {
         closeAtOnce: true,   // Back closes the window before the step change
@@ -1285,12 +1281,7 @@ export class LoginScene {
         update: (dt) => {
           const ms = dt * 1000;
           selFx.update(ms);
-          chars.forEach((c, i) => {
-            const a = anim[i], look = looks[i], act = charAct(look, i === sel);
-            if (a.act !== act) { a.act = act; a.frame = 0; a.t = 0; }
-            a.t += ms;
-            while (a.t >= look.delay(act, a.frame)) { a.t -= look.delay(act, a.frame); a.frame = (a.frame + 1) % Math.max(1, look.frameCount(act)); }
-          });
+          advanceLooks(looks, anim, sel, ms);
         },
         drawFront: (ctx) => {
           chars.forEach((c, i) => {
@@ -1415,11 +1406,13 @@ export class LoginScene {
     const preview = { x: 394, y: 339 };
     // the preview stands still on its first frame
     let look = null, name = '';
+    let build = 0;
     const rebuild = async () => {
+      const n = ++build;
       const l = new CharacterLook(this.assets, { skin: value(3), face: value(0), hair: value(1) + value(2), gender, equips: [value(4), value(5), value(6), value(7)] });
       await l.load();
       await this.assets.preload(lookCanvases(l, ['stand1']));
-      look = l;
+      if (n === build) look = l;   // a later click wins even if an earlier look loads last
     };
     await rebuild();
     const drawPreview = (ctx) => { if (look) drawParts(ctx, this.assets, look.compose('stand1', 0), preview.x, preview.y, true); };
@@ -1557,6 +1550,24 @@ export class LoginScene {
     }
     ctx.restore();
   }
+}
+
+/** Whether a point is on a character's drawn parts, its feet at (x, y). */
+function hitLook(look, a, x, y, mx, my) {
+  return look.compose(a.act || look.standAction(), a.frame).some((p) => {
+    const w = p.node?._w || 0, h = p.node?._h || 0, px = CHAR_FACING_RIGHT ? x - p.x - w : x + p.x;
+    return mx >= px && mx < px + w && my >= y + p.y && my < y + p.y + h;
+  });
+}
+
+/** Steps each character's animation: the selected one walks, the rest stand. */
+function advanceLooks(looks, anims, sel, ms) {
+  looks.forEach((look, i) => {
+    const a = anims[i], act = charAct(look, i === sel);
+    if (a.act !== act) { a.act = act; a.frame = 0; a.t = 0; }
+    a.t += ms;
+    while (a.t >= look.delay(act, a.frame)) { a.t -= look.delay(act, a.frame); a.frame = (a.frame + 1) % Math.max(1, look.frameCount(act)); }
+  });
 }
 
 /** Wraps a drawable so it slides in from x -149 over ms, timed from its first draw. */
