@@ -226,6 +226,10 @@ export class ChannelSession {
       this.emit('csWorldTransferRules', error, x, worlds);
     });
 
+    // the yellow chat tip: a flag (0 only shows the first one), then two lines
+    on(S.SET_WEEK_EVENT_MESSAGE, (r) => { const again = r.ubyte(); this.emit('yellowTip', again !== 0, r.string(), r.available >= 2 ? r.string() : ''); });
+    // ADMIN_RESULT 0x10: GM hide on (1) or off (0)
+    on(S.ADMIN_RESULT, (r) => { if (r.ubyte() === 0x10) this.emit('gmHide', !!r.ubyte()); });
     on(S.STAT_CHANGED, (r) => {
       const enable = r.bool();
       const mask = r.uint();
@@ -644,7 +648,7 @@ export class ChannelSession {
     const HB_HP = 0x200000000000n, HB_MP = 0x400000000000n; // BuffStat.HYPERBODYHP / HYPERBODYMP
     const SHARP_EYES = [3121002, 3221002];
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
-    const WATK = 0x100000000n, WDEF = 0x200000000n, MDEF = 0x800000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
+    const WATK = 0x100000000n, WDEF = 0x200000000n, MATK = 0x400000000n, MDEF = 0x800000000n, HANDS = 0x4000000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -681,7 +685,7 @@ export class ChannelSession {
       // Speed / Jump (Haste, Nimble Feet, speed potions...), weapon attack and accuracy: the values come in mask-bit
       // order, so each one's place is the number of set bits below it (all live in the second mask)
       const mask = BigInt.asUintN(64, m2);
-      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MDEF | AVOID | BOOSTER))) {
+      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MATK | MDEF | AVOID | HANDS | BOOSTER))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         const at = (bit) => popcount(mask & (bit - 1n));   // Cosmic lists the plain stats (WATK..JUMP) first
@@ -690,7 +694,9 @@ export class ChannelSession {
         if (mask & WATK) b.watk = values[at(WATK)];
         if (mask & ACC) b.acc = values[at(ACC)];
         if (mask & WDEF) b.wdef = values[at(WDEF)];
+        if (mask & MATK) b.matk = values[at(MATK)];
         if (mask & MDEF) b.mdef = values[at(MDEF)];
+        if (mask & HANDS) b.hands = values[at(HANDS)];
         if (mask & AVOID) b.avoid = values[at(AVOID)];
         if (mask & BOOSTER) b.booster = values[at(BOOSTER)];   // -1 to -4: that much faster
       }
@@ -1244,6 +1250,8 @@ export class ChannelSession {
     else if (selection !== undefined && selection !== null) w.int(selection);
     this.send(w);
   }
+  /** AUTO_DISTRIBUTE_AP: [[stat mask, amount], ...] */
+  autoDistributeAp(pairs) { const w = new PacketWriter(C.AUTO_DISTRIBUTE_AP).int(Date.now() | 0).int(pairs.length); for (const [m, n] of pairs) w.int(m).int(n); this.send(w); }
   distributeAp(stat) { this.send(new PacketWriter(C.DISTRIBUTE_AP).int(Date.now() | 0).int(stat)); }
   distributeSp(skillId) { this.send(new PacketWriter(C.DISTRIBUTE_SP).int(Date.now() | 0).int(skillId)); }
   useItem(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
