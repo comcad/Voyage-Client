@@ -250,7 +250,8 @@ export class ChannelSession {
         const id = r.ushort(), status = r.ubyte();
         const data = status === 1 ? r.string() : status === 2 ? r.long() : undefined;
         this.emit('quest', id, status, data);
-      } else if (mode === 9) this.emit('notice', { type: 5, msg: r.string() });
+      } else if (mode === 0x0A) { const id = r.ushort(); this.emit('questEx', id, r.string()); }
+      else if (mode === 9) this.emit('notice', { type: 5, msg: r.string() });
       else if (mode === 3) { const white = r.bool(); this.emit('status', { type: 'exp', amount: r.int(), white }); }
       else if (mode === 0) {
         const sub = r.ubyte();
@@ -747,6 +748,13 @@ export class ChannelSession {
       if (type === 2 && r.available >= 4) this.emit('affected', null, r.int());
       else if (type === 0x0a && r.available >= 1) this.emit('healNumber', null, r.ubyte());
       else if (type === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', null, r.ubyte(), e); }
+      else if (type === 9) this.emit('questClearEffect');
+      // 3: a quest's effect (0 items: message + Effect/Quest.img id) or the items it gave / took
+      else if (type === 3 && r.available >= 1) {
+        const n = r.ubyte();
+        if (n === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : 0); }
+        else this.emit('questItems', Array.from({ length: n }, () => ({ id: r.int(), qty: r.int() })));
+      }
     });
     // another player's curse (giveForeignDebuff): the masks, then per stat (Poison's value first) the mob skill as
     // short id + short level; an ordinary foreign buff has values and zeros there instead, so the id tells them apart
@@ -871,12 +879,15 @@ export class ChannelSession {
 
     on(S.NPC_TALK, (r) => {
       r.ubyte();
-      const npc = r.int(), type = r.ubyte(), speaker = r.ubyte(), text = r.string();
-      const d = { npc, type, speaker, text };
+      // speaker: bit 1 no END CHAT, bit 2 you are speaking, bit 4 (say) another NPC speaks - its id comes first
+      let npc = r.int();
+      const type = r.ubyte(), speaker = r.ubyte();
+      if (type === 0 && speaker & 4) npc = r.int();
+      const d = { npc, type, speaker, text: r.string() };
       if (type === 0) { d.prev = r.ubyte() === 1; d.next = r.ubyte() === 1; }
-      else if (type === 2) { d.def = r.string(); r.int(); }
+      else if (type === 2) { d.def = r.string(); d.min = r.available >= 2 ? r.short() : 0; d.max = r.available >= 2 ? r.short() : 0; }
       else if (type === 3) { d.def = r.int(); d.min = r.int(); d.max = r.int(); }
-      else if (type === 7) { d.styles = []; for (let k = r.ubyte(); k > 0; k--) d.styles.push(r.int()); }
+      else if (type === 7 || type === 8) { d.styles = []; for (let k = r.ubyte(); k > 0; k--) d.styles.push(r.int()); d.type = 7; d.wire = type; }
       this.emit('npcTalk', d);
     });
 
@@ -914,11 +925,21 @@ export class ChannelSession {
       else this.emit('storageError', op);
     });
 
+    // 6 start timers (qid, ms each), 7 remove them, 8 success (npc, next quest), 0x10 reset one; the rest are errors
     on(S.UPDATE_QUEST_INFO, (r) => {
       const mode = r.ubyte();
       if (mode === 8) { const id = r.ushort(), npc = r.int(); this.emit('questResult', { ok: true, id, npc, next: r.available >= 2 ? r.ushort() : 0 }); }
-      else if (mode === 6 || mode === 7) { r.short(); this.emit('questTimer', r.ushort(), mode === 6 ? r.int() : 0); }
+      else if (mode === 6) for (let n = r.ushort(); n > 0; n--) { const id = r.ushort(); this.emit('questTimer', id, r.int()); }
+      else if (mode === 7) for (let n = r.ushort(); n > 0; n--) this.emit('questTimer', r.ushort(), 0);
       else this.emit('questResult', { ok: false, mode, id: r.available >= 2 ? r.ushort() : 0 });
+    });
+    on(S.QUEST_CLEAR, (r) => this.emit('questClear', r.ushort()));
+    on(S.SCRIPT_PROGRESS_MESSAGE, (r) => this.emit('scriptProgress', r.string()));
+    // NPCs whose talk runs a server script (shown under ETC in their quest menu): id, name, start, end
+    on(S.SET_NPC_SCRIPTABLE, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0; n--) { const id = r.int(), name = r.string(); list.push({ id, name, start: r.int(), end: r.int() }); }
+      this.emit('npcScripts', list);
     });
 
     on(S.FIELD_EFFECT, (r) => {
@@ -1218,7 +1239,8 @@ export class ChannelSession {
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */
   npcReply(lastType, action, selection) {
     const w = new PacketWriter(C.NPC_TALK_MORE).byte(lastType).byte(action);
-    if (typeof selection === 'string') w.string(selection);
+    if (lastType === 7 || lastType === 8) w.byte(action === 1 ? selection ?? 0 : 0);   // a style choice is one byte
+    else if (typeof selection === 'string') w.string(selection);
     else if (selection !== undefined && selection !== null) w.int(selection);
     this.send(w);
   }
@@ -1256,14 +1278,20 @@ export class ChannelSession {
   moveItem(inv, from, to, qty = 1) { this.send(new PacketWriter(C.ITEM_MOVE).int(Date.now() | 0).byte(inv).short(from).short(to).short(qty)); }
   healOverTime(hp, mp) { this.send(new PacketWriter(C.HEAL_OVER_TIME).zero(8).short(hp).short(mp).byte(0)); }
   changeChannel(ch) { this.send(new PacketWriter(C.CHANGE_CHANNEL).byte(ch).int(Date.now() | 0)); }
-  /** QUEST_ACTION: 1 start, 2 complete, 3 forfeit, 4 scripted start, 5 scripted end. */
-  questAction(action, questId, npcId, pos, selection) {
+  /** QUEST_ACTION: 1 start, 2 complete (reward choice, -1 none), 3 forfeit, 4 scripted start, 5 scripted end. */
+  questAction(action, questId, npcId, pos, selection = -1) {
     const w = new PacketWriter(C.QUEST_ACTION).byte(action).short(questId);
     if (action !== 3) {
       w.int(npcId);
       if (pos) w.pos(pos);
-      if (action === 2 && selection !== undefined) w.short(selection);
+      if (action === 2) w.int(selection);
     }
+    this.send(w);
+  }
+  /** QUEST_ACTION 0: get back the quest items you lost. */
+  questRestore(questId, itemIds) {
+    const w = new PacketWriter(C.QUEST_ACTION).byte(0).short(questId).int(itemIds.length);
+    for (const id of itemIds) w.int(id);
     this.send(w);
   }
   shopRecharge(slot) { this.send(new PacketWriter(C.NPC_SHOP).byte(2).short(slot)); }
