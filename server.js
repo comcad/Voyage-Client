@@ -16,7 +16,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ENABLE/DISABLE MINIFY AND OBFUSCATION
 // ==========================================
 const ENABLE_OBFUSCATION = false;
-const ENABLE_MINIFY = true;
 
 // Automatically bundle (and optionally obfuscate) client scripts on every server boot
 try {
@@ -25,7 +24,7 @@ try {
   await esbuild.build({
     entryPoints: [path.join(__dirname, 'src/main.js')],
     bundle: true,
-    minify: ENABLE_MINIFY,
+    minify: ENABLE_OBFUSCATION,
     sourcemap: false, // Keep sourcemaps helpful if obfuscation is off
     outfile: path.join(__dirname, 'public/Voyage.js'),
   });
@@ -49,7 +48,7 @@ try {
     fs.writeFileSync(bundlePath, obfuscatedResult.getObfuscatedCode(), 'utf8');
     console.log('Client bundle generated and heavily obfuscated successfully!');
   } else {
-    console.log('Obfuscation skipped (ENABLE_OBFUSCATION is false). Bundle is minified only.');
+    console.log('Obfuscation skipped (ENABLE_OBFUSCATION is false).');
   }
 } catch (err) {
   console.error('CRITICAL BUILD ERROR:', err);
