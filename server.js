@@ -13,9 +13,10 @@ const JavaScriptObfuscator = pkg.default || pkg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ==========================================
-// TOGGLE: Set to true to obfuscate, false for plain esbuild minification only
+// ENABLE/DISABLE MINIFY AND OBFUSCATION
 // ==========================================
 const ENABLE_OBFUSCATION = false;
+const ENABLE_MINIFY = true;
 
 // Automatically bundle (and optionally obfuscate) client scripts on every server boot
 try {
@@ -24,7 +25,7 @@ try {
   await esbuild.build({
     entryPoints: [path.join(__dirname, 'src/main.js')],
     bundle: true,
-    minify: true,
+    minify: ENABLE_MINIFY,
     sourcemap: false, // Keep sourcemaps helpful if obfuscation is off
     outfile: path.join(__dirname, 'public/Voyage.js'),
   });
@@ -54,16 +55,15 @@ try {
   console.error('CRITICAL BUILD ERROR:', err);
 }
 
-const PORT = Number(process.env.PORT) || 2026;
+const PORT = Number(process.env.PORT) || 3000;
 const ASSETS_DIR = process.env.ASSETS_DIR || path.resolve(__dirname, 'assets');
-const SERVERS = Object.fromEntries((process.env.COSMIC_SERVERS || 'cosmic=192.168.2.2,dev=127.0.0.1')
+const SERVERS = Object.fromEntries((process.env.COSMIC_SERVERS || 'cosmic=192.168.2.2')
   .split(',').map((s) => s.split('=').map((x) => x.trim())));
 const portAllowed = (p) => p === 8484 || (p >= 7575 && p <= 7699);
 
 const app = express();
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
-
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 
 const server = http.createServer(app);
