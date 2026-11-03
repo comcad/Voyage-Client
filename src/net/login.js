@@ -10,9 +10,6 @@ export const LOGIN_ERRORS = {
   14: 'Wrong gateway.', 16: 'Please verify your account through email.', 17: 'Wrong gateway.',
   21: 'Please verify your account through email.', 23: 'License agreement not accepted.',
 };
-export const AFTER_LOGIN_ERRORS = {
-  10: 'The server is too busy or the channel is unavailable.', 17: 'Your client sent an invalid host string.',
-};
 
 /** Fake but well-formed machine identifiers (Cosmic validates the format, not the value). */
 function machineIds() {
@@ -27,7 +24,7 @@ function machineIds() {
 }
 
 function readAuth(r) {
-  r.skip(6); // int 0 (status) + short 0
+  r.skip(6); // result, regStatus, int 0
   const a = { id: r.int(), gender: r.ubyte(), gm: r.bool() };
   r.ubyte(); r.ubyte();
   a.name = r.string(); r.ubyte(); r.ubyte(); r.long(); r.long(); r.int();
@@ -40,6 +37,12 @@ export class LoginSession {
   constructor(transport) {
     this.conn = new Connection(transport);
     this.ids = machineIds();
+    // sent after the server list; 0xFE until LAST_CONNECTED_WORLD arrives
+    this.lastWorld = 0xFE; this.recommended = [];
+    this.conn.on(S.LAST_CONNECTED_WORLD, (r) => { this.lastWorld = r.int(); });
+    this.conn.on(S.RECOMMENDED_WORLD_MESSAGE, (r) => {
+      this.recommended = Array.from({ length: r.ubyte() }, () => ({ world: r.int(), text: r.string() }));
+    });
   }
   ready() { return this.conn.ready; }
   close() { this.conn.close(); }
@@ -53,11 +56,21 @@ export class LoginSession {
   }
 
   _status(r) {
-    const reason = r.ubyte();
-    if (reason !== 0) return { ok: false, reason, message: LOGIN_ERRORS[reason] || `Login failed (${reason}).` };
-    r.pos -= 1;
+    const reason = r.ubyte(), regStatus = r.ubyte();
+    r.int();
+    if (reason !== 0 && reason !== 12 && reason !== 23) {
+      const res = { ok: false, reason, message: LOGIN_ERRORS[reason] || `Login failed (${reason}).` };
+      if (reason === 2) {
+        const banReason = r.ubyte(), lo = r.int() >>> 0, hi = r.int() >>> 0;
+        // FILETIME: 100ns ticks since 1601
+        res.ban = { reason: banReason, until: new Date(Number(((BigInt(hi) << 32n) | BigInt(lo)) / 10000n) - 11644473600000) };
+      }
+      return res;
+    }
+    if (reason === 23) return { ok: false, reason, regStatus };
+    r.pos -= 6;
     this.account = readAuth(r);
-    return { ok: true, account: this.account };
+    return { ok: true, regStatus, account: this.account };
   }
 
   async acceptTos() {
@@ -89,16 +102,18 @@ export class LoginSession {
     return (await p).ubyte();
   }
 
-  async worlds() {
+  /** again: SERVERLIST_REREQUEST (back from character select after PLAYER_DC, or from View All Characters). */
+  async worlds(again = false, dc = again) {
     const worlds = [];
     const conn = this.conn;
-    this.conn.send(new PacketWriter(C.SERVERLIST_REQUEST));
+    if (dc) this.conn.send(new PacketWriter(C.PLAYER_DC));
+    this.conn.send(new PacketWriter(again ? C.SERVERLIST_REREQUEST : C.SERVERLIST_REQUEST));
     for (;;) {
       const r = await conn.expect(S.SERVERLIST);
       const id = r.ubyte();
       if (id === 0xff) break;
       const w = { id, name: r.string(), flag: r.ubyte(), event: r.string(), channels: [] };
-      r.skip(5);
+      w.expRate = r.short(); w.dropRate = r.short(); w.blockCreate = !!r.ubyte();
       for (let n = r.ubyte(); n > 0; n--) {
         const c = { name: r.string(), load: r.int(), world: r.ubyte(), id: r.ubyte() }; r.ubyte();
         w.channels.push(c);
@@ -108,23 +123,32 @@ export class LoginSession {
     return worlds;
   }
 
+  /** SERVERSTATUS for a world: 0 normal, 1 busy, 2 full. */
+  async serverStatus(world) {
+    const p = this.conn.expect(S.SERVERSTATUS);
+    this.conn.send(new PacketWriter(C.SERVERSTATUS_REQUEST).short(world));
+    return (await p).ubyte();
+  }
+
   async chars(world, channel) {
     const p = this.conn.expect([S.CHARLIST, S.SERVERSTATUS]);
     this.conn.send(new PacketWriter(C.CHARLIST_REQUEST).byte(2).byte(world).byte(channel).int(0));
     const r = await p;
-    if (r.op === S.SERVERSTATUS) return { error: 'This world is full or the channel is unavailable.' };
-    r.ubyte();
+    if (r.op === S.SERVERSTATUS) return { full: true };
+    const status = r.ubyte();
+    if (status !== 0) return { status };
     const chars = [];
     for (let n = r.ubyte(); n > 0; n--) chars.push(readCharEntry(r));
     this.picFlag = r.ubyte();
     return { chars, picFlag: this.picFlag, slots: r.int() };
   }
 
-  async nameAvailable(name) {
+  /** CHAR_NAME_RESPONSE result: 0 free, 1 taken, 2 not allowed. */
+  async checkName(name) {
     const p = this.conn.expect(S.CHAR_NAME_RESPONSE);
     this.conn.send(new PacketWriter(C.CHECK_CHAR_NAME).string(name));
     const r = await p; r.string();
-    return r.ubyte() === 0;
+    return r.ubyte();
   }
 
   /** job: 0 Cygnus, 1 Adventurer, 2 Aran. Returns the new char entry or null. */
@@ -145,17 +169,72 @@ export class LoginSession {
     return r.ubyte();
   }
 
-  /** -> { port } | { error } | { wrongPic: true } */
-  async selectChar(charId, pic) {
-    const p = this.conn.expect([S.SERVER_IP, S.CHECK_SPW_RESULT, S.SELECT_CHARACTER_BY_VAC]);
+  /**
+   * VIEW_ALL_CHAR: collects every world's characters (10 s at most).
+   * -> { chars: [{ world, stats, look, rank }] } | { error: 'none' | 'connected' | 'timeout' | message }
+   */
+  async viewAll() {
+    const conn = this.conn, deadline = performance.now() + 10000;
+    const reset = () => conn.send(new PacketWriter(C.VIEW_ALL_END).byte(0));
+    conn.send(new PacketWriter(C.VIEW_ALL_CHAR));
+    const chars = [];
+    let left = null;
+    for (;;) {
+      let r;
+      try { r = await conn.expect(S.VIEW_ALL_CHAR, Math.max(1, deadline - performance.now())); } catch (e) {
+        if (conn.closed) throw e;
+        if (!chars.length) { reset(); return { error: 'timeout' }; }
+        break;
+      }
+      const mode = r.ubyte();
+      if (mode === 1) {
+        const worlds = r.int(), n = r.int();
+        if (!worlds || !n) { reset(); return { error: 'none' }; }
+        left = worlds;
+        continue;
+      }
+      if (mode === 0) {
+        const world = r.ubyte();
+        for (let n = r.ubyte(); n > 0; n--) chars.push({ world, ...readCharEntry(r, true) });
+      } else if (mode === 2) { reset(); return { error: 'connected' }; }
+      else if (mode !== 4 && mode !== 5) { const msg = r.ubyte() ? r.string() : ''; reset(); return { error: msg || 'unknown' }; }
+      if (left === null || --left <= 0) break;
+    }
+    if (!chars.length) { reset(); return { error: 'none' }; }
+    conn.send(new PacketWriter(C.VIEW_ALL_END).byte(1));
+    return { chars };
+  }
+
+  /** Leaving View All Characters: VIEW_ALL_END 0, then SERVERLIST_REREQUEST. */
+  async leaveViewAll() {
+    this.conn.send(new PacketWriter(C.VIEW_ALL_END).byte(0));
+    return this.worlds(true, false);
+  }
+
+  /** Enter from View All Characters (no channel: the server picks one). picMode from LOGIN_STATUS. */
+  async selectFromAll(charId, world, pic, picMode) {
     const { macs, host } = this.ids;
-    if (this.picFlag === 0) this.conn.send(new PacketWriter(C.REGISTER_PIC).byte(1).int(charId).string(macs).string(host).string(pic));
-    else if (this.picFlag === 1) this.conn.send(new PacketWriter(C.CHAR_SELECT_WITH_PIC).string(pic).int(charId).string(macs).string(host));
-    else this.conn.send(new PacketWriter(C.CHAR_SELECT).int(charId).string(macs).string(host));
+    if (picMode === 0) return this._select(new PacketWriter(C.VIEW_ALL_PIC_REGISTER).byte(1).int(charId).int(world).string(macs).string(host).string(pic));
+    if (picMode === 1) return this._select(new PacketWriter(C.VIEW_ALL_WITH_PIC).string(pic).int(charId).int(world).string(macs).string(host));
+    return this._select(new PacketWriter(C.PICK_ALL_CHAR).int(charId).int(world).string(macs).string(host));
+  }
+
+  /** -> { port } | { code } (login result) | { wrongPic: true } */
+  async selectChar(charId, pic) {
+    const { macs, host } = this.ids;
+    if (this.picFlag === 0) return this._select(new PacketWriter(C.REGISTER_PIC).byte(1).int(charId).string(macs).string(host).string(pic));
+    if (this.picFlag === 1) return this._select(new PacketWriter(C.CHAR_SELECT_WITH_PIC).string(pic).int(charId).string(macs).string(host));
+    return this._select(new PacketWriter(C.CHAR_SELECT).int(charId).string(macs).string(host));
+  }
+
+  async _select(packet) {
+    const p = this.conn.expect([S.SERVER_IP, S.CHECK_SPW_RESULT, S.SELECT_CHARACTER_BY_VAC]);
+    this.conn.send(packet);
     const r = await p;
     if (r.op === S.CHECK_SPW_RESULT) return { wrongPic: true };
-    if (r.op === S.SELECT_CHARACTER_BY_VAC) { const c = r.short(); return { error: AFTER_LOGIN_ERRORS[c] || `Cannot enter the game (${c}).` }; }
-    r.short();
+    if (r.op === S.SELECT_CHARACTER_BY_VAC) return { code: r.short() };
+    const result = r.ubyte(), sub = r.ubyte();
+    if (result !== 0) return { code: result, sub };
     const ip = Array.from(r.bytes(4)).join('.');
     return { ip, port: r.ushort(), charId: r.int() };
   }

@@ -19,7 +19,14 @@ export class Connection {
     this.ready = new Promise((res, rej) => { this._ready = res; this._fail = rej; });
     this.closed = false;
     transport.onData = (d) => this._data(d);
-    transport.onClose = () => { this.closed = true; this._fail(new Error('connection closed')); this.onClose?.(); };
+    transport.onClose = () => {
+      this.closed = true;
+      const err = new Error('connection closed');
+      this._fail(err);
+      // pending replies can't come any more
+      for (const w of this.waiters.splice(0)) { clearTimeout(w.timer); w.rej(err); }
+      this.onClose?.();
+    };
     this.on(S.PING, () => this.send(new PacketWriter(C.PONG)));
   }
 
@@ -30,8 +37,9 @@ export class Connection {
     ops = [].concat(ops);
     const bi = this.backlog.findIndex((b) => ops.includes(b.op));
     if (bi >= 0) { const b = this.backlog.splice(bi, 1)[0]; return Promise.resolve(Object.assign(b.r, { op: b.op })); }
+    if (this.closed) return Promise.reject(new Error('connection closed'));
     return new Promise((res, rej) => {
-      const w = { ops, res: (r, op) => { clearTimeout(w.timer); res(Object.assign(r, { op })); } };
+      const w = { ops, rej, res: (r, op) => { clearTimeout(w.timer); res(Object.assign(r, { op })); } };
       w.timer = setTimeout(() => { this.waiters.splice(this.waiters.indexOf(w), 1); rej(new Error('server did not respond')); }, ms);
       this.waiters.push(w);
     });

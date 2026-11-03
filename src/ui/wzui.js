@@ -21,7 +21,7 @@ export class WzSprite {
     if (!img) return;
     const o = n.origin || [0, 0];
     ctx.save();
-    ctx.globalAlpha = this.alpha * this.anim.alpha;
+    ctx.globalAlpha *= this.alpha * this.anim.alpha;   // inside a fading dialog too
     if (this.anim.blend) ctx.globalCompositeOperation = 'lighter';
     ctx.drawImage(img, Math.round(this.x + ox - o[0]), Math.round(this.y + oy - o[1]));
     ctx.restore();
@@ -34,7 +34,8 @@ export class WzButton {
     this.enabled = true; this.visible = true; this.hover = false; this.down = false; this.focused = false;
     this.anims = {};
     // state animations play once and hold their last frame (e.g. a world tag swings, then hangs still)
-    for (const s of ['normal', 'mouseOver', 'pressed', 'disabled', 'keyFocused']) if (node?.[s]) this.anims[s] = new Anim(firstFrames(node[s]), false);
+    // the keyboard-focus art (e.g. a bobbing leaf) loops
+    for (const s of ['normal', 'mouseOver', 'pressed', 'disabled', 'keyFocused']) if (node?.[s]) this.anims[s] = new Anim(firstFrames(node[s]), s === 'keyFocused');
   }
   get state() {
     if (this.forceState) return this.forceState;
@@ -66,7 +67,8 @@ export class WzButton {
     const put = (a) => {
       const n = a?.node, img = n && assets.image(n);
       if (!img) return;
-      const o = n.origin || [0, 0];
+      // fixedOrigin: every state sits where the normal state does (for art whose states disagree)
+      const o = (this.fixedOrigin && a !== this.anims.keyFocused ? this.anims.normal?.node?.origin : n.origin) || [0, 0];
       ctx.drawImage(img, Math.round(this.x - o[0]), Math.round(this.y - o[1]));
     };
     put((ring ? this.anims.normal : this.anims[st]) || this.anims.normal);
@@ -111,9 +113,9 @@ export class TextField {
 }
 
 /** Draws text the way the client's UI does: small Arial with an optional 1px dark outline. */
-export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'left', bold = false, outline = null, base = 'top' } = {}) {
+export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'left', bold = false, outline = null, base = 'top', font = null } = {}) {
   ctx.save();
-  ctx.font = `${bold ? 'bold ' : ''}${size}px Arial, "Segoe UI", sans-serif`;
+  ctx.font = `${bold ? 'bold ' : ''}${size}px ${font ? `${font}, ` : ''}Arial, "Segoe UI", sans-serif`;
   ctx.textAlign = align; ctx.textBaseline = base;
   if (outline) { ctx.lineWidth = 3; ctx.strokeStyle = outline; ctx.strokeText(text, x, y); }
   ctx.fillStyle = color;
