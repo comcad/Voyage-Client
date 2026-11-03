@@ -1239,7 +1239,7 @@ export class ChannelSession {
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */
   npcReply(lastType, action, selection) {
     const w = new PacketWriter(C.NPC_TALK_MORE).byte(lastType).byte(action);
-    if (lastType === 7) w.byte(action === 1 ? selection ?? 0 : 0);   // a style choice is one byte
+    if (lastType === 7 || lastType === 8) w.byte(action === 1 ? selection ?? 0 : 0);   // a style choice is one byte
     else if (typeof selection === 'string') w.string(selection);
     else if (selection !== undefined && selection !== null) w.int(selection);
     this.send(w);

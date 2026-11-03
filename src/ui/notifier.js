@@ -24,12 +24,13 @@ const KINDS = {
   guildFound: { ...WIDE, icon: 8, lines: (n) => [['Guild founding', 25, 5], [`from '${n}'`, 25, 18]] },
   familySummon: { ...WIDE, icon: 9, lines: (n) => [['Family summons', 25, 5], [`from '${n}'`, 25, 18]] },
 };
+let balloonSeq = 0;
 const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, LOGIN_HOLD = 6000, NAME_W = 100;
 
 class Balloon extends Win {
   constructor(mgr, kind, art, done, hold) {
     super(mgr, mgr.W.FadeYesNo[art], 464, 0);
-    Object.assign(this, { kind, done, hold, born: performance.now(), deadline: performance.now() + hold, shownAt: null, closing: null, clicked: null, n: 1 });
+    Object.assign(this, { kind, done, hold, seq: ++balloonSeq, born: performance.now(), deadline: performance.now() + hold, shownAt: null, closing: null, clicked: null, n: 1 });
     this.fixed = true; this.keepOnEscape = true; this.closeBtn.visible = false; this.closeSound = null;
   }
   get F() { return this.mgr.W.FadeYesNo; }
@@ -52,9 +53,9 @@ class Balloon extends Win {
   }
   /** Gone: the balloons after it drop 5px. */
   remove() {
-    const list = this.balloons, i = list.indexOf(this);
-    if (i < 0) return;
-    for (const b of list.slice(i + 1)) b.n--;
+    const list = this.balloons;
+    if (!list.includes(this)) return;
+    for (const b of list) if (b.seq > this.seq) b.n--;   // by when they came, not by window order (clicks raise them)
     this.mgr.close(this);
   }
   draw(ctx) {

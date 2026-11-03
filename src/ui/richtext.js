@@ -19,7 +19,7 @@ export const LIGHT_COLORS = { b: '#9fd6ff', r: '#ff9a9a', g: '#a6f08a', d: '#e2b
 export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0, imgPad = null, boldE = true } = {}) {
   const palette = { ...COLORS, ...colors };
   const tokens = String(text).replace(/\\r\\n|\\n/g, '\n').replace(/\\r/g, '').replace(/\r\n|\r/g, '\n')
-    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#[tzopmcivsqL@](?:\d+:?#)?|#[a-zA-Z@]|\n)/);
+    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#[tzopmcivsqLB@](?:\d+:?#)?|#[a-zA-Z@]|\n)/);
   const lines = [];
   let line = null, color = base, bold = false, opt = null, x = 0;
   const newLine = () => { line = { runs: [], opt, h: lineH, x0: opt !== null ? bullet : 0 }; lines.push(line); x = line.x0; };

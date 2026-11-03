@@ -3,7 +3,7 @@ import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll, itemKeyT
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { richText, drawRich } from './richtext.js';
-import { isPartyQuest, questSort } from '../quests.js';
+import { isPartyQuest, questSort, TITLE_AREA } from '../quests.js';
 
 /**
  * In-game windows from UI/UIWindow.img, drawn on the game canvas like the v83 client:
@@ -879,11 +879,11 @@ class QuestWin extends Win {
     if (!book) return [];
     const ids = tab === 0 ? book.available(ctx) : Object.keys(tab === 1 ? book.started : book.completed).map(Number).filter((id) => book.status(id) === tab && book.checkPos.has(id))
       .sort((x, y) => book.checkPos.get(x) - book.checkPos.get(y));
-    const out = ids.filter((id) => book.info[id] && !book.info[id].parent && book.check[id]?.['0']?.npc && book.area(id) !== 51)
+    const out = ids.filter((id) => book.info[id] && !book.info[id].parent && book.check[id]?.['0']?.npc && book.area(id) !== TITLE_AREA)
       .map((id) => ({ id, name: book.name(id), area: book.area(id) }));
     for (const parent of book.chainParents) {
       const e = this.chainEntry(parent, book.chains.get(parent), ctx);
-      if (e && e.tab === tab && e.area !== 51) out.push(e);
+      if (e && e.tab === tab && e.area !== TITLE_AREA) out.push(e);
     }
     return out;
   }

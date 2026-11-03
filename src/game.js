@@ -2788,7 +2788,7 @@ export class Game {
   /** NPC_TALK: the canvas UtilDlgEx dialog, then NPC_TALK_MORE with the answer. */
   async showNpcDialog(d) {
     const r = await npcTalk(this.windows, d);
-    this.net.npcReply(d.type, r.action, r.sel);
+    this.net.npcReply(d.wire ?? d.type, r.action, r.sel);
   }
 
   // ------------------------------------------------------------------ loop
