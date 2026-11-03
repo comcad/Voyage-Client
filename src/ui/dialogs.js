@@ -59,7 +59,7 @@ function placeField(mgr, f, x, y) {
  * d: { npc, type, speaker, text, prev, next, def, min, max, styles } as sent in NPC_TALK.
  */
 const NPC_COLORS = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c' };
-const NPC_TEXT = { size: 12, lineH: 18, bullet: 18, colors: NPC_COLORS, imgPad: 2 };
+const NPC_TEXT = { size: 12, lineH: 18, bullet: 18, colors: NPC_COLORS, imgPad: 2, boldE: false };
 const DLG = { w: 529, wrap: 341, margin: 8, minBody: 120, maxBody: 240, typeMs: 30, admin: 9010000 };
 const dlgCentre = { x: 400, y: 300 };
 export class NpcDialog extends Win {

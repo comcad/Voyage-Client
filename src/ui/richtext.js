@@ -2,7 +2,7 @@ import { uiText } from './wzui.js';
 
 /**
  * NPC / quest script markup laid out for the canvas:
- *   #b #r #g #d #k colours, #e bold, #n normal, #h player name, #t/#z item, #o mob, #p / #@ NPC,
+ *   #b #r #g #d #k colours, #e bold, #n not bold (colour kept), #h player name, #t/#z item, #o mob, #p / #@ NPC,
  *   #m map, #c item count, #i/#v item icon (inline, 32px), #s skill icon, #q skill name, #L<n># ... #l a clickable option,
  *   #f<path># / #F<path># a UI image (UtilDlgEx/list0 "QUEST IN PROGRESS" and the like). Ids may end in ':' (#v4000000:#).
  * bullet: indent options this far, leaving room for the dot drawn before each one.
@@ -16,10 +16,10 @@ const LINE_H = 15, ICON_H = 34;
 /** Lighter versions for white text on the blue Notice / yes-no boxes, where the dark ones disappear. */
 export const LIGHT_COLORS = { b: '#9fd6ff', r: '#ff9a9a', g: '#a6f08a', d: '#e2b6ff' };
 
-export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0, imgPad = null } = {}) {
+export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0, imgPad = null, boldE = true } = {}) {
   const palette = { ...COLORS, ...colors };
   const tokens = String(text).replace(/\\r\\n|\\n/g, '\n').replace(/\\r/g, '').replace(/\r\n|\r/g, '\n')
-    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#[a-zA-Z@](?:\d+:?#)?|\n)/);
+    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#[tzopmcivsqL@](?:\d+:?#)?|#[a-zA-Z@]|\n)/);
   const lines = [];
   let line = null, color = base, bold = false, opt = null, x = 0;
   const newLine = () => { line = { runs: [], opt, h: lineH, x0: opt !== null ? bullet : 0 }; lines.push(line); x = line.x0; };
@@ -61,8 +61,8 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
     if (!m) { put(tk); continue; }
     const [, code, num] = m, id = Number(num);
     if (palette[code]) color = code === 'k' ? base : palette[code];
-    else if (code === 'e') bold = true;
-    else if (code === 'n') { bold = false; color = base; }
+    else if (code === 'e') bold = boldE;   // the NPC dialogue's #e font looks the same as its normal one
+    else if (code === 'n') bold = false;   // bold off; the colour stays
     else if (code === 'h') put(ref.player);
     else if (code === 't' || code === 'z') put(ref.item(id));
     else if (code === 'o') put(ref.mob(id));
