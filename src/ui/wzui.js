@@ -67,7 +67,8 @@ export class WzButton {
     const put = (a) => {
       const n = a?.node, img = n && assets.image(n);
       if (!img) return;
-      const o = n.origin || [0, 0];
+      // fixedOrigin: every state sits where the normal state does (for art whose states disagree)
+      const o = (this.fixedOrigin && a !== this.anims.keyFocused ? this.anims.normal?.node?.origin : n.origin) || [0, 0];
       ctx.drawImage(img, Math.round(this.x - o[0]), Math.round(this.y - o[1]));
     };
     put((ring ? this.anims.normal : this.anims[st]) || this.anims.normal);

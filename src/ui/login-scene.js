@@ -137,7 +137,7 @@ export class LoginScene {
       const r = this.canvas.getBoundingClientRect();
       return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
     };
-    this.canvas.addEventListener('pointermove', (e) => { this.mouse = pos(e); this.hover(); });
+    this.canvas.addEventListener('pointermove', (e) => { this.mouse = pos(e); this.drag?.(this.mouse); this.hover(); });
     // hit-test at the press/release position itself, so taps and clicks without a prior move work
     this.canvas.addEventListener('pointerdown', (e) => {
       this.mouse = pos(e); this.hover();
@@ -146,6 +146,7 @@ export class LoginScene {
     });
     addEventListener('pointerup', (e) => {
       this.mouse = pos(e);
+      this.drag = null;
       const target = this.buttons().find((b) => b.down && b.enabled && b.hit(this.mouse.x, this.mouse.y));
       for (const b of this.buttons()) b.down = false;
       this.hover();
@@ -158,6 +159,7 @@ export class LoginScene {
     addEventListener('keydown', (e) => {
       if (this.panning() && !this.dialogs.length) return;
       const top = this.topLayer();
+      if (top?.onRawKey?.(e)) { e.preventDefault(); return; }
       if (e.key === 'Enter' && top?.onEnter) { e.preventDefault(); top.onEnter(); }
       else if (e.key === 'Escape' && top?.onEscape) { e.preventDefault(); top.onEscape(); }
       else if (top?.onKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) { e.preventDefault(); top.onKey(e.key); }
@@ -230,7 +232,6 @@ export class LoginScene {
       const k = d.fade !== undefined ? 1 - d.fade / NOTICE_SLIDE_MS : d.slide ? d.t / NOTICE_SLIDE_MS : 1;
       ctx.save();
       ctx.globalAlpha = Math.max(0, k);
-      ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(0, 0, W, H);
       if (d.slide && d.fade === undefined) ctx.translate(Math.round(20 * (1 - k)), Math.round(-20 * (1 - k)));
       this.drawLayerContent(ctx, d);
       ctx.restore();
@@ -375,6 +376,168 @@ export class LoginScene {
     const n = this.loginResult(res);
     if (n !== null) await this.notice(n);
     if (res.reason === 7) throw new BackToTitle();
+  }
+
+  /**
+   * Login.img/Common/SoftKey: the PIC keyboard. 148x278, centred, draggable by any empty spot. Ten keys are
+   * shuffled once per opening and keep their places on the 1,2,3 / a,b,c / A,B,C tabs; a letter group cycles
+   * its letters on repeated taps until another key (or the right arrow) commits it. Typed characters are
+   * refused; Backspace / Delete / arrows / Home / End edit, Enter is OK and Esc is CANCEL.
+   * Resolves with the PIC (6-16 characters) or null.
+   */
+  async softKey({ tip = null } = {}) {
+    const K = this.L.Common.SoftKey, T = this.B?.Tab7 || (this.B = await this.assets.json('UI/Basic.img'))?.Tab7;
+    const MIN = 6, MAX = 16;
+    const win = { x: (W - 148) >> 1, y: (H - 278) >> 1 };
+    const slot = Array.from({ length: 10 }, (_, i) => i);
+    for (let i = slot.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [slot[i], slot[j]] = [slot[j], slot[i]]; }
+    const keyAt = (p) => ({ x: 16 + (p % 3) * 39, y: 91 + Math.floor(p / 3) * 34 });
+    let text = [], caret = 0, pending = -1, shownUntil = 0, tab = 0, tooltip = null;
+    const showTip = (msg) => { tooltip = { msg, until: performance.now() + 5000 }; };
+    if (tip) showTip(tip);
+    const commit = () => { pending = -1; };
+    const insert = (ch) => {
+      if (text.length >= MAX) return;
+      text.splice(caret, 0, ch); caret++;
+    };
+    const backspace = () => {
+      if (pending >= 0) { text.splice(pending, 1); caret = pending; }
+      else if (caret > 0) { text.splice(caret - 1, 1); caret--; }
+      commit();
+    };
+    const tapGroup = (g, upper) => {
+      const base = (upper ? 'A' : 'a').charCodeAt(0) + 3 * g, size = g === 8 ? 2 : 3;
+      const cur = pending >= 0 ? text[pending].charCodeAt(0) - base : -1;
+      if (pending >= 0 && cur >= 0 && cur < size) text[pending] = String.fromCharCode(base + (cur + 1) % size);
+      else {
+        commit();
+        if (text.length >= MAX) return;
+        insert(String.fromCharCode(base)); pending = caret - 1;
+      }
+      shownUntil = performance.now() + 500;   // the letter shows for 500 ms, then as *
+    };
+    return new Promise((resolve) => {
+      const d = { buttons: [], hotspots: [] };
+      const close = (v) => { this.closeDialog(d); resolve(v); };
+      const ok = () => {
+        if (text.length < MIN) { showTip(`The password needs to be at least ${MIN} letters long.`); return; }
+        close(text.join(''));
+      };
+      const at = (dx, dy) => [win.x + dx, win.y + dy];
+      const btn = (node, dx, dy, fn) => { const b = this.button(node, ...at(dx, dy), fn); b.dx = dx; b.dy = dy; return b; };
+      let keys = [];
+      const buildKeys = () => {
+        const nodes = [K.BtNum, K.BtLowCase, K.BtHighCase][tab];
+        keys = slot.map((p, i) => {
+          const { x, y } = keyAt(p);
+          return btn(nodes[i], x, y, () => {
+            if (tab === 0) { commit(); insert(String(i)); commit(); }
+            else if (i === 9) commit();        // the blank key only commits
+            else tapGroup(i, tab === 2);
+          });
+        });
+        d.buttons = [...keys, ...fixed];
+        this.assets.preload(keys.flatMap((b) => b.frames())).then(() => this.hover());
+      };
+      const fixed = [
+        btn(K.BtDel, 55, 193, backspace),
+        btn(K.BtNext, 94, 193, commit),
+        btn(K.BtOK, 16, 231, ok),
+        btn(K.BtCancel, 74, 231, () => close(null)),
+      ];
+      buildKeys();
+      // tabs: spans 15-37, 46-67, 76-100 on a Tab7 strip at (11, 65)
+      const spans = [[15, 37], [46, 67], [76, 100]];
+      const move = () => { for (const b of d.buttons) { b.x = win.x + b.dx; b.y = win.y + b.dy; } };
+      d.onPointer = (mx, my) => {
+        const rx = mx - win.x, ry = my - win.y;
+        if (ry >= 65 && ry < 85) {
+          const i = spans.findIndex(([a, b]) => rx >= a && rx < b);
+          if (i >= 0) { if (i !== tab) { commit(); tab = i; buildKeys(); } return; }
+        }
+        // drag by any empty spot
+        if (rx >= 0 && rx < 148 && ry >= 0 && ry < 278 && !d.buttons.some((b) => b.hit(mx, my))) {
+          const ox = mx - win.x, oy = my - win.y;
+          this.drag = (m) => {
+            win.x = Math.max(0, Math.min(W - 148, Math.round(m.x - ox))); win.y = Math.max(0, Math.min(H - 278, Math.round(m.y - oy)));
+            move();
+          };
+        }
+      };
+      d.onEnter = ok;
+      d.onEscape = () => close(null);
+      d.onRawKey = (e) => {
+        if (e.key === 'Enter' || e.key === 'Escape') return false;
+        if (e.key === 'Backspace') backspace();
+        else if (e.key === 'Delete') { if (caret < text.length) text.splice(caret, 1); commit(); }
+        else if (e.key === 'ArrowLeft') { caret = Math.max(0, caret - 1); commit(); }
+        else if (e.key === 'ArrowRight') { caret = Math.min(text.length, caret + 1); commit(); }
+        else if (e.key === 'Home') { caret = 0; commit(); }
+        else if (e.key === 'End') { caret = text.length; commit(); }
+        else if (e.key.length === 1) commit();   // typed characters are refused
+        return true;
+      };
+      d.update = () => { if (tooltip && performance.now() > tooltip.until) tooltip = null; };
+      d.drawBack = (ctx) => {
+        const bg = this.assets.image(K.backgrnd);
+        if (bg) ctx.drawImage(bg, win.x, win.y);
+        // input: white box, every character as * except the pending letter for 500 ms
+        ctx.fillStyle = '#fff'; ctx.fillRect(win.x + 12, win.y + 46, 122, 13);
+        ctx.save(); ctx.font = '12px Arial';
+        let x = win.x + 12, caretX = x;
+        text.forEach((ch, i) => {
+          const g = i === pending && performance.now() < shownUntil ? ch : '*';
+          // on the baseline: 'top' differs between browsers
+          uiText(ctx, g, x, win.y + 55, { color: '#000', base: 'alphabetic' });
+          x += g === '*' ? 5 : Math.ceil(ctx.measureText(g).width);
+          if (i === caret - 1) caretX = x;
+        });
+        if (caret === 0) caretX = win.x + 12;
+        ctx.restore();
+        if (Math.floor(performance.now() / 500) % 2 === 0) { ctx.fillStyle = '#000'; ctx.fillRect(caretX, win.y + 46, 1, 12); }
+        // Tab7 strip
+        const img = (k) => T && this.assets.image(T[k]);
+        const put = (k, dx, w) => { const i = img(k); if (i) ctx.drawImage(i, win.x + dx, win.y + 65, w ?? i.width, 20); };
+        put(tab === 0 ? 'left1' : 'left0', 11);
+        spans.forEach(([a, b], i) => {
+          put(i === tab ? 'fill1' : 'fill0', a, b - a);
+          if (i < spans.length - 1) put(tab === i ? 'middle1' : tab === i + 1 ? 'middle2' : 'middle0', b);
+        });
+        put(tab === spans.length - 1 ? 'right1' : 'right0', 100);
+        [13, 44, 74].forEach((lx, i) => { const l = this.assets.image(K.Tab[i === tab ? 'selected' : 'normal'][i]); if (l) ctx.drawImage(l, win.x + lx, win.y + 72); });
+      };
+      d.drawFront = (ctx) => {
+        if (!tooltip) return;
+        ctx.save(); ctx.font = '12px Arial';
+        const w = Math.ceil(ctx.measureText(tooltip.msg).width) + 6;
+        ctx.restore();
+        ctx.fillStyle = 'rgba(0,0,64,0.63)';
+        ctx.beginPath(); ctx.roundRect(win.x + 66, win.y + 44, w, 18, 1); ctx.fill();
+        uiText(ctx, tooltip.msg, win.x + 69, win.y + 47, { color: '#fff' });
+      };
+      const art = [K.backgrnd, ...Object.values(T || {}), ...[0, 1, 2].flatMap((i) => [K.Tab.normal[i], K.Tab.selected[i]]),
+        ...fixed.flatMap((b) => b.frames()), ...keys.flatMap((b) => b.frames())];
+      this.assets.preload(art).then(() => { this.dialogs.push(d); this.hover(); });
+    });
+  }
+
+  /** New PIC: the keyboard twice (the second with "Please re-enter your PIC."), again from the start on a mismatch. */
+  async registerPic() {
+    for (;;) {
+      const a = await this.softKey();
+      if (a === null) return null;
+      const b = await this.softKey({ tip: 'Please re-enter your PIC.' });
+      if (b === null) return null;
+      if (a === b) return a;
+      await this.notice(41, 'info');
+    }
+  }
+
+  /** The PIC for entering the game: notice 95 and registration (picFlag 0), the keyboard once (1), or none. */
+  async picFor(picFlag) {
+    if (picFlag === 0) { await this.notice(95, 'info'); return this.registerPic(); }
+    if (picFlag === 1) return this.softKey();
+    return '';
   }
 
   /** Pincode-style prompt with one input line. Resolves with the text or null. */
@@ -611,7 +774,7 @@ export class LoginScene {
         if (pending) return;
         for (const b of worldButtons) b.enabled = true;
         btn.enabled = false;   // the clicked tag stays pressed
-        focusWorld(w.id);      // and takes the keyboard focus, so no other tag keeps the highlight
+        picked = true; focusWorld(w.id);      // and takes the keyboard focus, so no other tag keeps the highlight
         pending = true;
         let status;
         try { status = await this.s.serverStatus(w.id); } catch (e) { reject(e); return; } finally { pending = false; }
@@ -646,23 +809,25 @@ export class LoginScene {
       });
       // the last world played gets the keyboard-focus highlight
       const focusWorld = (id) => worldButtons.forEach((b, i) => { b.focused = this.worlds[i].id === id; });
-      focusWorld(this.s.lastWorld);
+      // LAST_CONNECTED_WORLD and RECOMMENDED_WORLD_MESSAGE come just after the server list, so both are read live
+      let lastShown = null, picked = false;
+      const syncLast = () => { if (!picked && this.s.lastWorld !== lastShown) { lastShown = this.s.lastWorld; focusWorld(lastShown); } };
       // Recommended World window (screen (136, 51)): arrows step through the list, Select highlights that world's tag
-      const recs = (this.s.recommended || []).filter((r) => this.worlds.some((w) => w.id === r.world));
+      const recs = () => (this.s.recommended || []).filter((r) => this.worlds.some((w) => w.id === r.world));
       let rec = null;
       const RW = { x: 136, y: 51 }, A = WS.alert;
-      const recStep = (d) => { rec.i = (rec.i + d + recs.length) % recs.length; };
+      const recStep = (d) => { rec.i = (rec.i + d + recs().length) % recs().length; };
       const recArrows = [this.button(A.BtArrowL, RW.x + 45, RW.y + 70, () => recStep(-1)), this.button(A.BtArrowR, RW.x + 215, RW.y + 70, () => recStep(1))];
-      for (const b of recArrows) b.enabled = recs.length > 1;
-      const recChoice = this.button(A.BtChoice, RW.x + 113, RW.y + 114, () => { focusWorld(recs[rec.i].world); closeRec(); });
+      const recChoice = this.button(A.BtChoice, RW.x + 113, RW.y + 114, () => { picked = true; focusWorld(recs()[rec.i].world); closeRec(); });
+      recChoice.fixedOrigin = true;   // its hover / pressed art is centred, the normal art isn't
       const openRec = () => {
-        if (!recs.length || pending) return;
+        if (!recs().length || pending) return;
         closeWorld();
         rec = { i: 0 };
       };
       const closeRec = () => { rec = null; };
       const viewChoice = this.button(WS.BtViewChoice, 0, 125, openRec), viewAll = this.button(WS.BtViewAll, 0, 125, closeRec);
-      viewChoice.enabled = recs.length > 0;
+
       const recLines = (text) => {
         this.recWrap ??= new Map();
         if (!this.recWrap.has(text)) this.recWrap.set(text, wrapText(this.ctx, String(text).replace(/\\r|\r\n?/g, '\n'), 200));
@@ -674,19 +839,27 @@ export class LoginScene {
           if (!rec) return;
           const bg = this.assets.image(A.backgrd);
           if (bg) ctx.drawImage(bg, RW.x, RW.y);
-          const r = recs[rec.i], img = WS.world[r.world] && this.assets.image(WS.world[r.world]);
+          const r = recs()[rec.i], img = r && WS.world[r.world] && this.assets.image(WS.world[r.world]);
+          if (!r) return;
           if (img) ctx.drawImage(img, RW.x + 145 - Math.round(img.width / 2), RW.y + 61);
           recLines(r.text).slice(0, 6).forEach((ln, i) => uiText(ctx, ln, RW.x + 280, RW.y + 60 + i * 14, { color: '#000' }));
           for (const b of [...recArrows, recChoice]) b.draw(ctx, this.assets);
         },
       };
-      if (this.s.lastWorld === 0xFF && recs.length) rec = { i: 0 };
+      let autoOpened = false;
+      const syncRec = () => {
+        viewChoice.enabled = recs().length > 0;
+        for (const b of recArrows) b.enabled = recs().length > 1;
+        // opens by itself only when the last world is 0xFF
+        if (!autoOpened && this.s.lastWorld === 0xFF && recs().length) { autoOpened = true; rec = { i: 0 }; }
+      };
       // the Events balloon draws over the book frame
       const eventPanel = { frames: () => [], draw: (ctx) => { if (opened() && this.camY === this.camTarget) this.eventBalloon(ctx, world, win); } };
       const select = new WzSprite(WS.channel.chSelect, 0, 0, { loop: false }); // swirls in once per selection
       const layer = {
         // channel window buttons only exist once the scroll is open
         get buttons() {
+          syncLast(); syncRec();
           nav.vacBtn.enabled = !rec;
           const left = [rec ? viewAll : viewChoice, ...nav.buttons];
           if (rec) return [...recArrows, recChoice, ...left];
@@ -852,14 +1025,8 @@ export class LoginScene {
       const pick = async () => {
         if (sel < 0) return;
         const c = list.chars[sel];
-        let pic = '';
-        if (list.picFlag === 0) {
-          pic = await this.prompt('Register your PIC\nCreate a 6-16 character 2nd password to protect your characters.', { pattern: /^.{6,16}$/ });
-          if (pic === null) return;
-        } else if (list.picFlag === 1) {
-          pic = await this.prompt(`Enter your PIC\nEnter your 2nd password to play ${c.stats.name}.`);
-          if (pic === null) return;
-        }
+        const pic = await this.picFor(list.picFlag);
+        if (pic === null) return;
         const res = await this.s.selectChar(c.stats.id, pic);
         if (res.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
         if (res.code !== undefined) { await this.loginFailed({ reason: res.code }); return; }
@@ -886,7 +1053,7 @@ export class LoginScene {
         const c = list.chars[sel];
         if (list.picFlag !== 1) { await this.notice(NOTICE.NO_PIC, 'info'); return; }
         // the PIC first, then the question (Cygnus and Aran warn about their Cash items)
-        const pic = await this.prompt(`Delete ${c.stats.name}\nEnter your PIC to confirm.`);
+        const pic = await this.softKey();
         if (pic === null) return;
         const race = Math.floor(c.stats.job / 1000);
         if (!(await this.notice(race === 1 || race === 2 ? NOTICE.DELETE_CONFIRM_CASH : NOTICE.DELETE_CONFIRM, 'yesno'))) return;
@@ -1065,14 +1232,8 @@ export class LoginScene {
         busy = true;
         try {
           const c = chars[sel], picMode = this.account?.picMode;
-          let pic = '';
-          if (picMode === 0) {
-            pic = await this.prompt('Register your PIC\nCreate a 6-16 character 2nd password to protect your characters.', { pattern: /^.{6,16}$/ });
-            if (pic === null) return;
-          } else if (picMode === 1) {
-            pic = await this.prompt(`Enter your PIC\nEnter your 2nd password to play ${c.stats.name}.`);
-            if (pic === null) return;
-          }
+          const pic = await this.picFor(picMode);
+          if (pic === null) return;
           const r = await this.s.selectFromAll(c.stats.id, c.world, pic, picMode);
           if (r.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
           if (r.code !== undefined) { await this.loginFailed({ reason: r.code }); return; }
