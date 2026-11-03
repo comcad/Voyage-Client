@@ -68,6 +68,7 @@ export class GameMap {
   async createLife(kind, spawn) {
     const a = this.assets;
     let src = await a.json(`${kind}/${pad(spawn.id, 7)}.img`);
+    const hideName = !!Number(src?.info?.hideName);
     if (src?.info?.link) src = (await a.json(`${kind}/${pad(src.info.link, 7)}.img`)) || src;
     if (!src) return null;
     const strings = this.strings?.[kind];
@@ -75,7 +76,10 @@ export class GameMap {
     const fh = this.fh.get(spawn.fh) || this.fh.below(spawn.x, spawn.cy - 5, 60);
     const e = new Life(kind, spawn, src, name, fh, this.fh);
     if (kind === 'Npc' && src.info?.MapleTV) e.tv = mapleTV(await a.json('UI/MapleTV.img'), src.info);
-    if (kind === 'Npc') e.picks = npcPicks(src, strings?.[Number(spawn.id)]);
+    if (kind === 'Npc') {
+      e.picks = npcPicks(src, strings?.[Number(spawn.id)]);
+      e.hideName = hideName; e.func = strings?.[Number(spawn.id)]?.func || '';
+    }
     await a.preload(e.allFrames());
     return e;
   }
@@ -936,7 +940,10 @@ export class Life {
       if (scr) ctx.drawImage(scr, sx + s.x, sy + s.y);
     }
 
-    if (this.name && this.kind === 'Npc' && !Number(this.src.info?.hideName)) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
+    if (this.name && this.kind === 'Npc' && !this.hideName) {
+      const { h } = nameTag(ctx, this.name, sx, sy + 4, '#ff0');
+      if (this.func) nameTag(ctx, this.func, sx, sy + 4 + h + 1, '#ff0');
+    }
   }
 
   /** Bounding box of the current frame in world space. */
@@ -964,33 +971,54 @@ export class Life {
   }
 }
 
+const TAG_FONT = '12px Arial';
+const argb = (clr) => `#${((Number(clr) >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+
 /**
- * A label ring's name tag, from UI/NameTag.img/<n>: its left end (w), its middle (c) repeated under the text to a
- * whole number of tiles, its right end (e), the text in its clr. False while there is no art for it (yet).
+ * A plain tag centred on x with its top at y: a dark box (1px cut corners), the text 2px in. icon: room left of the box
+ * for an icon; white: the White Label Ring look. Returns the whole tag's left and height.
  */
-export function labelTag(ctx, assets, N, text, x, y) {
-  const w = assets.image(N?.w), c = assets.image(N?.c), e = assets.image(N?.e);
-  if (!w || !c || !e) return false;
-  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
-  const tw = Math.max(1, Math.ceil(ctx.measureText(text).width / c.width)) * c.width, x0 = Math.round(x - tw / 2), top = y + 4;
-  const oy = (n) => n.origin?.[1] ?? 0;
-  ctx.drawImage(w, x0 - (N.w.origin?.[0] ?? w.width), top - oy(N.w));
-  for (let cx = 0; cx < tw; cx += c.width) ctx.drawImage(c, x0 + cx, top - oy(N.c));
-  ctx.drawImage(e, x0 + tw - (N.e.origin?.[0] ?? 0), top - oy(N.e));
-  ctx.fillStyle = `#${((Number(N.clr) >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ctx.fillText(text, x, y + 2);
-  return true;
+export function nameTag(ctx, text, x, y, color = '#fff', { icon = 0, white = false } = {}) {
+  x = Math.round(x); y = Math.round(y);
+  ctx.font = white ? `bold ${TAG_FONT}` : TAG_FONT;
+  const w = Math.ceil(ctx.measureText(text).width) + 5, h = 16, left = x - Math.floor((w + icon) / 2), bx = left + icon;
+  if (white) {
+    ctx.fillStyle = '#2c80ad';
+    ctx.fillRect(bx, y, w, 1); ctx.fillRect(bx, y + h - 1, w, 1); ctx.fillRect(bx, y + 1, 1, h - 2); ctx.fillRect(bx + w - 1, y + 1, 1, h - 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.698)';
+    ctx.fillRect(bx + 1, y + 1, w - 2, h - 2);
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,0.627)';
+    ctx.fillRect(bx + 1, y, w - 2, 1); ctx.fillRect(bx, y + 1, w, h - 2); ctx.fillRect(bx + 1, y + h - 1, w - 2, 1);
+  }
+  ctx.fillStyle = white ? '#000' : color;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, bx + 2, y + 11);
+  return { left, h };
 }
 
-export function nameTag(ctx, text, x, y, color = '#fff') {
-  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
-  const w = ctx.measureText(text).width + 8;
-  ctx.fillStyle = 'rgba(0,0,0,0.65)';
-  ctx.fillRect(Math.round(x - w / 2), y, Math.round(w), 16);
-  ctx.fillStyle = color;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  ctx.fillText(text, x, y + 2);
+/**
+ * A tag from UI/NameTag.img art (w, c tiled under the text, e, text in clr) centred on x with its top at y.
+ * Returns its height, 0 while its art is loading, -1 when there is no art.
+ */
+export function artTag(ctx, assets, N, text, x, y, font = TAG_FONT) {
+  if (!N?.w || !N?.c || !N?.e) return -1;
+  const w = assets.image(N.w), c = assets.image(N.c), e = assets.image(N.e);
+  if (!w || !c || !e) return 0;
+  x = Math.round(x); y = Math.round(y);
+  ctx.font = font;
+  const tw = Math.ceil(ctx.measureText(text).width), mid = Math.max(1, Math.ceil(tw / c.width)) * c.width;
+  const ox = (n, d) => n.origin?.[0] ?? d, oy = (n) => n.origin?.[1] ?? 0, wo = ox(N.w, w.width);
+  const cy = Math.max(oy(N.w), oy(N.c), oy(N.e));
+  const h = cy + Math.max(w.height - oy(N.w), c.height - oy(N.c), e.height - oy(N.e));
+  const left = x - Math.floor((wo + mid + e.width - ox(N.e, 0)) / 2);
+  ctx.drawImage(w, left, y + cy - oy(N.w));
+  for (let k = 0; k < mid; k += c.width) ctx.drawImage(c, left + wo + k, y + cy - oy(N.c));
+  ctx.drawImage(e, left + wo + mid - ox(N.e, 0), y + cy - oy(N.e));
+  ctx.fillStyle = argb(N.clr);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, left + wo + Math.floor((mid - tw) / 2), y + cy - 2 + 11);
+  return h;
 }
 
 export { PHYS };

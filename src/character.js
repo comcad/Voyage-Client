@@ -69,7 +69,10 @@ export class CharacterLook {
     // poses, which every skin has, so another skin takes them from there and draws them in its own colour
     if (base && this.body) this.body = { ...base, ...this.body };
     const load = (id) => equipPath(id) && a.json(equipPath(id));
-    const ids = [...this.equipIds], eq = await Promise.all(ids.map(load));
+    const ids = [...this.equipIds], medal = ids.find((id) => Math.floor(id / 10000) === 114) || 0;
+    const [eq, medalInfo] = await Promise.all([Promise.all(ids.map(load)), medal && a.json(`Character/Accessory/${pad(medal, 8)}.img`)]);
+    // the medal worn, and its tag art (UI/NameTag.img/medal/<medalTag>)
+    this.medal = medal; this.medalTag = Number(medalInfo?.info?.medalTag) || 0;
     // the top and pants shown: an overall over pants hides them, unless the overall is a normal one and the pants
     // are cash - then the pants show with the undershirt; nothing on top / bottom shows the Blue-Striped Undershirt /
     // Boxers (when the gender is known)

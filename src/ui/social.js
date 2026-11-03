@@ -240,11 +240,11 @@ export function drawEmblem(ctx, game, e, x, y) {
   if (mark) ctx.drawImage(mark, x + 1, y + 1);
   return true;
 }
-/** The guild name tag under a character's name, its emblem just left of it. */
+/** The guild name tag under a character's name, with an 18px strip on its left for the emblem; returns its height. */
 export function drawGuildTag(ctx, game, name, emblem, x, y) {
-  nameTag(ctx, name, x, y, '#fff2a8');
-  const w = ctx.measureText(name).width + 8;               // nameTag left its font set
-  drawEmblem(ctx, game, emblem, Math.round(x - w / 2 - 19), y - 1);
+  const { left, h } = nameTag(ctx, name, x, y, '#fff', { icon: emblem && (emblem.bg || emblem.logo) ? 18 : 0 });
+  drawEmblem(ctx, game, emblem, left, y - 1);
+  return h;
 }
 
 /** Party HP bars (Party/PartyHP/GaugeBar) over party members on this map. */
