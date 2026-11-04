@@ -6,50 +6,13 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
-import * as esbuild from 'esbuild';
-import pkg from 'javascript-obfuscator';
-const JavaScriptObfuscator = pkg.default || pkg;
+import { build as buildClient } from './build.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ==========================================
-// ENABLE/DISABLE MINIFY AND OBFUSCATION
-// ==========================================
-const ENABLE_OBFUSCATION = false;
-
-// Automatically bundle (and optionally obfuscate) client scripts on every server boot
+// Build the client bundle on boot (respects OBFUSCATE). Fail-fast on error.
 try {
-  console.log('Building client bundle with esbuild...');
-  
-  await esbuild.build({
-    entryPoints: [path.join(__dirname, 'src/main.js')],
-    bundle: true,
-    minify: ENABLE_OBFUSCATION,
-    sourcemap: false, // Keep sourcemaps helpful if obfuscation is off
-    outfile: path.join(__dirname, 'public/Voyage.js'),
-  });
-
-  const bundlePath = path.join(__dirname, 'public/Voyage.js');
-  const bundledCode = fs.readFileSync(bundlePath, 'utf8');
-  console.log(`Bundle loaded (${(bundledCode.length / 1024).toFixed(2)} KB).`);
-
-  if (ENABLE_OBFUSCATION) {
-    console.log('Running JavaScript obfuscator...');
-    const obfuscatedResult = JavaScriptObfuscator.obfuscate(bundledCode, {
-      compact: true,
-      controlFlowFlattening: false,
-      stringArray: true,
-      stringArrayEncoding: ['base64'],
-      stringArrayThreshold: 0.75,
-      transformObjectKeys: true,
-      unicodeEscapeSequence: false,
-    });
-
-    fs.writeFileSync(bundlePath, obfuscatedResult.getObfuscatedCode(), 'utf8');
-    console.log('Client bundle generated and heavily obfuscated successfully!');
-  } else {
-    console.log('Obfuscation skipped (ENABLE_OBFUSCATION is false).');
-  }
+  await buildClient();
 } catch (err) {
   console.error('CRITICAL BUILD ERROR:', err);
 }

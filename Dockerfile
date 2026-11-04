@@ -10,10 +10,11 @@ RUN npm ci --omit=dev
 # Copy the client source
 COPY . .
 
-# Fail fast if the client bundle can't be built (mirrors server.js's startup
-# build). Note: `npm run build` swallows errors (`|| echo 'BUILD FAILED'`),
-# so we call esbuild directly to make a broken bundle fail the image build.
-RUN npx esbuild src/main.js --bundle --outfile=public/Voyage.js
+# Build the client bundle (respects OBFUSCATE). Fails the image build if the
+# bundle can't be built. OBFUSCATE=1 (or true/yes/on) minifies + obfuscates.
+ARG OBFUSCATE=0
+ENV OBFUSCATE=$OBFUSCATE
+RUN node build.mjs
 
 # The server listens on 3000 by default (overridable via PORT)
 EXPOSE 3000

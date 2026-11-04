@@ -5,6 +5,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # One shell var drives both the image build AND runtime:
+      #   OBFUSCATE=1 docker compose up --build
+      args:
+        OBFUSCATE: ${OBFUSCATE:-0}
     image: voyage-client:latest
     container_name: voyage-client
     # host networking so the container reaches the Cosmic server on the LAN
@@ -15,6 +19,8 @@ services:
       # name=host pairs, comma-separated. First is the default.
       COSMIC_SERVERS: "cosmic=192.168.2.2"
       ASSETS_DIR: /app/assets
+      # Set to 1 (or true/yes/on) to minify + obfuscate the client bundle. Off by default.
+      OBFUSCATE: ${OBFUSCATE:-0}
     volumes:
       # The extracted WZ assets (JSON + PNG). 5.6G, kept out of the image.
       - ./assets:/app/assets:ro
