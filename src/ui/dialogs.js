@@ -106,7 +106,10 @@ export class NpcDialog extends Win {
     this.layout = richText(scratch(), this.words, DLG.wrap - 2 * m, textRef(this.mgr), NPC_TEXT);
     this.laidOut = this.mgr.namesVersion;
     this.opts = [...new Set(this.layout.lines.filter((l) => l.opt !== null && l.opt !== undefined).map((l) => l.opt))];
-    this.chars = this.layout.lines.reduce((n, l) => n + (l.opt !== null && l.opt !== undefined ? 0 : l.runs.reduce((k, r) => k + (r.t ? r.t.length : 0), 0)), 0);
+    // only the words before the first picture type out: from a picture on (a quest's REWARD block) it shows at once
+    const pic = this.layout.lines.findIndex((l) => l.runs.some((r) => r.img));
+    this.typedLines = pic < 0 ? this.layout.lines.length : pic;
+    this.chars = this.layout.lines.slice(0, this.typedLines).reduce((n, l) => n + (l.opt !== null && l.opt !== undefined ? 0 : l.runs.reduce((k, r) => k + (r.t ? r.t.length : 0), 0)), 0);
     let textH = m + this.layout.height + m + (this.menu ? 24 : 0) + (d.type === 0 && (d.prev || d.next) ? 18 : 0) + (this.field ? 26 : 0);
     this.textH = textH;
     this.scrolls = textH > DLG.maxBody && textH - DLG.maxBody > 8;
@@ -230,7 +233,7 @@ export class NpcDialog extends Win {
     const m = this.mgr, im = (n) => m.image(n);
     let left = this.typed;
     const all = this.typed >= this.chars;
-    for (const l of this.layout.lines) {
+    this.layout.lines.forEach((l, li) => {
       const opt = l.opt !== null && l.opt !== undefined, ly = y + l.y + (opt ? 10 : 0), bottom = ly + l.h - 2;
       if (opt && l.x0) {
         const on = this.opts.indexOf(l.opt) === this.sel || l.opt === this.hoverOpt;
@@ -249,11 +252,11 @@ export class NpcDialog extends Win {
         if (r.img) { const i = im(r.img); if (i) ctx.drawImage(i, x + r.x, bottom - i.height); continue; }
         if (r.icon) { m.drawIcon(ctx, r.icon, x + r.x, bottom - 32); continue; }
         let t = r.t;
-        if (!opt && !all) { if (left <= 0) continue; if (t.length > left) t = t.slice(0, left); left -= r.t.length; }
+        if (!opt && !all && li < this.typedLines) { if (left <= 0) continue; if (t.length > left) t = t.slice(0, left); left -= r.t.length; }
         // on a whole-pixel baseline: a 'top' baseline lands glyph edges between pixels and greys out their tops
         uiText(ctx, t, Math.round(x + r.x), bottom - 4, { color: r.color, bold: r.bold, size: NPC_TEXT.size, base: 'alphabetic' });
       }
-    }
+    });
   }
   optAt(lx, ly) {
     const px = lx - this.textX - DLG.margin, py = ly - this.textY - DLG.margin + this.scroll * 8;
@@ -445,6 +448,7 @@ export class MessageBox extends Win {
  * BtCancel2 at 205, 30px off the bottom. 'okcancel': the lines centred, 14px apart, over at least two body tiles; 'okcancelLeft':
  * the lines as given (leading spaces kept), left-aligned at x 19 from y 24.
  * 'quantity': the prompt at the top left and a white 226x15 field 73px off the bottom.
+ * 'whisper': the same with a ComboBox whose list holds the names you whispered.
  */
 export class UtilBox extends Win {
   constructor(mgr, kind, text, done, opts = {}) {
@@ -454,7 +458,7 @@ export class UtilBox extends Win {
     this.lines = kind === 'okcancelLeft' ? text.split('\n') : wrapText(scratch(), text, 234, 12);
     const n = this.lines.length;
     this.tiles = Math.max(2, Math.floor((n * 14) / 20) + 1);
-    this.w = 266; this.h = kind === 'quantity' ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
+    this.w = 266; this.h = kind === 'quantity' || kind === 'whisper' ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
     this.x = 267; this.y = (600 - this.h) >> 1;
     this.button(mgr.B.BtOK2, 155, this.h - 30, () => this.finish(true));
     this.button(mgr.B.BtCancel2, 205, this.h - 30, () => this.finish(false));
@@ -462,11 +466,17 @@ export class UtilBox extends Win {
       this.field = overlayField(mgr, 226, { max: 10, color: '#000' });
       this.field.rect.h = 15; this.field.value = String(opts.def ?? 1);
     }
+    if (kind === 'whisper') {
+      this.field = overlayField(mgr, 205, { max: 13, color: '#000' });
+      this.field.rect.h = 15; this.field.value = opts.def || '';
+      this.names = opts.names || []; this.listOpen = false;
+    }
   }
-  frames() { return [...allCanvases(this.mgr.B.YesNo3), ...super.frames()]; }
+  frames() { return [...allCanvases(this.mgr.B.YesNo3), ...allCanvases(this.mgr.B.ComboBox?.normal), ...super.frames()]; }
   finish(ok) {
     if (this.answered) return;
     this.answered = true; this.field?.remove(); this.mgr.close(this);
+    if (this.kind === 'whisper') { this.done(ok && this.field.value.trim() ? this.field.value.trim() : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
     const v = Math.floor(Number(this.field.value));
     this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
@@ -480,19 +490,49 @@ export class UtilBox extends Win {
     ctx.drawImage(s, 0, this.h - 55);
     const line = (str, x, y, align) => uiText(ctx, str, x, y + 11, { color: '#fff', size: 12, base: 'alphabetic', align });
     if (this.kind === 'okcancelLeft') { this.lines.forEach((l, i) => line(l, 19, 24 + i * 14, 'left')); return; }
-    if (this.kind !== 'quantity') {
+    if (this.kind !== 'quantity' && this.kind !== 'whisper') {
       const top = (this.tiles * 20 - this.lines.length * 14) / 2 + 24;
       this.lines.forEach((l, i) => line(l, 132, top + i * 14, 'center'));
       return;
     }
     this.lines.forEach((l, i) => line(l, 19, 28 + i * 14, 'left'));
     const fy = this.h - 73;
-    ctx.fillStyle = '#000'; ctx.fillRect(18, fy - 1, 228, 17);
-    ctx.fillStyle = '#fff'; ctx.fillRect(19, fy, 226, 15);
-    placeField(m, this.field, this.x + 19, this.y + fy);
+    if (this.kind === 'whisper') this.drawCombo(ctx);
+    else {
+      ctx.fillStyle = '#000'; ctx.fillRect(18, fy - 1, 228, 17);
+      ctx.fillStyle = '#fff'; ctx.fillRect(19, fy, 226, 15);
+    }
+    placeField(m, this.field, this.x + (this.kind === 'whisper' ? 21 : 19), this.y + fy);
     if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
   }
 }
+
+/** UtilBox 'whisper': Basic.img/ComboBox (left, tiled middle, the arrow on the right) and its list of names. */
+UtilBox.prototype.comboRect = function comboRect() { return { x: 18, y: this.h - 74, w: 228, h: 17 }; };
+UtilBox.prototype.drawCombo = function drawCombo(ctx) {
+  const m = this.mgr, C = m.B.ComboBox?.normal, r = this.comboRect();
+  const l = m.image(C?.[0]), c = m.image(C?.[1]), e = m.image(C?.[2]);
+  if (l && c && e) { ctx.drawImage(l, r.x, r.y); ctx.drawImage(c, r.x + l.width, r.y, r.w - l.width - e.width, r.h); ctx.drawImage(e, r.x + r.w - e.width, r.y); }
+  else { ctx.fillStyle = '#fff'; ctx.fillRect(r.x, r.y, r.w, r.h); }
+  if (!this.listOpen || !this.names.length) return;
+  const hover = this.rowAt(m.mouse.x - this.x, m.mouse.y - this.y);
+  this.names.forEach((n, i) => {
+    const y = r.y + r.h + i * 15;
+    ctx.fillStyle = i === hover ? '#d4e6ff' : '#fff'; ctx.fillRect(r.x, y, r.w, 15);
+    uiText(ctx, n, r.x + 4, y + 2, { color: '#000', size: 12 });
+  });
+  ctx.strokeStyle = '#7d8a96'; ctx.strokeRect(r.x + 0.5, r.y + r.h + 0.5, r.w - 1, this.names.length * 15 - 1);
+};
+UtilBox.prototype.rowAt = function rowAt(lx, ly) {
+  const r = this.comboRect(), i = Math.floor((ly - r.y - r.h) / 15);
+  return this.listOpen && lx >= r.x && lx < r.x + r.w && i >= 0 && i < this.names.length ? i : -1;
+};
+UtilBox.prototype.down = function down(lx, ly) {
+  if (this.kind !== 'whisper') return;
+  const r = this.comboRect(), row = this.rowAt(lx, ly);
+  if (row >= 0) { this.field.value = this.names[row]; this.listOpen = false; this.field.focus(); return; }
+  this.listOpen = lx >= r.x + r.w - 18 && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h ? !this.listOpen : false;
+};
 
 // ==================================================================== shop
 /**

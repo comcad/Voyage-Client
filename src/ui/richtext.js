@@ -19,7 +19,7 @@ export const LIGHT_COLORS = { b: '#9fd6ff', r: '#ff9a9a', g: '#a6f08a', d: '#e2b
 export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0, imgPad = null, boldE = true } = {}) {
   const palette = { ...COLORS, ...colors };
   const tokens = String(text).replace(/\\r\\n|\\n/g, '\n').replace(/\\r/g, '').replace(/\r\n|\r/g, '\n')
-    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#[tzopmcivsqLB@](?:\d+:?#)?|#[a-zA-Z@]|\n)/);
+    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#h[^#\n]{0,3}#|#[tzopmcivsqLB@](?:\d+:?#)?|#[a-zA-Z@]|\n)/);
   const lines = [];
   let line = null, color = base, bold = false, opt = null, x = 0;
   const newLine = () => { line = { runs: [], opt, h: lineH, x0: opt !== null ? bullet : 0 }; lines.push(line); x = line.x0; };
@@ -57,6 +57,7 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
     if (tk === '\n') { newLine(); continue; }
     if (tk.length > 3 && /^#[fF]/.test(tk) && tk.endsWith('#') && tk.includes('/')) { image(ref.image?.(tk.slice(2, -1))); continue; }
     if (/^#W[a-zA-Z]+#$/.test(tk)) { image(ref.image?.(tk.slice(2, -1))); continue; }   // a quest heading (Quest/summary, reward, prob)
+    if (/^#h[^#\n]{0,3}#$/.test(tk)) { put(ref.player); continue; }   // the player's name, as #h0# or #h #
     const m = tk.match(/^#([a-zA-Z@])(\d+)?:?#?$/);
     if (!m) { put(tk); continue; }
     const [, code, num] = m, id = Number(num);

@@ -1,10 +1,14 @@
-import { itemName } from '../data.js';
+import { itemName, itemDesc, invType } from '../data.js';
+
+const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' };
 import { mapPath } from '../map.js';
 import { uiText } from './wzui.js';
+import { CHAT_COLOR, CHAT_BAR } from './statusbar.js';
 
 const GAIN_LIFE = 5, GAIN_FADE = 1, GAIN_MAX = 7, GAIN_LINE = 16, BANNER_SPEED = 70;
 
-const NOTICE_COLORS = { 0: '#ffe08a', 1: '#ffe08a', 5: '#ff9ed6', 6: '#9fd3ff', group: '#ffb36b', exp: '#fff', meso: '#fff', item: '#fff', fame: '#fff' };
+// server notices: 0 '[Notice] ' in light blue, 5 light red, 6 light blue
+const NOTICE_COLORS = { 0: CHAT_COLOR.notice, 5: CHAT_COLOR.error, 6: CHAT_COLOR.notice };
 
 /** In-game HTML interface layered over the canvas. */
 export class Hud {
@@ -68,33 +72,64 @@ export class Hud {
     const { type, msg } = n;
     if (type === 1) { this.game.windows.serverNotice(msg); return; }      // the server's pop-up: the metal plate
     if (type === 4) { this.banner(msg); return; }                         // the scrolling notice along the top
-    if (type === 2) { this.megaphone([msg], { bg: 'rgba(46, 92, 170, 0.9)' }); return; }   // Megaphone: this channel
-    if (type === 3 || type === 8 || type === 10) {                                          // Super / Item / Triple: the world
+    if (type === 2) { this.megaphone([msg], CHAT_BAR.mega); return; }   // Megaphone: this channel
+    if (type === 3 || type === 8 || type === 10) {                       // Super / Item / Triple: the world
       const lines = n.lines || [type === 8 && n.item ? `${msg} [${this.game.windows.itemName(n.item.id) || 'item'}]` : msg];
-      this.megaphone(lines, { bg: 'rgba(210, 46, 120, 0.9)', channel: n.channel, ear: n.ear });
+      this.megaphone(lines, { ...(type === 8 ? CHAT_BAR.itemMega : CHAT_BAR.superMega), channel: n.channel, ear: n.ear });
       return;
     }
-    this.message(msg, NOTICE_COLORS[type] || '#ffe08a');
+    this.message(type === 0 ? `[Notice] ${msg}` : msg, NOTICE_COLORS[type] || CHAT_COLOR.notice);
   }
   /**
-   * Megaphone lines: white on their bar, the world ones led by the CH tag and channel number
+   * Megaphone lines: their colour on their bar, the world ones led by the CH tag and channel number
    * (UIWindow.img/Megaphone/ch0) and, when the sender allows whispers, the ear (Megaphone/0).
    */
-  megaphone(lines, { bg, channel, ear }) {
+  megaphone(lines, { color = '#fff', bg, channel, ear }) {
     const M = this.game.windows.W.Megaphone, icons = [];
     if (channel) icons.push(M?.ch0, { text: String(channel) });
     if (ear) icons.push(M?.[0]);
     this.assets.preload([M?.ch0, M?.[0]].filter(Boolean));
-    lines.forEach((l, i) => this.game.statusBar?.message(l, '#fff', { bg, icons: i === 0 ? icons.filter(Boolean) : null }));
+    lines.forEach((l, i) => this.game.statusBar?.message(l, color, { bg, icons: i === 0 ? icons.filter(Boolean) : null }));
   }
 
+  /**
+   * SHOW_STATUS_INFO lines. A monster's EXP and pick-ups go to the lower-right list (with the EXP's bonus lines);
+   * a quest's EXP, fame, quest mesos, Guild Points and item messages are grey log lines; expiries light red.
+   */
   async status(s) {
-    if (s.type === 'exp') this.gain(`You have gained experience (+${s.amount})`, s.white ? '#fff' : '#ffef9a');
-    else if (s.type === 'meso') this.gain(s.amount < 0 ? `You have lost mesos (${s.amount})` : `You have gained mesos (+${s.amount})`);
-    else if (s.type === 'fame') this.gain(`You have gained fame (+${s.amount})`);
+    const grey = (t) => this.message(t, CHAT_COLOR.grey), red = (t) => this.message(t, CHAT_COLOR.error);
+    if (s.type === 'exp') {
+      const line = `You have gained experience (+${s.amount})`;
+      if (s.inChat) { grey(line); return; }
+      this.gain(line, s.white ? '#fff' : '#ffef9a');
+      const b = s.bonus || {}, extra = [
+        [b.equip, `Equip Item Bonus EXP (+${b.equip})`], [b.wedding, `Bonus Wedding EXP (+${b.wedding})`],
+        [b.party, b.partyRate > 0 ? `Bonus Event Party EXP (+${b.party}) x${b.partyRate / 100}` : `Bonus EXP for PARTY (+${b.party})`],
+        [b.cafe, `Internet Cafe EXP Bonus (+${b.cafe})`], [b.event, `Bonus Event EXP (+${b.event})`], [b.rainbow, `Rainbow Week Bonus EXP (+${b.rainbow})`],
+      ];
+      for (const [v, t] of extra) if (v > 0) this.gain(t, '#ffef9a');
+    } else if (s.type === 'meso') {
+      if (s.inChat) { grey(s.amount < 0 ? `You have lost mesos. (${s.amount})` : `You have gained mesos (+${s.amount})`); return; }
+      this.gain(s.amount < 0 ? `You have lost mesos (${s.amount})` : `You have gained mesos (+${s.amount})`);
+      if (s.lost) this.message('A portion was not found after falling on the ground.', CHAT_COLOR.yellow);
+      if (s.bonus) this.gain(`Internet Cafe Meso Bonus (+${s.bonus})`);
+    } else if (s.type === 'text') {
+      if (s.text === 'You cannot acquire any items.') red(s.text); else this.gain(s.text);
+    } else if (s.type === 'fame') grey(s.amount < 0 ? `You have lost fame (${s.amount})` : `You have gained fame. (+${s.amount})`);
+    else if (s.type === 'gp') grey(s.amount < 0 ? `You have lost Guild Points (${s.amount})` : `You have earned Guild Points (+${s.amount})`);
+    else if (s.type === 'itemMsg') { const d = await itemDesc(this.assets, s.id); if (d) grey(d); }
+    else if (s.type === 'expired' || s.type === 'sealExpired' || s.type === 'timeLimit') {
+      for (const id of s.ids) {
+        const name = await itemName(this.assets, id);
+        red(s.type === 'sealExpired' ? `${name}'s seal has expired.` : s.type === 'timeLimit' ? `${name} has disappeared as the time limit has passed.`
+          : s.cash ? `[${name}] has passed its expiration date and will be removed from your inventory.` : `The item [${name}] has been expired, and therefore, deleted from your inventory.`);
+      }
+    }
     else if (s.type === 'item') {
       const name = await itemName(this.assets, s.id);
-      this.gain(s.qty < 0 ? `You have lost an item (${name}${s.qty < -1 ? ` x${-s.qty}` : ''})` : `You have gained an item (${name}${s.qty > 1 ? ` x${s.qty}` : ''})`);
+      const tab = TAB_NAMES[invType(s.id)] || '';
+      if (s.qty < 0) this.gain(s.qty < -1 ? `You have lost items (${name} ${-s.qty})` : `You have lost an item (${name})`);
+      else if (name) this.gain(s.qty < 2 ? `You have gained an item in the ${tab} tab (${name})` : `You have gained items in the ${tab} tab (${name} ${s.qty})`);
     }
   }
 

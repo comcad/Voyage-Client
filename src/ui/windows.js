@@ -152,7 +152,7 @@ export class WindowManager {
       const d = this.drag;
       d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(800 - 40, x - d.dx)));
       d.win.y = Math.round(Math.max(0, Math.min(600 - 40, y - d.dy)));
-      if (type === 'up') this.drag = null;
+      if (type === 'up') { this.drag = null; d.win.dragged?.(); }
       return true;
     }
     const modal = this.modal;
@@ -373,7 +373,8 @@ class InventoryWin extends Win {
       const it = items[slot];
       if (!it || (m.carry?.slot === slot && m.carry.tab === this.tab)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
-      if (this.tab !== 1 && it.quantity > 1) m.count(ctx, it.quantity, x, y + 21);
+      // Use, Set-up and Etc items show their count even at 1; Cash ones only when stacked
+      if (this.tab !== 1 && (it.quantity > 1 || (this.tab !== 5 && it.quantity >= 1))) m.count(ctx, it.quantity, x, y + 21);
     }
     this.scrollbar(ctx, 156, 51, 201, this.first, this.rows, 6);
     this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 135, 268, { align: 'right' });
@@ -672,6 +673,11 @@ const MACRO_W = 207, MACRO_ROWS = 3;
 const emptyMacro = () => ({ name: '', shout: false, skills: [0, 0, 0] });
 const GM_TAB = 'gm';
 
+const SKILL_GUIDE = [
+  { box: { x: -162, y: -2, w: 158, h: 77 }, arrow: 'seArrow', tip: [11, 103], lines: ['Place the mouse cursor', 'over the skill icon', 'for details about', 'a specific skill.'] },
+  { box: { x: 159, y: 20, w: 115, h: 80 }, arrow: 'swArrow', tip: [143, 125], lines: ['Click on the', 'button to assign', 'the SP and raise', 'the skill level.'] },
+  { box: { x: -59, y: 300, w: 139, h: 80 }, arrow: 'neArrow', tip: [106, 280], lines: ['You may raise', 'your skill levels', 'by assigning the SP', 'you have on the skills.'] },
+];
 class SkillWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Skill;
@@ -758,7 +764,40 @@ class SkillWin extends Win {
     if (hit.row !== this.mSel) { this.mSel = hit.row; if (this.nameField) this.nameField.value = this.draft[hit.row].name; }
     if (hit.icon) this.mgr.startCarry({ kind: 'bind', b: { type: 8, action: hit.row } }, this.M.Macroicon?.[hit.row]?.icon);
   }
-  onOpen() { const b = this.books; this.book ??= b[b.length - 1]; }
+  onOpen() { const b = this.books; this.book ??= b[b.length - 1]; this.guide = false; }
+
+  /**
+   * Reaching level 2 opens the window with three WorldNotice/Balloon guides, their tails ending at the first skill's
+   * icon (11, 103), its + button (143, 125) and the SKILL POINT box (106, 280); the boxes sit where the client puts
+   * them (measured).
+   */
+  draw(ctx) {
+    super.draw(ctx);
+    if (!this.guide) return;
+    const B = this.mgr.game.loginUi?.WorldNotice?.Balloon;
+    if (!B) return;
+    ctx.save(); ctx.translate(this.x, this.y);
+    for (const g of SKILL_GUIDE) this.guideBalloon(ctx, B, g);
+    ctx.restore();
+  }
+  guideBalloon(ctx, B, g) {
+    const im = (k) => this.mgr.image(B[k]);
+    const [nw, ne, sw, se] = ['nw', 'ne', 'sw', 'se'].map(im);
+    if (!nw || !ne || !sw || !se) return;
+    const { x, y, w, h } = g.box, l = nw.width, t = nw.height, r = ne.width, b = sw.height;
+    const put = (k, dx, dy, dw, dh) => { const i = im(k); if (i && dw > 0 && dh > 0) ctx.drawImage(i, x + dx, y + dy, dw, dh); };
+    put('c', l, t, w - l - r, h - t - b);
+    put('n', l, 0, w - l - r, t); put('s', l, h - b, w - l - r, b);
+    put('w', 0, t, l, h - t - b); put('e', w - r, t, r, h - t - b);
+    ctx.drawImage(nw, x, y); ctx.drawImage(ne, x + w - r, y); ctx.drawImage(sw, x, y + h - b); ctx.drawImage(se, x + w - r, y + h - b);
+    // the tail runs from the box to its tip: seArrow's tip is its bottom right, swArrow's bottom left, neArrow's top right
+    const arrow = im(g.arrow);
+    if (arrow) {
+      const ax = g.arrow === 'swArrow' ? g.tip[0] : g.tip[0] - arrow.width + 1, ay = g.arrow === 'neArrow' ? g.tip[1] : g.tip[1] - arrow.height + 1;
+      ctx.drawImage(arrow, ax, ay);
+    }
+    g.lines.forEach((ln, i) => uiText(ctx, ln, x + w / 2, y + Math.round((h - g.lines.length * 15) / 2) + i * 15, { color: '#000', size: 12, align: 'center' }));
+  }
   /**
    * Your job's books, then for a GM (or anyone with a GM skill) one more tab, GM, holding the GM and Super GM
    * books (900 / 910) together. There is no v83 label art for it, so its label is drawn as text.
@@ -1225,120 +1264,192 @@ class QuestWin extends Win {
 
 // ==================================================================== Minimap
 /**
- * MiniMap frame: a 9-slice in three styles - MaxMap (72px header: title strip, then a blue band with
- * the map mark and street / map names), MinMap (29px header, title only) and Min (a 20px bar).
- * The map picture is the map itself - every layer's tiles and objects, no backgrounds - shrunk onto a
- * dark navy ground (the game's own miniMap canvas carries a blurred sky). Markers are
- * Map/MapHelper.img/minimap sprites centred on their spot.
+ * MiniMap: three states - 0 MaxMap (72px header: title, street / map names, map mark), 1 MinMap (29px header, title
+ * only) and 2 Min (a 20px bar with both names). The picture is the map's own miniMap canvas at its size: a world
+ * point is at ((x + centerX) >> mag, (y + centerY) >> mag), the view at most 210 wide (past 279) and 112 tall (past
+ * 149), centred on you and stopped at the canvas edges. Markers (Map/MapHelper.img/minimap) stand bottom-centre on
+ * their point. A map with hideMinimap (not for GMs) or no miniMap node keeps the window as the Min bar with BtMin /
+ * BtMax disabled; the chosen state comes back on the next map. State and position are kept between sessions.
  */
-const MM_MODES = ['max', 'min', 'bar'];
-// The map is shrunk to fit the view's width, but never below MIN_SCALE: a bigger map shows through
-// the view centred on you (stopping at its edges). MAX_SCALE keeps small maps from blowing up.
-const MM_VIEW = { w: 220, h: 100 }, MM_MIN_SCALE = 1 / 10, MM_MAX_SCALE = 1 / 5, MM_GROUND = '#1b2741';
+const MM_KEY = 'maple.minimap';
 class MiniMapWin extends Win {
   constructor(mgr) {
-    super(mgr, null, 0, 0);
-    this.buttons = [];                         // no CLOSE tab: M toggles it, like the client
-    this.W = mgr.W.MiniMap; this.mode = 'max';
+    const saved = (() => { try { return JSON.parse(localStorage.getItem(MM_KEY)) || {}; } catch { return {}; } })();
+    super(mgr, null, Number.isFinite(saved.x) ? saved.x : 8, Number.isFinite(saved.y) ? saved.y : 8);
+    this.buttons = [];                         // no close box: the minimap key cycles its states
+    this.W = mgr.W.MiniMap;
+    this.state = [0, 1, 2].includes(saved.state) ? saved.state : 1;
+    this.dragH = 1e4;                          // dragged from anywhere that isn't a button
     const B = mgr.B;
-    this.minBtn = this.button(B.BtMin, 0, 6, () => { this.mode = MM_MODES[Math.min(2, MM_MODES.indexOf(this.mode) + 1)]; });
-    this.maxBtn = this.button(B.BtMax, 0, 6, () => { this.mode = MM_MODES[Math.max(0, MM_MODES.indexOf(this.mode) - 1)]; });
-    this.worldBtn = this.button(this.W.BtMap, 0, 0, () => mgr.toggle('worldmap'));
-    mgr.assets.json('Map/MapHelper.img').then((h) => { this.helper = h; mgr.assets.preload([...allCanvases(h?.minimap)]); });
+    this.minBtn = this.button(B.BtMin, 0, 6, () => this.setState(this.state + 1));
+    this.maxBtn = this.button(B.BtMax, 0, 6, () => this.setState(this.state - 1));
+    this.worldBtn = this.button(this.W.BtMap, 0, 6, () => this.openWorldMap());
+    mgr.assets.json('Map/MapHelper.img').then((h) => { this.helper = h; mgr.assets.preload([...allCanvases(h?.minimap), ...allCanvases(h?.mark)]); });
     mgr.assets.json('String/Map.img').then((s) => { this.strMap = s; });
+    mgr.assets.json('String/ToolTipHelp.img').then((s) => { this.tips = s?.PortalTooltip; });
   }
   frames() { return [this.W.title, ...allCanvases(this.W.MinMap), ...allCanvases(this.W.MaxMap), ...allCanvases(this.W.Min), ...this.buttons.flatMap((b) => b.frames())]; }
-  /** The shrunk map, drawn once per map (and again shortly after, for art that was still loading). */
-  picture() {
-    const map = this.g.map;
-    if (!map?.bounds) return null;
-    const p = this.pic, now = performance.now();
-    if (p?.map === map && (p.final || now - p.at < 1500)) return p;
-    const b = map.bounds, mw = b.right - b.left, mh = b.bottom - b.top;
-    const k = Math.min(MM_MAX_SCALE, Math.max(MM_MIN_SCALE, MM_VIEW.w / mw));
-    const c = p?.map === map ? p.canvas : document.createElement('canvas');
-    c.width = Math.ceil(mw * k); c.height = Math.ceil(mh * k);
-    const g = c.getContext('2d');
-    g.fillStyle = MM_GROUND; g.fillRect(0, 0, c.width, c.height);
-    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
-    g.setTransform(k, 0, 0, k, 0, 0);
-    for (let l = 0; l < map.layers.length; l++) map.drawLayer(g, { x: b.left, y: b.top }, l);
-    this.pic = { map, canvas: c, k, at: now, final: p?.map === map };
-    return this.pic;
+  save() { try { localStorage.setItem(MM_KEY, JSON.stringify({ x: this.x, y: this.y, state: this.state })); } catch { /* ignore */ } }
+  setState(st) { if (!this.available()) return; this.state = Math.max(0, Math.min(2, st)); this.save(); }
+  /** The minimap key: Max -> Min bar -> MinMap -> Max; nothing on a map without a minimap. */
+  cycle() { if (this.available()) { this.state = (this.state + 2) % 3; this.save(); } }
+  /** hideMinimap (not for GMs) or no miniMap node: no minimap here; ADMIN_RESULT 0x1C turns it off until the next map. */
+  available() {
+    const g = this.g, map = g.map;
+    if (!map?.data || g.minimapOff === map) return false;
+    if (!g.gm && Number(map.info?.hideMinimap)) return false;
+    if (!map.data.miniMap?.canvas) return false;
+    if (!g.gm && g.minimapFlag === 0 && Number(map.info?.miniMapOnOff)) return false;
+    return true;
   }
-  layout() {
-    const img = this.picture()?.canvas;
-    if (this.mode === 'bar') { this.w = 160; this.h = 20; } else {
-      const F = this.mode === 'max' ? this.W.MaxMap : this.W.MinMap;
-      const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
-      ctx.font = 'bold 13px Arial, sans-serif';
-      const n = this.names(), names = Math.max(ctx.measureText(n.mapName || '').width, ctx.measureText(n.streetName || '').width);
-      this.w = Math.ceil(Math.max(Math.min(img?.width || 120, MM_VIEW.w) + 12, 170, this.mode === 'max' ? 52 + names + 12 : 0));
-      this.h = F.nw._h + Math.min(img?.height || 60, MM_VIEW.h) + F.sw._h;
-    }
-    // the title bar, right to left: WORLD, + and - (the bar alone keeps just +)
-    this.minBtn.visible = this.mode !== 'bar'; this.maxBtn.visible = true;
-    this.worldBtn.visible = this.mode !== 'bar';
-    let bx = this.w - 6;
-    for (const b of [this.worldBtn, this.maxBtn, this.minBtn]) {
-      if (!b.visible) continue;
-      const bw = b.frames()[0]?._w || 12;
-      bx -= bw; b.x = bx; b.y = b === this.worldBtn ? 5 : 6; bx -= 2;
-    }
+  /** The miniMap canvas and its view size. */
+  view() {
+    const mm = this.g.map?.data?.miniMap, c = mm?.canvas;
+    if (!c?._canvas) return null;
+    const cw = c._w || 0, ch = c._h || 0;
+    return { mm, c, cw, ch, vw: cw > 279 ? 210 : cw, vh: ch > 149 ? 112 : ch, mag: Number(mm.mag) || 0, cx: Number(mm.centerX) || 0, cy: Number(mm.centerY) || 0, ww: Number(mm.width) || 0, wh: Number(mm.height) || 0 };
   }
-  draw(ctx) { this.layout(); super.draw(ctx); }
   names() {
     const id = this.g.map?.id;
     for (const r of Object.values(this.strMap || {})) if (r?.[id]) return r[id];
     return { mapName: this.g.map?.name || '', streetName: '' };
   }
-  body(ctx) {
-    const m = this.mgr, im = (n) => m.image(n);
-    if (this.mode === 'bar') {
-      const [w, c, e] = ['w', 'c', 'e'].map((k) => im(this.W.Min[k]));
-      if (w && c && e) { ctx.drawImage(w, 0, 0); ctx.drawImage(c, w.width, 0, this.w - w.width - e.width, 20); ctx.drawImage(e, this.w - e.width, 0); }
-      uiText(ctx, this.names().mapName || '', 10, 4, { color: '#fff', size: 11, bold: true });
+  mark() {
+    const m = this.g.map?.info?.mapMark;
+    return m && m !== 'None' ? this.helper?.mark?.[m] : null;
+  }
+  layout() {
+    const st = this.available() ? this.state : 2, v = this.view(), n = this.names();
+    this.shown = st;
+    const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
+    ctx.font = 'bold 12px Arial, sans-serif';
+    const streetW = Math.ceil(ctx.measureText(n.streetName || '').width), mapW = Math.ceil(ctx.measureText(n.mapName || '').width);
+    ctx.font = '12px Arial, sans-serif';
+    const barMapW = Math.ceil(ctx.measureText(n.mapName || '').width), barStreetW = Math.ceil(ctx.measureText(n.streetName || '').width);
+    const vw = v?.vw || 0, vh = v?.vh || 0, m = this.mark() ? 40 : 0;
+    if (st === 0) { this.w = Math.max(streetW + 5 + m, mapW + 5 + m, vw) + 12; this.w = Math.max(120, this.w); this.h = vh + 87; this.top = 72; }
+    else if (st === 1) { this.w = Math.max(vw + 12, 120); this.h = vh + 43; this.top = 29; }
+    else { this.barMapW = barMapW; this.w = barMapW + 5 + 80 + barStreetW + 5; this.h = 20; this.top = 0; }
+    this.left = Math.floor((this.w - vw) / 2);
+    const bar = st === 2;
+    this.minBtn.x = this.w - (bar ? 71 : 69); this.maxBtn.x = this.w - (bar ? 58 : 56); this.worldBtn.x = this.w - (bar ? 44 : 42);
+    for (const b of this.buttons) b.y = bar ? 4 : 6;
+    const on = this.available();
+    this.maxBtn.enabled = on && st !== 0; this.minBtn.enabled = on && st !== 2; this.worldBtn.enabled = true;
+  }
+  draw(ctx) { this.layout(); super.draw(ctx); }
+  dragged() { this.save(); }
+  /** BtMap: the world map that lists this map, or a notice when none does. */
+  async openWorldMap() {
+    const wm = this.mgr.wins.worldmap;
+    if (!this.mgr.order.includes(wm) && wm?.find && !(await wm.find(this.g.map?.id))) {
+      this.mgr.notice('You are currently at a place where\nthe world map is not available.');
       return;
     }
-    const F = this.mode === 'max' ? this.W.MaxMap : this.W.MinMap;
-    nineSlice(ctx, m, F, this.w, this.h);
-    const t = im(this.W.title);
-    if (t) ctx.drawImage(t, 9, 9);
-    const top = F.nw._h;
-    if (this.mode === 'max') {
-      const n = this.names(), mark = this.helper?.mark?.[this.g.map?.data?.info?.mapMark];
-      if (mark) { if (im(mark)) ctx.drawImage(im(mark), 8, 26); else m.assets.preload([mark]); }
-      // street and map name both bold white, outlined like the client's title text
-      uiText(ctx, n.streetName || '', 52, 28, { color: '#fff', size: 13, bold: true, outline: '#2b3a55' });
-      uiText(ctx, n.mapName || '', 52, 45, { color: '#fff', size: 13, bold: true, outline: '#2b3a55' });
+    this.mgr.toggle('worldmap');
+  }
+
+  /** Canvas pixel of a world point, and the scroll that centres the view on you (clamped to the canvas). */
+  scroll(v) {
+    const p = this.g.player, span = (n) => n << v.mag;
+    const sx = Math.max(-v.cx, Math.min(v.ww - v.cx - span(v.vw), p.x - span(v.vw) / 2));
+    const sy = Math.max(-v.cy, Math.min(v.wh - v.cy - span(v.vh), p.y - span(v.vh) / 2));
+    return { x: Math.max(0, (Math.trunc(sx) + v.cx) >> v.mag), y: Math.max(0, (Math.trunc(sy) + v.cy) >> v.mag) };
+  }
+  at(v, sc, wx, wy) { return { x: this.left + ((Math.trunc(wx) + v.cx) >> v.mag) - sc.x, y: this.top + ((Math.trunc(wy) + v.cy) >> v.mag) - sc.y }; }
+
+  body(ctx) {
+    const m = this.mgr, im = (n) => m.image(n), st = this.shown, n = this.names();
+    if (st === 2) {
+      const [w, c, e] = ['w', 'c', 'e'].map((k) => im(this.W.Min[k]));
+      if (w && c && e) { ctx.drawImage(w, 0, 0); ctx.drawImage(c, w.width, 0, this.w - w.width - e.width, 20); ctx.drawImage(e, this.w - e.width, 0); }
+      uiText(ctx, n.mapName || '', 6, 3, { color: '#000', size: 12 });
+      uiText(ctx, n.streetName || '', (this.barMapW || 0) + 12, 3, { color: '#000', size: 12 });
+      return;
     }
-    const pic = this.picture();
-    if (!pic) return;
-    const map = pic.canvas, k = pic.k, b = this.g.map.bounds, g = this.g;
-    // the visible part: centred on you, clamped to the map; a map smaller than the view is centred instead
-    const vw = Math.min(map.width, MM_VIEW.w), vh = Math.min(map.height, MM_VIEW.h);
-    const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(v)));
-    const vx = clamp((g.player.x - b.left) * k - vw / 2, map.width - vw);
-    const vy = clamp((g.player.y - 20 - b.top) * k - vh / 2, map.height - vh);
-    const ox = Math.round((this.w - vw) / 2);
+    const F = st === 0 ? this.W.MaxMap : this.W.MinMap, v = this.view();
+    // the map area is a see-through black (2/3), not the frame's light middle
     ctx.save();
-    ctx.beginPath(); ctx.rect(ox, top, vw, vh); ctx.clip();
-    ctx.drawImage(map, vx, vy, vw, vh, ox, top, vw, vh);
-    const H = this.helper?.minimap || {};
-    const mark = (node, wx, wy) => {
-      const s = im(node);
-      if (s) ctx.drawImage(s, Math.round(ox + (wx - b.left) * k - vx - s.width / 2), Math.round(top + (wy - b.top) * k - vy - s.height / 2));
-    };
-    const qctx = g.textCtx?.();
-    for (const p of g.map.portals) if (p.pt === 2) mark(H.portal, p.x, p.y);
-    for (const e of g.map.life) {
-      if (e.kind !== 'Npc') continue;
-      const q = g.quests && qctx ? g.quests.npcQuests(Number(e.spawn.id), qctx) : null;
-      mark(q?.complete?.length ? H.endnpc : q?.start?.length ? H.startnpc : H.npc, e.x, e.y - 10);
-    }
-    for (const o of g.others.values()) mark(H.another, o.x, o.y - 20);
-    mark(H.user, g.player.x, g.player.y - 20);
+    if (v) { ctx.beginPath(); ctx.rect(0, 0, this.w, this.h); ctx.rect(this.left, this.top, v.vw, v.vh); ctx.clip('evenodd'); }
+    nineSlice(ctx, m, F, this.w, this.h);
     ctx.restore();
+    if (v) { ctx.fillStyle = 'rgba(0,0,0,0.667)'; ctx.fillRect(this.left, this.top, v.vw, v.vh); }
+    const t = im(this.W.title);
+    if (t) ctx.drawImage(t, 8, 10);
+    if (st === 0) {
+      const mark = this.mark(), x0 = mark ? 49 : 9;
+      if (mark) { if (im(mark)) ctx.drawImage(im(mark), 8, 24); else m.assets.preload([mark]); }
+      // white with a 1px #52759C outline on all eight sides
+      for (const [text, y] of [[n.streetName || '', 28], [n.mapName || '', 44]]) {
+        for (const [dx, dy] of [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]) uiText(ctx, text, x0 + dx, y + dy, { color: '#52759C', size: 12, bold: true });
+        uiText(ctx, text, x0, y, { color: '#fff', size: 12, bold: true });
+      }
+    }
+    if (!v) return;
+    const img = im(v.c);
+    if (!img) { m.assets.preload([v.c]); return; }
+    const sc = this.scroll(v);
+    ctx.save();
+    ctx.beginPath(); ctx.rect(this.left, this.top, v.vw, v.vh); ctx.clip();
+    ctx.drawImage(img, sc.x, sc.y, v.vw, v.vh, this.left, this.top, v.vw, v.vh);
+    this.drawMarkers(ctx, v, sc);
+    ctx.restore();
+  }
+
+  /** Markers bottom-centre on their point, in the client's order: strangers, portals, friends / guild / party, NPCs, you. */
+  drawMarkers(ctx, v, sc) {
+    const g = this.g, H = this.helper?.minimap || {}, im = (n) => this.mgr.image(n);
+    const put = (node, wx, wy) => {
+      const s = im(node);
+      if (!s) return;
+      const p = this.at(v, sc, wx, wy);
+      ctx.drawImage(s, p.x - Math.floor(s.width / 2), p.y - s.height);
+    };
+    const lists = { friend: [], guild: [], guildmaster: [], party: [], partymaster: [], match: [] };
+    const party = g.party, guild = g.guild, buddies = new Set((g.buddies || []).map((b) => b.id));
+    const ring = g.rings?.marriage, me = g.player?.id, spouse = ring ? (ring.husbandId === me ? ring.wifeId : ring.husbandId) : 0;
+    for (const o of g.others.values()) {
+      const gm = guild?.members?.find((x) => x.name === o.name);
+      const kind = spouse && o.id === spouse ? 'match'
+        : party?.members?.some((x) => x.id === o.id) ? (party.leader === o.id ? 'partymaster' : 'party')
+          : gm ? (gm.rank === 1 ? 'guildmaster' : 'guild')
+            : buddies.has(o.id) ? 'friend' : null;
+      if (kind) lists[kind].push(o); else put(H.another, o.x, o.y);
+    }
+    for (const p of g.map.portals) if (p.pt === 2 || p.pt === 7) put(H.portal, p.x, p.y);
+    for (const k of ['friend', 'guild', 'guildmaster', 'party', 'partymaster', 'match']) for (const o of lists[k]) put(H[k], o.x, o.y);
+    // NPCs from the map's own life list, marked by the spawned NPC's quests: plain, then can-complete, then can-start on top
+    const q = g.quests, qctx = g.textCtx?.(), end = [], start = [];
+    for (const e of this.npcs()) {
+      const mk = q && qctx ? q.npcQuests(e.id, qctx) : null;
+      if (mk?.complete?.length) end.push(e); else if (mk?.start?.length) start.push(e); else put(H.npc, e.x, e.y);
+    }
+    for (const e of end) put(H.endnpc, e.x, e.y);
+    for (const e of start) put(H.startnpc, e.x, e.y);
+    put(H.user, g.player.x, g.player.y);
+  }
+  /** The map's WZ NPCs (type n, not hidden) at their WZ spot. */
+  npcs() {
+    const map = this.g.map;
+    if (this.npcList?.map === map) return this.npcList.list;
+    const list = Object.values(map?.data?.life || {}).filter((l) => l.type === 'n' && !Number(l.hide)).map((l) => ({ id: Number(l.id), x: Number(l.x), y: Number(l.y) }));
+    this.npcList = { map, list };
+    return list;
+  }
+  /** Hover: an NPC's name, or a visible portal's destination (PortalTooltip, else the target map's name). */
+  tooltip(lx, ly) {
+    if (this.shown === 2 || !this.available()) return null;
+    const v = this.view();
+    if (!v) return null;
+    const sc = this.scroll(v), hit = (wx, wy) => { const p = this.at(v, sc, wx, wy); return lx >= p.x - 2 && lx < p.x + 3 && ly >= p.y - 5 && ly < p.y + 2; };
+    for (const e of this.npcs()) if (hit(e.x, e.y)) { const name = this.mgr.strings?.npc?.[e.id]?.name; if (name) return { title: name, lines: [] }; }
+    for (const p of this.g.map.portals) {
+      if ((p.pt !== 2 && p.pt !== 7) || !p.tm || p.tm === 999999999 || !hit(p.x, p.y)) continue;
+      const tip = this.tips?.[this.g.map.id]?.[p.pn];
+      if (tip) return { title: String(tip), lines: [] };
+      for (const r of Object.values(this.strMap || {})) if (r?.[p.tm]?.mapName) return { title: r[p.tm].mapName, lines: [] };
+    }
+    return null;
   }
 }
 
@@ -1385,7 +1496,7 @@ class KeyConfigWin extends Win {
     this.button(W.BtClose, 629 - 20, 4, () => mgr.close(this));
     this.button(W.BtDefault, 12, 236, async () => { this.draft = (await import('../keymap.js')).defaultKeymap(); });
     this.button(W.BtDelete, 78, 236, () => { this.draft = {}; this.picked = null; }); // the art reads CLEAR ALL
-    this.button(W.BtQuickSlot, 161, 236, () => { mgr.bar.quickOpen = !mgr.bar.quickOpen; });
+    this.button(W.BtQuickSlot, 161, 236, () => mgr.bar.setQuickOpen(!mgr.bar.quickOpen));
     this.button(W.BtOK, 629 - 112, 236, () => this.save());
     this.button(W.BtCancel, 629 - 60, 236, () => mgr.close(this));
   }

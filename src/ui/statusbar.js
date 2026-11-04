@@ -29,13 +29,33 @@ const GAUGE = { x: 216, y: 37 };
 const FILLS = { hp: { x: 2, w: 105 }, mp: { x: 110, w: 105 }, exp: { x: 223, w: 115 } };
 const FILL_Y = 15, FILL_H = 14;
 const CHAT = { x: 84, y: 9, w: 430, h: 18 };          // text field in the white strip, after the target box
-const CHAT_W = 566, CHAT_LINES = 6, LINE_H = 14;
+// the chat log: 580 wide, 13px lines, 64 kept, long lines wrapped at 535px (497 for a megaphone's first line),
+// on a see-through black band; VScr5 at x 551
+const CHAT_W = 580, LINE_H = 13, CHAT_MAX = 64, WRAP_W = 535, WRAP_MEGA = 497, SCROLL_X = 551, BAND = 'rgba(0,0,0,0.54)';
+const CHAT_H = { min: 26, max: 507, def: 70 }, BAND_W = SCROLL_X + 15;   // the band ends with the scrollbar
+// line colours by kind
+export const CHAT_COLOR = {
+  all: '#FFFFFF', whisper: '#00FF00', party: '#FF99CC', buddy: '#FF9900', guild: '#E1ACFE', alliance: '#A6FF7F', spouse: '#FF28A7',
+  grey: '#BBBBBB', yellow: '#FFFF00', result: '#FFF080', notice: '#60CEFF', error: '#FFAFAF',
+};
+// megaphone-style lines: text on a coloured bar
+export const CHAT_BAR = {
+  gm: { color: '#000000', bg: 'rgba(255,255,255,0.69)' }, mega: { color: '#003F7F', bg: 'rgba(202,231,255,0.69)' },
+  superMega: { color: '#770042', bg: 'rgba(255,191,221,0.8)' }, itemMega: { color: '#462706', bg: 'rgba(255,198,0,0.87)' },
+  avatarMega: { color: '#FC8BE5', bg: 'rgba(77,26,173,0.17)' },
+};
+// these kinds wrap flush; the rest indent their continuation lines by five spaces
+const FLUSH = new Set([CHAT_COLOR.grey, CHAT_COLOR.yellow, CHAT_COLOR.result, CHAT_COLOR.notice, CHAT_COLOR.error, CHAT_BAR.gm.color]);
 // the notice box (base/box, 42x19) right of the chat line, its pencil (base/iconMemo) in the right cell:
 // invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
 const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
 export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
 // quick slot keys: Shift Ins Home PgUp / Ctrl Del End PgDn (scancodes), labelled by StatusBar.img/key/0-7
 const QUICK_KEYS = [42, 82, 71, 73, 29, 83, 79, 81];
+// the panel sits 2px in from the right edge on top of the bar; each slot's 32x32 icon box, from the panel's corner
+const QUICK_X = 153, QUICK_ICONS = [[7, 8], [42, 8], [77, 8], [112, 8], [7, 41], [42, 41], [77, 41], [112, 41]];
+// shown unless the player closed it, remembered between sessions
+const QUICK_KEY = 'maple.quickslot';
 const MENU_ITEMS = {
   GameMenu: ['BtChannel', 'BtGameOpt', 'BtSysOpt', 'BtQuit'],             // "Change Skin" was never enabled
   ShortCut: ['BtItem', 'BtEquip', 'BtStat', 'BtSkill', 'BtQuest', 'BtComm', 'BtMobbook', 'BtRanking'],
@@ -44,8 +64,12 @@ const MENU_ITEMS = {
 export class StatusBar {
   constructor(game, layer) {
     this.game = game; this.assets = game.assets; this.layer = layer;
-    this.y = 0; this.lines = []; this.menu = null; this.quickOpen = false; this.chatTarget = 'all'; this.targetMenu = false;
+    this.y = 0; this.lines = []; this.menu = null; this.chatTarget = 'all'; this.targetMenu = false;
     this.mouse = { x: -1, y: -1 }; this.hovered = null; this.quick = [];
+    this.quickOpen = (() => { try { return localStorage.getItem(QUICK_KEY) !== '0'; } catch { return true; } })();
+    // chat: 1 minimized, 2 minimized while typing, 3 open (chatH tall); the view's first line, when you last scrolled
+    this.chatState = 1; this.chatH = CHAT_H.def; this.scrollPos = 0; this.scrolledAt = -Infinity;
+    this.history = []; this.historyAt = 0; this.chatDrag = null; this.edgeHover = false; this.scrollHold = null; this.thumbDrag = null;
   }
 
   async load() {
@@ -70,24 +94,17 @@ export class StatusBar {
     ];
     // the hotkey tabs from x 614, every 30px (the client's own spacing), after the notice box
     this.tabs = small.map(([node, fn], i) => this.btn(node, TABS_X + i * 30, () => y() + 6, fn));
-    this.quickBtn = this.btn(S.QuickSlot, TABS_X + 5 * 30, () => y() + 6, () => { this.quickOpen = !this.quickOpen; this.render(); });
-    this.quickBtnD = this.btn(S.QuickSlotD, TABS_X + 5 * 30, () => y() + 6, () => { this.quickOpen = false; });
-    // chat line extras at the end of the white strip
-    // the chat log's size: Basic.img's "-" folds it to its last line, "+" opens it back to six
-    this.chatSmall = false;
-    this.chatMinBtn = this.btn(this.B.BtMin, 530, () => y() + 12, () => { this.chatSmall = true; });
-    this.chatMaxBtn = this.btn(this.B.BtMax, 530, () => y() + 12, () => { this.chatSmall = false; });
+    this.quickBtn = this.btn(S.QuickSlot, TABS_X + 5 * 30, () => y() + 6, () => this.setQuickOpen(true));
+    this.quickBtnD = this.btn(S.QuickSlotD, TABS_X + 5 * 30, () => y() + 6, () => this.setQuickOpen(false));
+    // "-" minimizes the log to one line, "+" opens it
+    this.chatMinBtn = this.btn(this.B.BtMin, 536, () => y() + 12, () => this.setChatState(1));
+    this.chatMaxBtn = this.btn(this.B.BtMax, 536, () => y() + 12, () => this.setChatState(3));
 
     this.chat = new TextField(this.layer, CHAT.x, 0, CHAT.w, CHAT.h, { max: 70, color: '#000' });
     this.chat.el.classList.add('chatinput');
-    this.chat.el.addEventListener('keydown', (e) => {
-      e.stopPropagation();
-      if (e.key === 'Enter') {
-        const t = this.chat.value.trim();
-        if (t) g.sendChat(t);
-        this.chat.value = ''; this.chat.el.blur();
-      } else if (e.key === 'Escape') this.chat.el.blur();
-    });
+    this.chat.show(false);
+    this.chat.el.addEventListener('keydown', (e) => this.chatKey(e));
+    a.preload([...stateFrames(this.B.VScr5), this.B.Cursor?.[7]?.[0]].filter(Boolean));
 
     const menuFrames = Object.entries(MENU_ITEMS).flatMap(([w, list]) => [this.W[w].backgrnd, ...list.flatMap((b) => stateFrames(this.W[w][b]))]);
     await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
@@ -105,7 +122,7 @@ export class StatusBar {
 
   allButtons() {
     const list = [this.shopBtn, this.menuBtn, this.shortBtn, this.tradeBtn, ...this.tabs,
-      this.quickOpen ? this.quickBtnD : this.quickBtn, this.chatSmall ? this.chatMaxBtn : this.chatMinBtn];
+      this.quickOpen ? this.quickBtnD : this.quickBtn, this.chatState === 3 ? this.chatMinBtn : this.chatMaxBtn];
     if (this.menu) list.push(...this.menu.buttons);
     return list.filter(Boolean);
   }
@@ -118,14 +135,215 @@ export class StatusBar {
   /** Lay the chat field over the canvas: box = the canvas' on-screen rect relative to the UI layer. */
   place(box, scale) { this.chat.rect.y = this.y + CHAT.y; this.chat.layout(box, scale); }
 
-  focusChat(prefix = '') { if (prefix && !this.chat.value) this.chat.value = prefix; this.chat.focus(); }
+  /** Opens the input: minimized, the log's line moves up a row for it (state 2). */
+  focusChat(prefix = '') {
+    if (this.hidden) return;
+    if (this.chatState === 1) this.setChatState(2);
+    if (prefix && !this.chat.value) this.chat.value = prefix;
+    this.chat.focus();
+  }
+  closeChat() {
+    this.chat.el.blur();
+    if (this.chatState === 2) this.setChatState(1);
+  }
+  /** Gone while a scene locks the UI. */
+  setHidden(on) { this.hidden = on; this.showInput(); if (on) this.chat.el.blur(); }
+  showInput() { this.chat?.show(!this.hidden && this.chatState !== 1); }
   get typing() { return document.activeElement === this.chat?.el; }
 
   // ------------------------------------------------------------------ chat log
-  /** A chat log line; megaphones add a coloured bar (bg) and little images in front of the text (icons). */
-  message(text, color = '#fff', { bg = null, icons = null } = {}) {
-    this.lines.push({ text: String(text), color, bg, icons });
-    if (this.lines.length > 80) this.lines.shift();
+  setChatState(s) {
+    if (this.chatState === s) return;
+    this.chatState = s;
+    if (s === 1) this.chat.el.blur();
+    this.showInput();
+    this.toBottom();
+    this.saveChat();
+  }
+  /** The chat key (keymap 16): open -> minimized, anything else -> open. */
+  toggleChat() { if (this.chatState === 3) this.setChatState(1); else { this.chat.el.blur(); this.setChatState(3); } }
+  /** The state and open height, per character. */
+  saveChat() {
+    const name = this.game.stats?.name;
+    if (!name) return;
+    try { localStorage.setItem(`maple.chat.${name}`, JSON.stringify({ state: this.chatState, h: this.chatH })); } catch { /* private mode */ }
+  }
+  restoreChat() {
+    const name = this.game.stats?.name;
+    if (!name || this.restoredFor === name) return;
+    this.restoredFor = name;
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(`maple.chat.${name}`) || 'null'); } catch { saved = null; }
+    const h = Number(saved?.h);
+    this.chatH = h >= CHAT_H.min && h <= CHAT_H.max ? h : CHAT_H.def;
+    this.chatState = saved?.state === 3 ? 3 : 1;
+    this.showInput();
+    this.toBottom();
+  }
+  clearLog() { this.lines = []; this.scrollPos = 0; }
+
+  rows() { return this.chatState === 3 ? Math.floor(this.chatH / LINE_H) : 1; }
+  range() { return Math.max(0, this.lines.length - this.rows() + 1); }
+  toBottom() { this.scrollPos = Math.max(0, this.range() - 1); }
+  scrollBy(n) {
+    const max = Math.max(0, this.range() - 1);
+    this.scrollPos = Math.max(0, Math.min(max, this.scrollPos + n));
+    this.scrolledAt = performance.now();
+  }
+
+  /**
+   * A chat log line, wrapped at 535px into stored lines (continuations indented five spaces, except the system
+   * kinds). Megaphones add a coloured bar (bg) and little images in front of the first line (icons). The view
+   * jumps to the newest line unless you scrolled up in the last 5 seconds.
+   */
+  message(text, color = '#fff', { bg = null, icons = null, flush = null } = {}) {
+    const atBottom = this.scrollPos >= this.range() - 1;
+    const indent = !(flush ?? FLUSH.has(String(color).toUpperCase()));
+    const pieces = this.wrap(String(text), icons?.length ? WRAP_MEGA : WRAP_W, WRAP_W);
+    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, icons: i ? null : icons }));
+    let dropped = 0;
+    while (this.lines.length > CHAT_MAX) { this.lines.shift(); dropped++; }
+    if (this.range() < 3 || atBottom || performance.now() - this.scrolledAt > 5000) this.toBottom();
+    else this.scrollPos = Math.max(0, this.scrollPos - dropped);
+  }
+  wrap(text, first, rest) {
+    const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
+    ctx.font = '12px Arial, "Segoe UI", sans-serif';
+    const out = [];
+    let line = '', max = first;
+    const push = () => { out.push(line.trim()); line = ''; max = rest; };
+    for (const word of text.split(' ')) {
+      const t = line ? `${line} ${word}` : word;
+      if (ctx.measureText(t).width <= max) { line = t; continue; }
+      if (line) push();
+      for (const ch of word) {
+        if (line && ctx.measureText(line + ch).width > max) push();
+        line += ch;
+      }
+    }
+    if (line.trim() || !out.length) push();
+    return out;
+  }
+
+  /** Keys in the chat input. */
+  chatKey(e) {
+    e.stopPropagation();
+    const g = this.game, empty = !this.chat.value.trim();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (empty) { this.chat.value = ''; this.closeChat(); return; }
+      const t = this.chat.value.replace(/[^\x20-\x7e]/g, ' ').trim();
+      this.chat.value = '';
+      this.remember(t);
+      if (this.canSay(t)) g.sendChat(t);
+    } else if (e.key === 'Escape') { this.chat.value = ''; this.closeChat(); }
+    else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && empty) {
+      // the arrows go back to moving you
+      this.closeChat();
+      const k = e.key === 'ArrowLeft' ? 'left' : 'right';
+      g.input?.down.add(k); g.input?.pressed.add(k);
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const n = this.history.length;
+      if (!n) return;
+      this.historyAt = Math.max(0, Math.min(n, this.historyAt + (e.key === 'ArrowUp' ? -1 : 1)));
+      this.chat.value = this.history[this.historyAt] ?? '';
+    } else if (e.key === 'Tab') { e.preventDefault(); this.nextTarget(); }
+  }
+  /** The last 8 lines sent, not twice in a row. */
+  remember(t) {
+    if (this.history[this.history.length - 1] !== t) this.history.push(t);
+    if (this.history.length > 8) this.history.shift();
+    this.historyAt = this.history.length;
+  }
+  /**
+   * The client's chat checks: after a warning nothing goes for 2.8s; the same line 4 times in a row, or 4 lines in
+   * 2 seconds, is stopped with a warning. Commands are not checked.
+   */
+  canSay(t) {
+    if (t.startsWith('/') || t.startsWith('!')) return true;
+    const now = performance.now();
+    if (now - (this.spamAt ?? -Infinity) < 2800) return false;
+    const recent = (this.recentChat ?? []).filter((r) => now - r.t < 30000);
+    recent.push({ text: t, t: now });
+    this.recentChat = recent.slice(-5);
+    const last4 = this.recentChat.slice(-4);
+    const warn = (msg) => { this.spamAt = now; this.recentChat = []; this.game.windows?.notice(msg); return false; };
+    if (last4.length === 4 && last4.every((r) => r.text === t)) return warn('Repeating the same line over and over can negatively affect other users.');
+    if (last4.length === 4 && now - last4[0].t < 2000) return warn("Too much chatting can disrupt other players' ability to play the game.");
+    return true;
+  }
+  /** Tab: the next chat target in the list (Whisper only once someone has been chosen). */
+  nextTarget() {
+    const keys = CHAT_TARGETS.map((t) => t.key).filter((k) => k !== 'group' && (k !== 'whisper' || this.whisperTo));
+    this.chatTarget = keys[(keys.indexOf(this.chatTarget) + 1) % keys.length];
+  }
+  /** A keymap chat key: the input opens with that target (Whisper asks who to). */
+  openChat(target) {
+    if (target === 'whisper') { this.chooseTarget('whisper'); return; }
+    this.chatTarget = target;
+    this.focusChat();
+  }
+
+  /** Where the log is drawn in each state: its band and the newest line's y. */
+  logBox() {
+    if (this.chatState === 3) return { top: this.y + 2 - this.chatH, h: this.chatH, line: this.y + 2 - LINE_H };
+    if (this.chatState === 2) return { top: this.y - 21, h: 24, line: this.y - 15 };
+    return { top: this.y + 6, h: 24, line: this.y + 12 };
+  }
+  /** The scrollbar: arrows at both ends of the open log, or the two arrows stacked in one row. */
+  scrollBox() {
+    if (this.chatState === 3) return { x: SCROLL_X, y: this.y + 3 - this.chatH, h: this.chatH - 2, track: true };
+    return { x: SCROLL_X, y: this.chatState === 2 ? this.y - 21 : this.y + 6, h: 25, track: false };
+  }
+  thumbAt(sb) {
+    const track = sb.h - 26 - 25, max = Math.max(1, this.range() - 1);
+    return sb.y + 13 + Math.round(track * this.scrollPos / max);
+  }
+  /** Pointer on the log's scrollbar and top edge. Returns true when it took the event. */
+  chatPointer(type, x, y) {
+    const sb = this.scrollBox(), on = this.range() > 1;
+    if (type === 'up') { this.scrollHold = null; this.thumbDrag = null; if (this.chatDrag) { this.chatDrag = null; this.saveChat(); return true; } return false; }
+    if (type === 'move') {
+      if (this.chatDrag) {
+        const d = this.chatDrag.y - y;
+        if (Math.abs(d) >= 14) {
+          let h = Math.max(CHAT_H.min, Math.min(CHAT_H.max, this.chatDrag.h + Math.trunc(d / LINE_H) * LINE_H));
+          if (h % LINE_H === 0) h += 2;
+          if (h !== this.chatH) { this.chatH = h; this.toBottom(); }
+        }
+        return true;
+      }
+      if (this.thumbDrag) {
+        const track = sb.h - 26 - 25, max = Math.max(0, this.range() - 1);
+        this.scrollPos = Math.max(0, Math.min(max, Math.round(((y - this.thumbDrag.dy - sb.y - 13) / Math.max(1, track)) * max)));
+        this.scrolledAt = performance.now();
+        return true;
+      }
+      this.edgeHover = this.chatState === 3 && x < CHAT_W && Math.abs(y - this.logBox().top) <= 5;
+      return false;
+    }
+    if (type !== 'down') return false;
+    if (this.edgeHover) { this.chatDrag = { y, h: this.chatH }; return true; }
+    if (x < sb.x || x >= sb.x + 15 || y < sb.y || y >= sb.y + sb.h) return false;
+    if (!on) return true;
+    const step = (n) => { this.scrollBy(n); this.scrollHold = { n, t: 0.4 }; };
+    if (!sb.track) { step(y < sb.y + 12 ? -1 : 1); return true; }
+    if (y < sb.y + 13) step(-1);
+    else if (y >= sb.y + sb.h - 13) step(1);
+    else if (sb.h >= 52) {
+      const ty = this.thumbAt(sb);
+      if (y >= ty && y < ty + 25) this.thumbDrag = { dy: y - ty };
+      else this.scrollBy(y < ty ? -this.rows() : this.rows());
+    }
+    return true;
+  }
+  /** The mouse wheel over the log: one line a notch. */
+  wheel(x, y, dy) {
+    const b = this.logBox();
+    if (this.hidden || x >= CHAT_W || y < b.top || y >= b.top + b.h || !dy) return false;
+    this.scrollBy(Math.sign(dy));
+    return true;
   }
 
   // ------------------------------------------------------------------ menus
@@ -172,13 +390,22 @@ export class StatusBar {
     }));
   }
 
+  setQuickOpen(open) {
+    this.quickOpen = open;
+    try { localStorage.setItem(QUICK_KEY, open ? '1' : '0'); } catch { /* ignore */ }
+    if (open) this.render();
+  }
+
+  /** The open panel's top-left corner, right above the bar. */
+  quickPos() { return { x: this.w - QUICK_X, y: this.y - 80 }; }
+
   /** A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. */
   dropOnQuickSlot(x, y, c) {
     if (!this.quickOpen) return;
-    const x0 = this.w - 151, y0 = this.y - 80;
-    const col = Math.floor((x - x0 - 9) / 35), row = Math.floor((y - y0 - 9) / 34);
-    if (col < 0 || col > 3 || row < 0 || row > 1) return;
-    const sc = QUICK_KEYS[row * 4 + col];
+    const p = this.quickPos();
+    const i = QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
+    if (i < 0) return;
+    const sc = QUICK_KEYS[i];
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
     else if (c.kind === 'item' && itemKeyType(c.tab, c.id)) this.game.bindKey(sc, itemKeyType(c.tab, c.id), c.id);
     else if (c.kind === 'bind' && c.b.type === 8) this.game.bindKey(sc, 8, c.b.action);   // a skill macro
@@ -191,6 +418,7 @@ export class StatusBar {
   /** Canvas-space pointer events from Game. Returns true when the UI took the event. */
   pointer(type, x, y) {
     this.mouse = { x, y };
+    if (!this.hidden && this.chatPointer(type, x, y)) return true;
     const buttons = this.allButtons();
     for (const b of buttons) b.y = b.yAt ? b.yAt() : b.y;
     const over = buttons.find((b) => b.hit(x, y)) || null;
@@ -216,7 +444,7 @@ export class StatusBar {
   }
 
   /** The chat target box ("To All") at the start of the white strip. */
-  targetHit(x, y) { return x >= 1 && x < 82 && y >= this.y + 8 && y < this.y + 28; }
+  targetHit(x, y) { return this.chatState !== 1 && x >= 1 && x < 82 && y >= this.y + 8 && y < this.y + 28; }
   targetMenuTop() { return this.y + 8 - CHAT_TARGETS.length * TMENU.row - 2; }
   targetRowAt(x, y) {
     const top = this.targetMenuTop() + 1;
@@ -227,9 +455,12 @@ export class StatusBar {
   async chooseTarget(key) {
     sfx.play('UI/BtMouseClick');
     if (key === 'whisper') {
-      const name = (await this.game.windows.askText('Who would you like to whisper to?', this.whisperTo || ''))?.trim();
+      const w = this.game.windows, name = (await w.askWhisper(this.whisperTo || '', this.whisperNames || []))?.trim();
       if (!name) return;
+      if (!/^[A-Za-z0-9]{4,12}$/.test(name)) { w.notice('Incorrect ID.'); return; }
+      if (name.toLowerCase() === this.game.player?.name?.toLowerCase()) { w.notice("You can't whisper to yourself."); return; }
       this.whisperTo = name;
+      this.whisperNames = [name, ...(this.whisperNames || []).filter((n) => n.toLowerCase() !== name.toLowerCase())].slice(0, 10);
     }
     this.chatTarget = key;
     this.focusChat();
@@ -250,9 +481,11 @@ export class StatusBar {
 
   contains(x, y) {
     if (y >= this.y) return true;
+    // the open log (and the line over the bar while typing) takes clicks; above it they reach the map
+    if (this.chatState !== 1 && !this.hidden && x >= 80 && x < CHAT_W && y >= this.logBox().top) return true;
     if (this.targetMenu && x < TMENU.x + TMENU.w + 1 && y >= this.targetMenuTop() - 1) return true;
     if (this.menu && x >= this.menu.x && x < this.menu.x + this.menu.bg._w && y >= this.menu.y) return true;
-    if (this.quickOpen && x >= this.w - 151 && y >= this.y - 80) return true;
+    if (this.quickOpen && x >= this.quickPos().x && y >= this.quickPos().y) return true;
     return false;
   }
 
@@ -261,6 +494,7 @@ export class StatusBar {
   // ------------------------------------------------------------------ frame
   update(dt) {
     this.hpFlash.update(dt * 1000); this.mpFlash.update(dt * 1000);
+    if (this.scrollHold && (this.scrollHold.t -= dt) <= 0) { this.scrollBy(this.scrollHold.n); this.scrollHold.t = 0.06; }
     for (const b of this.allButtons()) { b.y = b.yAt ? b.yAt() : b.y; b.update(dt * 1000); }
   }
 
@@ -269,25 +503,30 @@ export class StatusBar {
     if (!s || !S) return;
     const img = (n) => this.assets.image(n);
     const y = this.y;
-    this.drawChatLog(ctx);
+    this.restoreChat();
+    if (this.chatState !== 1) this.drawChatLog(ctx);
     const bg = img(S.base.backgrnd), bg2 = img(S.base.backgrnd2);
     if (bg) ctx.drawImage(bg, 0, y);
     if (bg2) ctx.drawImage(bg2, 0, y);
 
-    // chat target box ("All") at the start of the white strip
-    const tgt = img(S.base.chatTarget);
-    const label = CHAT_TARGETS.find((t) => t.key === this.chatTarget)?.label || 'To All';
-    if (tgt) { ctx.drawImage(tgt, 1, y + 8); uiText(ctx, label, 1 + 40, y + 11, { color: '#fff', size: 11, align: 'center' }); }
+    // chat target box ("All") at the start of the white strip; minimized, the newest line sits there instead
+    if (this.chatState === 1) this.drawChatLog(ctx);
+    else {
+      const tgt = img(S.base.chatTarget);
+      // whispering: the box shows who to
+      const label = this.chatTarget === 'whisper' && this.whisperTo ? this.whisperTo : CHAT_TARGETS.find((t) => t.key === this.chatTarget)?.label || 'To All';
+      if (tgt) { ctx.drawImage(tgt, 1, y + 8); uiText(ctx, label, 5, y + 11, { color: '#fff', size: 11 }); }
+    }
     // the notice box and its pencil, where invitations come from
     const box = img(S.base.box), memo = img(S.base.iconMemo);
     if (box) ctx.drawImage(box, NOTICE_BOX.x, y + NOTICE_BOX.y);
     if (memo) ctx.drawImage(memo, NOTICE_ICON.x, y + NOTICE_ICON.y);
 
-    // LV. is part of backgrnd2 (x 10-29, rows 47-59); the digits follow it on the same rows.
-    // Name and job sit in the panel right of the LV plate (plate ends at x 77)
-    this.digits(ctx, String(s.level), 32, y + 47);
-    uiText(ctx, s.name, 82, y + 39, { color: '#fff', size: 12 });
-    uiText(ctx, jobName(s.job), 82, y + 53, { color: '#c8c8c8', size: 11 });
+    // LV. is part of backgrnd2 (x 10-29, rows 47-59); the digits sit in the plate's dark slot on the same rows.
+    // the level from x 50, 6px further left for each extra digit; the job, then the name, at x 87
+    this.digits(ctx, String(s.level), s.level < 10 ? 50 : s.level < 100 ? 44 : 38, y + 47);
+    uiText(ctx, jobName(s.job), 87, y + 39, { color: '#fff', size: 12 });
+    uiText(ctx, s.name, 87, y + 53, { color: '#fff', size: 12 });
 
     // gauges: the bar art is drawn full, then the empty part of each fill is greyed out
     const gx = GAUGE.x, gy = y + GAUGE.y;
@@ -325,46 +564,66 @@ export class StatusBar {
     this.syncCursor();
   }
 
+  /**
+   * The log on its see-through band: open, its lines above the bar; minimized, the line the view is on inside the
+   * input row (or one row up while typing). Megaphone lines get their bar from x 0 to the scrollbar.
+   */
   drawChatLog(ctx) {
-    const rows = this.chatSmall ? 1 : CHAT_LINES;
-    const shown = this.lines.slice(-rows);
-    // the log's panel is always there, empty or not, as in the client
-    const h = rows * LINE_H + 6, top = this.y - h;
+    const b = this.logBox(), rows = this.rows();
+    const shown = this.lines.slice(this.scrollPos, this.scrollPos + rows);
     ctx.save();
-    ctx.fillStyle = 'rgba(0,0,0,0.45)';
-    ctx.fillRect(0, top, CHAT_W, h);
+    ctx.fillStyle = BAND;
+    ctx.fillRect(0, b.top, BAND_W, b.h);
+    // the resize edge, only while the mouse is on it
     const edge = this.assets.image(this.S.base.chat);
-    if (edge) ctx.drawImage(edge, 0, top - edge.height);
+    if (edge && this.chatState === 3 && (this.edgeHover || this.chatDrag)) ctx.drawImage(edge, 0, b.top - 5);
+    ctx.beginPath(); ctx.rect(0, b.top, BAND_W, b.h); ctx.clip();
     shown.forEach((l, i) => {
-      const y = top + 3 + (rows - shown.length + i) * LINE_H;
-      let x = 4;
-      if (l.bg) {
-        ctx.font = '12px Arial, sans-serif';
-        const w = (l.icons || []).reduce((s, n) => s + (n.text ? ctx.measureText(n.text).width + 2 : (this.assets.image(n)?.width || 0) + 2), 0) + ctx.measureText(l.text).width + 6;
-        ctx.fillStyle = l.bg; ctx.fillRect(2, y - 1, Math.min(CHAT_W - 4, w), LINE_H);
-      }
+      const y = b.line - (shown.length - 1 - i) * LINE_H;
+      let x = 3;
+      if (l.bg) { ctx.fillStyle = l.bg; ctx.fillRect(0, y, SCROLL_X, LINE_H); }
       for (const n of l.icons || []) {
         if (n.text) { uiText(ctx, n.text, x, y, { color: l.color, size: 12, bold: true }); ctx.font = 'bold 12px Arial, sans-serif'; x += ctx.measureText(n.text).width + 2; continue; }
         const im = this.assets.image(n);
         if (im) { ctx.drawImage(im, x, y); x += im.width + 2; }
       }
-      uiText(ctx, l.text, x, y, l.bg ? { color: l.color, size: 12 } : { color: l.color, size: 12, outline: 'rgba(0,0,0,0.8)' });
+      uiText(ctx, l.text, x, y, { color: l.color, size: 12 });
     });
     ctx.restore();
+    this.drawChatScroll(ctx);
+  }
+  /** VScr5: disabled while everything fits; the thumb only on an open log 52px or taller. */
+  drawChatScroll(ctx) {
+    const V = this.B.VScr5, sb = this.scrollBox(), on = this.range() > 1, S = on ? V.enabled : V.disabled;
+    const im = (n) => this.assets.image(n), held = this.scrollHold?.n;
+    const prev = im(on ? (held < 0 ? S.prev1 : S.prev0) : S.prev), next = im(on ? (held > 0 ? S.next1 : S.next0) : S.next);
+    if (!sb.track) {
+      if (prev) ctx.drawImage(prev, sb.x, sb.y);
+      if (next) ctx.drawImage(next, sb.x, sb.y + 12);
+      return;
+    }
+    const base = im(S.base);
+    if (base) ctx.drawImage(base, sb.x, sb.y + 13, 15, Math.max(0, sb.h - 26));
+    if (prev) ctx.drawImage(prev, sb.x, sb.y);
+    if (next) ctx.drawImage(next, sb.x, sb.y + sb.h - 13);
+    if (on && sb.h >= 52) {
+      const thumb = im(this.thumbDrag ? S.thumb1 : S.thumb0);
+      if (thumb) ctx.drawImage(thumb, sb.x, this.thumbAt(sb));
+    }
   }
 
   drawQuickSlots(ctx) {
     const S = this.S, base = this.assets.image(S.base.quickSlot);
-    const x0 = this.w - 151, y0 = this.y - 80;
+    const { x: x0, y: y0 } = this.quickPos();
     if (base) ctx.drawImage(base, x0, y0);
     QUICK_KEYS.forEach((sc, i) => {
       const cx = x0 + 9 + (i % 4) * 35, cy = y0 + 9 + Math.floor(i / 4) * 34;
       const q = this.quick[i], icon = q?.node && this.assets.image(q.node);
       if (icon) {
-        // the 32x32 icon box is centred on the 28x25 cell; the icon sits in it by its origin
-        const o = q.node.origin || [0, 32];
-        ctx.drawImage(icon, cx + 14 - 16 - o[0], cy + 12 - 16 + 32 - o[1]);
-        if (q.item) this.number(ctx, String(this.game.itemCount(q.item)), cx + 22, cy + 17);
+        // the icon sits in its 32x32 box by its origin; a Use item's count is at the box's bottom-left, as in the inventory
+        const o = q.node.origin || [0, 32], ix = x0 + QUICK_ICONS[i][0], iy = y0 + QUICK_ICONS[i][1];
+        ctx.drawImage(icon, ix - o[0], iy + 32 - o[1]);
+        if (q.item) this.game.windows.count(ctx, this.game.itemCount(q.item), ix, iy + 21);
         const left = q.skill ? this.game.skills?.cooldownLeft(q.skill) : 0;
         if (left > 0) {
           ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(cx, cy, 28, 25);
@@ -378,10 +637,10 @@ export class StatusBar {
 
   /** The client's own cursor (Basic.img/Cursor): 0 normally, 1 over something clickable. */
   syncCursor() {
-    const want = this.hovered ? 1 : 0;
+    const want = this.chatDrag || this.edgeHover ? 7 : this.hovered ? 1 : 0;
     if (want === this.cursorState) return;
     this.cursorState = want;
-    const n = want ? this.B.Cursor[1][0] : this.B.Cursor[0][0];
+    const n = this.B.Cursor[want]?.[0] || this.B.Cursor[0][0];
     const o = n.origin || [0, 0];
     this.game.canvas.style.cursor = `url(${this.assets.base}/${n._canvas}) ${o[0]} ${o[1]}, auto`;
   }

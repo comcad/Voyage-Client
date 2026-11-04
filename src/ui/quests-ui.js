@@ -26,10 +26,16 @@ export async function npcQuestMenu(game, npc, q) {
   const book = game.quests, npcId = Number(npc.spawn.id), str = game.windows.strings.npc?.[npcId] || {};
   const script = npcScript(game, npc);
   const talk = () => game.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
-  // nothing to offer: the server decides (its script, or the NPC's own line)
-  if (!q.start.length && !q.progress.length && !q.complete.length) { talk(); return; }
   let head = str.d0 || '';
   for (const [qid, line] of Object.entries(str.quest || {})) if (book.status(Number(qid)) === 2 && line) { head = line; break; }
+  // nothing to offer: an NPC with a script asks the server; one without answers by itself, nothing sent, with its
+  // d1 once every one of its quests is done, else its d0 greeting
+  if (!q.start.length && !q.progress.length && !q.complete.length) {
+    const line = q.done >= q.all ? str.d1 || head : head;
+    if (!script && line) await localDialog(game, npcId, line, ['OK', 'End Chat']);
+    else talk();
+    return;
+  }
   const choices = [];
   let text = head;
   const line = (id, suffix) => {

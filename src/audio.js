@@ -121,9 +121,13 @@ class Sfx {
 
   /** 'Mob/0100100/Damage' -> mp3 url, following UOLs (relative to the linking node's parent). */
   async resolve(path) {
-    const [img, ...parts] = path.split('/');
-    if (!this.imgs.has(img)) this.imgs.set(img, fetch(`/assets/Sound/${img}.img.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null));
-    const root = await this.imgs.get(img);
+    // a full path into another file ("Effect/Direction3.img/sound/title") is read from that folder
+    const full = path.match(/^([^/]+)\/([^/]+)\.img\/(.*)$/);
+    const dir = full ? full[1] : 'Sound';
+    const [img, ...parts] = full ? [full[2], ...full[3].split('/')] : path.split('/');
+    const key = `${dir}/${img}`;
+    if (!this.imgs.has(key)) this.imgs.set(key, fetch(`/assets/${dir}/${img}.img.json`).then((r) => (r.ok ? r.json() : null)).catch(() => null));
+    const root = await this.imgs.get(key);
     let stack = [], node = root;
     for (let i = 0; i < parts.length && node; i++) {
       node = node[parts[i]];
@@ -134,7 +138,7 @@ class Sfx {
         stack = at; node = at.reduce((n, k) => n?.[k], root);
       }
     }
-    return node?._sound ? `/assets/Sound/${node._sound}` : null;
+    return node?._sound ? `/assets/${dir}/${node._sound}` : null;
   }
 
   async buffer(path) {

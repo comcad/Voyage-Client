@@ -122,17 +122,23 @@ export class LoginScene {
     };
     requestAnimationFrame(loop);
     const relayout = () => this.layoutFields();
-    addEventListener('resize', relayout);
-    new ResizeObserver(relayout).observe(this.canvas);
+    addEventListener('resize', relayout, { signal: this.listening.signal });
+    this.resizer = new ResizeObserver(relayout);
+    this.resizer.observe(this.canvas);
   }
 
   destroy() {
     this.stopped = true;
+    // the window listeners go with the scene, so the game's keys don't reach character select
+    this.listening?.abort();
+    this.resizer?.disconnect();
     for (const f of this.fields) f.remove();
     this.root.replaceChildren();
   }
 
   bindInput() {
+    this.listening = new AbortController();
+    const signal = this.listening.signal;
     const pos = (e) => {
       const r = this.canvas.getBoundingClientRect();
       return { x: ((e.clientX - r.left) / r.width) * W, y: ((e.clientY - r.top) / r.height) * H };
@@ -151,7 +157,7 @@ export class LoginScene {
       for (const b of this.buttons()) b.down = false;
       this.hover();
       if (target) { sfx.play(target.sound || 'UI/BtMouseClick'); target.onClick?.(); }   // a button may have its own click sound
-    });
+    }, { signal });
     this.canvas.addEventListener('wheel', (e) => {
       if (this.panning() || this.dialogs.length) return;
       if (this.screen?.onWheel) { e.preventDefault(); this.screen.onWheel(Math.sign(e.deltaY)); }
@@ -163,7 +169,7 @@ export class LoginScene {
       if (e.key === 'Enter' && top?.onEnter) { e.preventDefault(); top.onEnter(); }
       else if (e.key === 'Escape' && top?.onEscape) { e.preventDefault(); top.onEscape(); }
       else if (top?.onKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab'].includes(e.key)) { e.preventDefault(); top.onKey(e.key); }
-    });
+    }, { signal });
   }
 
   topLayer() { return this.dialogs[this.dialogs.length - 1] || this.screen; }
@@ -1042,7 +1048,7 @@ export class LoginScene {
         sfx.play('Game/GameIn');
         store.set(lastKey, String(c.stats.id));
         this.s.close();
-        finish({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, stats: c.stats, look: c.look, gm: !!this.account?.gm });
+        finish({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, channelNames: world.channels.map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm });
       };
       const start = guard(pick);
       // a new list after a create or delete; if it can't be loaded (world full...), back to world select
@@ -1246,7 +1252,7 @@ export class LoginScene {
           this.s.close();
           done = true;
           const w = this.worlds.find((x) => x.id === c.world);
-          resolve({ server, charId: c.stats.id, port: r.port, world: c.world, channels: w?.channels.length || 1, stats: c.stats, look: c.look, gm: !!this.account?.gm });
+          resolve({ server, charId: c.stats.id, port: r.port, world: c.world, channels: w?.channels.length || 1, channelNames: (w?.channels || []).map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm });
         } catch (e) { done = true; reject(e); } finally { busy = false; }
       };
       const back = async () => {

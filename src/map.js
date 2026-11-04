@@ -60,7 +60,7 @@ export class Anim {
 export class GameMap {
   constructor(assets, id) {
     this.assets = assets; this.id = id;
-    this.backs = []; this.layers = []; this.life = []; this.portals = [];
+    this.backs = []; this.layers = []; this.life = []; this.portals = []; this.objTags = new Map();
     this.scroll = 0;
   }
 
@@ -88,8 +88,13 @@ export class GameMap {
     const a = this.assets;
     onStatus?.('Loading map data...');
     // opts.path loads a map-format .img from elsewhere (e.g. UI/MapLogin.img for the login scene)
-    const data = await a.json(opts.path || mapPath(this.id));
+    let data = await a.json(opts.path || mapPath(this.id));
     if (!data) throw new Error(`Map ${this.id} not found`);
+    // info/link: everything but the map's own info (footholds, life, portals, tiles, the miniMap) is the linked map's
+    if (!opts.path && data.info?.link) {
+      const linked = await a.json(mapPath(Number(data.info.link)));
+      if (linked) data = { ...linked, info: data.info };
+    }
     this.data = data;
     this.info = data.info || {};
     this.fh = new Footholds(data.foothold);
@@ -122,7 +127,11 @@ export class GameMap {
       for (const o of Object.values(layer.obj || {})) {
         const set = await a.json(`Map/Obj/${o.oS}.img`);
         const node = set?.[o.l0]?.[o.l1]?.[o.l2];
-        if (node) objs.push({ ...o, anim: new Anim(node) });
+        if (!node) continue;
+        // `hide` starts it hidden; its `tags` (comma-separated) let the server show or hide it (SET_MAP_OBJECT_VISIBLE)
+        const obj = { ...o, anim: new Anim(node), visible: !Number(o.hide), tags: String(o.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean) };
+        objs.push(obj);
+        for (const t of obj.tags) { if (!this.objTags.has(t)) this.objTags.set(t, []); this.objTags.get(t).push(obj); }
       }
       const tS = layer.info?.tS;
       if (tS) {
@@ -190,6 +199,15 @@ export class GameMap {
     return this.portals.findLast((p) => p.pt !== 0 && p.pt !== 6 && (p.tm !== 999999999 || p.script)
       && x >= p.x - 20 && x < p.x + 20 && y >= p.y - 50 && y < p.y + 50);
   }
+  /** The script touch portal (type 9) whose hRange x vRange box (100 x 100 by default) holds this point, last listed first. */
+  scriptPortalAt(x, y) {
+    return this.portals.findLast((p) => {
+      if (p.pt !== 9) return false;
+      const hw = Math.trunc((p.hRange ?? 100) / 2), hh = Math.trunc((p.vRange ?? 100) / 2);
+      return x >= p.x - hw && x < p.x + hw && y >= p.y - hh && y < p.y + hh;
+    });
+  }
+
   /**
    * Hidden portals show while you are within [x-100, x+100) x [y-50, y+50) of one: portalStart, then portalContinue
    * looping; walking off plays portalExit (a Start still running is not reversed).
@@ -250,10 +268,14 @@ export class GameMap {
     ctx.restore();
   }
 
+  /** Shows or hides every object with this tag. */
+  setObjectVisible(tag, on) { for (const o of this.objTags.get(tag) || []) o.visible = on; }
+
   drawLayer(ctx, cam, l) {
     const layer = this.layers[l];
     if (!layer) return;
     for (const o of layer.objs) {
+      if (!o.visible) continue;
       const node = o.anim.node;
       const img = this.assets.image(node);
       if (!img) continue;
@@ -929,7 +951,8 @@ export class Life {
       if (k >= 1) delete this.fadeInAt; else ctx.globalAlpha *= Math.max(0, k);
     }
     ctx.translate(sx, sy);
-    if (this.facingRight) ctx.scale(-1, 1);
+    // info/noFlip art (e.g. a tutorial monster carrying a key sign) is never mirrored
+    if (this.facingRight && !Number(this.src?.info?.noFlip)) ctx.scale(-1, 1);
     if (this.frozen) ctx.filter = 'sepia(1) hue-rotate(170deg) saturate(2.5) brightness(1.05)';   // iced over
     ctx.drawImage(img, -o[0], -o[1]);
     ctx.restore();
