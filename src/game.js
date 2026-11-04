@@ -3442,11 +3442,17 @@ export class Game {
     sfx.play('Game/Portal');
     if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
       this.portalCooldown = 0.6;
-      const from = { x: Math.round(this.player.x), y: Math.round(this.player.y) };
+      const p = this.player, from = { x: Math.round(p.x), y: Math.round(p.y) };
       const t = map.spawnPortal(portal.tn);
       this.playTeleportEffect(from.x, from.y);
-      this.placeAtPortal(t);
-      this.playTeleportEffect(this.player.x, this.player.y);
+      // for those watching: the portal (4), a tick there, then the jump (3) to 10px over the other one, which you
+      // fall from as after any move
+      const fhId = p.fh?.id || 0, stance = this.currentStance();
+      this.moveBuf.push({ cmd: 4, ...from, fh: fhId, stance, duration: 0 }, { cmd: 0, ...from, vx: 0, vy: 0, fh: fhId, stance, duration: 30 });
+      p.x = t.x; p.y = t.y - 10; p.vx = 0; p.vy = 0; p.fh = null; p.ladder = null; p.seat = null;
+      this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance, duration: 0 });
+      this.moveTotal += 30; this.movePos = { x: p.x, y: p.y }; this.wasAirborne = true; this.downOfh = 0;
+      this.playTeleportEffect(p.x, p.y);
       this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
       return;
     }
