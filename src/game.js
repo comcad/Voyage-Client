@@ -5,7 +5,7 @@ import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, mesoIcon, invType
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, localTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice, UtilBox } from './ui/dialogs.js';
+import { npcTalk, localTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -28,7 +28,8 @@ import { MegaphoneWin } from './ui/megaphone.js';
 import { notify, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
-import { UserListWin, PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
+import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
+import { UserListWin, PartyHpWin, GuildContractWin, GuildMarkWin, heracleSays } from './ui/userlist.js';
 import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
 import { uiText } from './ui/wzui.js';
@@ -469,26 +470,36 @@ const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.e
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
 // keymap UI actions for the chat: open the input with a target, or toggle the log
 const CHAT_KEYS = { 10: 'all', 11: 'whisper', 12: 'party', 13: 'buddy', 16: 'toggle', 18: 'guild', 21: 'spouse', 24: 'alliance' };
-/** PacketCreator.partyStatusMessage codes */
+/** PARTY_OPERATION result codes that are only a chat line (0x15-0x17 name the other character; 0x12 says nothing) */
 const PARTY_MESSAGES = {
-  10: 'A beginner cannot create a party.', 12: 'You have quit as the leader of the party.', 13: 'You have yet to join a party.',
-  16: 'You have already joined a party.', 17: 'The party you are trying to join is already full.',
-  19: 'Unable to find the requested character in this channel.', 21: "'%s' is blocking party invitations.",
-  22: "'%s' is taking care of another invitation.", 23: "'%s' has denied your party invitation.",
-  25: 'You cannot kick another user in this map.', 28: 'Leadership can only be given to a party member in the vicinity.',
-  29: 'Leadership can only be given to a party member in the vicinity.', 30: 'You can only change leadership on the same channel.',
-  1: 'Your party request did not work.', 5: 'Your party request did not work.', 6: 'Your party request did not work.',
+  0x09: 'Already have joined a party.', 0x10: 'Already have joined a party.', 0x0A: "A beginner can't create a party.",
+  0x0D: 'You have yet to join a party.', 0x11: "The party you're trying to join is already in full capacity.", 0x12: '',
+  0x13: 'Unable to find the requested character in this channel.', 0x15: '%s is currently blocking any party invitations.',
+  0x16: "'%s' is taking care of another invitation.", 0x17: '%s have denied request to the party.', 0x19: 'Cannot kick another user in this map',
+  0x1C: 'This can only be given to a party member within the vicinity.',
+  0x1D: 'Unable to hand over the leadership post; No party member is currently within the vicinity of the party leader.',
+  0x1E: "You may only change with the party member that's on the same channel.", 0x20: "As a GM, you're forbidden from creating a party.",
+  0x21: 'Unable to find the character.',
 };
-/** GuildPackets.genericGuildMessage / responseGuildMessage codes (53-55 name the other character) */
+const PARTY_ERROR = "Your request for a party didn't work due to an unexpected error.";
+/** GUILD_OPERATION result codes: a chat line, or Heracle saying it (npc). 0x35-0x37 name the other character. */
 const GUILD_MESSAGES = {
-  28: 'The name is already in use. Please try another one.', 31: 'There was a problem locating the players during the agreement.',
-  33: 'You have already joined a guild.', 35: 'You cannot make a guild.', 36: 'Someone disagreed to the guild agreement.',
-  38: 'There was a problem during the forming of the guild.', 40: 'That character has already joined a guild.',
-  41: 'The guild you are trying to join has already reached the maximum number of members.', 42: 'The character cannot be found in the current channel.',
-  45: 'The character is not in the guild.', 48: 'The character is not in the guild.', 52: 'There was a problem in disbanding the guild.',
-  56: 'An admin cannot make a guild.', 57: 'There was a problem in increasing the guild size.',
-  53: "'%s' is not accepting guild invitations.", 54: "'%s' is taking care of another invitation.", 55: "'%s' has denied your guild invitation.",
+  0x1F: ['npc', 'The problem has happened during the process of gathering agreement of forming the guild... Plese try again later...'],
+  0x21: ['chat', 'Already joined the guild.'], 0x28: ['chat', 'Already joined the guild.'],
+  0x23: ['chat', 'You cannot make a guild, due to the limitation of minimum level requirement.'],
+  0x24: ['npc', 'Somebody has disagreed to form a guild...  Please come back to me when you meet with the right people...  You can only make a guild after getting agreement from all...'],
+  0x26: ['npc', 'The problem has happened during the process of forming the guild... Plese try again later...'],
+  0x29: ['chat', 'The guild, you are trying to join, has already reached the max number of users.'],
+  0x2A: ['chat', 'The character cannot be found in the current channel.'],
+  0x2D: ['chat', 'You are not in the guild.'], 0x30: ['chat', 'You are not in the guild.'],
+  0x34: ['npc', 'The problem has happened during the process of disbanding the guild... Plese try again later...'],
+  0x35: ['chat', '%s is currently not accepting guild invite message.'], 0x36: ['chat', "'%s' is taking care of another invitation."],
+  0x37: ['chat', '%s has denied your guild invitation.'], 0x38: ['chat', 'Admin cannot make a guild.'],
+  0x3B: ['npc', 'The problem has happened during the process of increasing the guild... Plese try again later...'],
+  0x4A: ['chat', 'There are less than 6 members remaining, so the quest cannot continue. Your Guild Quest will end in 5 seconds.'],
+  0x4B: ['chat', 'The user that registered has disconnected, so the quest cannot continue. Your Guild Quest will end in 5 seconds.'],
 };
+const GUILD_ERROR = 'The guild request has not been accepted, due to unknown reason.';
 /** PacketCreator.getMiniRoomError codes for trades */
 const TRADE_ERRORS = { 2: 'The other character is already trading.', 4: 'You cannot trade right now.', 5: 'The other character cannot trade right now.' };
 const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
@@ -711,6 +722,12 @@ export class Game {
   // held, or tapped since the last frame (a quick tap can start and end between two frames)
   holdAction(a) { return this.keysFor(5, a).some((c) => this.input.is(c) || this.input.hit(c)); }
 
+  unbindKey(sc) {
+    if (!this.keymap[sc]) return;
+    delete this.keymap[sc];
+    this.net?.changeKeymap([{ key: sc, type: 0, action: 0 }]);
+    this.keyBar?.render(); this.statusBar?.render();
+  }
   bindKey(sc, type, action) {
     if (type === 1 && this.skills && !this.skills.owns(action)) return;   // another job's skill has no key
     // a skill/item lives on one key only
@@ -1040,6 +1057,7 @@ export class Game {
     else if (m === MENU.KEYS) this.windows.toggle('keyconfig');
     else if (m === MENU.BUDDY) this.windows.toggle('userlist', 0);
     else if (m === MENU.PARTY) this.windows.toggle('userlist', 1);
+    else if (m === MENU.GUILD) this.windows.toggle('userlist', 2);
     else if (m === MENU.MONSTERBOOK) this.windows.toggle('monsterbook');
     else if (m === MENU.MESSENGER) this.windows.toggle('messenger');
     else if (m === MENU.PARTY_SEARCH) this.windows.toggle('partysearch');
@@ -1427,7 +1445,8 @@ export class Game {
   async goOnline(entered, uiRoot) {
     const info = entered.info;
     sfx.play('Game/GameIn');
-    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings;
+    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.linked = info.linked;
+    this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
     this.statusBar.layout(VIEW_W, VIEW_H);
@@ -1437,20 +1456,22 @@ export class Game {
     this.vfx = new WorldFx(this);
     await this.vfx.load();
     const wm = this.windows;
-    wm.drawItemTip = drawItemTip;
+    wm.drawItemTip = drawItemTip; wm.drawSkillTip = drawSkillTip;
     wm.notice = (text, opts) => new Promise((r) => wm.show(new MessageBox(wm, 'notice', text, r, opts)));
     // another player asking something of you: the metal YesNo2 plate (preloaded, as it may not be in yet)
     wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
     wm.okCancel = (text, kind = 'okcancel') => new Promise((r) => wm.show(new UtilBox(wm, kind, text, r)));
-    wm.askWhisper = (def, names) => new Promise((r) => wm.show(new UtilBox(wm, 'whisper', 'Please enter the person you want to whisper to.', r, { def, names })));
+    wm.askWhisper = (def, names) => new Promise((r) => wm.show(new UtilBox(wm, 'whisper', 'Please enter the person you want to whisper to.', r, { def, names }), null));
     wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
-    wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new MessageBox(wm, 'number', text, r, { def, min, max })));
-    wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new MessageBox(wm, 'text', text, r, { def, ...opts })));
-    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
-    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
-    this.buddies = []; this.party = null; this.partyHpMarks = true; this.guild = null;
+    // an amount: the same box with a number field (item names spelled out)
+    wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));
+    // a name or a line: the small UtilDlg box with a white field, opened without a sound
+    wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
+    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
+    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
+    this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
     this.bindUiPointer();
@@ -1515,27 +1536,32 @@ export class Game {
       fame: (f) => this.onFame(f),
       avatarMega: (a) => this.hud.megaphone([`${a.name} : ${a.lines.filter(Boolean).join(' ')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }),
       spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
-      groupChat: (c) => { if (this.chatAllowed(c.mode)) this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff'); },
+      groupChat: (c) => {
+        if (!this.chatAllowed(c.mode) || (c.mode === 0 && this.windows.wins.userlist?.blockedName(c.name))) return;
+        this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
+      },
       whisper: (w) => this.onWhisper(w),
       whisperResult: (r) => this.onWhisperResult(r),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
-      // a buddy coming online gets its balloon; one moving onto your channel gets the same-channel one
+      // a buddy coming online gets its balloon (a guildmate's comes from the guild); one moving onto your channel gets the same-channel one
       buddyChannel: (id, ch) => {
         const b = this.buddies.find((x) => x.id === id);
         if (!b) return;
         const was = b.channel; b.channel = ch;
-        if (was < 0 && ch >= 0) notifyLogin(this.windows, b.name);
+        if (was < 0 && ch >= 0) { if (!this.guild?.members.some((m) => m.id === id)) notifyLogin(this.windows, b.name); }
         else if (was !== ch && ch === this.channel) notifyLogin(this.windows, b.name, true);
       },
-      buddyCapacity: () => {},
+      buddyCapacity: (n) => { this.buddyCapacity = n; },
       buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
       buddyRequest: (b) => notify(this.windows, 'buddy', b.name)
         .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
-      guildName: (id, name) => { const o = this.others.get(id); if (o) { o.guild = name; if (!name) o.emblem = null; } },
-      guildMark: (id, emblem) => { const o = this.others.get(id); if (o) o.emblem = emblem; },
+      // other players' guild tags: held for one still spawning
+      guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
+      guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
+      notifyLevel: (n) => this.hud.message(`<${n.type === 2 ? 'Guild' : 'Family'}> ${n.name} has reached Lv. ${n.level}.`, CHAT_COLOR.error),
       tradeOpen: (t) => {
         if (this.tradeWin) return;
         const w = this.tradeWin = this.windows.show(new TradeWin(this.windows));
@@ -1578,9 +1604,19 @@ export class Game {
       tradeError: (code) => { this.tradeWin?.ended(0); this.windows.notice(TRADE_ERRORS[code] || 'The trade could not be started.'); },
       charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i)); },
       // a Party Search invitation comes as "PS: <leader>"
-      partyInvite: (p) => (p.name.startsWith('PS: ') ? notify(this.windows, 'partySearch', p.name.slice(4)) : notify(this.windows, 'party', p.name))
-        .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name))),
-      partyMessage: (code, name) => { const t = PARTY_MESSAGES[code]; if (t) this.hud.message(t.replace('%s', name), CHAT_COLORS.notice); },
+      // refused at once with party invites switched off, from someone on the Blacklist, or while another is up;
+      // an auto-join one (Party Search) joins straight away
+      partyInvite: (p) => {
+        const from = p.name.startsWith('PS: ') ? p.name.slice(4) : p.name;
+        if (p.autoJoin) { this.net.partyOp(3, p.id); return; }
+        if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
+        (from !== p.name ? notify(this.windows, 'partySearch', from) : notify(this.windows, 'party', p.name))
+          .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
+      },
+      partyMessage: (code, text) => {
+        const t = code === 0x24 ? text || PARTY_ERROR : PARTY_MESSAGES[code] ?? PARTY_ERROR;
+        if (t) this.hud.message(code === 0x24 ? t : t.replace('%s', text), CHAT_COLORS.notice);
+      },
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
       chat: later((c) => this.onChat(c)),
       spawnPlayer: later((d) => this.spawnPlayer(d)),
@@ -1722,7 +1758,10 @@ export class Game {
         this.skillWin?.render(); this.keyBar.render();
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
-      cooldown: (id, sec) => { if (sec) this.skills.cooldowns[id] = Date.now() + sec * 1000; else delete this.skills.cooldowns[id]; },
+      cooldown: (id, sec) => {
+        if (sec) { this.skills.cooldowns[id] = Date.now() + sec * 1000; (this.skills.cooldownTotal ??= {})[id] = sec * 1000; }
+        else delete this.skills.cooldowns[id];
+      },
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
@@ -1736,6 +1775,8 @@ export class Game {
         const ent = chrId === null ? this.player : this.others.get(chrId);
         if (ent) this.playSkillEffect(skillId, ent, false, 'affected');
       }),
+      skillSpecial: later((chrId, skillId) => { const ent = chrId === null ? this.player : this.others.get(chrId); if (ent) this.playSkillEffect(skillId, ent, false, 'special'); }),
+      berserk: later((chrId, on) => this.setBerserk(chrId === null ? this.player : this.others.get(chrId), on)),
       foreignSkill: later((chrId, skillId) => {
         const rp = this.others.get(chrId);
         if (!rp) return;
@@ -1774,7 +1815,8 @@ export class Game {
           this.hud.message(text, QUEST_GREY);
         }
       },
-      disconnected: () => this.windows.notice('The connection to the server was closed.').then(() => location.reload()),
+      // the game's small box with its OK; back to the login screen once it is clicked
+      disconnected: () => this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => location.reload()),
     });
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
@@ -2170,6 +2212,7 @@ export class Game {
     if (rp.chair) this.chairArt(rp.chair);
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     this.others.set(d.id, rp);
+    if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
 
@@ -2821,6 +2864,25 @@ export class Game {
    * answers the last whisper, /find <name> locates a player; anything else goes to the chat target
    * (All / Buddy / Party / Guild / Alliance). GM commands (!...) always go to All.
    */
+  /**
+   * [MapleTip] lines (yellow): every 12 s the first Etc/Tips.img/info row for your level and job group is checked;
+   * once its interval has passed since the last tip, its `all` percent picks a tip from `all`, else from its own list.
+   */
+  mapleTip() {
+    const now = performance.now(), s = this.stats;
+    if (!s || now < (this.tipCheckAt ??= now + 12000)) return;
+    this.tipCheckAt = now + 12000;
+    if (!this.tips) { this.tips = 'loading'; this.assets.json('Etc/Tips.img').then((t) => { this.tips = t || {}; }); return; }
+    if (this.tips === 'loading') return;
+    const group = Math.floor((s.job % 1000) / 100), bit = 2 ** ((group - 1 + 32) % 32);
+    const row = Object.values(this.tips.info || {}).find((r) => s.level >= r.levelMin && s.level <= r.levelMax
+      && (r.job === undefined || (Number(r.job) & bit) !== 0));
+    if (!row || now - (this.lastTipAt ?? -Infinity) < (row.interval || 0)) return;
+    const list = Object.values((Math.random() * 100 < (row.all || 0) ? this.tips.all : this.tips[row.tip]) || {});
+    if (!list.length) return;
+    this.lastTipAt = now;
+    this.hud.message(`[MapleTip] ${list[Math.floor(Math.random() * list.length)]}`, CHAT_COLOR.yellow);
+  }
   /** FAME_RESPONSE lines, all light red. */
   onFame(f) {
     const me = this.player.name, say = (t) => this.hud.message(t, CHAT_COLOR.error);
@@ -2849,6 +2911,10 @@ export class Game {
     try { allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { allow = {}; }
     return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false);
   }
+  /** A Game Option switch (on unless turned off). */
+  optionAllowed(key) {
+    try { return JSON.parse(localStorage.getItem('maple.gameopt') || '{}')[key] !== false; } catch { return true; }
+  }
   sendChat(text) {
     if (!this.net) { this.player.chat = { text, t: 5 }; return; }
     let m = text.match(/^\/(?:w|whisper)\s+(\S+)\s+(.+)$/i);
@@ -2870,8 +2936,9 @@ export class Game {
     if (mode === 2 && !this.guild) { note('You are not in a guild yet or none of your guild member is online.'); return; }
     if (mode === 3 && !this.guild) { note('There are no guild alliance you joined OR no one online in your guild alliance.'); return; }
     if (mode === 0) {
-      // buddy chat (and Group, which has no buddy-group choice yet) reaches the buddies online
-      const ids = (this.buddies || []).filter((b) => b.channel >= 0).map((b) => b.id);
+      // buddy chat reaches the buddies online (To Group: those in the group picked on the Buddy tab), not blocked ones
+      const ul = this.windows.wins.userlist, group = target === 'group' ? this.statusBar.chatGroup : null;
+      const ids = (this.buddies || []).filter((b) => b.channel >= 0 && !b.pending && !ul?.isBlocked(b) && (!group || (b.group || 'Default Group') === group)).map((b) => b.id);
       if (!ids.length) { note('You have no buddy available for chat.'); return; }
       this.net.groupChat(0, text, ids);
     } else this.net.groupChat(mode, text);
@@ -2884,44 +2951,79 @@ export class Game {
    */
   onGuild(d) {
     const me = this.player.id, g = this.guild, msg = (t) => this.hud.message(t, CHAT_COLORS.guild);
-    const member = (id) => g?.members.find((m) => m.id === id);
+    const member = (id) => g?.members.find((m) => m.id === id), master = g?.members[0]?.id === me;
     switch (d.kind) {
-      case 'askName':
-        this.windows.askText('Enter the name of the guild you would like to create.').then((n) => { if (n) this.net.guildOp(2, n.trim()); });
-        break;
+      case 'askName': this.askGuildName(); break;
       case 'agreement':
-        notify(this.windows, 'guildFound', d.master).then((ok) => this.net.guildAgree(ok));
+        if (this.party?.leader === me) { heracleSays(this.windows, 'Now I am asking other guild members for the agreement of forming a guild~ Please hold on~...'); break; }
+        this.showModal(new GuildContractWin(this.windows, d.master, d.name, (ok) => this.net.guildAgree(ok)));
         break;
-      case 'invite':
+      case 'invite': {
+        // refused at once with guild invites off, from someone on the Blacklist (0x35) or while another is up (0x36)
+        const busy = this.windows.order.some((w) => w.kind === 'guild');
+        if (busy || !this.optionAllowed('guildInvite') || this.windows.wins.userlist?.blacklisted(d.from)) { this.net.guildDeny(d.from, busy ? 0x36 : 0x35, this.player.name); break; }
         notify(this.windows, 'guild', d.from)
-          .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from)));
+          .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from, 0x37, this.player.name)));
         break;
-      case 'info':
-        this.guild = d.guild;
-        break;
+      }
+      case 'info': this.guild = d.guild; break;
       case 'join':
+        if (d.member.id === me) { msg('You have entered the guild.'); this.net.guildOp(0); break; }
         if (!g) break;
         g.members = [...g.members.filter((m) => m.id !== d.member.id), d.member];
-        msg(d.member.id === me ? `You have joined the guild ${g.name}.` : `${d.member.name} has joined the guild.`);
+        msg(`'${d.member.name}' has joined the guild.`);
         break;
       case 'leave': case 'expel':
-        if (d.id === me) { this.guild = null; msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have left the guild.'); break; }
+        if (d.id === me) { this.guild = null; msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have quit the guild.'); break; }
         if (g) g.members = g.members.filter((m) => m.id !== d.id);
-        msg(`${d.name} has ${d.kind === 'expel' ? 'been expelled from' : 'left'} the guild.`);
+        if (d.kind === 'leave') msg(`'${d.name}' quitted the guild.`);
+        else msg(d.name ? `'${d.name}' has been expelled from the guild.` : 'Deleted Chracters have been expelled.');
         break;
-      case 'disband': this.guild = null; msg('The guild has been disbanded.'); break;
-      case 'capacity': if (g) g.capacity = d.capacity; break;
+      case 'disband':
+        this.guild = null;
+        if (master) heracleSays(this.windows, 'The guild has been disbanded..  Please come back to me when you want to make a guild, again..');
+        else msg('The guild has been disbanded.');
+        break;
+      case 'capacity':
+        if (g) g.capacity = d.capacity;
+        if (master) heracleSays(this.windows, `Congratulation~  The number of guld members has now increased to ${d.capacity} ...  Please come back to me whenever you need to..`);
+        break;
       case 'levelJob': { const m = member(d.id); if (m) Object.assign(m, { level: d.level, job: d.job }); break; }
       case 'online': { const m = member(d.id); if (m) { m.online = d.online; if (d.online && d.id !== me) notifyLogin(this.windows, m.name); } break; }
-      case 'ranks': if (g) g.ranks = d.ranks; break;
-      case 'rank': { const m = member(d.id); if (m) m.rank = d.rank; break; }
-      case 'emblem': if (g) g.emblem = d.emblem; break;
-      case 'notice': if (g) { g.notice = d.notice; if (d.notice) msg(`[Guild Notice] ${d.notice}`); } break;
+      case 'ranks': if (g) { g.ranks = d.ranks; if (master) this.windows.notice('It is saved.'); } break;
+      case 'rank': { const m = member(d.id); if (m) { m.rank = d.rank; msg(`[${m.name}]'s position has been changed to [${g.ranks[d.rank - 1] || ''}].`); } break; }
+      case 'emblem': if (g) { g.emblem = d.emblem; if (master) this.windows.notice('It is completed.'); } break;
+      case 'notice': if (g) { g.notice = d.notice; if (d.notice) msg(`* Guild Notice : ${d.notice}`); } break;
       case 'gp': if (g) g.gp = d.gp; break;
-      case 'message': { const t = GUILD_MESSAGES[d.code]; if (t) this.windows.notice(t.replace('%s', d.name)); break; }
+      case 'makeMark':
+        if (master) this.showModal(new GuildMarkWin(this.windows, g.emblem, (e) => { if (e) this.net.guildEmblem(e); }));
+        break;
+      case 'gpqQueue': {
+        const ch = String(d.channel);
+        msg(d.pos === 1 ? `Please go see the Guild Quest NPC at Channel ${ch} immediately to enter.`
+          : d.pos === 2 ? `Your guild is up next. Please head to the Guild Quest map at Channel ${ch} and wait.`
+            : `There's currently 1 guild participating in the Guild Quest, and your guild is number ${d.pos - 1} on the waitlist.`);
+        break;
+      }
+      case 'message': {
+        if (d.code === 0x1C) { heracleSays(this.windows, 'The name is already in use... Please try other ones....').then(() => this.askGuildName()); break; }
+        if (d.code === 0x4E) { msg(d.ok && d.text ? d.text : GUILD_ERROR); break; }
+        const [how, t] = GUILD_MESSAGES[d.code] || ['chat', GUILD_ERROR];
+        if (how === 'npc') heracleSays(this.windows, t); else msg(t.replace('%s', d.name));
+        break;
+      }
       default: break;
     }
   }
+  /** Heracle's guild name prompt: 4-12 characters; Cancel sends nothing. */
+  askGuildName() {
+    this.windows.askText('Please type the name of the guild.', '', { max: 12 }).then((n) => {
+      const name = n?.trim();
+      if (name && name.length >= 4) this.net.guildOp(2, name);
+    });
+  }
+  /** A modal window with its art loaded first. */
+  showModal(w) { this.assets.preload(w.frames()).then(() => this.windows.show(w)); }
 
   /** PARTY_OPERATION results: keep this.party = { id, leader, members[] } in step with the server. */
   onParty(p) {
@@ -2931,18 +3033,23 @@ export class Game {
       this.party = { id: p.id, leader: me, members: [{ id: me, name: this.player.name, job: this.stats.job, level: this.stats.level, channel: this.channel, map: this.map?.id }] };
       msg('You have created a new party.');
     } else if (p.kind === 'update' || p.kind === 'join') {
-      if (p.kind === 'join') msg(p.name === this.player.name ? 'You have joined the party.' : `${p.name} has joined the party.`);
+      if (p.kind === 'join') msg(p.name === this.player.name ? 'You have joined the party.' : `'${p.name}' has joined the party.`);
       this.party = { id: p.id, leader: p.leader, members: keepHp(p.members) };
     } else if (p.kind === 'leave' || p.kind === 'expel') {
-      if (p.target === me) { this.party = null; msg(p.kind === 'expel' ? 'You have been expelled from the party.' : 'You have left the party.'); }
-      else { this.party = { id: p.id, leader: p.leader, members: keepHp(p.members) }; msg(`${p.name} has ${p.kind === 'expel' ? 'been expelled from' : 'left'} the party.`); }
+      const out = p.kind === 'expel';
+      if (p.target === me) { this.party = null; msg(out ? 'You have been expelled from the party.' : 'You have left the party.'); }
+      else { this.party = { id: p.id, leader: p.leader, members: keepHp(p.members) }; msg(out ? `'${p.name}' have been expelled from the party.` : `'${p.name}' have left the party.`); }
     } else if (p.kind === 'disband') {
-      this.party = null; msg(p.target === me ? 'You have disbanded the party.' : 'The party has been disbanded.');
+      this.party = null; msg(p.target === me ? 'You have quit as the leader of the party. The party has been disbanded.' : 'You have left the party since the party leader quit.');
     } else if (p.kind === 'leader' && this.party) {
       this.party.leader = p.leader;
       const m = this.party.members.find((x) => x.id === p.leader);
-      if (m) msg(`${m.name} is now the party leader.`);
+      if (m) msg(p.reason ? `Due to the party leader disconnecting from the game, ${m.name} has been assigned as the new leader.` : `\t${m.name} has become the leader of the party.`);
+    } else if (p.kind === 'levelJob') {
+      const m = this.party?.members.find((x) => x.id === p.id);
+      if (m) Object.assign(m, { level: p.level, job: p.job });
     }
+    this.windows.wins.partyhp?.sync();
     this.windows.wins.partysearch?.partyChanged();
   }
 
@@ -2962,6 +3069,7 @@ export class Game {
     this.pendingWhisper = null;
   }
   async onFindResult(f) {
+    if (f.buddy) { this.windows.wins.userlist?.located(f); return; }
     let where;
     if (f.type === 1) where = `is in ${await this.mapName(f.where)}`;
     else if (f.type === 3) where = `is in channel ${f.where + 1}`;
@@ -3033,6 +3141,7 @@ export class Game {
     this.updateFx(dt);
     this.runTimers(dt);
     this.playTimeNote();
+    this.mapleTip();
     if (this.shake) this.shakeStep(dt);
     this.loadAfterimage();
     this.handleHotkeys();
@@ -3870,12 +3979,24 @@ export class Game {
     this.attack(c.id, 'magic', { charge: Math.round(Math.min(c.t, CHARGE_HOLD) * 1000) });
   }
   /** A skill's looping art on `ent` for as long as `keep()` holds. */
+  /** Berserk on (HP low enough): its effect stays on the character until it goes off. */
+  setBerserk(ent, on) {
+    if (!ent) return;
+    ent.berserk = on;
+    if (!on || ent.berserkFx === 'pending' || this.fx.includes(ent.berserkFx)) return;
+    // (started again when a map change cleared it while it is still on)
+    ent.berserkFx = 'pending';
+    const keep = () => !!ent.berserk && (ent === this.player || this.others.get(ent.id) === ent);
+    this.loopSkillEffect(BERSERK, ent, 'effect', keep).then((f) => { ent.berserkFx = f || null; });
+  }
   async loopSkillEffect(id, ent, branch, keep) {
     const fx = Game.fxNode((await this.skills?.ensure(id))?.[branch]);
     if (!fx || !keep()) return;
     const anim = new Anim(fx, true);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, follow: ent, keep });
+    const f = { anim, follow: ent, keep };
+    this.fx.push(f);
+    return f;
   }
   /**
    * Let go: up to mobCount monsters (fewer the shorter it was held) whose bodies reach into a wedge in front of you,

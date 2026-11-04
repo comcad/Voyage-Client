@@ -44,8 +44,15 @@ export class WindowManager {
     return w;
   }
   close(w) {
+    // a window may ask first (Key Setting's "Save changes?"); it closes once that is answered
+    if (w.confirmClose && !w.closeOk && this.order.includes(w)) {
+      if (w.asking) return;
+      w.asking = true;
+      w.confirmClose().then(() => { w.asking = false; w.closeOk = true; this.close(w); w.closeOk = false; });
+      return;
+    }
     const i = this.order.indexOf(w);
-    if (i >= 0) { this.order.splice(i, 1); const s = w.closeSound ?? 'UI/MenuDown'; if (s) sfx.play(s); this.tip = null; w.onClose?.(); }   // closeSound null: closes silently
+    if (i >= 0) { this.order.splice(i, 1); const s = w.closeSound === undefined ? 'UI/MenuDown' : w.closeSound; if (s) sfx.play(s); this.tip = null; w.onClose?.(); }   // closeSound null: closes silently
   }
   toggle(name, arg) {
     const w = this.wins[name];
@@ -55,8 +62,9 @@ export class WindowManager {
     w.setArg?.(arg);
   }
   closeAll() {
-    const keep = this.order.filter((w) => w.modal || w.keepOnEscape || w === this.wins.minimap || w === this.wins.questalarm);
+    const keep = this.order.filter((w) => w.modal || w.keepOnEscape || w === this.wins.minimap || w === this.wins.questalarm || (w.confirmClose && !w.closeOk));
     for (const w of this.order) if (!keep.includes(w)) w.onClose?.();
+    for (const w of keep) if (w.confirmClose) this.close(w);
     if (this.order.length > keep.length) sfx.play('UI/MenuDown');
     this.order = keep;
   }
@@ -131,7 +139,8 @@ export class WindowManager {
     for (const ch of String(n)) { const im = this.image(this.B.ItemNo[ch]); if (im) { ctx.drawImage(im, cx, y); cx += im.width; } }
   }
 
-  startCarry(payload, node) { this.carry = { ...payload, node }; }
+  /** Anything picked up makes the drag sound; an item put down in a window, the drop sound (not a key binding). */
+  startCarry(payload, node) { this.carry = { ...payload, node }; sfx.play('UI/DragStart'); }
   /**
    * Put down what is being carried at (x, y): on the window there, on the quick slots, or outside
    * (the source decides - an item is dropped on the field). Returns whether a window took the event.
@@ -139,7 +148,7 @@ export class WindowManager {
   placeCarry(x, y) {
     const c = this.carry, w = this.top(x, y);
     this.carry = null;
-    if (w) w.drop?.(x - w.x, y - w.y, c);
+    if (w) { w.drop?.(x - w.x, y - w.y, c); if (!w.bindsKeys && c.kind === 'item') sfx.play('UI/DragEnd'); }
     else if (this.bar.contains?.(x, y)) this.bar.dropOnQuickSlot?.(x, y, c);
     else c.source?.dropOutside?.(c, x, y);
     return !!w;
@@ -171,13 +180,13 @@ export class WindowManager {
     if (type === 'wheel') this.tipHeld = true;
     else if (type === 'move' && (x !== this.tipAt?.x || y !== this.tipAt?.y)) this.tipHeld = false;
     this.tipAt = { x, y };
-    this.tip = w && !this.carry && !this.tipHeld ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : null;
+    this.tip = this.carry || this.tipHeld ? null : w ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : this.bar?.quickTip?.(x, y) ?? null;
     if (w) w.move?.(x - w.x, y - w.y);
 
     if (type === 'down') {
       // menus close on any click outside them
       for (const o of [...this.order]) if (o.transient && o !== w) this.close(o);
-      // an item held by a click goes where the next click is (a quick second click on it is a double-click)
+      // anything held by a click goes where the next click is (a quick second click on it is a double-click)
       const held = this.carry?.sticky ? this.carry : null, quick = held && performance.now() - held.at < 350 && Math.abs(held.x - x) < 4 && Math.abs(held.y - y) < 4;
       if (held && !quick) { this.lastDown = null; if (!modal || w === modal) this.placeCarry(x, y); return true; }
       if (!w) return !!modal;
@@ -201,8 +210,8 @@ export class WindowManager {
       if (this.carry) {
         const c = this.carry;
         if (c.sticky) return !!w;
-        // released where it was picked up: a click, not a drag - keep holding the item until the next click
-        if (c.kind === 'item' && Math.abs(c.x - x) < 4 && Math.abs(c.y - y) < 4) { c.sticky = true; return true; }
+        // released where it was picked up: a click, not a drag - keep holding it until the next click
+        if (Math.abs(c.x - x) < 4 && Math.abs(c.y - y) < 4) { c.sticky = true; return true; }
         return this.placeCarry(x, y);
       }
       if (!w) return false;
@@ -239,9 +248,11 @@ export class WindowManager {
       }
     }
     if (this.carry?.node) {
-      ctx.globalAlpha = 0.7; this.drawIcon(ctx, this.carry.node, this.mouse.x - 16, this.mouse.y - 16); ctx.globalAlpha = 1;
+      ctx.globalAlpha = this.carry.alpha ?? 0.7; this.drawIcon(ctx, this.carry.node, this.mouse.x - 16, this.mouse.y - 16); ctx.globalAlpha = 1;
     }
-    if (this.tip?.item) this.drawItemTip?.(ctx, this, this.tip.item, this.mouse.x + 14, this.mouse.y + 18);
+    const ty = this.tip?.above ? { bottom: this.tip.above } : null;
+    if (this.tip?.item) this.drawItemTip?.(ctx, this, this.tip.item, this.mouse.x + 14, ty ?? this.mouse.y + 18);
+    else if (this.tip?.skill) this.drawSkillTip?.(ctx, this, this.tip.skill, this.mouse.x, ty ?? this.mouse.y + 20);
     else if (this.tip) drawTip(ctx, this.tip, this.mouse.x + 14, this.mouse.y + 18);
   }
 }
@@ -306,29 +317,32 @@ export class Win {
   body() {}
   text(ctx, t, x, y, o = {}) { uiText(ctx, String(t), x, y, { color: '#000', size: 11, ...o }); }
 
-  /** A Basic.img/VScr scrollbar at (x, y) of height h; returns the new first row on click. */
-  scrollbar(ctx, x, y, h, first, rows, visible) {
-    const V = this.mgr.B.VScr, on = rows > visible, S = on ? V.enabled : V.disabled;
+  /** A Basic.img/VScr scrollbar (or another VScr style, V) at (x, y) of height h; returns the new first row on click. */
+  scrollbar(ctx, x, y, h, first, rows, visible, V = this.mgr.B.VScr) {
+    const on = rows > visible, S = on ? V.enabled : V.disabled, { w, a, t } = scrollSizes(V);
     const im = (n) => this.mgr.image(n);
     const base = im(S.base);
-    if (base) ctx.drawImage(base, x, y + 12, 12, h - 24);
+    if (base) ctx.drawImage(base, x, y + a, w, h - 2 * a);
     const prev = im(on ? S.prev0 : S.prev), next = im(on ? S.next0 : S.next);
     if (prev) ctx.drawImage(prev, x, y);
-    if (next) ctx.drawImage(next, x, y + h - 12);
+    if (next) ctx.drawImage(next, x, y + h - a);
     if (on) {
-      const track = h - 24 - 12, t = Math.round(track * first / Math.max(1, rows - visible));
+      const track = h - 2 * a - t, p = Math.round(track * first / Math.max(1, rows - visible));
       const thumb = im(S.thumb0);
-      if (thumb) ctx.drawImage(thumb, x, y + 12 + t);
+      if (thumb) ctx.drawImage(thumb, x, y + a + p);
     }
   }
-  scrollClick(lx, ly, x, y, h, first, rows, visible) {
-    if (lx < x || lx >= x + 12 || ly < y || ly >= y + h) return null;
+  scrollClick(lx, ly, x, y, h, first, rows, visible, V = this.mgr.B.VScr) {
+    const { w, a, t } = scrollSizes(V);
+    if (lx < x || lx >= x + w || ly < y || ly >= y + h) return null;
     const max = Math.max(0, rows - visible);
-    if (ly < y + 12) return Math.max(0, first - 1);
-    if (ly >= y + h - 12) return Math.min(max, first + 1);
-    return Math.max(0, Math.min(max, Math.round(((ly - y - 18) / (h - 36)) * max)));
+    if (ly < y + a) return Math.max(0, first - 1);
+    if (ly >= y + h - a) return Math.min(max, first + 1);
+    return Math.max(0, Math.min(max, Math.round(((ly - y - a - t / 2) / (h - 2 * a - t)) * max)));
   }
 }
+/** A VScr style's width, arrow height and thumb height. */
+const scrollSizes = (V) => ({ w: V?.enabled?.prev0?._w || 12, a: V?.enabled?.prev0?._h || 12, t: V?.enabled?.thumb0?._h || 12 });
 
 // ==================================================================== Item inventory
 /**
@@ -385,7 +399,7 @@ class InventoryWin extends Win {
     const s = this.scrollClick(lx, ly, 156, 51, 201, this.first, this.rows, 6);
     if (s !== null) { this.first = s; return; }
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
-    if (it) { this.mgr.startCarry({ kind: 'item', tab: this.tab, slot, id: it.id }, this.mgr.icon(it.id)); sfx.play('UI/DragStart'); }
+    if (it) this.mgr.startCarry({ kind: 'item', tab: this.tab, slot, id: it.id }, this.mgr.icon(it.id));
   }
   dblclick(lx, ly) {
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
@@ -395,7 +409,7 @@ class InventoryWin extends Win {
     if (c.kind !== 'item') return;
     const to = this.slotAt(lx, ly);
     if (c.tab === 2 && isScroll(c.id) && this.tab === 1 && to && this.g.inventory[1][to]) { this.g.useScroll(c.slot, to); return; }
-    if (c.tab === this.tab && to && to !== c.slot) { this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1); sfx.play('UI/DragEnd'); }
+    if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);
     else if (c.tab === 'equip' && this.tab === 1) this.g.unequip(c.slot);
   }
   /** Dragged onto the field: drop it (ITEM_MOVE to slot 0), asking how many of a stack. */
@@ -655,10 +669,26 @@ class StatWin extends Win {
 
 // ==================================================================== Skill inventory
 /**
- * Skill.img backgrnd 175x289: tab strip y 22-40 (Tab ● I II III IV), header icon box x 6-40 y 47-83
- * with the job name bar x 40-167 y 52-78, list y 88-256 (four 141x35 rows, skill0 / skill1 when
- * selected, every 40px from y 93), SKILL POINT box x 82-111 y 264-278.
+ * Skill.img backgrnd 175x289: tab strip y 22-40 (Tab ● I II III IV), the book's icon at (10, 57) and its
+ * name (Tahoma 11 white) centred on x 105 at y 66. Four rows every 40px from y 99: skill1 (requirements met)
+ * or skill0 at x 7, icon at (9, y + 2), name and level (Arial 12) at (47, y + 1) / (47, y + 19), BtSpUp at
+ * (131, y + 20), a line under each row but the last. VScr4 scrollbar at (153, 99), SP right-aligned at x 110.
  */
+const SKILL_ROW_Y = 99, SKILL_ROW_H = 40;
+/** Text lands 2px under its v83 coordinate when drawn from a canvas 'top' baseline. */
+const SKILL_TEXT_DY = 2;
+const SKILL_BAR = [153, 99, 156];
+/** Skills a double-click doesn't cast: the ones held down, and Aran's combo / hidden skills. */
+const NO_DBLCLICK = new Set([1121001, 1221001, 1321001, 2121001, 2221001, 2321001, 3121004, 3221001, 5101004, 5201002, 5221004,
+  13111002, 14111006, 15101003, 22121000, 22151001, 20000014, 20000015, 20000016, 21000002, 21100001, 21100002, 21100004,
+  21100005, 21110003, 21110004, 21110006, 21110007, 21110008, 21120005, 21120006, 21120007, 21120009, 21120010]);
+const SP_SHORT = ["You're lacking Level 1 Skills.", "You're lacking Level 1 or 2 Skills.", 'You are lacking in either 1st, 2nd, or 3rd level skills.'];
+/** Text cut to `w` px with "..", in the context's current font. */
+function cutText(ctx, s, w) {
+  if (ctx.measureText(s).width <= w) return s;
+  while (s && ctx.measureText(`${s}..`).width > w) s = s.slice(0, -1);
+  return `${s}..`;
+}
 /**
  * The Skill Macro editor (UIWindow.img/SkillMacro, 207x289), attached to the skill window's right side
  * by its MACRO button (Basic.img/BtMacro at 120,265), laid out as openms recovered it: three of the five
@@ -682,8 +712,9 @@ class SkillWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Skill;
     super(mgr, W.backgrnd, 200, 90);
-    this.W = W; this.first = 0; this.sel = null;
-    this.spUp = [0, 1, 2, 3].map((i) => this.button(W.BtSpUp, 9 + 141 - 16, 93 + i * 40 + 20, () => this.raise(i)));
+    this.W = W; this.first = 0;
+    this.spUp = [0, 1, 2, 3].map((i) => this.button(W.BtSpUp, 131, SKILL_ROW_Y + i * SKILL_ROW_H + 20, () => this.raise(i)));
+    mgr.assets.json('Etc/RecommendSkill.img').then((r) => { this.recommendData = r || {}; }, () => { this.recommendData = {}; });
     this.skillW = this.w; this.closePinned = true; this.closeBtn.x = this.skillW - 17;
     this.M = mgr.W.SkillMacro; this.mSel = -1; this.mFirst = 0;
     this.button(mgr.B.BtMacro, 120, 265, () => this.toggleMacro());
@@ -693,7 +724,8 @@ class SkillWin extends Win {
   }
   frames() {
     const M = this.M;
-    return [...super.frames(), this.W.skill0, this.W.skill1, ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled),
+    return [...super.frames(), this.W.skill0, this.W.skill1, this.W.line, this.W.recommend?.[0], ...allCanvases(this.mgr.B.VScr4),
+      ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled),
       M.backgrnd, M.macroslot, M.macroslot1, M.macroslot2, M.macroname, M.line01, M.line02, ...allCanvases(M.Macroicon), ...allCanvases(this.mgr.B.CheckBox)];
   }
 
@@ -816,24 +848,52 @@ class SkillWin extends Win {
   get sp() {
     const g = this.g, b = this.book;
     if (b === GM_TAB) return g.stats.sp || 0;
+    // the beginner book: a point a level up to 7, less what every beginner's Three Snails / Recovery / Nimble Feet hold
     if (b % 1000 === 0 || b === 2001) {
-      const base = Math.floor(g.stats.job / 1000) * 1000;
       let used = 0;
-      for (let i = 0; i < 3; i++) used += g.skills.level(base * 10000 + 1000 + i);
-      return Math.max(0, Math.min(g.stats.level - 1, 6) - used);
+      for (const base of [0, 1000, 2000, 2001]) for (let i = 0; i < 3; i++) used += g.skills.level(base * 10000 + 1000 + i);
+      return Math.max(0, Math.min(g.stats.level, 7) - 1 - used);
     }
     return g.stats.sp || 0;
   }
   canRaise(id) {
     if (this.book === GM_TAB) return false;   // GM skills are granted, not bought with SP
-    const sb = this.g.skills, req = sb.node(id)?.req;
-    return this.sp > 0 && sb.level(id) < sb.maxLevel(id) && (!req || Object.entries(req).every(([r, lv]) => sb.level(Number(r)) >= lv));
+    const sb = this.g.skills;
+    return !sb.node(id)?.disable && this.sp > 0 && sb.raiseState(id) === 'ok';
   }
-  raise(i) { const id = this.list[this.first + i]; if (id && this.canRaise(id)) this.g.net?.distributeSp(id); }
-  rowAt(lx, ly) {
-    const i = Math.floor((ly - 93) / 40);
-    if (i < 0 || i > 3 || lx < 9 || lx > 150 || (ly - 93) % 40 >= 35) return -1;
+  /**
+   * A + click: one request at a time; past the first job, the SP already in that job step's skills must be
+   * under 3 x level - 89 (2nd), 3 x level - 209 (3rd) or 3 x (level - 119) (4th).
+   */
+  raise(i) {
+    const g = this.g, sb = g.skills, id = this.list[this.first + i];
+    if (!id || !this.canRaise(id)) return;
+    const book = Math.floor(id / 10000), step = book % 10, L = g.stats.level;
+    if (book % 100 !== 0 && book !== 2001 && step <= 2) {
+      let spent = 0;
+      for (const [k, s] of Object.entries(sb.levels)) {
+        const kb = Math.floor(k / 10000);
+        if (kb % 10 === step && (step !== 0 || kb % 100 !== 0)) spent += s.level || 0;
+      }
+      if (spent >= [3 * L - 89, 3 * L - 209, 3 * (L - 119)][step]) { this.mgr.notice(SP_SHORT[step]); return; }
+    }
+    g.sendStatRequest(() => g.net?.distributeSp(id));
+  }
+  /** The row under (lx, ly), or with `icon` only over its icon; -1 for none. */
+  rowAt(lx, ly, icon = false) {
+    const i = Math.floor((ly - SKILL_ROW_Y) / SKILL_ROW_H), dy = ly - SKILL_ROW_Y - i * SKILL_ROW_H;
+    if (i < 0 || i > 3) return -1;
+    if (icon ? lx < 10 || lx >= 42 || dy < 3 || dy >= 35 : lx < 7 || lx >= 161 || dy >= 38) return -1;
     return this.first + i < this.list.length ? this.first + i : -1;
+  }
+  /** Etc/RecommendSkill.img: the book's skill for the SP spent in it (0 for none). */
+  recommended(list) {
+    const r = this.recommendData?.[this.book], sb = this.g.skills;
+    if (!r) return 0;
+    const spent = list.reduce((a, id) => a + sb.level(id), 0), ts = Object.keys(r).map(Number).sort((a, b) => a - b);
+    const i = ts.findIndex((t) => t >= spent);
+    if (i < 0) return 0;
+    return Number(ts[i] === spent ? r[ts[i]] : i > 0 ? r[ts[i - 1]] : 0) || 0;
   }
   body(ctx) {
     const g = this.g, sb = g.skills, m = this.mgr;
@@ -849,40 +909,54 @@ class SkillWin extends Win {
     const bookId = this.book === GM_TAB ? 900 : this.book;
     const book = sb.books[bookId], bi = book && !(book instanceof Promise) ? book.info?.icon : null;
     const bim = m.image(bi);
-    if (bim) ctx.drawImage(bim, 6 + 4, 80 - 30);
+    if (bim) ctx.drawImage(bim, 10, 57);
     else if (bi) m.assets.preload([bi]);
-    this.text(ctx, this.book === GM_TAB ? 'GM' : sb.bookName(this.book), 103, 59, { color: '#fff', align: 'center', size: 12 });
-    const list = this.list;
+    // the book's name centred on x 105, or from x 45 cut to 125px when it is 126px or wider
+    ctx.save(); ctx.font = '11px Tahoma, Arial, "Segoe UI", sans-serif';
+    const bn = this.book === GM_TAB ? 'GM' : sb.bookName(this.book), wide = ctx.measureText(bn).width >= 126;
+    const bookName = wide ? cutText(ctx, bn, 125) : bn;
+    ctx.restore();
+    this.text(ctx, bookName, wide ? 45 : 105, 66 + SKILL_TEXT_DY, { color: '#fff', align: wide ? 'left' : 'center', size: 11, font: 'Tahoma' });
+    const list = this.list, rec = this.recommended(list), R = this.W.recommend?.[0];
     this.first = Math.min(this.first, Math.max(0, list.length - 4));
+    const mx = m.mouse.x - this.x, my = m.mouse.y - this.y, hover = m.top(m.mouse.x, m.mouse.y) === this ? this.rowAt(mx, my) : -1;
+    ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';
     for (let i = 0; i < 4; i++) {
       const id = list[this.first + i];
       this.spUp[i].visible = !!id;
       if (!id) continue;
-      const y = 93 + i * 40, lv = sb.level(id);
-      const row = m.image(id === this.sel ? this.W.skill1 : this.W.skill0);
-      if (row) ctx.drawImage(row, 9, y);
-      const icon = lv ? sb.icon(id) : sb.node(id)?.iconDisabled || sb.icon(id);
-      if (m.image(icon)) m.drawIcon(ctx, icon, 9 + 2, y + 2); else if (icon) m.assets.preload([icon]);
-      this.text(ctx, sb.name(id), 9 + 39, y + 3);
-      this.text(ctx, `Lv. ${lv}/${sb.maxLevel(id)}`, 9 + 39, y + 20);
+      const y = SKILL_ROW_Y + i * SKILL_ROW_H, lv = sb.level(id), state = sb.raiseState(id), n = sb.node(id);
+      const row = m.image(state === 'req' ? this.W.skill0 : this.W.skill1);
+      if (row) ctx.drawImage(row, 7, y);
+      if (id === rec && m.image(R)) ctx.drawImage(m.image(R), 43, y);
+      const icon = state === 'req' ? n?.iconDisabled || sb.icon(id) : hover === this.first + i ? n?.iconMouseOver || sb.icon(id) : sb.icon(id);
+      const im = m.image(icon);
+      if (im) ctx.drawImage(im, 9, y + 2); else if (icon) m.assets.preload([icon]);
+      this.text(ctx, cutText(ctx, sb.name(id), 104), 47, y + 1 + SKILL_TEXT_DY, { size: 12 });
+      this.text(ctx, lv, 47, y + 19 + SKILL_TEXT_DY, { size: 12 });
+      if (i < 3 && list[this.first + i + 1]) { const line = m.image(this.W.line); if (line) ctx.drawImage(line, 7, y + 37); }
       this.spUp[i].enabled = this.canRaise(id);
     }
-    this.scrollbar(ctx, 154, 92, 160, this.first, list.length, 4);
-    this.text(ctx, this.sp, 97, 266, { align: 'center' });
+    ctx.restore();
+    this.scrollbar(ctx, ...SKILL_BAR, this.first, list.length, 4, m.B.VScr4);
+    this.text(ctx, this.sp, 110, 265 + SKILL_TEXT_DY, { align: 'right', size: 12 });
   }
   down(lx, ly) {
     if (this.macroOpen && lx >= this.skillW) { this.macroDown(lx, ly); return; }
     const hit = tabAt(this.tabRects, lx, ly);
     if (hit >= 0) { if (this.book !== this.books[hit]) { this.book = this.books[hit]; this.first = 0; sfx.play('UI/Tab'); } return; }
-    const s = this.scrollClick(lx, ly, 154, 92, 160, this.first, this.list.length, 4);
+    const s = this.scrollClick(lx, ly, ...SKILL_BAR, this.first, this.list.length, 4, this.mgr.B.VScr4);
     if (s !== null) { this.first = s; return; }
-    const r = this.rowAt(lx, ly);
+    const r = this.rowAt(lx, ly, true);
     if (r < 0) return;
-    const id = this.list[r];
-    this.sel = id;
-    const sb = this.g.skills;
-    // only learned, usable skills can be dragged onto a key
-    if (lx < 9 + 36 && sb.level(id) && sb.kind(id, this.g.weaponId()) !== 'passive') this.mgr.startCarry({ kind: 'skill', id }, sb.icon(id));
+    const id = this.list[r], sb = this.g.skills, kind = Math.floor(id / 1000) % 10;
+    // a learned skill's icon goes onto a key, except the x0xxx passives and the x9xxx ones
+    if (kind !== 0 && kind !== 9 && sb.level(id) > 0) this.mgr.startCarry({ kind: 'skill', id, alpha: 0.5 }, sb.icon(id));
+  }
+  dblclick(lx, ly) {
+    if (this.macroOpen && lx >= this.skillW) return;
+    const r = this.rowAt(lx, ly), id = r >= 0 ? this.list[r] : 0;
+    if (id && this.g.skills.level(id) > 0 && !NO_DBLCLICK.has(id)) this.g.useSkill(id);
   }
   wheel(dy) {
     if (this.macroOpen && this.mgr.mouse.x - this.x >= this.skillW) { this.mFirst = Math.max(0, Math.min(5 - MACRO_ROWS, this.mFirst + Math.sign(dy))); return; }
@@ -894,16 +968,12 @@ class SkillWin extends Win {
     if (!hit || hit.icon) return;
     this.draft[hit.row].skills[hit.slot] = c.id; this.mSel = hit.row;
     if (this.nameField) this.nameField.value = this.draft[hit.row].name;
-    sfx.play('UI/DragEnd');
   }
   rclick(lx, ly) { const hit = this.macroOpen && this.macroAt(lx, ly); if (hit && !hit.icon) this.draft[hit.row].skills[hit.slot] = 0; }
   tooltip(lx, ly) {
+    if (this.macroOpen && lx >= this.skillW) return null;
     const r = this.rowAt(lx, ly);
-    if (r < 0 || lx > 9 + 36) return null;
-    const sb = this.g.skills, id = this.list[r], lv = sb.level(id);
-    const lines = [sb.desc(id).replace(/\\n/g, '\n')];
-    if (lv) lines.push('', `[Current Level ${lv}]`, sb.hint(id, lv).replace(/\\n/g, '\n'));
-    return { title: sb.name(id), lines };
+    return r < 0 ? null : { skill: this.list[r] };
   }
 }
 
@@ -1465,45 +1535,74 @@ function nineSlice(ctx, m, F, w, h) {
 
 // ==================================================================== Key config
 /**
- * KeyConfig backgrnd 629x373 (origin at its centre, so it opens centred). Key caps were found in the
- * art (light 28x25 faces; wider for Shift/Ctrl/Alt/Space); the reserved pink keys (Esc, Tab, Screen
- * Shot) and keys without a KeyConfig/key label cannot be bound. Unbound functions wait in the
- * palette below: 3 rows of 18 cells (28x32), columns every 34px from x 10, rows at y 265/299/333.
- * KeyConfig/icon/<action> pictures menu (0-27), action (50-54) and face (100-106) bindings.
+ * KeyConfig backgrnd 629x373 (origin at its centre, so it opens centred). Each bindable key is a 32x32
+ * box at its spot below, holding the bound icon, with the key's KeyConfig/key label at +4,+4 (Shift +2,
+ * Space +0) on top. The reserved pink keys (Esc, Tab, Screen Shot), '/' and the unlabelled keys cannot be
+ * bound. The right Shift, Ctrl and Alt (54, 89, 90) show and take their left key's binding.
+ * The palette below is 3 rows of 18 cells at (9 + 34c, 267 + 34r); each function keeps its own cell
+ * (menus 0-27, then actions 50-54, then faces 100-106), empty while the function is on a key.
  */
 const KEYCAPS = {
-  59: [83, 29], 60: [117, 29], 61: [151, 29], 62: [185, 29], 63: [227, 29], 64: [261, 29], 65: [295, 29], 66: [329, 29],
-  67: [371, 29], 68: [405, 29], 87: [439, 29], 88: [473, 29],
-  41: [15, 68], 2: [49, 68], 3: [83, 68], 4: [117, 68], 5: [151, 68], 6: [185, 68], 7: [219, 68], 8: [253, 68], 9: [287, 68],
-  10: [321, 68], 11: [355, 68], 12: [389, 68], 13: [423, 68], 82: [515, 68], 71: [549, 68], 73: [583, 68],
-  16: [65, 101], 17: [99, 101], 18: [133, 101], 19: [167, 101], 20: [201, 101], 21: [235, 101], 22: [269, 101], 23: [303, 101],
-  24: [337, 101], 25: [371, 101], 26: [405, 101], 27: [439, 101], 43: [473, 101], 83: [515, 101], 79: [549, 101], 81: [583, 101],
-  30: [82, 134], 31: [116, 134], 32: [150, 134], 33: [184, 134], 34: [218, 134], 35: [252, 134], 36: [286, 134], 37: [320, 134],
-  38: [354, 134], 39: [388, 134], 40: [422, 134],
-  42: [15, 167, 78], 44: [99, 167], 45: [133, 167], 46: [167, 167], 47: [201, 167], 48: [235, 167], 49: [269, 167], 50: [303, 167],
-  51: [337, 167], 52: [371, 167], 53: [405, 167],
-  29: [15, 200, 43], 56: [114, 200, 47], 57: [167, 200, 164],
+  59: [82, 27], 60: [116, 27], 61: [150, 27], 62: [184, 27], 63: [226, 27], 64: [260, 27], 65: [294, 27], 66: [328, 27],
+  67: [370, 27], 68: [404, 27], 87: [438, 27], 88: [472, 27],
+  41: [14, 66], 2: [48, 66], 3: [82, 66], 4: [116, 66], 5: [150, 66], 6: [184, 66], 7: [218, 66], 8: [252, 66], 9: [286, 66],
+  10: [320, 66], 11: [354, 66], 12: [388, 66], 13: [422, 66], 82: [514, 66], 71: [548, 66], 73: [582, 66],
+  16: [64, 99], 17: [98, 99], 18: [132, 99], 19: [166, 99], 20: [200, 99], 21: [234, 99], 22: [268, 99], 23: [302, 99],
+  24: [336, 99], 25: [370, 99], 26: [404, 99], 27: [438, 99], 43: [472, 99], 83: [514, 99], 79: [548, 99], 81: [582, 99],
+  30: [81, 132], 31: [115, 132], 32: [149, 132], 33: [183, 132], 34: [217, 132], 35: [251, 132], 36: [285, 132], 37: [319, 132],
+  38: [353, 132], 39: [387, 132], 40: [421, 132],
+  42: [38, 165], 44: [98, 165], 45: [132, 165], 46: [166, 165], 47: [200, 165], 48: [234, 165], 49: [268, 165], 50: [302, 165],
+  51: [336, 165], 52: [370, 165], 54: [457, 165],
+  29: [22, 198], 56: [122, 198], 57: [233, 198], 90: [348, 198], 89: [461, 198],
 };
-const PALETTE = { x: 10, step: 34, rows: [265, 299, 333], cols: 18 };
+const KEY_TWIN = { 54: 42, 89: 29, 90: 56 };
+const keyOf = (sc) => KEY_TWIN[sc] ?? sc;
+const PALETTE = { x: 9, y: 267, step: 34, cols: 18 };
 const FUNCTIONS = [...Array.from({ length: 28 }, (_, i) => [4, i]), ...[50, 51, 52, 53, 54].map((a) => [5, a]), ...[100, 101, 102, 103, 104, 105, 106].map((a) => [6, a])];
+const MACRO_TIP = 'Register the frequently-used skills for a quick access with a single button.';
+
+/** Key Setting's confirmations: the notice picture with KeyConfig's OK (160, 55) and Cancel (210, 55). */
+class KeyConfigNotice extends Win {
+  constructor(mgr, n, done) {
+    const W = mgr.W.KeyConfig, bg = W.notice[n];
+    super(mgr, bg, (800 - (bg?._w || 266)) >> 1, (600 - (bg?._h || 85)) >> 1);
+    this.buttons = []; this.modal = true; this.done = done; this.closeSound = null;
+    this.button(W.BtOK, 160, 55, () => this.finish(true));
+    this.button(W.BtCancel, 210, 55, () => this.finish(false));
+  }
+  finish(ok) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(ok); }
+  key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false); }
+}
 
 class KeyConfigWin extends Win {
   constructor(mgr) {
     const W = mgr.W.KeyConfig;
     super(mgr, W.backgrnd, 400 - 314, 300 - 186);
     this.buttons = [];
-    this.W = W; this.draft = {}; this.picked = null;
-    this.button(W.BtClose, 629 - 20, 4, () => mgr.close(this));
-    this.button(W.BtDefault, 12, 236, async () => { this.draft = (await import('../keymap.js')).defaultKeymap(); });
-    this.button(W.BtDelete, 78, 236, () => { this.draft = {}; this.picked = null; }); // the art reads CLEAR ALL
-    this.button(W.BtQuickSlot, 161, 236, () => mgr.bar.setQuickOpen(!mgr.bar.quickOpen));
-    this.button(W.BtOK, 629 - 112, 236, () => this.save());
-    this.button(W.BtCancel, 629 - 60, 236, () => mgr.close(this));
+    this.W = W; this.draft = {}; this.picked = null; this.bindsKeys = true;
+    this.button(W.BtClose, 606, 7, () => mgr.close(this));
+    this.button(W.BtOK, 8, 236, () => this.save());
+    this.button(mgr.B.BtCancel2, 58, 236, () => this.discard());
+    this.button(W.BtDefault, 112, 236, async () => {
+      if (await this.ask(0)) { this.draft = (await import('../keymap.js')).defaultKeymap(); this.picked = null; }
+    });
+    this.button(W.BtDelete, 177, 236, async () => { if (await this.ask(1)) { this.draft = {}; this.picked = null; } }); // the art reads CLEAR ALL
+    this.button(W.BtQuickSlot, 260, 236, () => mgr.bar.setQuickOpen(!mgr.bar.quickOpen));
   }
   frames() { return [...super.frames(), ...allCanvases(this.W.icon), ...allCanvases(this.W.key)]; }
   onOpen() { this.draft = Object.fromEntries(Object.entries(this.g.keymap || {}).map(([k, v]) => [k, { ...v }])); this.picked = null; }
 
-  save() {
+  /** KeyConfig/notice/<n> (0 reset, 1 delete all, 2 save changes) with OK / Cancel: true for OK. */
+  ask(n) { return new Promise((r) => this.mgr.show(new KeyConfigNotice(this.mgr, n, r))); }
+  changed() {
+    const before = this.g.keymap || {}, same = (a, b) => a?.type === b?.type && a?.action === b?.action;
+    return [...new Set([...Object.keys(before), ...Object.keys(this.draft)])].some((sc) => !same(before[sc], this.draft[sc]));
+  }
+  /** Closed another way than OK / Cancel with changes made: "Save changes?" (OK saves); it closes either way. */
+  async confirmClose() { if (this.changed() && await this.ask(2)) this.apply(); }
+  discard() { this.closeOk = true; this.mgr.close(this); this.closeOk = false; }
+  save() { this.apply(); this.discard(); }
+  apply() {
     const g = this.g, before = g.keymap || {}, changes = [];
     for (const sc of new Set([...Object.keys(before), ...Object.keys(this.draft)])) {
       const a = before[sc], b = this.draft[sc];
@@ -1511,9 +1610,8 @@ class KeyConfigWin extends Win {
       changes.push({ key: Number(sc), type: b?.type || 0, action: b?.action || 0 });
     }
     if (changes.length) g.net?.changeKeymap(changes);
-    g.keymap = this.draft;
+    g.keymap = { ...this.draft };
     this.mgr.bar.render();
-    this.mgr.close(this);
   }
 
   /** The picture for a binding: function icon, skill icon or item icon. */
@@ -1524,34 +1622,38 @@ class KeyConfigWin extends Win {
     if (b.type === 8) return this.mgr.W.SkillMacro?.Macroicon?.[b.action]?.icon || null;
     return this.W.icon[b.action] || null;
   }
-  palette() {
-    const bound = new Set(Object.values(this.draft).filter((b) => b.type >= 4).map((b) => `${b.type}:${b.action}`));
-    return FUNCTIONS.filter(([t, a]) => this.W.icon[a] && !bound.has(`${t}:${a}`));
+  /** The palette cell's function, or null when the cell is empty or that function is on a key. */
+  paletteFn(i) {
+    const f = FUNCTIONS[i];
+    if (!f || !this.W.icon[f[1]]) return null;
+    return Object.values(this.draft).some((b) => b.type === f[0] && b.action === f[1]) ? null : f;
   }
   capAt(lx, ly) {
-    for (const [sc, [x, y, w = 28]] of Object.entries(KEYCAPS)) if (lx >= x && lx < x + w && ly >= y && ly < y + 25) return Number(sc);
+    for (const [sc, [x, y]] of Object.entries(KEYCAPS)) if (lx >= x && lx < x + 32 && ly >= y && ly < y + 32) return keyOf(Number(sc));
     return null;
   }
   paletteAt(lx, ly) {
-    const c = Math.floor((lx - PALETTE.x) / PALETTE.step), r = PALETTE.rows.findIndex((y) => ly >= y && ly < y + 32);
-    if (c < 0 || c >= PALETTE.cols || r < 0 || (lx - PALETTE.x) % PALETTE.step >= 28) return -1;
+    const c = Math.floor((lx - PALETTE.x) / PALETTE.step), r = Math.floor((ly - PALETTE.y) / PALETTE.step);
+    if (c < 0 || c >= PALETTE.cols || r < 0 || r >= 3 || (lx - PALETTE.x) % PALETTE.step >= 32 || (ly - PALETTE.y) % PALETTE.step >= 32) return -1;
     return r * PALETTE.cols + c;
   }
   body(ctx) {
     const m = this.mgr;
-    for (const [sc, [x, y]] of Object.entries(KEYCAPS)) {
-      const b = this.draft[sc];
-      if (!b || (m.carry?.fromSc === Number(sc))) continue;
-      const icon = this.iconFor(b);
-      if (icon && m.image(icon)) m.drawIcon(ctx, icon, x - 2, y - 4); else if (icon) m.assets.preload([icon]);
-      // the key's own letter stays readable on top of what is bound to it
+    for (const [s, [x, y]] of Object.entries(KEYCAPS)) {
+      const sc = keyOf(Number(s)), b = this.draft[sc];
+      if (b && m.carry?.fromSc !== sc) {
+        const icon = this.iconFor(b);
+        if (icon && m.image(icon)) m.drawIcon(ctx, icon, x, y); else if (icon) m.assets.preload([icon]);
+        if (b.type === 2) m.count(ctx, this.g.itemCount?.(b.action) || 0, x, y + 20);
+      }
+      // the key's own label stays readable on top of what is bound to it
       const label = m.image(this.W.key?.[sc]);
-      if (label) ctx.drawImage(label, x + 2, y + 1);
-      if (this.picked === Number(sc)) { ctx.strokeStyle = '#ff0'; ctx.strokeRect(x + 0.5, y + 0.5, 27, 24); }
+      if (label) ctx.drawImage(label, x + (sc === 42 ? 2 : sc === 57 ? 0 : 4), y + 4);
+      if (this.picked === sc) { ctx.strokeStyle = '#ff0'; ctx.strokeRect(x + 0.5, y + 0.5, 31, 31); }
     }
-    this.palette().forEach(([, a], i) => {
-      if (i >= PALETTE.cols * 3) return;
-      m.drawIcon(ctx, this.W.icon[a], PALETTE.x + (i % PALETTE.cols) * PALETTE.step - 2, PALETTE.rows[Math.floor(i / PALETTE.cols)]);
+    FUNCTIONS.forEach((_, i) => {
+      const f = this.paletteFn(i);
+      if (f) m.drawIcon(ctx, this.W.icon[f[1]], PALETTE.x + (i % PALETTE.cols) * PALETTE.step, PALETTE.y + Math.floor(i / PALETTE.cols) * PALETTE.step);
     });
   }
   down(lx, ly) {
@@ -1562,7 +1664,7 @@ class KeyConfigWin extends Win {
       if (b) this.mgr.startCarry({ kind: 'bind', b, fromSc: sc }, this.iconFor(b));
       return;
     }
-    const i = this.paletteAt(lx, ly), f = this.palette()[i];
+    const f = this.paletteFn(this.paletteAt(lx, ly));
     if (f) this.mgr.startCarry({ kind: 'bind', b: { type: f[0], action: f[1] } }, this.W.icon[f[1]]);
   }
   drop(lx, ly, c) {
@@ -1576,14 +1678,22 @@ class KeyConfigWin extends Win {
     for (const [k, v] of Object.entries(this.draft)) if (v.type === b.type && v.action === b.action && Number(k) !== sc) delete this.draft[k];
     this.draft[sc] = { ...b };
     this.picked = sc;
-    sfx.play('UI/DragEnd');
   }
   dropOutside(c) { if (c.kind === 'bind' && c.fromSc !== undefined) delete this.draft[c.fromSc]; }
   tooltip(lx, ly) {
-    const sc = this.capAt(lx, ly), b = sc !== null ? this.draft[sc] : null;
+    const sc = this.capAt(lx, ly), b = sc !== null ? this.draft[sc] : null, g = this.g;
     if (!b) return null;
-    const title = b.type === 1 ? this.g.skills.name(b.action) : [2, 3, 7].includes(b.type) ? this.mgr.itemName(b.action) : null;
-    return title ? { title, lines: [] } : null;
+    if (b.type === 2 || b.type === 7) {
+      for (const tab of [2, 3, 4, 5]) for (const it of Object.values(g.inventory?.[tab] || {})) if (it?.id === b.action) return { item: it };
+      return { item: { id: b.action } };
+    }
+    if (b.type === 1 && g.skills) return { skill: b.action };
+    if (b.type === 8) {
+      const mac = g.macros?.[b.action];
+      if (!mac) return null;
+      return { title: mac.name || `Macro ${b.action + 1}`, lines: [MACRO_TIP, '', ...mac.skills.filter(Boolean).map((id) => g.skills?.name(id) || '')] };
+    }
+    return null;
   }
 }
 

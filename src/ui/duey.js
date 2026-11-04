@@ -161,7 +161,7 @@ export class DueyWin extends Win {
   /** An item dragged from your inventory onto the send box. */
   drop(lx, ly, c) {
     if (this.tab !== 1 || c.kind !== 'item' || typeof c.tab !== 'number') return;
-    if (lx >= 8 + 105 && lx < 8 + 160 && ly >= TB_Y + 35 && ly < TB_Y + 80) { this.item = { tab: c.tab, slot: c.slot }; sfx.play('UI/DragEnd'); }
+    if (lx >= 8 + 105 && lx < 8 + 160 && ly >= TB_Y + 35 && ly < TB_Y + 80) { this.item = { tab: c.tab, slot: c.slot }; }
   }
 }
 

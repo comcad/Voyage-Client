@@ -82,6 +82,6 @@ export class MegaphoneWin extends Win {
   /** An item from your inventory onto the Item Megaphone's slot. */
   drop(lx, ly, c) {
     if (this.kind !== 6 || c.kind !== 'item' || typeof c.tab !== 'number') return;
-    if (lx >= 60 && lx < 190 && ly >= 50 && ly < 122) { this.item = { tab: c.tab, slot: c.slot }; sfx.play('UI/DragEnd'); }
+    if (lx >= 60 && lx < 190 && ly >= 50 && ly < 122) { this.item = { tab: c.tab, slot: c.slot }; }
   }
 }

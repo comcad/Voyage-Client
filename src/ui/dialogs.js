@@ -10,7 +10,7 @@ import { richText, drawRich, optionAt, LIGHT_COLORS } from './richtext.js';
 /**
  * Stage 3 of the v83 in-game UI, drawn on the canvas through the WindowManager:
  *   NpcDialog   UIWindow.img/UtilDlgEx (t / c tiles / s, or it / ic / is for quests)
- *   MessageBox  Basic.img Notice3 / YesNo3 (t / c tiles / s) for notices, yes-no and amounts
+ *   MessageBox  Basic.img Notice3 / YesNo3 (t / c tiles / s) for notices and yes-no questions
  *   ShopWin     UIWindow.img/Shop
  *   drawItemTip UIWindow.img/ToolTip/Equip requirement sprites (Can / Cannot)
  */
@@ -393,29 +393,21 @@ export class MessageBox extends Win {
       return;
     }
     this.layout = richText(scratch(), text, 238, textRef(mgr), { base: '#fff', colors: LIGHT_COLORS });
-    if (kind === 'number') { this.field = overlayField(mgr, 120, { max: 10 }); this.field.value = String(opts.def ?? 1); }
-    if (kind === 'text') { this.field = overlayField(mgr, opts.width || 150, { max: opts.max || 13 }); this.field.value = opts.def || ''; }
-    const extra = this.field ? 26 : 0;
-    this.tiles = Math.max(1, Math.ceil((8 + this.layout.height + extra + 6 - 21) / 20));
+    this.tiles = Math.max(1, Math.ceil((8 + this.layout.height + 6 - 21) / 20));
     this.bandY = 21 + this.tiles * 20;
     this.w = 266; this.h = this.bandY + 55;
     this.x = Math.round((800 - this.w) / 2); this.y = opts.y ?? Math.round((529 - this.h) / 2);
     const by = this.bandY + 18;
     if (kind === 'notice') this.button(B.BtOK, 266 - 65 - 12, by, () => this.finish(true));
     else {
-      const input = kind === 'number' || kind === 'text';
-      this.button(input ? B.BtOK : B.BtYes, 266 - 2 * 65 - 16, by, () => this.finish(true));
-      this.button(input ? B.BtCancel : B.BtNo, 266 - 65 - 12, by, () => this.finish(false));
+      this.button(B.BtYes, 266 - 2 * 65 - 16, by, () => this.finish(true));
+      this.button(B.BtNo, 266 - 65 - 12, by, () => this.finish(false));
     }
   }
   frames() { return [...allCanvases(this.F), ...this.buttons.flatMap((b) => b.frames())]; }
   finish(ok) {
-    this.field?.remove(); this.mgr.close(this);
-    if (this.kind === 'number') {
-      const v = Math.floor(Number(this.field.value));
-      this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
-    } else if (this.kind === 'text') this.done(ok && this.field.value.trim() ? this.field.value.trim() : null);
-    else this.done(ok);
+    this.mgr.close(this);
+    this.done(ok);
   }
   key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(this.kind === 'notice' || this.kind === 'server'); }
   body(ctx) {
@@ -434,12 +426,6 @@ export class MessageBox extends Win {
     for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 21 + i * 20);
     ctx.drawImage(s, 0, this.bandY);
     drawRich(ctx, this.layout, 14, 8, { drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
-    if (this.field) {
-      const fy = 8 + this.layout.height + 4;
-      ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(14, fy, 124, 19);
-      placeField(m, this.field, this.x + 16, this.y + fy + 1);
-      if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
-    }
   }
 }
 
@@ -448,7 +434,7 @@ export class MessageBox extends Win {
  * BtCancel2 at 205, 30px off the bottom. 'okcancel': the lines centred, 14px apart, over at least two body tiles; 'okcancelLeft':
  * the lines as given (leading spaces kept), left-aligned at x 19 from y 24.
  * 'quantity': the prompt at the top left and a white 226x15 field 73px off the bottom.
- * 'whisper': the same with a ComboBox whose list holds the names you whispered.
+ * 'text': the same field for a name or a line. 'whisper': the same with a ComboBox whose list holds the names you whispered.
  */
 export class UtilBox extends Win {
   constructor(mgr, kind, text, done, opts = {}) {
@@ -458,13 +444,19 @@ export class UtilBox extends Win {
     this.lines = kind === 'okcancelLeft' ? text.split('\n') : wrapText(scratch(), text, 234, 12);
     const n = this.lines.length;
     this.tiles = Math.max(2, Math.floor((n * 14) / 20) + 1);
-    this.w = 266; this.h = kind === 'quantity' || kind === 'whisper' ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
+    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text';
+    this.w = 266; this.h = field ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
     this.x = 267; this.y = (600 - this.h) >> 1;
-    this.button(mgr.B.BtOK2, 155, this.h - 30, () => this.finish(true));
-    this.button(mgr.B.BtCancel2, 205, this.h - 30, () => this.finish(false));
+    // 'ok': a notice with OK alone, where Cancel would be
+    this.button(mgr.B.BtOK2, kind === 'ok' ? 205 : 155, this.h - 30, () => this.finish(true));
+    if (kind !== 'ok') this.button(mgr.B.BtCancel2, 205, this.h - 30, () => this.finish(false));
     if (kind === 'quantity') {
       this.field = overlayField(mgr, 226, { max: 10, color: '#000' });
       this.field.rect.h = 15; this.field.value = String(opts.def ?? 1);
+    }
+    if (kind === 'text') {
+      this.field = overlayField(mgr, 222, { max: opts.max || 13, color: '#000' });
+      this.field.rect.h = 15; this.field.value = opts.def || '';
     }
     if (kind === 'whisper') {
       this.field = overlayField(mgr, 205, { max: 13, color: '#000' });
@@ -476,7 +468,7 @@ export class UtilBox extends Win {
   finish(ok) {
     if (this.answered) return;
     this.answered = true; this.field?.remove(); this.mgr.close(this);
-    if (this.kind === 'whisper') { this.done(ok && this.field.value.trim() ? this.field.value.trim() : null); return; }
+    if (this.kind === 'whisper' || this.kind === 'text') { const v = this.field.value.trim(); this.done(ok && (v || this.opts.empty) ? v : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
     const v = Math.floor(Number(this.field.value));
     this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
@@ -490,7 +482,7 @@ export class UtilBox extends Win {
     ctx.drawImage(s, 0, this.h - 55);
     const line = (str, x, y, align) => uiText(ctx, str, x, y + 11, { color: '#fff', size: 12, base: 'alphabetic', align });
     if (this.kind === 'okcancelLeft') { this.lines.forEach((l, i) => line(l, 19, 24 + i * 14, 'left')); return; }
-    if (this.kind !== 'quantity' && this.kind !== 'whisper') {
+    if (this.kind !== 'quantity' && this.kind !== 'whisper' && this.kind !== 'text') {
       const top = (this.tiles * 20 - this.lines.length * 14) / 2 + 24;
       this.lines.forEach((l, i) => line(l, 132, top + i * 14, 'center'));
       return;
@@ -1045,7 +1037,8 @@ function tipSale(ctx, it, x, y, W) {
   tipCentre(ctx, `Original Price : ${o} Cash`, x, y, W, TIP_FONT.body, '#fff');
   tipPair(ctx, 'Discount Price :', TIP_FONT.body, '#fff', `${pct}%`, TIP_FONT.body, TIP_SALE, x, y + 16, W);
 }
-const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, 799 - W)), Math.max(0, Math.min(my, 599 - H))];
+// my may be { bottom }: the tip ends there (over the quick slots, so it doesn't cover them)
+const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, 799 - W)), Math.max(0, Math.min(typeof my === 'object' ? my.bottom - H : my, 599 - H))];
 
 export function drawItemTip(ctx, mgr, it, mx, my) {
   const info = mgr.info(it.id) || {};
@@ -1053,6 +1046,74 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
   ctx.textBaseline = 'top'; ctx.textAlign = 'left';
   if (invType(it.id) === 1) equipTip(ctx, mgr, it, info, mx, my);
   else itemTip(ctx, mgr, it, info, mx, my);
+  ctx.restore();
+}
+
+// ==================================================================== skill tooltip
+/**
+ * The v83 skill tooltip, 320 wide (or its widest level line + 20): dot + name at (18, 10), the icon at 2x in a 68px
+ * box at (10, 32), the description in 218px lines from (87, 32) (from 47 under a 4th job skill's [Master Level]),
+ * a line at 114 + 16 per description line past the fourth, then [Current Level] / [Next Level] and their texts
+ * (Tahoma 11, 15px apart) and at the bottom the [Required] skills.
+ */
+const TIP_LEVEL_FONT = '11px Tahoma, Verdana, sans-serif';
+const BLESSINGS = new Set([12, 10000012, 20000012, 20010012]);
+export function drawSkillTip(ctx, mgr, id, mx, my) {
+  const g = mgr.game, sb = g.skills, node = sb?.node(id);
+  if (!node) { sb?.ensure(id); return; }
+  ctx.save();
+  ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  const D = mgr.W.ToolTip?.Equip?.Dot, lv = sb.level(id), desc = sb.desc(id);
+  const n = Math.max(0, tipWrap(ctx, desc, 218).length - 4);
+  let text = desc;
+  if (BLESSINGS.has(id) && lv > 0) {
+    const from = g.linked || '';
+    text = `Spirits who receive #c${from}#'s energy will give your character a boost. 1 Skill Point will be granted each time #c${from}#'s level increases by 10.`;
+  } else if (node.timeLimited) {
+    const d = tipDate(sb.levels[id]?.expiration);
+    if (d) text += `\r\n#cExpiration Date: ${d.getUTCFullYear()}Year ${d.getUTCMonth() + 1}Month ${d.getUTCDate()}Day ${d.getUTCHours()}Hour ${d.getUTCMinutes()}Minute#`;
+  }
+  const hs = (l) => sb.hint(id, l).replace(/\\r\\n|\\n|\r\n|\r|\n/g, ' ');
+  const levels = [];
+  if (lv > 0) levels.push([true, `[Current Level ${lv}]`], [false, hs(lv)]);
+  if (lv < sb.wzMax(id)) levels.push([true, `[Next Level ${lv + 1}]`], [false, hs(lv + 1)]);
+  const reqs = Object.entries(node.req || {});
+  const W = Math.ceil(Math.max(320, ...levels.map(([, s]) => tipW(ctx, s, TIP_LEVEL_FONT) + 20)));
+  const H = 128 + 16 * n + (reqs.length ? 34 * reqs.length + 20 : 0) + 15 * levels.length, sep = 114 + 16 * n;
+  const [x, y] = tipPlace(mx, my, W, H);
+  // text lands 2px under its v83 coordinate when drawn from a canvas 'top' baseline
+  const T = 2, say = (s, tx, ty, font, color) => tipText(ctx, s, x + tx, y + ty + T, font, color);
+  tipFrame(ctx, x, y, W, H);
+  tipSprite(ctx, mgr, D?.[0], x + 10, y + 15);
+  say(sb.name(id), 18, 10, TIP_FONT.title, '#fff');
+  ctx.fillStyle = 'rgba(255,255,255,0.627)'; ctx.fillRect(x + 10, y + 32, 68, 68);
+  const icon = sb.icon(id), im = mgr.image(icon);
+  if (im) {
+    const o = icon.origin || [0, 32];
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(im, x + 12 - o[0] * 2, y + 98 - o[1] * 2, im.width * 2, im.height * 2);
+    ctx.imageSmoothingEnabled = true;
+  } else if (icon) mgr.assets.preload([icon]);
+  let top = 32;
+  if (sb.mastered(id)) { say(`[Master Level : ${sb.levels[id]?.master || 0}]`, 87, 32, TIP_FONT.body, '#fff'); top = 47; }
+  tipDrawWrap(ctx, tipWrap(ctx, text, 218), x + 87, y + top + T);
+  ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, y + sep, W - 12, 1);
+  levels.forEach(([head, s], i) => {
+    const ly = sep + 7 + 15 * i;
+    if (head) { tipSprite(ctx, mgr, D?.[1], x + 10, y + ly + T + 2); say(s, 16, ly, TIP_LEVEL_FONT, TIP_LABEL); }
+    else say(s, 10, ly, TIP_LEVEL_FONT, '#fff');
+  });
+  if (reqs.length) {
+    const r0 = H - 34 * reqs.length - 20;
+    tipSprite(ctx, mgr, D?.[1], x + 10, y + r0 - 3 + T + 2);
+    say('[Required]', 16, r0 - 3, TIP_LEVEL_FONT, TIP_LABEL);
+    reqs.forEach(([r, need], k) => {
+      const rid = Number(r), ri = sb.icon(rid), rim = mgr.image(ri);
+      if (rim) ctx.drawImage(rim, x + 11, y + r0 + 15 + 34 * k); else if (ri) mgr.assets.preload([ri]);
+      say(sb.name(rid), 50, r0 + 17 + 34 * k, TIP_LEVEL_FONT, '#fff');
+      say(`Level : ${need}`, 50, r0 + 29 + 34 * k, TIP_LEVEL_FONT, '#fff');
+    });
+  }
   ctx.restore();
 }
 

@@ -49,10 +49,10 @@ const SKILL_WEAPONS = {
 };
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
 
-/** Skill books for a job: 112 -> [0, 100, 110, 111, 112], 2112 -> [2000, 2100, 2110, 2111, 2112]. */
+/** Skill books for a job: 112 -> [0, 100, 110, 111, 112], 2112 -> [2000, 2100, 2110, 2111, 2112]; Evans start from 2001. */
 export function jobBooks(job) {
   const base = Math.floor(job / 1000) * 1000;
-  const books = [base === 2000 && job >= 2200 ? 2001 : base];
+  const books = [base === 2000 && (job >= 2200 || job === 2001) ? 2001 : base];
   if (job % 1000 >= 100) books.push(Math.floor(job / 100) * 100);
   if (job % 100 >= 10) books.push(Math.floor(job / 10) * 10);
   for (let j = Math.floor(job / 10) * 10 + 1; j <= job; j++) books.push(j);
@@ -73,7 +73,8 @@ export class SkillBook {
     this.strings = await this.assets.json('String/Skill.img');
     this.setLevels(skills);
     const now = Date.now();
-    for (const [id, sec] of Object.entries(cooldowns || {})) this.cooldowns[id] = now + sec * 1000;
+    this.cooldownTotal ??= {};
+    for (const [id, sec] of Object.entries(cooldowns || {})) { this.cooldowns[id] = now + sec * 1000; this.cooldownTotal[id] = sec * 1000; }
     await this.loadJob(job);
   }
 
@@ -115,24 +116,37 @@ export class SkillBook {
     const max = Object.keys(this.node(id)?.level || {}).length; // level keys are "1".."N"
     return this.levels[id]?.master || max;
   }
+  /** The skill's level count in Skill.wz. */
+  wzMax(id) { return Object.keys(this.node(id)?.level || {}).length; }
+  /** Skills capped at their master level: 4th job books, and Evan's last two stages. */
+  mastered(id) {
+    const b = Math.floor(id / 10000);
+    if (Math.floor(b / 100) === 22 || b === 2001) return b !== 2001 && b % 100 !== 0 && (b % 10 === 7 || b % 10 === 8);
+    return b % 100 !== 0 && b % 10 === 2;
+  }
+  /** 'req' while a required skill is short of its level, 'max' at the cap, else 'ok'. */
+  raiseState(id) {
+    const req = this.node(id)?.req;
+    if (req && Object.entries(req).some(([r, lv]) => this.level(Number(r)) < lv)) return 'req';
+    const lv = this.level(id);
+    if (this.mastered(id) && (this.levels[id]?.master || 0) <= lv) return 'max';
+    return lv >= this.wzMax(id) ? 'max' : 'ok';
+  }
   name(id) { return this.strings?.[pad(id, 7)]?.name || this.strings?.[id]?.name || `Skill ${id}`; }
   desc(id) { return this.strings?.[pad(id, 7)]?.desc || ''; }
-  hint(id, lv) { return this.strings?.[pad(id, 7)]?.[`h${lv}`] || ''; }
+  hint(id, lv) { return this.strings?.[pad(id, 7)]?.[this.levelData(id, lv)?.hs || `h${lv}`] || ''; }
   bookName(b) { return this.strings?.[pad(b, 3)]?.bookName || this.strings?.[b]?.bookName || `Book ${b}`; }
 
   /**
-   * Skills shown in a book: everything you have, plus what SP can buy. Beginner books hold many
-   * event / mount skills that the client hides unless granted, so only Three Snails, Recovery and
-   * Nimble Feet are learnable there; job books hide `invisible` skills.
+   * Skills shown in a book, in the book's own order: those you have a record of (any level) and the
+   * visible ones, less Space Dash and time-limited skills you don't have.
    */
   bookSkills(b) {
     const j = this.books[b];
     if (!j || j instanceof Promise) return [];
-    const beginner = b % 1000 === 0 || b === 2001;
-    return Object.keys(j.skill || {}).map(Number).sort((a, c) => a - c).filter((id) => {
-      if (this.level(id) > 0) return true;
+    return Object.keys(j.skill || {}).map(Number).filter((id) => {
       const n = j.skill[pad(id, 7)];
-      return beginner ? [1000, 1001, 1002].includes(id % 10000) : !n?.invisible;
+      return id !== 1014 && id !== 10001015 && (id in this.levels || !n?.invisible) && (!n?.timeLimited || this.level(id) > 0);
     });
   }
 

@@ -368,7 +368,7 @@ export class StatusBar {
       case 'BtSkill': g.windows.toggle('skill'); break;
       case 'BtQuest': g.windows.toggle('quest'); break;
       case 'BtChannel': g.windows.toggle('channel'); break;
-      case 'BtComm': g.windows.toggle('userlist', 0); break;
+      case 'BtComm': g.windows.toggle('userlist'); break;
       case 'BtGameOpt': g.windows.toggle('gameopt'); break;
       case 'BtSysOpt': g.windows.toggle('sysopt'); break;
       case 'BtQuit': g.windows.confirm('Are you sure you want to quit the game?').then((ok) => { if (ok) location.reload(); }); break;
@@ -382,12 +382,24 @@ export class StatusBar {
     const g = this.game;
     this.quick = await Promise.all(QUICK_KEYS.map(async (sc) => {
       const k = g.keymap?.[sc];
-      if (!k || ![1, 2, 3, 7, 8].includes(k.type)) return null;
+      if (!k) return null;
+      // skills, items and macros by their own icons; menus, actions and faces by the key setting's
       const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? g.windows.W.SkillMacro?.Macroicon?.[k.action]?.icon
-        : await itemIcon(this.assets, k.action);
+        : [2, 3, 7].includes(k.type) ? await itemIcon(this.assets, k.action) : g.windows.W.KeyConfig?.icon?.[k.action];
       if (node) await this.assets.preload([node]);
       return { node, skill: k.type === 1 ? k.action : 0, item: k.type === 2 ? k.action : 0 };
     }));
+  }
+
+  /** The tooltip for the quick slot under the mouse: the item's, or the skill's. */
+  quickTip(x, y) {
+    const i = this.quickAt(x, y), k = i >= 0 ? this.game.keymap?.[QUICK_KEYS[i]] : null, g = this.game, above = this.quickPos().y - 2;
+    if (!k) return null;
+    if ([2, 3, 7].includes(k.type)) {
+      for (const tab of [2, 3, 4, 5]) for (const it of Object.values(g.inventory?.[tab] || {})) if (it?.id === k.action) return { item: it, above };
+      return { item: { id: k.action }, above };
+    }
+    return k.type === 1 && g.skills ? { skill: k.action, above } : null;
   }
 
   setQuickOpen(open) {
@@ -408,10 +420,25 @@ export class StatusBar {
     const sc = QUICK_KEYS[i];
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
     else if (c.kind === 'item' && itemKeyType(c.tab, c.id)) this.game.bindKey(sc, itemKeyType(c.tab, c.id), c.id);
-    else if (c.kind === 'bind' && c.b.type === 8) this.game.bindKey(sc, 8, c.b.action);   // a skill macro
-    else return;
-    sfx.play('UI/DragEnd');
+    else if (c.kind === 'bind') this.game.bindKey(sc, c.b.type, c.b.action);   // a macro, or a slot moved to another
+    else return false;
     this.render();
+    return true;
+  }
+  /** The slot under (x, y), or -1. */
+  quickAt(x, y) {
+    if (!this.quickOpen || this.hidden) return -1;
+    const p = this.quickPos();
+    return QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
+  }
+  /** Pick a slot's binding up: dropped on another slot it moves there, dropped off the bar it is taken off the key. */
+  pickQuick(x, y) {
+    const i = this.quickAt(x, y), sc = QUICK_KEYS[i], k = i >= 0 ? this.game.keymap?.[sc] : null, node = this.quick[i]?.node;
+    if (!k || !node || this.game.windows.carry) return false;
+    const bar = this;
+    this.game.windows.startCarry({ kind: 'bind', b: { ...k }, fromQuick: sc, x, y, at: performance.now(),
+      source: { dropOutside: () => bar.game.unbindKey?.(sc) } }, node);
+    return true;
   }
 
   // ------------------------------------------------------------------ input
@@ -419,6 +446,7 @@ export class StatusBar {
   pointer(type, x, y) {
     this.mouse = { x, y };
     if (!this.hidden && this.chatPointer(type, x, y)) return true;
+    if (type === 'down' && this.pickQuick(x, y)) return true;
     const buttons = this.allButtons();
     for (const b of buttons) b.y = b.yAt ? b.yAt() : b.y;
     const over = buttons.find((b) => b.hit(x, y)) || null;
@@ -457,7 +485,9 @@ export class StatusBar {
     if (key === 'whisper') {
       const w = this.game.windows, name = (await w.askWhisper(this.whisperTo || '', this.whisperNames || []))?.trim();
       if (!name) return;
-      if (!/^[A-Za-z0-9]{4,12}$/.test(name)) { w.notice('Incorrect ID.'); return; }
+      // a name holding a word from Etc/ForbiddenName.img is refused
+      const bad = Object.values((await this.assets.json('Etc/ForbiddenName.img')) || {}).map((v) => String(v).toLowerCase());
+      if (bad.some((b) => b && name.toLowerCase().includes(b))) { w.notice('Incorrect ID.'); return; }
       if (name.toLowerCase() === this.game.player?.name?.toLowerCase()) { w.notice("You can't whisper to yourself."); return; }
       this.whisperTo = name;
       this.whisperNames = [name, ...(this.whisperNames || []).filter((n) => n.toLowerCase() !== name.toLowerCase())].slice(0, 10);
@@ -515,7 +545,7 @@ export class StatusBar {
       const tgt = img(S.base.chatTarget);
       // whispering: the box shows who to
       const label = this.chatTarget === 'whisper' && this.whisperTo ? this.whisperTo : CHAT_TARGETS.find((t) => t.key === this.chatTarget)?.label || 'To All';
-      if (tgt) { ctx.drawImage(tgt, 1, y + 8); uiText(ctx, label, 5, y + 11, { color: '#fff', size: 11 }); }
+      if (tgt) { ctx.drawImage(tgt, 1, y + 8); uiText(ctx, label, 5, y + 13, { color: '#fff', size: 11 }); }
     }
     // the notice box and its pencil, where invitations come from
     const box = img(S.base.box), memo = img(S.base.iconMemo);
@@ -624,10 +654,12 @@ export class StatusBar {
         const o = q.node.origin || [0, 32], ix = x0 + QUICK_ICONS[i][0], iy = y0 + QUICK_ICONS[i][1];
         ctx.drawImage(icon, ix - o[0], iy + 32 - o[1]);
         if (q.item) this.game.windows.count(ctx, this.game.itemCount(q.item), ix, iy + 21);
-        const left = q.skill ? this.game.skills?.cooldownLeft(q.skill) : 0;
-        if (left > 0) {
-          ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(cx, cy, 28, 25);
-          this.number(ctx, String(Math.ceil(left / 1000)), cx + 14, cy + 9);
+        // a skill cooling down: UIWindow.img/Skill/CoolTime, 16 steps whose dark cover clears from the top
+        const sk = this.game.skills, left = q.skill ? sk?.cooldownLeft(q.skill) : 0, total = sk?.cooldownTotal?.[q.skill];
+        if (left > 0 && total > 0) {
+          const step = Math.max(0, Math.min(15, Math.floor((total - left) / (total / 16))));
+          const cool = this.game.windows.W.Skill?.CoolTime?.[step], cim = cool && this.assets.image(cool);
+          if (cim) ctx.drawImage(cim, ix, iy); else if (cool) this.assets.preload([cool]);
         }
       }
       const label = this.assets.image(S.key[i]);
