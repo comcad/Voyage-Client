@@ -1,10 +1,12 @@
 # --- Generated / runtime ---
 assets/
 test/
+public/Voyage.js
 **/node_modules/
 **/*.pid
 **/*.log
 **/*.tmp
+**/*.swp
 
 # --- OS / editor noise ---
 .DS_Store
