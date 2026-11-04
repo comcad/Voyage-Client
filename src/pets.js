@@ -29,6 +29,7 @@ export class Pet {
     this.vx = 0; this.vy = 0; this.ladder = null;
     this.fh = game.map?.fh?.get(d.fh) || game.map?.fh?.below(d.x, d.y - 5, 60) || null;
     if (this.fh) this.y = Footholds.yAt(this.fh, this.x);
+    this.fhId = this.fh?.id || 0;
     this.pose = 1;              // idle pose: 1 stand0, 2 stand1, 6 rest0, 7 rest1
     this.forced = null;         // a one-shot action playing: {act}
     this.anim = null; this.frame = 0; this.frameT = 0;
@@ -346,6 +347,7 @@ export class Pet {
     }
     const k = Math.min(1, (p.t += dt) / (Math.max(1, s.duration || 30) / 1000));
     this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k;
+    if (s.fh) this.fhId = s.fh;
     this.setStance(s.stance);
     if (k >= 1) { p.fromX = s.x; p.fromY = s.y; p.t = 0; if (++p.i >= p.steps.length) this.path = null; }
   }
@@ -365,12 +367,6 @@ export class Pet {
   get hidden() {
     if (!this.onBack) return false;
     return this.slot !== 0 || (this.mine && performance.now() < (this.visibleAt || 0));
-  }
-  layer() {
-    if (this.onBack) return 7;
-    const f = this.mine ? this.fh : this.g.map?.fh?.below(this.x, this.y - 2, 12);
-    if (f?.layer !== undefined) this.lastLayer = f.layer;
-    return this.lastLayer ?? 7;
   }
   /** Whether a map point is on the pet's current frame. */
   hits(wx, wy) {

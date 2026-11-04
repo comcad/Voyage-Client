@@ -158,8 +158,12 @@ class RemotePlayer {
   constructor(d, look) {
     Object.assign(this, { id: d.id, name: d.name, level: d.level, job: d.job, x: d.x, y: d.y, guild: d.guild, emblem: d.emblem });
     this.look = look; this.facingRight = !(d.stance & 1);
+    // already on a ladder, lying down, in the air... when you arrive; standing still rather than walking in place
+    const st = STANCE_NAMES[d.stance >> 1];
+    if (st && st !== 'walk') this.state = st;
     this.action = look.standAction(); this.frame = 0; this.frameT = 0;
     this.path = null; this.attack = null; this.chat = null;
+    this.fhId = d.fh || 0;
   }
   /**
    * Their movement queues behind what is still playing (as the client does); with more than 1.1s queued it plays 10%
@@ -180,11 +184,12 @@ class RemotePlayer {
   update(dt) {
     if (this.path) {
       const p = this.path, s = p.steps[p.i];
-      const dur = Math.max(1, s.duration || 60) / 1000;
+      const dur = Math.max(1, s.duration ?? 60) / 1000;   // 0: at once (a jump's start)
       const queued = p.steps.slice(p.i).reduce((t, m) => t + (m.duration || 0), 0) - p.t * 1000;
       p.t += queued > 1100 ? dt * 1.1 : dt;
       const k = Math.min(1, p.t / dur);
       if (s.x !== undefined) { this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k; }
+      if (s.fh) this.fhId = s.fh;   // a foothold, or -id of a ladder / rope; 0 (in the air) keeps the last
       if (s.stance !== undefined) {
         this.facingRight = !(s.stance & 1);
         const st = STANCE_NAMES[s.stance >> 1];
@@ -355,7 +360,7 @@ const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 /** How much movement (ms) gathers before it goes to the server, as the client does. */
-const MOVE_FLUSH = 1000;
+const MOVE_FLUSH = 500;
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 /** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
 const CRUSHERS = new Set([1311001, 1311002]);
@@ -1777,10 +1782,11 @@ export class Game {
       }),
       skillSpecial: later((chrId, skillId) => { const ent = chrId === null ? this.player : this.others.get(chrId); if (ent) this.playSkillEffect(skillId, ent, false, 'special'); }),
       berserk: later((chrId, on) => this.setBerserk(chrId === null ? this.player : this.others.get(chrId), on)),
-      foreignSkill: later((chrId, skillId) => {
+      foreignSkill: later((chrId, skillId, level) => {
         const rp = this.others.get(chrId);
         if (!rp) return;
         rp.charge = null;
+        if (level) rp.level = level;
         if (TELEPORTS.has(skillId)) this.playTeleportEffect(rp.x, rp.y);   // its art is BasicEff's, not the skill's
         else this.playSkillEffect(skillId, rp);
       }),
@@ -2140,7 +2146,7 @@ export class Game {
     p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.ladder = null; p.seat = null;
     p.fh = this.map.fh.below(p.x, p.y, 400);
     if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
-    this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null;
+    this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null; this.downOfh = 0; this.moveEvent = null; this.wasAirborne = false; this.playerZ = null;
   }
 
   // ------------------------------------------------------------------ server entities
@@ -2203,7 +2209,7 @@ export class Game {
   async addOther(d) {
     const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips: lookEquipIds(d.look) });
     await look.load();
-    await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump']));
+    await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
@@ -2239,6 +2245,7 @@ export class Game {
   onRemoteAttack(a) {
     const rp = this.others.get(a.id);
     let delay = 0;
+    if (rp && a.level) rp.level = a.level;   // their attack's art follows the level it carries
     if (rp) {
       rp.attack = this.actionName(a.action); rp.facingRight = !a.facingLeft;
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
@@ -3372,7 +3379,10 @@ export class Game {
         if (inp.is('down')) {
           const below = fh.below(p.x, p.y + 1, Infinity, p.fh);   // any floor under us, however far down
           // a little hop first, then down through the floor: it stays ignored until we are well past it
-          if (below) { p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump'); }
+          if (below) {
+            this.moveEvent = { kind: 'down', ofh: p.fh.id, x: p.x, y: p.y };
+            p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump');
+          }
           else if (!dir) action = 'prone';   // nothing to drop to: stay lying down
         } else {
           // the client's jump: a direction adds 0.8 of the walk speed to what you already had, up to the walk speed
@@ -3380,6 +3390,7 @@ export class Game {
           if (dir * p.vx < WALK * 0.8) p.vx += dir * WALK * 0.8;
           if (dir * p.vx > WALK) p.vx = dir * WALK;
           p.fh = null; p.vy = -JUMP;
+          this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
           this.lastJumpDir = dir;
           sfx.play('Game/Jump');
         }
@@ -3420,7 +3431,7 @@ export class Game {
    */
   usePortal(portal) {
     const map = this.map;
-    this.flushMovement(true);   // the server and everyone else see where you were before you go
+    this.flushMovement();   // the server and everyone else see where you were before you go
     // a script portal with no target map (types 7, 8, 11) only asks the server to run its script: no sound, no fade
     if (portal.tm === 999999999) {
       if (!this.net) return;
@@ -3431,11 +3442,17 @@ export class Game {
     sfx.play('Game/Portal');
     if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
       this.portalCooldown = 0.6;
-      const from = { x: Math.round(this.player.x), y: Math.round(this.player.y) };
+      const p = this.player, from = { x: Math.round(p.x), y: Math.round(p.y) };
       const t = map.spawnPortal(portal.tn);
       this.playTeleportEffect(from.x, from.y);
-      this.placeAtPortal(t);
-      this.playTeleportEffect(this.player.x, this.player.y);
+      // for those watching: the portal (4), a tick there, then the jump (3) to 10px over the other one, which you
+      // fall from as after any move
+      const fhId = p.fh?.id || 0, stance = this.currentStance();
+      this.moveBuf.push({ cmd: 4, ...from, fh: fhId, stance, duration: 0 }, { cmd: 0, ...from, vx: 0, vy: 0, fh: fhId, stance, duration: 30 });
+      p.x = t.x; p.y = t.y - 10; p.vx = 0; p.vy = 0; p.fh = null; p.ladder = null; p.seat = null;
+      this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance, duration: 0 });
+      this.moveTotal += 30; this.movePos = { x: p.x, y: p.y }; this.wasAirborne = true; this.downOfh = 0;
+      this.playTeleportEffect(p.x, p.y);
       this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
       return;
     }
@@ -5073,7 +5090,7 @@ export class Game {
    */
   async playSkillEffect(id, ent, swing = false, branch = 'effect', rate = 1) {
     if (branch === 'effect') sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
-    const node = await this.skills?.ensure(id);
+    const node = this.byCharLevel(await this.skills?.ensure(id), ent);
     if (branch !== 'effect') { const fx = Game.fxNode(node?.[branch]); if (fx) this.pushEffect(fx, ent, rate); return; }
     // a skill with an effect per pose (Brandish: effect/0 with brandish1, effect/1 with brandish2) plays the one
     // that goes with the pose being used
@@ -5088,6 +5105,16 @@ export class Game {
     for (let i = 0; i <= last && node[`effect${i}`]; i++) layers.push(node[`effect${i}`]);
     for (const n of layers) { const fx = Game.fxNode(n); if (fx) this.pushEffect(fx, ent, rate); }
   }
+  /**
+   * The first-job attacks' effect and hit art changes with the caster's level: CharLevel/10, 15, 20 and 25 each
+   * take over from that level up.
+   */
+  byCharLevel(node, ent) {
+    const tiers = node?.CharLevel, level = ent === this.player ? this.stats?.level : ent?.level;
+    if (!tiers || !level) return node;
+    const n = Math.max(0, ...Object.keys(tiers).map(Number).filter((k) => k <= level));
+    return n ? { ...node, ...tiers[n] } : node;
+  }
   /** One effect layer on `ent`, following it, at `rate` (an attack's speed scale); a `fixed` one never flips. */
   async pushEffect(node, ent, rate = 1) {
     const anim = new Anim(node, false);
@@ -5101,7 +5128,7 @@ export class Game {
    * faces. Without a head point, the middle of its body.
    */
   async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null) {
-    const node = id ? await this.skills?.ensure(id) : null;
+    const node = id ? this.byCharLevel(await this.skills?.ensure(id), by) : null;
     const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
@@ -5539,8 +5566,8 @@ export class Game {
   /**
    * Your movement for the server and everyone watching, recorded as the client does: each frame adds to the last
    * element (where you ended up, how fast you were then moving, in px/s) until the foothold, the stance or the way
-   * you are moving changes; once a second of movement has gathered that touches the ground it goes out, the elements
-   * in the air after the last on the ground waiting for the next packet. Standing still sends nothing. Watchers draw
+   * you are moving changes; once half a second of movement has gathered it all goes out, in the air too. Standing
+   * still sends nothing. Watchers draw
    * each element as a curve through those speeds, so they must be the real ones (also on ropes and slopes).
    */
   syncMovement(dt) {
@@ -5548,31 +5575,45 @@ export class Game {
     if (!dt) return;
     const prev = this.movePos || { x: p.x, y: p.y };
     this.movePos = { x: p.x, y: p.y };
-    if (Math.abs(p.x - prev.x) > 300 || Math.abs(p.y - prev.y) > 300) { this.flushMovement(true); this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; return; }
+    if (Math.abs(p.x - prev.x) > 300 || Math.abs(p.y - prev.y) > 300) { this.flushMovement(); this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.downOfh = 0; return; }
+    // a jump starts with its speed (cmd 1); a down-jump with you lifted off the floor you drop through, lying then
+    // in the air (cmd 15), and every step until you land names that floor, so those watching let you through it
+    const ev = this.moveEvent, left = !p.facingRight;
+    this.moveEvent = null;
+    if (ev?.kind === 'jump') this.moveBuf.push({ cmd: 1, rx: Math.round(ev.vx), ry: Math.round(ev.vy), stance: stanceByte('jump', left), duration: 0 });
+    if (ev?.kind === 'down') {
+      const at = { cmd: 15, x: Math.round(ev.x), y: Math.round(ev.y) - 1, vx: 0, vy: 0, ofh: ev.ofh, duration: 0 };
+      this.moveBuf.push({ ...at, fh: ev.ofh, stance: stanceByte('prone', left) }, { ...at, fh: 0, stance: stanceByte('jump', left) });
+      this.downOfh = ev.ofh;
+    }
+    // the frame you land on still counts as in the air, stopped where you meet the floor; the ground starts after it
+    const landed = !!p.fh && this.wasAirborne;
+    this.wasAirborne = !p.fh && !p.ladder;
     // the speeds are the physics' own, not how far you moved this frame: catching a rope snaps you onto it, and that
     // jump must not read as a burst of speed that carries you past it for those watching
     const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round(p.vx || 0), vy: Math.round(p.fh ? 0 : p.vy || 0),
       // on a ladder or rope its id, negative: those watching put you on it, in its layer (0 would leave you in the
       // layer of the last floor, sometimes behind it)
-      fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000, held: !!p.ladder };
+      fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000 };
+    if (landed) Object.assign(el, { vy: 0, fh: 0, stance: stanceByte('jump', left) });
+    if (this.downOfh) Object.assign(el, { cmd: 15, ofh: this.downOfh });
+    if (p.fh || p.ladder) this.downOfh = 0;
     const last = this.moveBuf[this.moveBuf.length - 1];
-    if (last && last.cmd === 0 && last.fh === el.fh && last.stance === el.stance && Math.sign(last.vx) === Math.sign(el.vx) && Math.sign(last.vy) === Math.sign(el.vy)) {
+    if (last && (last.cmd === 0 || last.cmd === 15) && last.cmd === el.cmd && last.ofh === el.ofh && last.fh === el.fh && last.stance === el.stance && Math.sign(last.vx) === Math.sign(el.vx) && Math.sign(last.vy) === Math.sign(el.vy)) {
       Object.assign(last, { x: el.x, y: el.y, vx: el.vx, vy: el.vy }); last.duration += el.duration;
     } else this.moveBuf.push(el);
     this.moveTotal = (this.moveTotal || 0) + el.duration;
-    if (this.moveTotal >= MOVE_FLUSH) this.flushMovement(this.moveTotal >= MOVE_FLUSH * 3);
+    if (this.moveTotal >= MOVE_FLUSH) this.flushMovement();
   }
-  /** Send what is gathered: up to the last element on the ground (all of it when forced, before a portal). */
-  flushMovement(force) {
-    const buf = this.moveBuf || [];
-    const ground = force ? buf.length - 1 : buf.findLastIndex((m) => m.fh > 0 || m.held);   // a ladder or rope holds you too
-    if (ground < 0 || !this.net) return;
-    const send = buf.slice(0, ground + 1), keep = buf.slice(ground + 1), first = send[0], lastSent = this.lastSent;
-    this.moveBuf = keep; this.moveTotal = keep.reduce((t, m) => t + m.duration, 0);
+  /** Send everything gathered. */
+  flushMovement() {
+    const send = this.moveBuf || [], first = send[0], lastSent = this.lastSent;
+    if (!first || !this.net) return;
+    this.moveBuf = []; this.moveTotal = 0;
     // standing where we last were: nothing to tell
     if (send.length === 1 && lastSent && first.x === lastSent.x && first.y === lastSent.y && first.stance === lastSent.stance && !first.vx && !first.vy) return;
     const start = lastSent ? { x: lastSent.x, y: lastSent.y } : { x: first.x, y: first.y };
-    this.net.move(start, send.map(({ held, ...m }) => ({ ...m, duration: Math.round(m.duration) })));
+    this.net.move(start, send.map((m) => ({ ...m, duration: Math.round(m.duration) })));
     this.lastSent = send[send.length - 1];
   }
 
@@ -5638,14 +5679,12 @@ export class Game {
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     map.drawBacks(ctx, cam, false);
 
-    // Same rule as the official client: foothold page, kept while airborne, 7 on ladders/ropes.
-    const playerLayer = p.ladder ? 7 : p.fh?.layer ?? this.lastLayer ?? 7;
-    this.lastLayer = playerLayer;
     // shop owners and their booths go down first: everyone else walks in front of a shop
     const inShop = (e) => e.box?.type === 4;
+    const chars = this.drawOrder(ctx, cam, inShop), playerLayer = this.playerZ.page;
     for (let l = 0; l < 8; l++) {
       map.drawLayer(ctx, cam, l);
-      for (const e of map.life) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
+      for (const e of map.life) if (e.kind !== 'Npc' && (e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.drawDoors(ctx, cam);
@@ -5653,14 +5692,11 @@ export class Game {
       if (l === playerLayer) {
         for (const m of this.boards.merchants.values()) this.boards.drawMerchant(ctx, cam, m);   // Hired Merchants, behind people
         for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
-        if (inShop(p)) this.drawChar(ctx, cam, p, this.look, true);
+        if (inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.questAlert?.draw(ctx, cam); }
       }
-      if (l === 7) for (const rp of this.others.values()) if (!inShop(rp)) { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); }
-      for (const pet of this.pets.values()) if (!pet.onBack && pet.layer() === l) pet.draw(ctx, cam);
-      if (l === playerLayer && !inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); }
+      for (const c of chars) if (c.page === l) c.draw();
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
-    for (const pet of this.pets.values()) if (pet.onBack) pet.draw(ctx, cam);   // up the ladder with its owner
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
@@ -5669,7 +5705,6 @@ export class Game {
     map.drawBacks(ctx, cam, true);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
-    this.questAlert?.draw(ctx, cam);    // the QuestAlert bulb over your head
     drawPartyHp(ctx, this, cam);
     this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
 
@@ -5703,6 +5738,38 @@ export class Game {
     this.vfx?.drawBoss(ctx);
     const dark = this.darkness;
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
+  }
+
+  /**
+   * A character's or pet's place in the draw order: the page and zMass of the foothold it is on (a ladder or rope:
+   * its page, zMass 0), kept while in the air; page 7 before it has stood anywhere.
+   */
+  zFrom(fhId, last) {
+    if (fhId > 0) { const f = this.map?.fh?.get(fhId); if (f) return { page: f.layer, zMass: f.zMass }; }
+    if (fhId < 0) { const l = this.map?.ladders?.find((x) => x.id === -fhId); if (l) return { page: Number(l.page) || 0, zMass: 0 }; }
+    return last || { page: 7, zMass: 0 };
+  }
+  /**
+   * Characters, pets and NPCs, each drawn in its page: a lower zMass in front, then other players, their pets, NPCs,
+   * you and your pets, in that order. A pet up a ladder on its owner's back goes on right after them.
+   */
+  drawOrder(ctx, cam, inShop) {
+    const p = this.player, list = [];
+    const put = (z, slot, draw) => list.push({ page: z.page, k: -10 * z.zMass + slot, draw });
+    for (const e of this.map.life) if (e.kind === 'Npc') put(e.fh ? { page: e.fh.layer, zMass: e.fh.zMass } : { page: 7, zMass: 0 }, 5, () => e.draw(ctx, cam, this.assets));
+    const onBack = (owner) => { for (const pet of this.pets.values()) if (pet.onBack && pet.owner === owner) pet.draw(ctx, cam); };
+    for (const rp of this.others.values()) {
+      rp.z = this.zFrom(rp.fhId, rp.z);
+      if (!inShop(rp)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); onBack(rp.id); });
+    }
+    for (const pet of this.pets.values()) {
+      pet.z = pet.mine ? (pet.fh ? { page: pet.fh.layer, zMass: pet.fh.zMass } : pet.z || { page: 7, zMass: 0 }) : this.zFrom(pet.fhId, pet.z);
+      if (!pet.onBack) put(pet.z, pet.mine ? 8 : 3, () => pet.draw(ctx, cam));
+    }
+    this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
+      : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
+    if (!inShop(p)) put(this.playerZ, 7, () => { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); this.questAlert?.draw(ctx, cam); onBack(p.id); });
+    return list.sort((a, b) => a.k - b.k);
   }
 
   /**

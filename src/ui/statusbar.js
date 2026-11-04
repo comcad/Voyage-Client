@@ -341,7 +341,7 @@ export class StatusBar {
   /** The mouse wheel over the log: one line a notch. */
   wheel(x, y, dy) {
     const b = this.logBox();
-    if (this.hidden || x >= CHAT_W || y < b.top || y >= b.top + b.h || !dy) return false;
+    if (this.hidden || this.inMenu(x, y) || x >= CHAT_W || y < b.top || y >= b.top + b.h || !dy) return false;
     this.scrollBy(Math.sign(dy));
     return true;
   }
@@ -413,7 +413,7 @@ export class StatusBar {
 
   /** A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. */
   dropOnQuickSlot(x, y, c) {
-    if (!this.quickOpen) return;
+    if (!this.quickOpen || this.inMenu(x, y)) return;
     const p = this.quickPos();
     const i = QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
     if (i < 0) return;
@@ -427,7 +427,7 @@ export class StatusBar {
   }
   /** The slot under (x, y), or -1. */
   quickAt(x, y) {
-    if (!this.quickOpen || this.hidden) return -1;
+    if (!this.quickOpen || this.hidden || this.inMenu(x, y)) return -1;
     const p = this.quickPos();
     return QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
   }
@@ -445,11 +445,14 @@ export class StatusBar {
   /** Canvas-space pointer events from Game. Returns true when the UI took the event. */
   pointer(type, x, y) {
     this.mouse = { x, y };
-    if (!this.hidden && this.chatPointer(type, x, y)) return true;
+    // an open pop-up menu sits on top: what's under it doesn't take the mouse
+    const onMenu = this.inMenu(x, y);
+    if (onMenu && type !== 'up' && !this.chatDrag && !this.thumbDrag) this.edgeHover = false;   // 'up' still ends a drag
+    else if (!this.hidden && this.chatPointer(type, x, y)) return true;
     if (type === 'down' && this.pickQuick(x, y)) return true;
     const buttons = this.allButtons();
     for (const b of buttons) b.y = b.yAt ? b.yAt() : b.y;
-    const over = buttons.find((b) => b.hit(x, y)) || null;
+    const over = (onMenu ? this.menu.buttons : buttons).find((b) => b.hit(x, y)) || null;
     for (const b of buttons) b.hover = b === over;
     if (over && over !== this.hovered) sfx.play('UI/BtMouseOver');
     this.hovered = over;
@@ -507,6 +510,11 @@ export class StatusBar {
       uiText(ctx, t.label, TMENU.x + 7, ry + 3, { color: '#fff', size: 12 });
     });
     ctx.restore();
+  }
+
+  inMenu(x, y) {
+    const m = this.menu;
+    return !!m && x >= m.x && x < m.x + m.bg._w && y >= m.y && y < m.y + m.bg._h;
   }
 
   contains(x, y) {
