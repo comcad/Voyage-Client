@@ -585,8 +585,8 @@ export class ChannelSession {
       const job = r.short();
       const look = readCharLook(r);
       r.int(); const itemEffect = r.int(), chair = r.int();
-      const pos = r.pos2(); const stance = r.ubyte();
-      r.short(); r.ubyte();
+      const pos = r.pos2(); const stance = r.ubyte(), fh = r.short();
+      r.ubyte();
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
@@ -601,7 +601,7 @@ export class ChannelSession {
           berserk = r.available > 0 && r.ubyte() !== 0;
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, rings, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -662,7 +662,7 @@ export class ChannelSession {
 
     // addAttackBody: shared by melee / ranged / magic broadcasts
     const readAttack = (kind) => (r) => {
-      const id = r.int(), nd = r.ubyte(); r.ubyte();
+      const id = r.int(), nd = r.ubyte(), level = r.ubyte();   // the attacker's level
       const skillLevel = r.ubyte(); const skill = skillLevel ? r.int() : 0;
       // the action (15 bits) with facing left in the top bit, as the attacker sent it
       const display = r.ubyte(), act = r.ushort(), speed = r.ubyte(); r.ubyte();
@@ -676,7 +676,7 @@ export class ChannelSession {
         for (let j = 0; j < n; j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
         targets.push({ oid, dmg, crit });
       }
-      this.emit('attack', { kind, id, skill, skillLevel, display, action, facingLeft, speed, projectile, targets });
+      this.emit('attack', { kind, id, level, skill, skillLevel, display, action, facingLeft, speed, projectile, targets });
     };
     on(S.CLOSE_RANGE_ATTACK, readAttack('melee'));
     on(S.RANGED_ATTACK, readAttack('ranged'));
@@ -795,7 +795,7 @@ export class ChannelSession {
         const skill = r.int();
         // Berserk: level, then whether it is on (its aura stays while it is)
         if (skill === 1320006 && r.available >= 3) { r.ubyte(); r.ubyte(); this.emit('berserk', id, r.ubyte() !== 0); return; }
-        this.emit('foreignSkill', id, skill);
+        this.emit('foreignSkill', id, skill, r.available >= 1 ? r.ubyte() : 0);   // then the user's level
       }
       else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
       else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)

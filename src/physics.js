@@ -27,7 +27,7 @@ export class Footholds {
     for (const [layer, groups] of Object.entries(mapFoothold || {})) {
       for (const [g, group] of Object.entries(groups)) {
         for (const [id, f] of Object.entries(group)) {
-          this.byId.set(Number(id), { id: Number(id), layer: Number(layer), group: `${layer}/${g}`, ...f });
+          this.byId.set(Number(id), { id: Number(id), layer: Number(layer), zMass: Number(g) || 0, group: `${layer}/${g}`, ...f });
         }
       }
     }
