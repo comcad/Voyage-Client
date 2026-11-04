@@ -108,6 +108,9 @@ export class QuestBook {
       this.chains.get(q.parent).push(id);
     }
     this.chainParents = chainOrder(this.info, this.infoOrder);
+    // map object tags a quest shows while it is in progress (QuestInfo showLayerTag)
+    this.layerTags = new Map();
+    for (const id of this.infoOrder) { const t = String(this.info[id].showLayerTag ?? '').trim(); if (t) this.layerTags.set(t, id); }
     // parts by order, swapping only when a later one is strictly lower, so equal orders keep the files' order
     const ord = (id) => (this.info[id].order === undefined ? null : Number(this.info[id].order));
     for (const ids of this.chains.values()) {

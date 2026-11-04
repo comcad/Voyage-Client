@@ -83,6 +83,14 @@ export async function itemName(assets, id) {
   return s[id]?.name || `#${id}`;
 }
 
+/** An item's description from its String file (empty when it has none). */
+export async function itemDesc(assets, id) {
+  const t = invType(id), s = await assets.json(`String/${STRING_FILES[t]}.img`);
+  if (!s) return '';
+  if (t === 1) { for (const cat of Object.values(s.Eqp || {})) if (cat?.[id]) return cat[id].desc || ''; return ''; }
+  return (t === 4 ? s.Etc?.[id] : s[id])?.desc || '';
+}
+
 /** An item's info node (price, slotMax, unitPrice, reqLevel, ...). */
 export async function itemInfo(assets, id) {
   const n = itemNode(id);
@@ -106,6 +114,14 @@ export async function itemIcon(assets, id, raw = false) {
   const img = await assets.json(n.path);
   const node = n.key ? img?.[n.key] : img;
   return node?.info?.[raw ? 'iconRaw' : 'icon'] || node?.info?.icon || node?.icon || null;
+}
+
+/** A quest item's info/iconReward: its drop is shown with a key sign over it (e.g. "Z" above a tutorial item). */
+export async function itemRewardIcon(assets, id) {
+  const n = itemNode(id);
+  if (!n?.path) return null;
+  const img = await assets.json(n.path);
+  return (n.key ? img?.[n.key] : img)?.info?.iconReward || null;
 }
 
 /** Meso drop icon frames by amount (Item/Special/0900.img). */

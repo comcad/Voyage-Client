@@ -1,11 +1,11 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath } from './character.js';
-import { weaponMultiplier, itemIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
+import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, DeathNotice, UtilBox } from './ui/dialogs.js';
+import { npcTalk, localTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -15,11 +15,12 @@ import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
-import { StatusBar } from './ui/statusbar.js';
+import { StatusBar, CHAT_COLOR, CHAT_BAR } from './ui/statusbar.js';
 import { WindowManager, allCanvases } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
+import { BookWin } from './ui/book.js';
 import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
@@ -27,7 +28,8 @@ import { MegaphoneWin } from './ui/megaphone.js';
 import { notify, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
-import { UserListWin, PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
+import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
+import { UserListWin, PartyHpWin, GuildContractWin, GuildMarkWin, heracleSays } from './ui/userlist.js';
 import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
 import { uiText } from './ui/wzui.js';
@@ -41,6 +43,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings } from './settings.js';
+import { DirectionScene } from './direction.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -78,8 +81,8 @@ const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST
 export const VIEW_W = 800, VIEW_H = 600;
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2', 'stabT2'];
-// portal types that fire on touch instead of the Up key
-const TOUCH_PORTALS = new Set([3, 9, 12, 13, 14]);
+// portal types that fire on touch instead of the Up key (type 9, a script touch portal, has its own check)
+const TOUCH_PORTALS = new Set([3, 12, 13, 14]);
 
 /**
  * Keyboard state by physical key. Arrows are fixed; everything else is resolved through the
@@ -87,15 +90,16 @@ const TOUCH_PORTALS = new Set([3, 9, 12, 13, 14]);
  */
 class Input {
   constructor(canvas) {
-    this.down = new Set(); this.pressed = new Set(); this.clicks = [];
+    this.down = new Set(); this.pressed = new Set(); this.repeats = new Set(); this.clicks = [];
     const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
     const map = (e) => ARROWS[e.code] || (CODE_TO_SC[e.code] ? e.code : null);
     addEventListener('keydown', (e) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (document.querySelector('.modal-overlay')) return;
-      const k = map(e); if (!k || e.code === 'Enter' || e.code === 'Escape') return;
+      const k = map(e) || (e.code === 'Numpad0' ? 'Numpad0' : null); if (!k || e.code === 'Enter' || e.code === 'Escape') return;
       e.preventDefault();
       if (!this.down.has(k)) this.pressed.add(k);
+      if (e.repeat) this.repeats.add(k);   // the system's key repeat: only the last key pressed repeats
       this.down.add(k);
     });
     addEventListener('keyup', (e) => { const k = map(e); if (k) this.down.delete(k); });
@@ -105,10 +109,16 @@ class Input {
       const r = canvas.getBoundingClientRect();
       this.clicks.push({ x: ((e.clientX - r.left) / r.width) * VIEW_W, y: ((e.clientY - r.top) / r.height) * VIEW_H });
     });
+    // a single click only counts on an NPC's quest icon
+    canvas.addEventListener('click', (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.clicks.push({ x: ((e.clientX - r.left) / r.width) * VIEW_W, y: ((e.clientY - r.top) / r.height) * VIEW_H, single: true });
+    });
   }
   is(k) { return this.down.has(k); }
   hit(k) { return this.pressed.has(k); }
-  endFrame() { this.pressed.clear(); this.clicks.length = 0; }
+  repeated(k) { return this.repeats.has(k); }
+  endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; }
 }
 
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
@@ -456,28 +466,40 @@ const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 121
 const PICKUP_TIME = 0.7;
 
 /** Chat line colours, as in the v83 chat log. */
-const CHAT_COLORS = { spouse: '#ff9ec7', whisper: '#7cfc5a', buddy: '#ffb36b', party: '#ff9ed6', guild: '#d6a4ff', alliance: '#9fe6c2', find: '#ffe08a', notice: '#ff9e9e' };
+const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.error };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
-/** PacketCreator.partyStatusMessage codes */
+// keymap UI actions for the chat: open the input with a target, or toggle the log
+const CHAT_KEYS = { 10: 'all', 11: 'whisper', 12: 'party', 13: 'buddy', 16: 'toggle', 18: 'guild', 21: 'spouse', 24: 'alliance' };
+/** PARTY_OPERATION result codes that are only a chat line (0x15-0x17 name the other character; 0x12 says nothing) */
 const PARTY_MESSAGES = {
-  10: 'A beginner cannot create a party.', 12: 'You have quit as the leader of the party.', 13: 'You have yet to join a party.',
-  16: 'You have already joined a party.', 17: 'The party you are trying to join is already full.',
-  19: 'Unable to find the requested character in this channel.', 21: "'%s' is blocking party invitations.",
-  22: "'%s' is taking care of another invitation.", 23: "'%s' has denied your party invitation.",
-  25: 'You cannot kick another user in this map.', 28: 'Leadership can only be given to a party member in the vicinity.',
-  29: 'Leadership can only be given to a party member in the vicinity.', 30: 'You can only change leadership on the same channel.',
-  1: 'Your party request did not work.', 5: 'Your party request did not work.', 6: 'Your party request did not work.',
+  0x09: 'Already have joined a party.', 0x10: 'Already have joined a party.', 0x0A: "A beginner can't create a party.",
+  0x0D: 'You have yet to join a party.', 0x11: "The party you're trying to join is already in full capacity.", 0x12: '',
+  0x13: 'Unable to find the requested character in this channel.', 0x15: '%s is currently blocking any party invitations.',
+  0x16: "'%s' is taking care of another invitation.", 0x17: '%s have denied request to the party.', 0x19: 'Cannot kick another user in this map',
+  0x1C: 'This can only be given to a party member within the vicinity.',
+  0x1D: 'Unable to hand over the leadership post; No party member is currently within the vicinity of the party leader.',
+  0x1E: "You may only change with the party member that's on the same channel.", 0x20: "As a GM, you're forbidden from creating a party.",
+  0x21: 'Unable to find the character.',
 };
-/** GuildPackets.genericGuildMessage / responseGuildMessage codes (53-55 name the other character) */
+const PARTY_ERROR = "Your request for a party didn't work due to an unexpected error.";
+/** GUILD_OPERATION result codes: a chat line, or Heracle saying it (npc). 0x35-0x37 name the other character. */
 const GUILD_MESSAGES = {
-  28: 'The name is already in use. Please try another one.', 31: 'There was a problem locating the players during the agreement.',
-  33: 'You have already joined a guild.', 35: 'You cannot make a guild.', 36: 'Someone disagreed to the guild agreement.',
-  38: 'There was a problem during the forming of the guild.', 40: 'That character has already joined a guild.',
-  41: 'The guild you are trying to join has already reached the maximum number of members.', 42: 'The character cannot be found in the current channel.',
-  45: 'The character is not in the guild.', 48: 'The character is not in the guild.', 52: 'There was a problem in disbanding the guild.',
-  56: 'An admin cannot make a guild.', 57: 'There was a problem in increasing the guild size.',
-  53: "'%s' is not accepting guild invitations.", 54: "'%s' is taking care of another invitation.", 55: "'%s' has denied your guild invitation.",
+  0x1F: ['npc', 'The problem has happened during the process of gathering agreement of forming the guild... Plese try again later...'],
+  0x21: ['chat', 'Already joined the guild.'], 0x28: ['chat', 'Already joined the guild.'],
+  0x23: ['chat', 'You cannot make a guild, due to the limitation of minimum level requirement.'],
+  0x24: ['npc', 'Somebody has disagreed to form a guild...  Please come back to me when you meet with the right people...  You can only make a guild after getting agreement from all...'],
+  0x26: ['npc', 'The problem has happened during the process of forming the guild... Plese try again later...'],
+  0x29: ['chat', 'The guild, you are trying to join, has already reached the max number of users.'],
+  0x2A: ['chat', 'The character cannot be found in the current channel.'],
+  0x2D: ['chat', 'You are not in the guild.'], 0x30: ['chat', 'You are not in the guild.'],
+  0x34: ['npc', 'The problem has happened during the process of disbanding the guild... Plese try again later...'],
+  0x35: ['chat', '%s is currently not accepting guild invite message.'], 0x36: ['chat', "'%s' is taking care of another invitation."],
+  0x37: ['chat', '%s has denied your guild invitation.'], 0x38: ['chat', 'Admin cannot make a guild.'],
+  0x3B: ['npc', 'The problem has happened during the process of increasing the guild... Plese try again later...'],
+  0x4A: ['chat', 'There are less than 6 members remaining, so the quest cannot continue. Your Guild Quest will end in 5 seconds.'],
+  0x4B: ['chat', 'The user that registered has disconnected, so the quest cannot continue. Your Guild Quest will end in 5 seconds.'],
 };
+const GUILD_ERROR = 'The guild request has not been accepted, due to unknown reason.';
 /** PacketCreator.getMiniRoomError codes for trades */
 const TRADE_ERRORS = { 2: 'The other character is already trading.', 4: 'You cannot trade right now.', 5: 'The other character cannot trade right now.' };
 const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
@@ -532,7 +554,6 @@ export class Game {
     this.moveBuf = []; this.moveTotal = 0;
     this.invincible = 0; this.portalCooldown = 0;
     this.stats = null; this.inventory = null; this.meso = 0;
-    this.showMinimap = true;
     this.keymap = defaultKeymap();
     this.buffs = [];   // {source, until, m1, m2}
     this.fx = [];      // skill effect animations {anim, x, y, flip, follow}
@@ -548,7 +569,7 @@ export class Game {
     const at = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * VIEW_W / r.width, (e.clientY - r.top) * VIEW_H / r.height]; };
     const wm = this.windows;
     // windows sit above the bar: they see the event first, the bar only gets what they leave
-    const route = (type, e) => (wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e)));
+    const route = (type, e) => this.uiLocked || (wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e)));
     c.addEventListener('pointermove', (e) => route('move', e));
     c.addEventListener('pointerdown', (e) => { if (route('down', e)) e.stopImmediatePropagation(); }, true);
     addEventListener('pointerup', (e) => route('up', e));
@@ -585,7 +606,7 @@ export class Game {
     c.addEventListener('wheel', (e) => {
       // deltaMode 1 = lines (some mice / Firefox): count each as a pixel step of 40
       const dy = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
-      if (wm.pointer('wheel', ...at(e), dy)) e.preventDefault();
+      if (wm.pointer('wheel', ...at(e), dy) || sb.wheel(...at(e), dy)) e.preventDefault();
     }, { passive: false });
     const place = () => sb.place({ left: 0, top: 0 }, c.clientWidth / VIEW_W);
     new ResizeObserver(place).observe(c);
@@ -653,11 +674,11 @@ export class Game {
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
       await loaded;
+      if (info) this.basicGuide();
       // the server comes back without your item effect: put it back on (or off, if the item is gone)
       const fx = this.player.itemFxId;
       if (fx) { if (this.itemCount(fx)) net.useItemEffect(fx); else this.setItemEffect(this.player, 0); }
       if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
-      else this.hud.message(`You are now in channel ${this.channel + 1}.`, '#9fd3ff');
       if (this.stats.hp <= 0 && !this.dead) this.die();   // still dead after the switch
     } catch (e) {
       console.error(e);
@@ -693,9 +714,20 @@ export class Game {
     return out;
   }
   hitAction(a) { return this.keysFor(5, a).some((c) => this.input.hit(c)); }
+  /** The pickup key: a press, or its key repeat while held (so holding it keeps picking up); Numpad 0 always works. */
+  pickupKey() {
+    const keys = [...this.keysFor(5, ACTION.PICKUP), 'Numpad0'];
+    return keys.some((c) => this.input.hit(c) || this.input.repeated(c));
+  }
   // held, or tapped since the last frame (a quick tap can start and end between two frames)
   holdAction(a) { return this.keysFor(5, a).some((c) => this.input.is(c) || this.input.hit(c)); }
 
+  unbindKey(sc) {
+    if (!this.keymap[sc]) return;
+    delete this.keymap[sc];
+    this.net?.changeKeymap([{ key: sc, type: 0, action: 0 }]);
+    this.keyBar?.render(); this.statusBar?.render();
+  }
   bindKey(sc, type, action) {
     if (type === 1 && this.skills && !this.skills.owns(action)) return;   // another job's skill has no key
     // a skill/item lives on one key only
@@ -1009,16 +1041,23 @@ export class Game {
 
   toggleMenu(m) {
     if (!this.hud) return;
+    const chatKey = CHAT_KEYS[m];
+    if (chatKey) { if (chatKey === 'toggle') this.statusBar?.toggleChat(); else this.statusBar?.openChat(chatKey); return; }
     if (m === MENU.ITEMS) this.windows.toggle('inventory');
     else if (m === MENU.EQUIP) this.windows.toggle('equip');
     else if (m === MENU.STATS) this.windows.toggle('stat');
     else if (m === MENU.SKILLS) this.toggleSkills();
     else if (m === MENU.QUESTS) this.toggleQuests();
-    else if (m === MENU.MINIMAP) this.windows.toggle('minimap');
+    else if (m === MENU.MINIMAP) {
+      // the window stays: the key cycles Max -> Min bar -> MinMap -> Max
+      const w = this.windows.wins.minimap;
+      if (!this.windows.order.includes(w)) this.windows.open('minimap'); else w?.cycle();
+    }
     else if (m === MENU.WORLDMAP) this.windows.toggle('worldmap');
     else if (m === MENU.KEYS) this.windows.toggle('keyconfig');
     else if (m === MENU.BUDDY) this.windows.toggle('userlist', 0);
     else if (m === MENU.PARTY) this.windows.toggle('userlist', 1);
+    else if (m === MENU.GUILD) this.windows.toggle('userlist', 2);
     else if (m === MENU.MONSTERBOOK) this.windows.toggle('monsterbook');
     else if (m === MENU.MESSENGER) this.windows.toggle('messenger');
     else if (m === MENU.PARTY_SEARCH) this.windows.toggle('partysearch');
@@ -1406,7 +1445,8 @@ export class Game {
   async goOnline(entered, uiRoot) {
     const info = entered.info;
     sfx.play('Game/GameIn');
-    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings;
+    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.linked = info.linked;
+    this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
     this.statusBar.layout(VIEW_W, VIEW_H);
@@ -1416,19 +1456,22 @@ export class Game {
     this.vfx = new WorldFx(this);
     await this.vfx.load();
     const wm = this.windows;
-    wm.drawItemTip = drawItemTip;
+    wm.drawItemTip = drawItemTip; wm.drawSkillTip = drawSkillTip;
     wm.notice = (text, opts) => new Promise((r) => wm.show(new MessageBox(wm, 'notice', text, r, opts)));
     // another player asking something of you: the metal YesNo2 plate (preloaded, as it may not be in yet)
     wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
     wm.okCancel = (text, kind = 'okcancel') => new Promise((r) => wm.show(new UtilBox(wm, kind, text, r)));
+    wm.askWhisper = (def, names) => new Promise((r) => wm.show(new UtilBox(wm, 'whisper', 'Please enter the person you want to whisper to.', r, { def, names }), null));
     wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
-    wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new MessageBox(wm, 'number', text, r, { def, min, max })));
-    wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new MessageBox(wm, 'text', text, r, { def, ...opts })));
-    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
-    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
-    this.buddies = []; this.party = null; this.partyHpMarks = true; this.guild = null;
+    // an amount: the same box with a number field (item names spelled out)
+    wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));
+    // a name or a line: the small UtilDlg box with a white field, opened without a sound
+    wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
+    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
+    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
+    this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
     this.bindUiPointer();
@@ -1438,6 +1481,7 @@ export class Game {
     this.questMsg = new QuestMessages(); this.questTimers = new Map();
     await this.quests.load();
     this.quests.setState(info.quests);
+    this.questLayerTags();
     if (wm.wins.questalarm.state.opened) wm.open('questalarm');   // and the Quest Helper, unless it was closed
     this.questAlert = new QuestAlert(this);
     this.assets.preload(allCanvases(this.vfx.E?.QuestAlert));
@@ -1479,36 +1523,45 @@ export class Game {
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });
       },
       stats: (s, enable) => this.onStats(s, enable),
+      pickupAnswered: () => this.pickupAnswered(),
       gmHide: (on) => { this.gmHidden = on; },
+      // ADMIN_RESULT 0x1C / 0x1B and MINIMAP_ON_OFF: off until the next map, check again, or the on/off flag
+      minimap: (v) => { if (v === 'off') this.minimapOff = this.map; else if (v === 'check') this.minimapOff = null; else this.minimapFlag = v; },
       yellowTip: (again, a, b) => {
         if (this.yellowTipShown && !again) return;
         if (a) { for (const t of [a, b]) if (t) this.hud.message(t, '#ffff00'); this.yellowTipShown = true; }
       },
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
-      avatarMega: (a) => this.hud.megaphone([`${a.name} : ${a.lines.filter(Boolean).join(' ')}`], { bg: 'rgba(210, 46, 120, 0.9)', channel: a.channel, ear: a.ear }),
+      fame: (f) => this.onFame(f),
+      avatarMega: (a) => this.hud.megaphone([`${a.name} : ${a.lines.filter(Boolean).join(' ')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }),
       spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
-      groupChat: (c) => this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff'),
+      groupChat: (c) => {
+        if (!this.chatAllowed(c.mode) || (c.mode === 0 && this.windows.wins.userlist?.blockedName(c.name))) return;
+        this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
+      },
       whisper: (w) => this.onWhisper(w),
       whisperResult: (r) => this.onWhisperResult(r),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
-      // a buddy coming online gets its balloon; one moving onto your channel gets the same-channel one
+      // a buddy coming online gets its balloon (a guildmate's comes from the guild); one moving onto your channel gets the same-channel one
       buddyChannel: (id, ch) => {
         const b = this.buddies.find((x) => x.id === id);
         if (!b) return;
         const was = b.channel; b.channel = ch;
-        if (was < 0 && ch >= 0) notifyLogin(this.windows, b.name);
+        if (was < 0 && ch >= 0) { if (!this.guild?.members.some((m) => m.id === id)) notifyLogin(this.windows, b.name); }
         else if (was !== ch && ch === this.channel) notifyLogin(this.windows, b.name, true);
       },
-      buddyCapacity: () => {},
+      buddyCapacity: (n) => { this.buddyCapacity = n; },
       buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
       buddyRequest: (b) => notify(this.windows, 'buddy', b.name)
         .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
-      guildName: (id, name) => { const o = this.others.get(id); if (o) { o.guild = name; if (!name) o.emblem = null; } },
-      guildMark: (id, emblem) => { const o = this.others.get(id); if (o) o.emblem = emblem; },
+      // other players' guild tags: held for one still spawning
+      guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
+      guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
+      notifyLevel: (n) => this.hud.message(`<${n.type === 2 ? 'Guild' : 'Family'}> ${n.name} has reached Lv. ${n.level}.`, CHAT_COLOR.error),
       tradeOpen: (t) => {
         if (this.tradeWin) return;
         const w = this.tradeWin = this.windows.show(new TradeWin(this.windows));
@@ -1551,9 +1604,19 @@ export class Game {
       tradeError: (code) => { this.tradeWin?.ended(0); this.windows.notice(TRADE_ERRORS[code] || 'The trade could not be started.'); },
       charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i)); },
       // a Party Search invitation comes as "PS: <leader>"
-      partyInvite: (p) => (p.name.startsWith('PS: ') ? notify(this.windows, 'partySearch', p.name.slice(4)) : notify(this.windows, 'party', p.name))
-        .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name))),
-      partyMessage: (code, name) => { const t = PARTY_MESSAGES[code]; if (t) this.hud.message(t.replace('%s', name), CHAT_COLORS.notice); },
+      // refused at once with party invites switched off, from someone on the Blacklist, or while another is up;
+      // an auto-join one (Party Search) joins straight away
+      partyInvite: (p) => {
+        const from = p.name.startsWith('PS: ') ? p.name.slice(4) : p.name;
+        if (p.autoJoin) { this.net.partyOp(3, p.id); return; }
+        if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
+        (from !== p.name ? notify(this.windows, 'partySearch', from) : notify(this.windows, 'party', p.name))
+          .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
+      },
+      partyMessage: (code, text) => {
+        const t = code === 0x24 ? text || PARTY_ERROR : PARTY_MESSAGES[code] ?? PARTY_ERROR;
+        if (t) this.hud.message(code === 0x24 ? t : t.replace('%s', text), CHAT_COLORS.notice);
+      },
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
       chat: later((c) => this.onChat(c)),
       spawnPlayer: later((d) => this.spawnPlayer(d)),
@@ -1695,7 +1758,10 @@ export class Game {
         this.skillWin?.render(); this.keyBar.render();
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
-      cooldown: (id, sec) => { if (sec) this.skills.cooldowns[id] = Date.now() + sec * 1000; else delete this.skills.cooldowns[id]; },
+      cooldown: (id, sec) => {
+        if (sec) { this.skills.cooldowns[id] = Date.now() + sec * 1000; (this.skills.cooldownTotal ??= {})[id] = sec * 1000; }
+        else delete this.skills.cooldowns[id];
+      },
       buff: (b) => {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
@@ -1709,6 +1775,8 @@ export class Game {
         const ent = chrId === null ? this.player : this.others.get(chrId);
         if (ent) this.playSkillEffect(skillId, ent, false, 'affected');
       }),
+      skillSpecial: later((chrId, skillId) => { const ent = chrId === null ? this.player : this.others.get(chrId); if (ent) this.playSkillEffect(skillId, ent, false, 'special'); }),
+      berserk: later((chrId, on) => this.setBerserk(chrId === null ? this.player : this.others.get(chrId), on)),
       foreignSkill: later((chrId, skillId) => {
         const rp = this.others.get(chrId);
         if (!rp) return;
@@ -1733,6 +1801,12 @@ export class Game {
       scriptProgress: (t) => this.questMsg.script(t),
       npcScripts: (list) => { this.npcScripts = new Map(list.map((e) => [e.id, e.name])); },
       questClearEffect: () => { this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); },
+      avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
+      direction: (path) => this.playDirection(path),
+      lockUi: (on) => this.setUiLock(on),
+      mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
+      disableUi: (on) => { this.uiDisabled = on; },
+      hint: (text, width, seconds, at) => { this.vfx?.hint(text, width, seconds, at || this.player); },
       questItems: async (items) => {
         for (const { id, qty } of items) {
           const name = await itemName(this.assets, id), tab = TAB_NAMES[invType(id)] || '';
@@ -1741,25 +1815,49 @@ export class Game {
           this.hud.message(text, QUEST_GREY);
         }
       },
-      disconnected: () => this.windows.notice('The connection to the server was closed.').then(() => location.reload()),
+      // the game's small box with its OK; back to the login screen once it is clicked
+      disconnected: () => this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => location.reload()),
     });
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
     await loaded;
+    // the first map after logging in: a fresh log with the welcome line; the hourly play-time count starts
+    this.statusBar?.clearLog(); this.hud.message('[Welcome] Welcome to MapleStory!!', CHAT_COLOR.yellow);
+    this.playHourAt = performance.now() + 3600000; this.playHours = 1;
+    this.basicGuide();
     // logged off (or dropped) while dead: the server kept the 0 HP, so come back as the ghost, still to be revived
     if (this.stats.hp <= 0 && !this.dead) this.die();
   }
 
+  /**
+   * Entering the game with a fresh character (level 1, no EXP) opens the Maple Administrator's key guide, a
+   * dialog the client makes itself: nothing is sent when it closes.
+   */
+  basicGuide() {
+    if (this.stats?.level !== 1 || this.stats?.exp !== 0) return;
+    localTalk(this.windows, 9010000, '#eBasic Configuration for MapleStory#n\r\n\r\n#fUI/UIWindow.img/UtilDlgEx/notice#', ['OK', 'End Chat']);
+  }
+
   // ---------------------------------------------------------------- quests
+  /** Map objects tagged with a quest's showLayerTag show only while that quest is in progress. */
+  questLayerTags() {
+    const tags = this.quests?.layerTags, map = this.map;
+    if (!tags || !map?.objTags) return;
+    for (const tag of map.objTags.keys()) { const q = tags.get(tag); if (q) map.setObjectVisible(tag, this.quests.started[q] !== undefined); }
+  }
+
   /** SHOW_STATUS_INFO mode 1: a quest record. Nothing goes to the chat; progress shows as the yellow lines. */
   onQuest(id, status, data) {
     const book = this.quests, old = book.started[id];
     book.update(id, status, data);
+    this.questLayerTags();
     this.questAlert?.recordChanged(id, status);
     const alarm = this.windows.wins.questalarm, ctx = this.textCtx();
     if (status === 1) {
       if (old !== data) this.questMobLines(id, old);
       alarm?.onRecord(id);
+      // a quest whose only requirement is talking to someone can be handed in as soon as it starts
+      if (old === undefined && book.info[id] && book.canComplete(id, ctx)) this.questCompleteNotice(id);
       // a record (or the counter kept under an infoNumber) can make a quest ready to hand in
       for (const q of Object.keys(book.started).map(Number)) {
         if ((Number(book.check[q]?.['1']?.infoNumber) || q) === id && book.info[q] && book.canComplete(q, ctx)) this.questCompleteNotice(q);
@@ -1836,7 +1934,8 @@ export class Game {
   async onQuestResult(r) {
     const book = this.quests;
     if (r.ok) {
-      dropQuestNotice(this.windows, r.id);
+      // mode 8 also confirms a start: only a quest handed in loses its notice
+      if (book.status(r.id) !== 1) dropQuestNotice(this.windows, r.id);
       const yes = book.dialogue(r.id, book.status(r.id) === 1 ? '0' : '1').yes;
       if (yes.length && !(await playQuestLines(this, r.npc, yes))) return;
       if (r.next) {
@@ -1905,6 +2004,18 @@ export class Game {
     return n;
   }
 
+  /** Level 2: the skill window opens with its guide balloons, unless it is already open (Evan's skill window aside). */
+  async skillGuide() {
+    const job = this.stats?.job ?? 0;
+    if (Math.floor(job / 100) === 22 || job === 2001) return;
+    if (this.windows.order.includes(this.windows.wins.skill)) return;
+    this.loginUi ??= await this.assets.json('UI/Login.img');
+    const B = this.loginUi?.WorldNotice?.Balloon;
+    if (B) await this.assets.preload(Object.values(B).filter((n) => n?._canvas));
+    const w = this.windows.open('skill');
+    if (w) w.guide = true;
+  }
+
   /** Context for quest checks and NPC text (#c item counts). */
   textCtx() {
     const bookCards = Object.values(this.monsterBook?.cards || {}).filter((n) => n > 0).length;
@@ -1927,7 +2038,7 @@ export class Game {
 
   onStats(s, enable) {
     if (!this.stats) return;
-    if (enable) this.apPending = false;
+    if (enable) { this.apPending = false; this.scriptPending = 0; this.pickupAnswered(); }
     const before = this.stats.level, exp0 = this.stats.exp;
     Object.assign(this.stats, s);
     if (s.level > before) this.petEvent('e_levelup');
@@ -1935,9 +2046,9 @@ export class Game {
     this.petAutoPot('mp');
     if (s.meso !== undefined) { const was = this.meso; this.meso = s.meso; this.questMesoChanged(was); }
     this.questAlert?.statsChanged();
-    if (s.level > before) { this.hud.message(`Level up! You are now level ${s.level}.`, '#ffe08a'); this.levelUpEffect(); sfx.play('Game/LevelUp'); }
+    if (s.level > before) { this.levelUpEffect(); sfx.play('Game/LevelUp'); }
+    if (s.level === 2 && before === 1) this.skillGuide();
     if (s.job !== undefined && this.skills && s.job !== this.skills.job) {
-      this.hud.message('Your job has changed! New skills are available.', '#ffe08a');
       this.vfx?.play('JobChanged', this.player); sfx.play('Game/JobChanged');
       this.skills.loadJob(s.job).then(() => this.skillWin?.render());
     }
@@ -1970,7 +2081,10 @@ export class Game {
     const seq = this.loadSeq = (this.loadSeq || 0) + 1;
     const current = () => seq === this.loadSeq;
     this.petMpArmed = false;
-    this.loading = true; this.loadingId = id;
+    this.loading = true; this.loadingId = id; this.objVisQueue = null;
+    // a scene ends with its map; the next map's scene comes while that one loads
+    this.direction = null;
+    if (this.directionDressed) { this.directionDressed = false; this.rebuildLook(); }
     // the old map fades to black while the new one loads; the loading screen only shows if that takes a while
     this.fadeOut();
     const fadeStart = this.fade.t0;
@@ -1984,6 +2098,10 @@ export class Game {
       ]);
       if (!current()) return;
       this.map = map;
+      this.questLayerTags();
+      for (const { tag, on } of this.objVisQueue || []) map.setObjectVisible(tag, on);
+      this.objVisQueue = null;
+      this.scriptPortalIn = this.scriptPortalLast = null; this.scriptPending = 0;   // script touch portals start fresh on each map
       this.charging = null;   // a skill being charged doesn't carry over
       this.keydown = null;
       this.rush = null;
@@ -2047,6 +2165,7 @@ export class Game {
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`); }
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
+    if (kind === 'Npc' && this.vfx) this.vfx.questT = 0;   // its quest icon at once
   }
 
   killLife(oid, anim) {
@@ -2093,6 +2212,7 @@ export class Game {
     if (rp.chair) this.chairArt(rp.chair);
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     this.others.set(d.id, rp);
+    if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
 
@@ -2107,7 +2227,9 @@ export class Game {
     const ent = c.id === this.player.id ? this.player : this.others.get(c.id);
     const name = ent?.name || '?';
     if (ent) ent.chat = { text: c.text, t: 5 };
-    this.hud.message(`${name} : ${c.text}`, '#fff');      // general chat is white, a GM's too
+    if (c.show) return;   // a balloon only
+    if (c.gm) this.statusBar?.message(`${name} : ${c.text}`, CHAT_BAR.gm.color, { bg: CHAT_BAR.gm.bg });
+    else this.hud.message(`${name} : ${c.text}`, CHAT_COLOR.all);
   }
 
   /**
@@ -2192,7 +2314,9 @@ export class Game {
     const pending = (this.pendingDrops ??= new Set());
     if (this.drops.has(d.oid) || pending.has(d.oid)) return;
     pending.add(d.oid);
-    let node = d.meso ? await mesoIcon(this.assets, d.id) : await itemIcon(this.assets, d.id, true);
+    // an item with info/iconReward lies on the ground as that animation (the item with a key sign over it)
+    const reward = d.meso ? null : await itemRewardIcon(this.assets, d.id);
+    let node = d.meso ? await mesoIcon(this.assets, d.id) : reward || await itemIcon(this.assets, d.id, true);
     if (d.meso && node) node = mesoTiming(node, d.id);
     const anim = new Anim(node || null);
     await this.assets.preload(anim.frames);
@@ -2208,20 +2332,24 @@ export class Game {
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
     const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
     this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
-      spin: !d.meso, angle: 0, speed, flight });
+      spin: !d.meso && !reward, angle: 0, speed, flight });
   }
 
   removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
     const d = this.drops.get(oid);
     if (!d) return;
     if (anim === 4) { this.explodeMeso(oid, delay); return; }
+    if (chr === this.player.id && (anim === 2 || anim === 5)) this.pickupAnswered();
     const pet = anim === 5 && this.pets.get(`${chr}:${petSlot}`);
     if (pet) { if (chr === this.player.id) sfx.play('Game/PickUpItem'); this.pickUp(d, pet); return; }
-    if (anim === 2) {
+    // a pet's pickup without that pet flies to its owner
+    if (anim === 2 || anim === 5) {
       const target = chr === this.player.id ? this.player : this.others.get(chr);
       if (chr === this.player.id) sfx.play('Game/PickUpItem');
       if (target) { this.pickUp(d, target); return; }
     }
+    // expired: it stops floating on its first frame and fades out over 1s
+    if (anim === 0 && d.landed) { d.expire = 0; d.anim.reset?.(); return; }
     this.drops.delete(oid);
   }
 
@@ -2258,6 +2386,43 @@ export class Game {
     for (const [id, n] of was) this.questItemLines(id, n);
     for (const id of was.keys()) this.questAlert?.itemChanged(id, false);
     for (const op of ops) if (op.pos < 0 || op.to < 0) for (const id of [op.item?.id, box(op.inv, op.to ?? op.pos)?.[op.to ?? op.pos]?.id]) if (id) this.questAlert?.itemChanged(id, true);
+  }
+
+  /** User effect 0x12: a scene over the screen (the job previews, the boat to Lith Harbor...). */
+  async playDirection(path) {
+    const seq = this.loadSeq;
+    const scene = await DirectionScene.load(this, path);
+    if (scene && seq === this.loadSeq) { this.direction = scene; this.player.facingRight = false; }   // played facing left
+  }
+  directionField(id) { this.net?.directionField(id); }
+  /** A scene's costume: only these items (slot: id), until the next map. */
+  async directionLook(slots) {
+    const s = this.stats;
+    if (!s) return;
+    // no medal: its tag doesn't show in a scene
+    const equips = Object.values(slots).filter((id) => Math.floor(id / 10000) !== 114);
+    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, gender: s.gender, equips });
+    await look.load();
+    await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
+    if (!this.direction) return;
+    this.look = look; this.directionDressed = true;
+    this.assets.preload(lookCanvases(look, look.actionList()));
+  }
+  directionAction(action) {
+    const p = this.player;
+    if (!this.look.has(action)) return;
+    p.attack = action; p.action = action; p.frame = 0; p.frameT = 0; p.seat = null;
+  }
+  /** LOCK_UI: the windows close and the status bar and minimap are gone until it is unlocked. */
+  setUiLock(on) {
+    this.uiLocked = on;
+    const wm = this.windows;
+    if (on && wm) {
+      const keep = (w) => w === wm.wins.minimap || w === wm.wins.questalarm;
+      for (const w of wm.order) if (!keep(w)) w.onClose?.();
+      wm.order = wm.order.filter(keep); wm.drag = null; wm.carry = null; wm.tip = null;
+    }
+    this.statusBar?.setHidden?.(on);
   }
 
   async rebuildLook() {
@@ -2315,6 +2480,7 @@ export class Game {
     if (tab === 5 && Math.floor(it.id / 10000) === 516) { this.useFaceItem(it.id); return; }             // a facial expression
     if (tab === 5 && Math.floor(it.id / 10000) === 501) { this.useItemEffect(it.id); return; }           // a character effect
     if (tab === 3 && Math.floor(it.id / 10000) === 301) { this.sitChair(it.id); return; }        // a chair
+    if (tab === 4 && Math.floor(it.id / 10000) === 416) { this.openBook(it.id); return; }        // a book (the Beginner's Guide)
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
     if (tab === 2 && isScroll(it.id)) {
       // a scroll is put on an item, not used: pick it up and show what you wear
@@ -2331,6 +2497,18 @@ export class Game {
       if (!dst) return;
       this.equipChecked(slot, it, dst);
     }
+  }
+
+  /** A book item's pages (Item/Etc/0416.img/<id>/book) in UIWindow.img/Book; the client opens it by itself. */
+  async openBook(id) {
+    const items = await this.assets.json(`Item/Etc/${pad(Math.floor(id / 10000), 4)}.img`);
+    const book = items?.[pad(id, 8)]?.book;
+    if (!book) return;
+    const old = this.windows.order.find((w) => w instanceof BookWin);
+    if (old) this.windows.close(old);
+    const win = new BookWin(this.windows, Object.values(book));
+    await this.windows.assets.preload(win.frames());
+    this.windows.show(win, 'UI/MenuUp');
   }
 
   petSlots(i) { return PET_SLOTS[i] || PET_SLOTS[0]; }
@@ -2686,6 +2864,57 @@ export class Game {
    * answers the last whisper, /find <name> locates a player; anything else goes to the chat target
    * (All / Buddy / Party / Guild / Alliance). GM commands (!...) always go to All.
    */
+  /**
+   * [MapleTip] lines (yellow): every 12 s the first Etc/Tips.img/info row for your level and job group is checked;
+   * once its interval has passed since the last tip, its `all` percent picks a tip from `all`, else from its own list.
+   */
+  mapleTip() {
+    const now = performance.now(), s = this.stats;
+    if (!s || now < (this.tipCheckAt ??= now + 12000)) return;
+    this.tipCheckAt = now + 12000;
+    if (!this.tips) { this.tips = 'loading'; this.assets.json('Etc/Tips.img').then((t) => { this.tips = t || {}; }); return; }
+    if (this.tips === 'loading') return;
+    const group = Math.floor((s.job % 1000) / 100), bit = 2 ** ((group - 1 + 32) % 32);
+    const row = Object.values(this.tips.info || {}).find((r) => s.level >= r.levelMin && s.level <= r.levelMax
+      && (r.job === undefined || (Number(r.job) & bit) !== 0));
+    if (!row || now - (this.lastTipAt ?? -Infinity) < (row.interval || 0)) return;
+    const list = Object.values((Math.random() * 100 < (row.all || 0) ? this.tips.all : this.tips[row.tip]) || {});
+    if (!list.length) return;
+    this.lastTipAt = now;
+    this.hud.message(`[MapleTip] ${list[Math.floor(Math.random() * list.length)]}`, CHAT_COLOR.yellow);
+  }
+  /** FAME_RESPONSE lines, all light red. */
+  onFame(f) {
+    const me = this.player.name, say = (t) => this.hud.message(t, CHAT_COLOR.error);
+    if (f.mode === 0) say(f.up ? `You have raised '${f.name}''s level of fame.` : `You have dropped '${f.name}''s level of fame.`);
+    else if (f.mode === 5) say(f.up ? `'${f.name}' have raised '${me}''s level of fame.` : `'${f.name}' have dropped '${me}''s level of fame.`);
+    else say({ 1: 'The user name is incorrectly entered.', 2: 'Users under level 15 are unable to toggle with fame.',
+      3: "You can't raise or drop a level of fame anymore for today.", 4: "You can't raise or drop a level of fame of that character anymore for this month." }[f.mode] || 'The user name is incorrectly entered.');
+  }
+  /** Every hour after logging in, how long you have played (from the third, with a suggestion to rest). */
+  playTimeNote() {
+    if (!this.playHourAt || performance.now() < this.playHourAt) return;
+    const h = this.playHours;
+    this.hud.message(`You have played MapleStory for ${h} hour(s).`, CHAT_COLOR.error);
+    if (h >= 3) this.hud.message('We suggest you take a break from Mapling.', CHAT_COLOR.error);
+    this.playHourAt += 3600000; this.playHours = h + 1;
+  }
+  /** Laughing or crying words in your own line show on your face. */
+  chatFace(text) {
+    const t = text.toLowerCase();
+    if (/haha|hoho|hehe|harhar|wahaha/.test(t)) this.emote(2);
+    else if (/sob|tears|cry|sniff/.test(t)) this.emote(4);
+  }
+  /** The Game Option switches for buddy and guild chat. */
+  chatAllowed(mode) {
+    let allow = {};
+    try { allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { allow = {}; }
+    return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false);
+  }
+  /** A Game Option switch (on unless turned off). */
+  optionAllowed(key) {
+    try { return JSON.parse(localStorage.getItem('maple.gameopt') || '{}')[key] !== false; } catch { return true; }
+  }
   sendChat(text) {
     if (!this.net) { this.player.chat = { text, t: 5 }; return; }
     let m = text.match(/^\/(?:w|whisper)\s+(\S+)\s+(.+)$/i);
@@ -2696,19 +2925,21 @@ export class Game {
     if (m) { this.net.find(m[1]); return; }
     m = text.match(/^\/pet\s+(.+)$/i);
     if (m) { this.petTalk(m[1]); return; }
-    if (!text.startsWith('/')) this.petCommandWord(text);   // your pets hear every line
+    if (!text.startsWith('/')) { this.petCommandWord(text); this.chatFace(text); }   // your pets hear every line
     // the chat target from the drop-up list beside the chat line
     const target = this.statusBar?.chatTarget || 'all', note = (t) => this.hud.message(t, CHAT_COLORS.notice);
     if (target === 'all' || text.startsWith('!')) { this.net.chat(text); return; }
-    if (target === 'whisper') { const to = this.statusBar.whisperTo; if (to) this.whisperTo(to, text); else note('Choose who to whisper to first.'); return; }
+    if (target === 'whisper') { const to = this.statusBar.whisperTo; if (to) this.whisperTo(to, text); else note('There is no one to whisper to.'); return; }
     if (target === 'spouse') { this.net.spouseChat(text); return; }
     const mode = { buddy: 0, group: 0, party: 1, guild: 2, alliance: 3 }[target];
-    if (mode === 1 && !this.party) { note('You are not in a party.'); return; }
-    if (mode >= 2 && !this.guild) { note('You are not in a guild.'); return; }
+    if (mode === 1 && !this.party) { note("Either the party doesn't exist or no member of your party is logged on."); return; }
+    if (mode === 2 && !this.guild) { note('You are not in a guild yet or none of your guild member is online.'); return; }
+    if (mode === 3 && !this.guild) { note('There are no guild alliance you joined OR no one online in your guild alliance.'); return; }
     if (mode === 0) {
-      // buddy chat (and Group, which has no buddy-group choice yet) reaches the buddies online
-      const ids = (this.buddies || []).filter((b) => b.channel >= 0).map((b) => b.id);
-      if (!ids.length) { note('None of your buddies are online.'); return; }
+      // buddy chat reaches the buddies online (To Group: those in the group picked on the Buddy tab), not blocked ones
+      const ul = this.windows.wins.userlist, group = target === 'group' ? this.statusBar.chatGroup : null;
+      const ids = (this.buddies || []).filter((b) => b.channel >= 0 && !b.pending && !ul?.isBlocked(b) && (!group || (b.group || 'Default Group') === group)).map((b) => b.id);
+      if (!ids.length) { note('You have no buddy available for chat.'); return; }
       this.net.groupChat(0, text, ids);
     } else this.net.groupChat(mode, text);
     // the server only echoes group chat to the others, so show your own line here
@@ -2720,44 +2951,79 @@ export class Game {
    */
   onGuild(d) {
     const me = this.player.id, g = this.guild, msg = (t) => this.hud.message(t, CHAT_COLORS.guild);
-    const member = (id) => g?.members.find((m) => m.id === id);
+    const member = (id) => g?.members.find((m) => m.id === id), master = g?.members[0]?.id === me;
     switch (d.kind) {
-      case 'askName':
-        this.windows.askText('Enter the name of the guild you would like to create.').then((n) => { if (n) this.net.guildOp(2, n.trim()); });
-        break;
+      case 'askName': this.askGuildName(); break;
       case 'agreement':
-        notify(this.windows, 'guildFound', d.master).then((ok) => this.net.guildAgree(ok));
+        if (this.party?.leader === me) { heracleSays(this.windows, 'Now I am asking other guild members for the agreement of forming a guild~ Please hold on~...'); break; }
+        this.showModal(new GuildContractWin(this.windows, d.master, d.name, (ok) => this.net.guildAgree(ok)));
         break;
-      case 'invite':
+      case 'invite': {
+        // refused at once with guild invites off, from someone on the Blacklist (0x35) or while another is up (0x36)
+        const busy = this.windows.order.some((w) => w.kind === 'guild');
+        if (busy || !this.optionAllowed('guildInvite') || this.windows.wins.userlist?.blacklisted(d.from)) { this.net.guildDeny(d.from, busy ? 0x36 : 0x35, this.player.name); break; }
         notify(this.windows, 'guild', d.from)
-          .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from)));
+          .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from, 0x37, this.player.name)));
         break;
-      case 'info':
-        this.guild = d.guild;
-        break;
+      }
+      case 'info': this.guild = d.guild; break;
       case 'join':
+        if (d.member.id === me) { msg('You have entered the guild.'); this.net.guildOp(0); break; }
         if (!g) break;
         g.members = [...g.members.filter((m) => m.id !== d.member.id), d.member];
-        msg(d.member.id === me ? `You have joined the guild ${g.name}.` : `${d.member.name} has joined the guild.`);
+        msg(`'${d.member.name}' has joined the guild.`);
         break;
       case 'leave': case 'expel':
-        if (d.id === me) { this.guild = null; msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have left the guild.'); break; }
+        if (d.id === me) { this.guild = null; msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have quit the guild.'); break; }
         if (g) g.members = g.members.filter((m) => m.id !== d.id);
-        msg(`${d.name} has ${d.kind === 'expel' ? 'been expelled from' : 'left'} the guild.`);
+        if (d.kind === 'leave') msg(`'${d.name}' quitted the guild.`);
+        else msg(d.name ? `'${d.name}' has been expelled from the guild.` : 'Deleted Chracters have been expelled.');
         break;
-      case 'disband': this.guild = null; msg('The guild has been disbanded.'); break;
-      case 'capacity': if (g) g.capacity = d.capacity; break;
+      case 'disband':
+        this.guild = null;
+        if (master) heracleSays(this.windows, 'The guild has been disbanded..  Please come back to me when you want to make a guild, again..');
+        else msg('The guild has been disbanded.');
+        break;
+      case 'capacity':
+        if (g) g.capacity = d.capacity;
+        if (master) heracleSays(this.windows, `Congratulation~  The number of guld members has now increased to ${d.capacity} ...  Please come back to me whenever you need to..`);
+        break;
       case 'levelJob': { const m = member(d.id); if (m) Object.assign(m, { level: d.level, job: d.job }); break; }
       case 'online': { const m = member(d.id); if (m) { m.online = d.online; if (d.online && d.id !== me) notifyLogin(this.windows, m.name); } break; }
-      case 'ranks': if (g) g.ranks = d.ranks; break;
-      case 'rank': { const m = member(d.id); if (m) m.rank = d.rank; break; }
-      case 'emblem': if (g) g.emblem = d.emblem; break;
-      case 'notice': if (g) { g.notice = d.notice; if (d.notice) msg(`[Guild Notice] ${d.notice}`); } break;
+      case 'ranks': if (g) { g.ranks = d.ranks; if (master) this.windows.notice('It is saved.'); } break;
+      case 'rank': { const m = member(d.id); if (m) { m.rank = d.rank; msg(`[${m.name}]'s position has been changed to [${g.ranks[d.rank - 1] || ''}].`); } break; }
+      case 'emblem': if (g) { g.emblem = d.emblem; if (master) this.windows.notice('It is completed.'); } break;
+      case 'notice': if (g) { g.notice = d.notice; if (d.notice) msg(`* Guild Notice : ${d.notice}`); } break;
       case 'gp': if (g) g.gp = d.gp; break;
-      case 'message': { const t = GUILD_MESSAGES[d.code]; if (t) this.windows.notice(t.replace('%s', d.name)); break; }
+      case 'makeMark':
+        if (master) this.showModal(new GuildMarkWin(this.windows, g.emblem, (e) => { if (e) this.net.guildEmblem(e); }));
+        break;
+      case 'gpqQueue': {
+        const ch = String(d.channel);
+        msg(d.pos === 1 ? `Please go see the Guild Quest NPC at Channel ${ch} immediately to enter.`
+          : d.pos === 2 ? `Your guild is up next. Please head to the Guild Quest map at Channel ${ch} and wait.`
+            : `There's currently 1 guild participating in the Guild Quest, and your guild is number ${d.pos - 1} on the waitlist.`);
+        break;
+      }
+      case 'message': {
+        if (d.code === 0x1C) { heracleSays(this.windows, 'The name is already in use... Please try other ones....').then(() => this.askGuildName()); break; }
+        if (d.code === 0x4E) { msg(d.ok && d.text ? d.text : GUILD_ERROR); break; }
+        const [how, t] = GUILD_MESSAGES[d.code] || ['chat', GUILD_ERROR];
+        if (how === 'npc') heracleSays(this.windows, t); else msg(t.replace('%s', d.name));
+        break;
+      }
       default: break;
     }
   }
+  /** Heracle's guild name prompt: 4-12 characters; Cancel sends nothing. */
+  askGuildName() {
+    this.windows.askText('Please type the name of the guild.', '', { max: 12 }).then((n) => {
+      const name = n?.trim();
+      if (name && name.length >= 4) this.net.guildOp(2, name);
+    });
+  }
+  /** A modal window with its art loaded first. */
+  showModal(w) { this.assets.preload(w.frames()).then(() => this.windows.show(w)); }
 
   /** PARTY_OPERATION results: keep this.party = { id, leader, members[] } in step with the server. */
   onParty(p) {
@@ -2767,18 +3033,23 @@ export class Game {
       this.party = { id: p.id, leader: me, members: [{ id: me, name: this.player.name, job: this.stats.job, level: this.stats.level, channel: this.channel, map: this.map?.id }] };
       msg('You have created a new party.');
     } else if (p.kind === 'update' || p.kind === 'join') {
-      if (p.kind === 'join') msg(p.name === this.player.name ? 'You have joined the party.' : `${p.name} has joined the party.`);
+      if (p.kind === 'join') msg(p.name === this.player.name ? 'You have joined the party.' : `'${p.name}' has joined the party.`);
       this.party = { id: p.id, leader: p.leader, members: keepHp(p.members) };
     } else if (p.kind === 'leave' || p.kind === 'expel') {
-      if (p.target === me) { this.party = null; msg(p.kind === 'expel' ? 'You have been expelled from the party.' : 'You have left the party.'); }
-      else { this.party = { id: p.id, leader: p.leader, members: keepHp(p.members) }; msg(`${p.name} has ${p.kind === 'expel' ? 'been expelled from' : 'left'} the party.`); }
+      const out = p.kind === 'expel';
+      if (p.target === me) { this.party = null; msg(out ? 'You have been expelled from the party.' : 'You have left the party.'); }
+      else { this.party = { id: p.id, leader: p.leader, members: keepHp(p.members) }; msg(out ? `'${p.name}' have been expelled from the party.` : `'${p.name}' have left the party.`); }
     } else if (p.kind === 'disband') {
-      this.party = null; msg(p.target === me ? 'You have disbanded the party.' : 'The party has been disbanded.');
+      this.party = null; msg(p.target === me ? 'You have quit as the leader of the party. The party has been disbanded.' : 'You have left the party since the party leader quit.');
     } else if (p.kind === 'leader' && this.party) {
       this.party.leader = p.leader;
       const m = this.party.members.find((x) => x.id === p.leader);
-      if (m) msg(`${m.name} is now the party leader.`);
+      if (m) msg(p.reason ? `Due to the party leader disconnecting from the game, ${m.name} has been assigned as the new leader.` : `\t${m.name} has become the leader of the party.`);
+    } else if (p.kind === 'levelJob') {
+      const m = this.party?.members.find((x) => x.id === p.id);
+      if (m) Object.assign(m, { level: p.level, job: p.job });
     }
+    this.windows.wins.partyhp?.sync();
     this.windows.wins.partysearch?.partyChanged();
   }
 
@@ -2788,15 +3059,17 @@ export class Game {
   }
   onWhisper(w) {
     this.lastWhisperFrom = w.from;
-    this.hud.message(`${w.from}>> ${w.text}`, CHAT_COLORS.whisper);
+    const ch = w.channel === this.channel ? '' : `[${this.channelNames?.[w.channel] || `Ch. ${w.channel + 1}`}]`;
+    this.hud.message(`${w.from}${ch}>> ${w.text}`, CHAT_COLORS.whisper);
   }
   onWhisperResult(r) {
     const p = this.pendingWhisper;
     if (r.ok && p) this.hud.message(`${r.to}<< ${p.text}`, CHAT_COLORS.whisper);
-    else if (!r.ok) this.hud.message(`Unable to find '${r.to}'.`, CHAT_COLORS.notice);
+    else if (!r.ok) this.hud.message(`Unable to find '${r.to}'`, CHAT_COLORS.notice);
     this.pendingWhisper = null;
   }
   async onFindResult(f) {
+    if (f.buddy) { this.windows.wins.userlist?.located(f); return; }
     let where;
     if (f.type === 1) where = `is in ${await this.mapName(f.where)}`;
     else if (f.type === 3) where = `is in channel ${f.where + 1}`;
@@ -2841,6 +3114,8 @@ export class Game {
 
   update(dt) {
     if (this.inCashShop) { this.windows?.update(dt); return; }   // the shop screen is all there is
+    if (this.uiLocked || this.uiDisabled) { const i = this.input; i.down.clear(); i.pressed.clear(); i.repeats.clear(); i.clicks.length = 0; }
+    if (this.direction) { this.direction.update(dt); if (this.direction.done) this.direction = null; }
     this.map.update(dt);
     this.map.updateHidden(this.player.x, this.player.y);
     this.statusBar?.update(dt);
@@ -2865,6 +3140,8 @@ export class Game {
     this.updateDrops(dt);
     this.updateFx(dt);
     this.runTimers(dt);
+    this.playTimeNote();
+    this.mapleTip();
     if (this.shake) this.shakeStep(dt);
     this.loadAfterimage();
     this.handleHotkeys();
@@ -2926,11 +3203,16 @@ export class Game {
   }
   updateDrops(dt) {
     for (const [oid, d] of this.drops) {
+      if (d.expire !== undefined) {
+        d.expire += dt; d.alpha = Math.max(0, 1 - d.expire);
+        if (d.expire >= 1) this.drops.delete(oid);
+        continue;
+      }
       d.anim.update(dt * 1000);
       d.age += dt;
       if (d.pickedBy) {
         const L = d.pickedBy, u = Math.min(PICKUP_TIME, d.age), k = u / PICKUP_TIME, ms = u * 1000;
-        const tx = L.x, ty = L.y - (L === this.player || this.others.has(L.id) ? 32 : 15);   // the middle of a character (a pet is smaller)
+        const tx = L.x, ty = L.y - (L === this.player || this.others.has(L.id) ? 32 : 0);   // the middle of a character; a pet's feet
         d.cx = d.sx + (tx - d.sx) * k;
         d.cy = d.sy + (ty - d.sy) * k - 40 + ((ms - 350) ** 2 * 160) / 490000;
         d.alpha = ms < 420 ? 1 : (255 - ((ms - 420) * 192) / 280) / 255;
@@ -3008,6 +3290,8 @@ export class Game {
       } else this.endKeydown();
     }
 
+    // the pickup key works on ladders and ropes and mid-attack, not while seated
+    if (this.net && !p.seat && this.pickupKey()) this.tryPickup();
     if (p.ladder) {
       const l = p.ladder;
       const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
@@ -3041,7 +3325,6 @@ export class Game {
     if (p.seat) {
       if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.heldSkill() || this.macroQueue?.length) this.standUp();
       else {
-        if (this.hitAction(ACTION.PICKUP) && this.net) this.tryPickup();
         this.advanceFrame('sit', dt);
         return;
       }
@@ -3061,10 +3344,10 @@ export class Game {
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
       if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     }
-    if (this.hitAction(ACTION.PICKUP) && this.net) this.tryPickup();
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
     if (inp.hit('up') && p.fh && this.useDoorAt(p)) return;
+    this.scriptTouch();
     if (p.fh && this.portalCooldown <= 0) {
       const portal = map.portalAt(p.x, p.y);
       // touch portals fire once on entry, not every frame you stand in them
@@ -3138,6 +3421,13 @@ export class Game {
   usePortal(portal) {
     const map = this.map;
     this.flushMovement(true);   // the server and everyone else see where you were before you go
+    // a script portal with no target map (types 7, 8, 11) only asks the server to run its script: no sound, no fade
+    if (portal.tm === 999999999) {
+      if (!this.net) return;
+      this.portalCooldown = 0.5;
+      this.net.scriptPortal(portal.pn, { x: Math.round(this.player.x), y: Math.round(this.player.y) });
+      return;
+    }
     sfx.play('Game/Portal');
     if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
       this.portalCooldown = 0.6;
@@ -3153,9 +3443,30 @@ export class Game {
     this.fadeOut();
     this.after(3000, () => { if (this.fade?.dir === 'out' && !this.loading && this.map === map) this.fade = { dir: 'in', t0: performance.now() }; });
     if (!this.net) this.changeMap(portal.tm, { portal: portal.tn });
-    else if (portal.script) this.net.scriptPortal(portal.pn);
-    else this.net.enterPortal(portal.pn);
+    else this.net.enterPortal(portal.pn);   // the server runs a portal's script, if it has one, from here too
   }
+  /**
+   * Type 9 portals run their script when you walk into them, with no sound or fade and no map change: one request
+   * at a time (until the server enables actions again), after the portal's delay, and an onlyOnce portal not
+   * twice in a row.
+   */
+  scriptTouch() {
+    const p = this.player;
+    if (!this.net || !(this.stats?.hp > 0)) return;
+    const portal = this.map.scriptPortalAt(p.x, p.y);
+    if (portal === this.scriptPortalIn) return;
+    const now = performance.now();
+    if (portal) {
+      if (this.scriptPending && now - this.scriptPending < 5000) return;   // try again once the last one is answered
+      if (now - (this.scriptPortalT ?? -Infinity) < (portal.delay || 0)) return;
+      if (!(portal.onlyOnce && this.scriptPortalLast === portal.idx)) {
+        this.scriptPending = now; this.scriptPortalT = now; this.scriptPortalLast = portal.idx;
+        this.net.scriptPortal(portal.pn, { x: Math.round(p.x), y: Math.round(p.y) });
+      }
+    }
+    this.scriptPortalIn = portal;
+  }
+
   /** Map changes go dark over 600ms and light up over 600ms on the new map (the client's global brightness fade). */
   fadeOut() { if (this.fade?.dir !== 'out') this.fade = { dir: 'out', t0: performance.now() }; }
   get darkness() {
@@ -3669,12 +3980,24 @@ export class Game {
     this.attack(c.id, 'magic', { charge: Math.round(Math.min(c.t, CHARGE_HOLD) * 1000) });
   }
   /** A skill's looping art on `ent` for as long as `keep()` holds. */
+  /** Berserk on (HP low enough): its effect stays on the character until it goes off. */
+  setBerserk(ent, on) {
+    if (!ent) return;
+    ent.berserk = on;
+    if (!on || ent.berserkFx === 'pending' || this.fx.includes(ent.berserkFx)) return;
+    // (started again when a map change cleared it while it is still on)
+    ent.berserkFx = 'pending';
+    const keep = () => !!ent.berserk && (ent === this.player || this.others.get(ent.id) === ent);
+    this.loopSkillEffect(BERSERK, ent, 'effect', keep).then((f) => { ent.berserkFx = f || null; });
+  }
   async loopSkillEffect(id, ent, branch, keep) {
     const fx = Game.fxNode((await this.skills?.ensure(id))?.[branch]);
     if (!fx || !keep()) return;
     const anim = new Anim(fx, true);
     await this.assets.preload(anim.frames);
-    this.fx.push({ anim, follow: ent, keep });
+    const f = { anim, follow: ent, keep };
+    this.fx.push(f);
+    return f;
   }
   /**
    * Let go: up to mobCount monsters (fewer the shorter it was held) whose bodies reach into a wedge in front of you,
@@ -4726,7 +5049,7 @@ export class Game {
   notice(text) {
     if (this.lastNotice === text && performance.now() - this.lastNoticeT < 1500) return;
     this.lastNotice = text; this.lastNoticeT = performance.now();
-    this.hud?.message(text, '#ff9e9e');
+    this.hud?.message(text, CHAT_COLOR.error);
   }
 
   // ------------------------------------------------------------------ skill effects
@@ -5155,23 +5478,44 @@ export class Game {
   }
 
   /** Pick up the item you are standing on: your feet within its width, on the same ground. */
+  /**
+   * The pickup key: one request at a time (until the server answers, then 30ms; released after 1.5s if it never
+   * does), for the first drop in arrival order whose landing point is within x-25..x+25, y-50..y+10 of your feet,
+   * that has landed, came as a pickable drop, isn't pickUpBlock, is yours (or your party's, or anyone's, or 15s old)
+   * and wasn't asked for in the last 3s.
+   */
   tryPickup() {
     if (this.hidden()) return;
-    const p = this.player;
-    let best = null, bestDx = Infinity;
+    const now = performance.now();
+    if (this.pickupBusy && now - this.pickupBusy < 1500) return;
+    if (now < (this.pickupFree || 0)) return;
+    const p = this.player, me = p.id;
     for (const [oid, d] of this.drops) {
-      if (d.pickedBy || !d.landed) continue;
-      const half = (this.assets.image(d.anim.node)?.width || 24) / 2, dx = Math.abs(d.x - p.x);
-      if (dx <= half && Math.abs(d.y - p.y) <= 12 && dx < bestDx) { best = oid; bestDx = dx; }
+      if (d.pickedBy || !d.landed || (d.mode !== 1 && d.mode !== 2)) continue;
+      if (d.x < p.x - 25 || d.x >= p.x + 25 || d.y < p.y - 50 || d.y >= p.y + 10) continue;
+      if (now - (d.tryAt || -Infinity) < 3000) continue;
+      if (!d.meso && Number(this.windows.info(d.id)?.pickUpBlock)) continue;
+      const ours = !d.dropper || d.type >= 2 || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || now - (d.born || 0) > 15000;
+      if (!ours) continue;
+      d.tryAt = now; this.pickupBusy = now;
+      this.net.pickup(oid, { x: Math.round(p.x), y: Math.round(p.y) });
+      return;
     }
-    if (best !== null) this.net.pickup(best, { x: Math.round(p.x), y: Math.round(p.y) });
   }
+  /** The server answered an exclusive request: pickup may go again 30ms later. */
+  pickupAnswered() { if (this.pickupBusy) { this.pickupBusy = 0; this.pickupFree = performance.now() + 30; } }
 
   handleClicks() {
     for (const c of this.input.clicks) {
       // a double-click on a window (or the status bar) is the window's, never the NPC behind it
       if (this.windows?.top(c.x, c.y) || this.statusBar?.contains?.(c.x, c.y)) continue;
       const wx = c.x + Math.round(this.cam.x), wy = c.y + Math.round(this.cam.y);
+      // the quest icon over an NPC's head opens it with one click
+      for (const e of this.vfx?.questIcons.keys() || []) {
+        const r = this.vfx.questIconRect(e);
+        if (r && e.oid !== null && wx >= r.x && wx < r.x + r.w && wy >= r.y && wy < r.y + r.h) { this.interactNpc(e); return; }
+      }
+      if (c.single) continue;
       for (const e of this.map.life) {
         if (e.kind !== 'Npc' || e.oid === null) continue;
         const b = e.box();
@@ -5342,14 +5686,20 @@ export class Game {
       ctx.restore();
     }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
-    this.vfx?.drawHud(ctx);
-    this.drawClock(ctx);
-    this.questMsg?.draw(ctx);           // quest progress, near the top
-    this.drawQuestTimers(ctx);
-    this.hud?.draw?.(ctx);              // what you gain, in the lower-right corner
+    this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
+    const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
+    if (ui) {
+      this.vfx?.drawHud(ctx);
+      this.drawClock(ctx);
+      this.questMsg?.draw(ctx);         // quest progress, near the top
+      this.drawQuestTimers(ctx);
+      this.hud?.draw?.(ctx);            // what you gain, in the lower-right corner
+    }
     this.hud?.drawBanner?.(ctx);        // the server's scrolling notice, under the bar and every window
-    this.statusBar?.draw(ctx);
-    this.windows?.draw(ctx);
+    if (ui) {
+      this.statusBar?.draw(ctx);
+      this.windows?.draw(ctx);
+    }
     this.vfx?.drawBoss(ctx);
     const dark = this.darkness;
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }

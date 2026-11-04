@@ -9,7 +9,7 @@ export const CODE_TO_SC = {
   Minus: 12, Equal: 13, KeyQ: 16, KeyW: 17, KeyE: 18, KeyR: 19, KeyT: 20, KeyY: 21, KeyU: 22, KeyI: 23, KeyO: 24, KeyP: 25,
   BracketLeft: 26, BracketRight: 27, ControlLeft: 29, ControlRight: 29, KeyA: 30, KeyS: 31, KeyD: 32, KeyF: 33, KeyG: 34, KeyH: 35,
   KeyJ: 36, KeyK: 37, KeyL: 38, Semicolon: 39, Quote: 40, Backquote: 41, ShiftLeft: 42, Backslash: 43, KeyZ: 44, KeyX: 45,
-  KeyC: 46, KeyV: 47, KeyB: 48, KeyN: 49, KeyM: 50, Comma: 51, Period: 52, Slash: 53, ShiftRight: 54, AltLeft: 56, AltRight: 56,
+  KeyC: 46, KeyV: 47, KeyB: 48, KeyN: 49, KeyM: 50, Comma: 51, Period: 52, Slash: 53, ShiftRight: 42, AltLeft: 56, AltRight: 56,
   Space: 57, F1: 59, F2: 60, F3: 61, F4: 62, F5: 63, F6: 64, F7: 65, F8: 66, F9: 67, F10: 68, F11: 87, F12: 88,
   Home: 71, PageUp: 73, End: 79, PageDown: 81, Insert: 82, Delete: 83,
 };
@@ -31,4 +31,4 @@ export function defaultKeymap() {
 }
 
 export const ACTION = { PICKUP: 50, SIT: 51, ATTACK: 52, JUMP: 53, NPC_CHAT: 54 };
-export const MENU = { EQUIP: 0, ITEMS: 1, STATS: 2, SKILLS: 3, BUDDY: 4, WORLDMAP: 5, MESSENGER: 6, MINIMAP: 7, QUESTS: 8, KEYS: 9, PARTY: 19, MONSTERBOOK: 22, PARTY_SEARCH: 25, FAMILY: 26 };
+export const MENU = { EQUIP: 0, ITEMS: 1, STATS: 2, SKILLS: 3, BUDDY: 4, WORLDMAP: 5, MESSENGER: 6, MINIMAP: 7, QUESTS: 8, KEYS: 9, GUILD: 17, PARTY: 19, MONSTERBOOK: 22, PARTY_SEARCH: 25, FAMILY: 26 };

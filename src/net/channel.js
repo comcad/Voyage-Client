@@ -229,7 +229,13 @@ export class ChannelSession {
     // the yellow chat tip: a flag (0 only shows the first one), then two lines
     on(S.SET_WEEK_EVENT_MESSAGE, (r) => { const again = r.ubyte(); this.emit('yellowTip', again !== 0, r.string(), r.available >= 2 ? r.string() : ''); });
     // ADMIN_RESULT 0x10: GM hide on (1) or off (0)
-    on(S.ADMIN_RESULT, (r) => { if (r.ubyte() === 0x10) this.emit('gmHide', !!r.ubyte()); });
+    on(S.ADMIN_RESULT, (r) => {
+      const t = r.ubyte();
+      if (t === 0x10) this.emit('gmHide', !!r.ubyte());
+      else if (t === 0x1C) this.emit('minimap', 'off');     // the minimap off until the next map
+      else if (t === 0x1B) this.emit('minimap', 'check');   // check this map's minimap again
+    });
+    on(S.MINIMAP_ON_OFF, (r) => this.emit('minimap', r.ubyte()));
     on(S.STAT_CHANGED, (r) => {
       const enable = r.bool();
       const mask = r.uint();
@@ -256,13 +262,37 @@ export class ChannelSession {
         this.emit('quest', id, status, data);
       } else if (mode === 0x0A) { const id = r.ushort(); this.emit('questEx', id, r.string()); }
       else if (mode === 9) this.emit('notice', { type: 5, msg: r.string() });
-      else if (mode === 3) { const white = r.bool(); this.emit('status', { type: 'exp', amount: r.int(), white }); }
+      else if (mode === 3) {
+        // EXP: white, amount, in chat (a quest's: a grey log line), then the bonuses shown with a monster's
+        const white = r.bool(), amount = r.int(), inChat = r.bool(), b = {};
+        try {
+          b.event = r.int(); r.ubyte(); r.ubyte(); b.wedding = r.int();
+          if (inChat) r.ubyte();
+          b.partyRate = r.ubyte(); b.party = r.int(); b.equip = r.int(); b.cafe = r.int(); b.rainbow = r.int();
+        } catch { /* a shorter form: the amount alone */ }
+        this.emit('status', { type: 'exp', amount, white, inChat, bonus: b });
+      }
       else if (mode === 0) {
         const sub = r.ubyte();
-        if (sub === 1) { r.skip(1); this.emit('status', { type: 'meso', amount: r.int() }); }
-        else if (sub === 0) { const id = r.int(), qty = r.int(); this.emit('status', { type: 'item', id, qty }); }
+        if (sub === 1) {
+          const lost = r.ubyte(), amount = r.int(), bonus = r.available >= 2 ? r.short() : 0;
+          this.emit('status', { type: 'meso', amount, lost: !!lost, bonus });
+        } else if (sub === 0) { const id = r.int(), qty = r.int(); this.emit('status', { type: 'item', id, qty, pickup: true }); }
+        else if (sub === 2) this.emit('status', { type: 'item', id: r.int(), qty: 1, pickup: true });
+        else if (sub === 0xFE) this.emit('status', { type: 'text', text: 'This item is unavailable for the pick-up.' });
+        else if (sub === 0xFD) this.emit('status', { type: 'text', text: 'You cannot acquire any items.' });
+        else this.emit('status', { type: 'text', text: "You can't get anymore items." });
+        this.emit('pickupAnswered');
       } else if (mode === 4) this.emit('status', { type: 'fame', amount: r.int() });
-      else if (mode === 5) this.emit('status', { type: 'meso', amount: r.int() });
+      else if (mode === 5) this.emit('status', { type: 'meso', amount: r.int(), inChat: true });
+      else if (mode === 6) this.emit('status', { type: 'gp', amount: r.int() });
+      else if (mode === 7) this.emit('status', { type: 'itemMsg', id: r.int() });
+      else if (mode === 2) this.emit('status', { type: 'expired', ids: [r.int()], cash: true });
+      else if (mode === 8 || mode === 0x0B || mode === 0x0D) {
+        const ids = [];
+        for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
+        this.emit('status', { type: mode === 8 ? 'expired' : mode === 0x0B ? 'sealExpired' : 'timeLimit', ids });
+      } else if (mode === 0x0C) { for (let n = r.ubyte(); n > 0; n--) this.emit('notice', { type: 5, msg: r.string() }); }
     });
 
     // SERVERMESSAGE: 0 notice, 1 pop-up, 2 Megaphone, 3 Super Megaphone (+ channel, whisper ear), 4 the scrolling
@@ -325,16 +355,24 @@ export class ChannelSession {
     on(S.CLEAR_AVATAR_MEGAPHONE, () => this.emit('avatarMegaClear'));
 
     on(S.CHATTEXT, (r) => this.emit('chat', { id: r.int(), gm: r.bool(), text: r.string(), show: r.ubyte() }));
+    // FAME_RESPONSE: 0 you raised (1) / dropped someone's fame, 5 someone raised / dropped yours, else an error code
+    on(S.FAME_RESPONSE, (r) => {
+      const mode = r.ubyte();
+      if (mode === 0) { const name = r.string(); this.emit('fame', { mode, name, up: r.ubyte() === 1 }); }
+      else if (mode === 5) { const name = r.string(); this.emit('fame', { mode, name, up: r.ubyte() === 1 }); }
+      else this.emit('fame', { mode });
+    });
     // ---- buddy list (CWvsContext::OnFriendResult)
     const fixed = (r, n) => { const b = r.bytes(n); let s = ''; for (const c of b) { if (!c) break; s += String.fromCharCode(c); } return s; };
     on(S.BUDDYLIST, (r) => {
       const op = r.ubyte();
-      if (op === 7) {
+      if (op === 7 || op === 10 || op === 0x12) {
+        // flag 1: a request still waiting for an answer
         const list = [];
         for (let n = r.ubyte(); n > 0 && r.available >= 39; n--) {
-          const id = r.int(), name = fixed(r, 13); r.ubyte();
-          const channel = r.int(), group = fixed(r, 13); r.int();
-          list.push({ id, name, channel, group });
+          const id = r.int(), name = fixed(r, 13), pending = r.ubyte() === 1;
+          const channel = r.int(), group = fixed(r, 17);
+          list.push({ id, name, channel, group, pending });
         }
         this.emit('buddies', list);
       } else if (op === 9) {
@@ -379,7 +417,11 @@ export class ChannelSession {
       else if (op === 0x42) { r.int(); e('emblem', { emblem: readEmblem(r) }); }
       else if (op === 0x44) { r.int(); e('notice', { notice: r.string() }); }
       else if (op === 0x48) { r.int(); e('gp', { gp: r.int() }); }
-      else if (op === 0x49 || op === 0x4C) return;                                   // rank board, GPQ queue
+      else if (op === 0x11) e('makeMark');
+      else if (op === 0x49) return;                                                   // rank board
+      // the Guild Quest queue: channel, then place (an int; some servers send a byte)
+      else if (op === 0x4C) { const channel = r.ubyte(); e('gpqQueue', { channel, pos: r.available >= 4 ? r.int() : r.ubyte() }); }
+      else if (op === 0x4E) { const ok = r.ubyte(); e('message', { code: op, ok, text: r.available >= 2 ? r.string() : '' }); }
       else e('message', { code: op, name: op >= 53 && op <= 55 && r.available ? r.string() : '' });
     });
     on(S.GUILD_NAME_CHANGED, (r) => this.emit('guildName', r.int(), r.string()));
@@ -387,18 +429,22 @@ export class ChannelSession {
     on(S.PARTY_OPERATION, (r) => {
       const op = r.ubyte();
       if (op === 8) this.emit('party', { kind: 'created', id: r.int() });
-      else if (op === 4) { const id = r.int(); this.emit('partyInvite', { id, name: r.string() }); }
-      else if (op === 7) { const id = r.int(); this.emit('party', { kind: 'update', id, ...partyStatus(r) }); }
+      else if (op === 4) { const id = r.int(), name = r.string(); this.emit('partyInvite', { id, name, autoJoin: r.available ? r.ubyte() !== 0 : false }); }
+      else if (op === 7 || op === 0x22) { const id = r.int(); this.emit('party', { kind: 'update', id, ...partyStatus(r) }); }
       else if (op === 0x0F) { const id = r.int(), name = r.string(); this.emit('party', { kind: 'join', id, name, ...partyStatus(r) }); }
       else if (op === 0x0C) {
         const id = r.int(), target = r.int();
         if (r.ubyte() === 0) this.emit('party', { kind: 'disband', id, target });
         else { const expel = r.ubyte() === 1, name = r.string(); this.emit('party', { kind: expel ? 'expel' : 'leave', id, target, name, ...partyStatus(r) }); }
-      } else if (op === 0x1B) this.emit('party', { kind: 'leader', leader: r.int() });
-      else if (op === 0x23) { /* mystic door portal */ }
+      } else if (op === 0x1B) { const leader = r.int(); this.emit('party', { kind: 'leader', leader, reason: r.available ? r.ubyte() : 0 }); }
+      else if (op === 0x23) { if (r.available >= 12) this.emit('party', { kind: 'levelJob', id: r.int(), level: r.int(), job: r.int() }); }
+      else if (op === 0x24) { const ok = r.available ? r.ubyte() : 0; this.emit('partyMessage', op, ok && r.available >= 2 ? r.string() : ''); }
+      else if (op === 0x25) { /* a member's Mystic Door */ }
       else this.emit('partyMessage', op, r.available >= 2 ? r.string() : '');
     });
     on(S.UPDATE_PARTYMEMBER_HP, (r) => this.emit('partyHp', r.int(), r.int(), r.int()));
+    // NOTIFY_LEVELUP: a guildmate (2) or family member levelled
+    on(S.NOTIFY_LEVELUP, (r) => { const type = r.ubyte(), level = r.int(); this.emit('notifyLevel', { type, level, name: r.string() }); });
     // Hired Merchants on the map (spawnHiredMerchantBox / updateHiredMerchantBox / removeHiredMerchantBox)
     on(S.SPAWN_HIRED_MERCHANT, (r) => {
       const owner = r.int(), itemId = r.int(), x = r.short(), y = r.short(); r.short();
@@ -522,7 +568,7 @@ export class ChannelSession {
       if (flag === 0x0A) { this.emit('whisperResult', { to: r.string(), ok: r.bool() }); return; }
       if (flag === 0x09 || flag === 0x48) {
         const name = r.string(), type = r.ubyte(), where = r.int();
-        this.emit('findResult', { name, type, where });
+        this.emit('findResult', { name, type, where, buddy: flag === 0x48 });
       }
     });
 
@@ -544,13 +590,18 @@ export class ChannelSession {
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
-      let chalk = null, rings = null;
+      let chalk = null, rings = null, berserk = false;
       if (r.available >= 13) {
         r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
         if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
         if (r.available >= 3) rings = readRingLook(r);
+        // New Year cards received, then whether Berserk is on
+        try {
+          if (r.available && r.ubyte()) for (let n = r.int(); n > 0; n--) r.int();
+          berserk = r.available > 0 && r.ubyte() !== 0;
+        } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, rings, combo, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, pets, box, chalk, rings, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -740,8 +791,14 @@ export class ChannelSession {
     on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.bool(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
     on(S.SHOW_FOREIGN_EFFECT, (r) => {
       const id = r.int(), effect = r.ubyte();
-      if (effect === 1 && r.available >= 4) this.emit('foreignSkill', id, r.int());
+      if (effect === 1 && r.available >= 4) {
+        const skill = r.int();
+        // Berserk: level, then whether it is on (its aura stays while it is)
+        if (skill === 1320006 && r.available >= 3) { r.ubyte(); r.ubyte(); this.emit('berserk', id, r.ubyte() !== 0); return; }
+        this.emit('foreignSkill', id, skill);
+      }
       else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
+      else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
       else if (effect === 0 || effect === 8 || effect === 9) this.emit('foreignEffect', id, effect); // level up / job change / quest clear
@@ -749,12 +806,24 @@ export class ChannelSession {
     on(S.SKILL_EFFECT, (r) => this.emit('foreignCharge', r.int(), r.int()));   // charging / winding up a skill
     // your own effects; 2 = a party member's buff (Bless, Haste, Holy Symbol...) reached you
     // and 0x0a = HP you recovered (a blue number over you)
+    // PLAYER_HINT: text, width, seconds, then 1 (over your head) or 0 with a map point
+    on(S.PLAYER_HINT, (r) => {
+      const text = r.string(), width = r.ushort(), seconds = r.ushort(), onAvatar = r.ubyte() !== 0;
+      const at = !onAvatar && r.available >= 8 ? { x: r.int(), y: r.int() } : null;
+      this.emit('hint', text, width, seconds, at);
+    });
     on(S.SHOW_ITEM_GAIN_INCHAT, (r) => {
       const type = r.ubyte();
       if (type === 2 && r.available >= 4) this.emit('affected', null, r.int());
+      else if (type === 5 && r.available >= 4) this.emit('skillSpecial', null, r.int());
+      else if (type === 1 && r.available >= 7) { if (r.int() === 1320006) { r.ubyte(); r.ubyte(); this.emit('berserk', null, r.ubyte() !== 0); } }
       else if (type === 0x0a && r.available >= 1) this.emit('healNumber', null, r.ubyte());
       else if (type === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', null, r.ubyte(), e); }
       else if (type === 9) this.emit('questClearEffect');
+      // 0x17: a picture on your character, e.g. a tutorial hint (UI/tutorial.img/<n>)
+      else if (type === 0x17 && r.available >= 2) this.emit('avatarPicture', r.string());
+      // 0x12: a scene (Effect/Direction*.img/...) played over the screen
+      else if (type === 0x12 && r.available >= 2) this.emit('direction', r.string());
       // 3: a quest's effect (0 items: message + Effect/Quest.img id) or the items it gave / took
       else if (type === 3 && r.available >= 1) {
         const n = r.ubyte();
@@ -954,6 +1023,12 @@ export class ChannelSession {
       if (t === 5) { this.emit('bossHp', { oid: r.int(), hp: r.int(), maxHp: r.int(), tag: r.ubyte(), bg: r.ubyte() }); return; }
       this.emit('fieldEffect', t, r.available ? r.string() : '');
     });
+    // map objects by tag: a count, then each tag and 1 to show / 0 to hide
+    on(S.SET_MAP_OBJECT_VISIBLE, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0 && r.available >= 3; n--) list.push({ tag: r.string(), on: r.ubyte() !== 0 });
+      this.emit('mapObjectVisible', list);
+    });
     on(S.LOCK_UI, (r) => this.emit('lockUi', r.bool()));
     on(S.DISABLE_UI, (r) => this.emit('disableUi', r.bool()));
     on(S.CHANGE_CHANNEL, (r) => { r.ubyte(); const ip = Array.from(r.bytes(4)).join('.'); this.emit('changeChannel', { ip, port: r.ushort() }); });
@@ -1070,6 +1145,10 @@ export class ChannelSession {
   }
   whisper(name, text) { this.send(new PacketWriter(C.WHISPER).byte(0x06).string(name).string(text)); }
   find(name) { this.send(new PacketWriter(C.WHISPER).byte(0x05).string(name)); }
+  /** Where a buddy is, for the Buddy tab's location line (answered with flag 0x48). */
+  findBuddy(name) { this.send(new PacketWriter(C.WHISPER).byte(0x44).string(name)); }
+  /** USE_CASH_ITEM for a Memo (509xxxx): who to, the note. */
+  useMemo(slot, itemId, to, text) { this.send(new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId).string(to).string(text)); }
   /** BUDDYLIST_MODIFY: 1 add (name, group), 2 accept (cid), 3 delete / deny (cid) */
   buddyAdd(name, group = 'Default Group') { this.send(new PacketWriter(C.BUDDYLIST_MODIFY).byte(1).string(name).string(group)); }
   buddyAccept(cid) { this.send(new PacketWriter(C.BUDDYLIST_MODIFY).byte(2).int(cid)); }
@@ -1189,12 +1268,14 @@ export class ChannelSession {
   guildRank(cid, rank) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0E).int(cid).byte(rank)); }
   guildEmblem(e) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0F).short(e.bg).byte(e.bgColor).short(e.logo).byte(e.logoColor)); }
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
-  guildDeny(from) { this.send(new PacketWriter(C.DENY_GUILD_REQUEST).byte(0).string(from)); }
+  /** DENY_GUILD_REQUEST: 0x37 refused, 0x36 busy with another invitation, 0x35 not taking invitations. */
+  guildDeny(from, code = 0x37, me = '') { this.send(new PacketWriter(C.DENY_GUILD_REQUEST).byte(code).string(from).string(me)); }
   /** PARTY_SEARCH_START: level range, how many members, the job bits; PARTY_SEARCH_UPDATE ends the search */
   partySearchStart(min, max, members, jobs) { this.send(new PacketWriter(C.PARTY_SEARCH_START).int(min).int(max).int(members).int(jobs)); }
   partySearchStop() { this.send(new PacketWriter(C.PARTY_SEARCH_UPDATE)); }
   partyDeny(name) { this.send(new PacketWriter(C.DENY_PARTY_REQUEST).byte(0).string(name)); }
-  pickup(oid, pos) { this.send(new PacketWriter(C.ITEM_PICKUP).int(Date.now() | 0).byte(0).pos(pos).int(oid)); }
+  /** ITEM_PICKUP: field key, tick, where you stand, the drop, then a 0 checksum. */
+  pickup(oid, pos) { this.send(new PacketWriter(C.ITEM_PICKUP).byte(0).int(Date.now() | 0).pos(pos).int(oid).int(0)); }
   /** The Cash Shop: entering is a bare ENTER_CASHSHOP, leaving a bare CHANGE_MAP (the server answers with a channel change) */
   enterCashShop() { this.send(new PacketWriter(C.ENTER_CASHSHOP).int(Date.now() | 0)); }
   leaveCashShop() { this.send(new PacketWriter(C.CHANGE_MAP)); }
@@ -1238,8 +1319,11 @@ export class ChannelSession {
   csTake(cashId, type, slot) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0D).long(cashId).byte(type).short(slot)); }
   csPut(cashId, type) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0E).long(cashId).byte(type)); }
   enterPortal(name) { this.send(new PacketWriter(C.CHANGE_MAP).byte(0).int(-1).string(name).byte(0).byte(0).byte(0)); }
-  scriptPortal(name) { this.send(new PacketWriter(C.CHANGE_MAP_SPECIAL).byte(0).string(name).short(0)); }
+  /** CHANGE_MAP_SPECIAL: field key, portal name, where you stand. */
+  scriptPortal(name, pos = { x: 0, y: 0 }) { this.send(new PacketWriter(C.CHANGE_MAP_SPECIAL).byte(0).string(name).short(pos.x).short(pos.y)); }
   innerPortal(name, from, to) { this.send(new PacketWriter(C.USE_INNER_PORTAL).byte(0).string(name).pos(from).pos(to)); }
+  /** A scene's move to another map. */
+  directionField(id) { this.send(new PacketWriter(C.CHANGE_MAP).byte(0).int(id).string('').byte(0).byte(0).byte(0)); }
   respawn() { this.send(new PacketWriter(C.CHANGE_MAP).byte(1).int(0).string('').byte(0).byte(0).byte(0)); }
   npcTalk(oid, pos) { this.send(new PacketWriter(C.NPC_TALK).int(oid).pos(pos)); }
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */

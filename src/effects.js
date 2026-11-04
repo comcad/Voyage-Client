@@ -90,11 +90,40 @@ export class WorldFx {
     this.assets.preload(anim.frames);
     this.anims.push({ anim, ent });
   }
+  /** Any WZ animation by path ("UI/tutorial.img/28"), played once on `ent`, placed by its own origin. */
+  async playPath(path, ent) {
+    const at = path.indexOf('.img');
+    if (at < 0) return;
+    let node = await this.assets.json(path.slice(0, at + 4));
+    for (const seg of path.slice(at + 5).split('/').filter(Boolean)) node = node?.[seg];
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.anims.push({ anim, ent });
+  }
+  /**
+   * PLAYER_HINT: a WorldNotice/Balloon over your head ("Once you leave this area..."), wrapped to the server's
+   * width, for its seconds.
+   */
+  async hint(text, width, seconds, ent) {
+    this.L ??= await this.assets.json('UI/Login.img');
+    const node = this.L?.WorldNotice?.Balloon;
+    if (!node) return;
+    this.hints = [{ text, wrap: Math.max(40, width), until: performance.now() + Math.max(1, seconds) * 1000, ent, node }];
+  }
   /** A tombstone for `ent`: it lands where the ghost is (following the death knock-back), not where the blow fell. */
   tomb(ent) { this.tombs.push({ anim: new Anim(this.T.fall, false), ent }); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
-  mapChanged() { this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); }
+  mapChanged() { this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
+
+  /** Where an NPC's quest icon is (world coordinates); clicking it opens the NPC. */
+  questIconRect(e) {
+    const anim = this.questIcons.get(e), n = anim?.node, img = n && this.assets.image(n);
+    if (!img) return null;
+    const o = n.origin || [img.width / 2, img.height / 2], b = e.box();
+    return { img, x: e.x - o[0], y: b.top - 26 - o[1], w: img.width, h: img.height };
+  }
 
   // ---------------------------------------------------------------- frame
   update(dt) {
@@ -134,15 +163,17 @@ export class WorldFx {
       if (shown && settings.mobInfo === 2 && !Number(info.hideName) && e.name) mobNameTag(ctx, e, cam, info);
     }
     // quest icons above NPC heads
-    for (const [e, anim] of this.questIcons) {
-      const n = anim.node, i = im(n);
-      if (!i) continue;
-      const o = n.origin || [i.width / 2, i.height / 2], b = e.box();
-      ctx.drawImage(i, Math.round(e.x - cam.x - o[0]), Math.round(b.top - cam.y - 26 - o[1]));
+    for (const [e] of this.questIcons) {
+      const r = this.questIconRect(e);
+      if (r) ctx.drawImage(r.img, Math.round(r.x - cam.x), Math.round(r.y - cam.y));
     }
     // level up / job change / quest clear, following their character
     for (const a of this.anims) drawAt(ctx, im, a.anim.node, a.ent.x - cam.x, a.ent.y - cam.y, a.anim.alpha);
     for (const n of this.nums) this.drawNumber(ctx, n, cam);
+    if (this.hints?.length) {
+      this.hints = this.hints.filter((h) => performance.now() < h.until);
+      for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24 });
+    }
   }
   /** Tombstones (drawn behind the characters, so the ghost floats in front): drop from above during frames 0-11, then land. */
   drawTombs(ctx, cam) {
@@ -200,29 +231,51 @@ export class WorldFx {
   }
 
   /** ChatBalloon.img/0 (or /npc, /pet/<n>): a 9-slice around the text with the arrow under it, pointing at the speaker. */
-  drawBalloon(ctx, cam, ent, text, style = '0') {
-    if (String(style).startsWith('pet/') && !this.CB?.pet?.[style.slice(4)]) style = 'pet/0';
-    const B = String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
+  drawBalloon(ctx, cam, ent, text, style = '0', { node = null, wrap = 89, width = 0, arrowDx = null } = {}) {
+    if (!node && String(style).startsWith('pet/') && !this.CB?.pet?.[style.slice(4)]) style = 'pet/0';
+    const B = node || String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
     if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
     const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
+    const tail = arrowDx !== null && B?.slArrow ? im(B.slArrow) : null;   // a hint's tail: slArrow, pointing down-left
     if (Object.values(p).some((v) => !v)) return style !== '0' && style !== 'npc' ? this.drawBalloon(ctx, cam, ent, text) : false;   // a quote ring's, until its art is in
     ctx.save();
     ctx.font = '12px Arial, sans-serif';
     // centred 14px lines wrapped at 89px (a word too long for a line is broken up), in the balloon's clr; the arrow
     // laid over the bottom edge at the centre so the tail grows out of it
-    const lh = 14, lines = balloonLines(ctx, text, 89);
-    const W = Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
+    // width: a fixed outer width (the server's hint width), the text wrapped inside the 9px sides
+    const inner = width ? width - 18 : 0;
+    const lh = 14, lines = balloonLines(ctx, text, inner || wrap);
+    const W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
     // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
     const o = (k) => B[k]?.origin || [0, 0];
+    // a hint's balloon is see-through: its pieces are put together on their own canvas, the arrow replacing what is
+    // under it (not blended over it, which would show a brighter square), then the whole is drawn at once
+    const screen = ctx;
+    let off = null;
+    if (arrowDx !== null) {
+      off = (this.balloonCanvas ??= document.createElement('canvas'));
+      off.width = W + 60; off.height = H + 60;
+      ctx = off.getContext('2d');
+      ctx.font = '12px Arial, sans-serif';
+      ctx.translate(30 - x0, 30 - y0);
+    }
     ctx.drawImage(p.c, x0, y0, W, H);
     ctx.drawImage(p.n, x0, y0 - o('n')[1], W, p.n.height); ctx.drawImage(p.s, x0, y0 + H - o('s')[1], W, p.s.height);
     ctx.drawImage(p.w, x0 - o('w')[0], y0, p.w.width, H); ctx.drawImage(p.e, x0 + W - o('e')[0], y0, p.e.width, H);
     ctx.drawImage(p.nw, x0 - o('nw')[0], y0 - o('nw')[1]); ctx.drawImage(p.ne, x0 + W - o('ne')[0], y0 - o('ne')[1]);
     ctx.drawImage(p.sw, x0 - o('sw')[0], y0 + H - o('sw')[1]); ctx.drawImage(p.se, x0 + W - o('se')[0], y0 + H - o('se')[1]);
     const ao = o('arrow');
-    ctx.drawImage(p.arrow, cx - ao[0] + 1, y0 + H - ao[1]);
-    const color = `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+    // the arrow is laid over the bottom edge (it covers the border there and grows the tail below it): at the centre,
+    // or arrowDx right of it (a hint's)
+    const ax = cx + (arrowDx ?? 1 - ao[0]), ay = y0 + H - ao[1];
+    if (off && tail) {
+      // laid over the bottom band (its row 8 is the border, open where the tail joins), replacing what is there
+      ctx.clearRect(ax, ay, tail.width, tail.height);
+      ctx.drawImage(tail, ax, ay);
+    } else ctx.drawImage(p.arrow, ax, ay);
+    if (off) { screen.drawImage(off, x0 - 30, y0 - 30); ctx = screen; }
+    const color = B.clr === undefined ? '#000' : `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
     lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
     ctx.restore();
     return true;
