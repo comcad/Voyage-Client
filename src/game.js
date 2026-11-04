@@ -3011,7 +3011,8 @@ export class Game {
     if (p.ladder) {
       const l = p.ladder;
       const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
-      p.y += v * PHYS.climb * dt;
+      p.vx = 0; p.vy = v * PHYS.climb;   // the speed sent while climbing
+      p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
       if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
         p.ladder = null; p.vy = -JUMP * 0.5; p.vx = dir * WALK * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
@@ -3019,7 +3020,7 @@ export class Game {
         p.regrabT = 0.35;              // jumping off with up still held must not catch the same rope again
         sfx.play('Game/Jump');
       } else if (p.y < l.y1) {
-        p.ladder = null;
+        p.ladder = null; p.vy = 0;
         p.fh = fh.below(l.x, l.y1 - 20, 40);
         p.y = p.fh ? Footholds.yAt(p.fh, p.x) : l.y1;
       } else if (p.y > l.y2) {
@@ -5204,7 +5205,9 @@ export class Game {
     const prev = this.movePos || { x: p.x, y: p.y };
     this.movePos = { x: p.x, y: p.y };
     if (Math.abs(p.x - prev.x) > 300 || Math.abs(p.y - prev.y) > 300) { this.flushMovement(true); this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; return; }
-    const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round((p.x - prev.x) / dt), vy: Math.round((p.y - prev.y) / dt),
+    // the speeds are the physics' own, not how far you moved this frame: catching a rope snaps you onto it, and that
+    // jump must not read as a burst of speed that carries you past it for those watching
+    const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round(p.vx || 0), vy: Math.round(p.fh ? 0 : p.vy || 0),
       // on a ladder or rope its id, negative: those watching put you on it, in its layer (0 would leave you in the
       // layer of the last floor, sometimes behind it)
       fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000, held: !!p.ladder };
