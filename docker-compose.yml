@@ -1,0 +1,30 @@
+# Voyage MS — MapleStory v83 web client
+# Run from the repo root:  docker compose up --build
+services:
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: voyage-client:latest
+    container_name: voyage-client
+    # host networking so the container reaches the Cosmic server on the LAN
+    # (192.168.2.2:8484 login, :7575-7699 channels) and binds :3000 directly
+    network_mode: host
+    environment:
+      PORT: "3000"
+      # name=host pairs, comma-separated. First is the default.
+      COSMIC_SERVERS: "cosmic=192.168.2.2"
+      ASSETS_DIR: /app/assets
+    volumes:
+      # The extracted WZ assets (JSON + PNG). 5.6G, kept out of the image.
+      - ./assets:/app/assets:ro
+    # Restart unless killed
+    restart: unless-stopped
+    # The client is a long-running server; no healthcheck needed, but a
+    # liveness probe on the HTTP port is cheap insurance.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

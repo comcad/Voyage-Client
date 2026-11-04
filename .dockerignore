@@ -1,0 +1,7 @@
+# Don't ship these into the build context (they're mounted at runtime or not needed)
+assets/
+.git/
+node_modules/
+public/Voyage.js
+*.log
+.DS_Store
