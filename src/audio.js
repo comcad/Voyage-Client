@@ -28,7 +28,7 @@ class Music {
     this.fading = new Set();    // old tracks still fading out
     this.current = null;
     // resume on any gesture: browsers hold audio back until the first one
-    const unlock = () => { const el = this.track?.el; if (this.current && el?.src && el.paused) el.play().catch(() => {}); };
+    const unlock = () => { const el = this.track?.el; if (this.current && el?.src && el.paused && !el.ended) el.play().catch(() => {}); };   // not one that played out
     addEventListener('pointerdown', unlock);
     addEventListener('keydown', unlock);
   }
@@ -193,6 +193,9 @@ class Sfx {
     return true;
   }
 
+  /** Whether path has a sound. */
+  async has(path) { return !!(await this.buffer(path)); }
+
   /** Loop path until the returned stop function is called (null when it doesn't exist or can't play now). */
   async loop(path, { volume = 1 } = {}) {
     const buf = await this.buffer(path);
@@ -201,7 +204,7 @@ class Sfx {
 
   start(buf, volume, loop = false) {
     const ctx = this.ctx;
-    if (this.muted || !ctx || ctx.state !== 'running') return null;
+    if (!ctx || ctx.state !== 'running') return null;   // muted: the master gain holds it silent
     const src = ctx.createBufferSource(), gain = ctx.createGain();
     src.buffer = buf; src.loop = loop; gain.gain.value = volume;
     src.connect(gain).connect(this.master);

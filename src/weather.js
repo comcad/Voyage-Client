@@ -42,9 +42,9 @@ export class Weather {
       for (let i = 0; i < n; i++) cur.pieces.push(this.piece(cur));
     }
     this.cur = cur;
+    this.stopSound?.(); this.stopSound = null;   // the last weather's sound goes with it
     if (info.bgmPath) {
       const p = String(info.bgmPath).replace(/^Sound\//, '').replace('.img', ''), loop = !!Number(info.repeat);
-      this.stopSound?.(); this.stopSound = null;
       if (Number(info.isBgmOrEffect)) music.play(p, { loop, fadeOut: 1000, fadeIn: 1000, force: true });
       else if (loop) { const stop = await sfx.loop(p); if (seq === this.seq) this.stopSound = stop; else stop?.(); }
       else sfx.play(p);

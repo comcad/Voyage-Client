@@ -76,7 +76,7 @@ export class WindowManager {
     return true;
   }
   /** A transient window (dialog, shop) on top of everything. */
-  show(w, sound = 'UI/DlgNotice') { this.order.push(w); if (sound) sfx.play(sound); return w; }
+  show(w, sound = 'UI/DlgNotice') { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; if (sound) sfx.play(sound); return w; }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
     // Escape puts back an item held by a click

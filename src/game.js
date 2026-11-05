@@ -376,22 +376,24 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
-/** Riding skills: Monster Rider, Battleship, and the skill vehicles (Spaceship, Yeti, Witch's Broomstick, Barlog...). */
 // a monster's blow on a player sounds only for its first two attacks and attackF
-// sounds: Grenade and Poison Bomb make no weapon swing; Grenade's throw is Use2; Blast's cast follows the charge on
-// the weapon; a held Big Bang or Piercing Arrow loops its Loop, and Monster Magnet makes no cast sound
+const CHAR_DAM = { 0: 'CharDam1', 1: 'CharDam2', 8: 'CharDamF' };
+// another player's level up, job change, quest clear, monster card and item level up, heard in full
 const FOREIGN_SOUND = { 0: 'Game/LevelUp', 8: 'Game/JobChanged', 9: 'Game/QuestClear', 0x0d: 'Game/mCardGet', 0x0f: 'Game/ItemLevelUp' };
+// Grenade and Poison Bomb make no weapon swing; Grenade's throw is Use2; Blast's cast follows the charge on the weapon
 const GRENADE = 5201002, BLAST = 1221009, NO_SWING = new Set([GRENADE, 14111006]);
 const BLAST_USE = { 1211003: 'Use2', 1211004: 'Use2', 1211005: 'Use3', 1211006: 'Use3', 21111005: 'Use3', 1211007: 'Use4', 1211008: 'Use4',
   15101006: 'Use4', 1221003: 'Use5', 1221004: 'Use5', 11111007: 'Use5' };
+// a held Big Bang or Piercing Arrow loops its Loop sound
 const LOOP_HOLDS = new Set([2121001, 2221001, 2321001, 3221001]);
-// Barrage, Demolition and the like: only their first line sounds their Hit (Arrow Bomb's only if it hurt)
+// Avenger keeps its own Hit over a cash star's
 const AVENGERS = new Set([4111005, 14111002]);
 // shots that make no Attack2 as they leave: Hurricane, Battleship Cannon / Torpedo, Wind Piercing, Wind Shot, the
 // homing ones, Shadow Meso, Storm Break, Vampire
 const SILENT_SHOTS = new Set([3121004, 13111002, 5221007, 5221008, 13111006, 13111007, 5211006, 5220011, 22151002, 4111004, 13101005, 14101006]);
+// Barrage, Demolition and the like: only their first line sounds their Hit (Arrow Bomb's only if it hurt)
 const FIRST_HIT_ONLY = new Set([5121007, 15111004, 5121004, 22171002, 3101005]);
-const CHAR_DAM = { 0: 'CharDam1', 1: 'CharDam2', 8: 'CharDamF' };
+/** Riding skills: Monster Rider, Battleship, and the skill vehicles (Spaceship, Yeti, Witch's Broomstick, Barlog...). */
 const MONSTER_RIDERS = new Set([1004, 10001004, 20001004, 20011004]), BATTLESHIP = 5221006;
 const SKILL_VEHICLE_SKILLS = new Set([1013, 1017, 1018, 1019, 10001014, 10001019, 10001022, 10001023, 20001019, 20001022, 20001023,
   ...[1027, 1028, 1029, 1030, 1031].flatMap((n) => [n, 10000000 + n, 20000000 + n, 20010000 + n])]);
@@ -696,6 +698,7 @@ export class Game {
     this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
+    this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
     music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
     this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
@@ -4511,6 +4514,7 @@ export class Game {
     const stop = await sfx.loop(`Skill/${pad(id, 7)}/Loop`);
     if (!stop) return;
     if (!held()) { stop(); return; }
+    this.skillLoop?.stop();
     this.skillLoop = { held, stop };
   }
   releaseCharge() {
@@ -5725,13 +5729,13 @@ export class Game {
   hitSound(id, mob, d, line, cash = 0) {
     const volume = mob ? this.volumeAt(mob.x, mob.y) : 1;
     const damage = () => { if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`, { volume }); };
+    const hitOr = (path) => sfx.has(path).then((found) => (found ? sfx.play(path, { volume }) : damage()));
     if (cash && !AVENGERS.has(id)) {
-      if (line > 0 || !(d > 0)) damage();
-      else sfx.play(`CashEffect/${pad(cash, 8)}/Hit`, { volume }).then((found) => { if (!found) damage(); });
+      if (line > 0 || !(d > 0)) damage(); else hitOr(`CashEffect/${pad(cash, 8)}/Hit`);
       return;
     }
     const hit = id && !(FIRST_HIT_ONLY.has(id) && (line > 0 || (id === 3101005 && !(d > 0))));
-    if (hit) sfx.play(`Skill/${pad(id, 7)}/Hit`, { volume }).then((found) => { if (!found) damage(); }); // 7-digit keys (0001000); Cygnus/Aran ids are 8
+    if (hit) hitOr(`Skill/${pad(id, 7)}/Hit`); // 7-digit keys (0001000); Cygnus/Aran ids are 8
     else damage();
   }
   async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0) {
