@@ -123,6 +123,7 @@ export class PlayerShopWin extends Win {
     if (!this.owner || this.open || c.kind !== 'item' || typeof c.tab !== 'number') return;
     const it = this.g.inventory?.[c.tab]?.[c.slot];
     if (!it) return;
+    if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
     const qty = it.quantity || 1, recharge = [207, 233].includes(Math.floor(it.id / 10000));
     let per = 1, bundles = 1;
     if (!recharge && invType(it.id) !== 1 && qty > 1) {

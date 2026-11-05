@@ -10,7 +10,6 @@ import { richText, drawRich, optionAt, LIGHT_COLORS } from './richtext.js';
 /**
  * Stage 3 of the v83 in-game UI, drawn on the canvas through the WindowManager:
  *   NpcDialog   UIWindow.img/UtilDlgEx (t / c tiles / s, or it / ic / is for quests)
- *   MessageBox  Basic.img Notice3 / YesNo3 (t / c tiles / s) for notices and yes-no questions
  *   ShopWin     UIWindow.img/Shop
  *   drawItemTip UIWindow.img/ToolTip/Equip requirement sprites (Can / Cannot)
  */
@@ -346,15 +345,6 @@ export class PetSelectDialog extends Win {
 
 // ==================================================================== notices
 /**
- * Basic.img Notice3 / YesNo3: 266 wide; t (21) / c (20, tiled) / s (55). The blue box holds the
- * (white) text, the band in s holds the 65x24 buttons. kind: 'notice' | 'yesno' | 'number'.
- * 'server' is the server's own pop-up on the classic metal plate, Basic.img/Notice2, 258 wide: t (40: the
- * header strip and the screwed top edge), c (20, tiled: the white sheet the black text sits on), s (47, the
- * bottom edge with the OK slot centred at 96, 11).
- * 'request' is another player asking something of you (a trade, a party, a guild...): the same plate as
- * Basic.img/YesNo2, its bottom edge with two slots for YES (58, 11) and NO (155, 11).
- */
-/**
  * The death notice (UIWindow.img/Notice/0, 286x146): the tombstone and "PRESS OK TO BE REVIVED. Once you have revived,
  * you will be sent to a safe town nearby." are in the art; OK (Basic BtOK, 65x24) sits centred in its grey strip along
  * the bottom: inside the borders x 5-280, and between the separator line (row 110) and the bottom bevel (row 140).
@@ -372,66 +362,9 @@ export class DeathNotice extends Win {
   key(e) { if (e.key === 'Enter' || e.key === ' ') this.finish(); }
 }
 
-export class MessageBox extends Win {
-  constructor(mgr, kind, text, done, opts = {}) {
-    super(mgr, null, 0, 0);
-    this.buttons = [];
-    const B = mgr.B;
-    this.kind = kind; this.done = done; this.modal = true; this.opts = opts;
-    this.F = kind === 'server' ? B.Notice2 : kind === 'request' ? B.YesNo2 : kind === 'notice' ? B.Notice3 : B.YesNo3;
-    if (kind === 'server' || kind === 'request') {
-      this.layout = richText(scratch(), text, 226, textRef(mgr), { base: '#000', size: 12 });
-      this.tiles = Math.max(2, Math.ceil((this.layout.height + 10) / 20));
-      this.bandY = 40 + this.tiles * 20;
-      this.w = 258; this.h = this.bandY + 47;
-      this.x = Math.round((800 - this.w) / 2); this.y = opts.y ?? Math.round((529 - this.h) / 2);
-      if (kind === 'server') this.button(B.BtOK, 96, this.bandY + 11, () => this.finish(true));
-      else {
-        this.button(B.BtYes, 58, this.bandY + 11, () => this.finish(true));
-        this.button(B.BtNo, 155, this.bandY + 11, () => this.finish(false));
-      }
-      return;
-    }
-    this.layout = richText(scratch(), text, 238, textRef(mgr), { base: '#fff', colors: LIGHT_COLORS });
-    this.tiles = Math.max(1, Math.ceil((8 + this.layout.height + 6 - 21) / 20));
-    this.bandY = 21 + this.tiles * 20;
-    this.w = 266; this.h = this.bandY + 55;
-    this.x = Math.round((800 - this.w) / 2); this.y = opts.y ?? Math.round((529 - this.h) / 2);
-    const by = this.bandY + 18;
-    if (kind === 'notice') this.button(B.BtOK, 266 - 65 - 12, by, () => this.finish(true));
-    else {
-      this.button(B.BtYes, 266 - 2 * 65 - 16, by, () => this.finish(true));
-      this.button(B.BtNo, 266 - 65 - 12, by, () => this.finish(false));
-    }
-  }
-  frames() { return [...allCanvases(this.F), ...this.buttons.flatMap((b) => b.frames())]; }
-  finish(ok) {
-    this.mgr.close(this);
-    this.done(ok);
-  }
-  key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(this.kind === 'notice' || this.kind === 'server'); }
-  body(ctx) {
-    const m = this.mgr, t = m.image(this.F.t), c = m.image(this.F.c), s = m.image(this.F.s);
-    if (!t || !c || !s) return;
-    if (this.kind === 'server' || this.kind === 'request') {
-      ctx.drawImage(t, 0, 0);
-      for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 40 + i * 20);
-      ctx.drawImage(s, 0, this.bandY);
-      // centred on the sheet, as the client sets its pop-ups
-      const top = 40 + Math.round((this.tiles * 20 - this.layout.height) / 2) - 2;
-      drawRich(ctx, this.layout, 16, top, { size: 12, drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
-      return;
-    }
-    ctx.drawImage(t, 0, 0);
-    for (let i = 0; i < this.tiles; i++) ctx.drawImage(c, 0, 21 + i * 20);
-    ctx.drawImage(s, 0, this.bandY);
-    drawRich(ctx, this.layout, 14, 8, { drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
-  }
-}
-
 /**
  * The plain message box (Basic.img YesNo3: t 21, c 20 tiled, s 55, 266 wide, centred) with Basic BtOK2 at x 155 and
- * BtCancel2 at 205, 30px off the bottom. 'okcancel': the lines centred, 14px apart, over at least two body tiles; 'okcancelLeft':
+ * BtCancel2 at 205, 30px off the bottom; every notice, question and server pop-up uses it. 'okcancel': the lines centred, 14px apart, over at least two body tiles; 'okcancelLeft':
  * the lines as given (leading spaces kept), left-aligned at x 19 from y 24.
  * 'quantity': the prompt at the top left and a white 226x15 field 73px off the bottom.
  * 'text': the same field for a name or a line. 'whisper': the same with a ComboBox whose list holds the names you whispered.
@@ -441,10 +374,16 @@ export class UtilBox extends Win {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.modal = true; this.kind = kind; this.done = done; this.opts = opts;
-    this.lines = kind === 'okcancelLeft' ? text.split('\n') : wrapText(scratch(), text, 234, 12);
-    const n = this.lines.length;
-    this.tiles = Math.max(2, Math.floor((n * 14) / 20) + 1);
     const field = kind === 'quantity' || kind === 'whisper' || kind === 'text';
+    // centred lines take item names (#t), colours and \r\n breaks; each is trimmed so it centres on its words
+    this.centred = !field && kind !== 'okcancelLeft';
+    this.lines = kind === 'okcancelLeft' ? text.split('\n')
+      : this.centred ? richText(scratch(), text, 234, textRef(mgr), { base: '#fff', colors: LIGHT_COLORS, size: 12, lineH: 14 }).lines
+        : wrapText(scratch(), text, 234, 12);
+    const n = this.lines.length;
+    // centred lines stack by their own height (a line with an item icon is taller)
+    this.textH = this.centred ? this.lines.reduce((t, l) => t + (l.h || 14), 0) : n * 14;
+    this.tiles = Math.max(2, Math.floor(this.textH / 20) + 1);
     this.w = 266; this.h = field ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
     this.x = 267; this.y = (600 - this.h) >> 1;
     // 'ok': a notice with OK alone, where Cancel would be
@@ -467,6 +406,11 @@ export class UtilBox extends Win {
   frames() { return [...allCanvases(this.mgr.B.YesNo3), ...allCanvases(this.mgr.B.ComboBox?.normal), ...super.frames()]; }
   finish(ok) {
     if (this.answered) return;
+    // too short (opts.minLen): say so and keep the box open
+    if (ok && this.kind === 'text' && this.opts.minLen && this.field.value.trim().length < this.opts.minLen) {
+      this.mgr.notice(`Please enter at least ${this.opts.minLen} characters.`).then(() => this.field.focus());
+      return;
+    }
     this.answered = true; this.field?.remove(); this.mgr.close(this);
     if (this.kind === 'whisper' || this.kind === 'text') { const v = this.field.value.trim(); this.done(ok && (v || this.opts.empty) ? v : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
@@ -482,9 +426,20 @@ export class UtilBox extends Win {
     ctx.drawImage(s, 0, this.h - 55);
     const line = (str, x, y, align) => uiText(ctx, str, x, y + 11, { color: '#fff', size: 12, base: 'alphabetic', align });
     if (this.kind === 'okcancelLeft') { this.lines.forEach((l, i) => line(l, 19, 24 + i * 14, 'left')); return; }
-    if (this.kind !== 'quantity' && this.kind !== 'whisper' && this.kind !== 'text') {
-      const top = (this.tiles * 20 - this.lines.length * 14) / 2 + 24;
-      this.lines.forEach((l, i) => line(l, 132, top + i * 14, 'center'));
+    if (this.centred) {
+      const top = (this.tiles * 20 - this.textH) / 2 + 24;
+      ctx.save(); ctx.font = '12px Arial, sans-serif';
+      this.lines.forEach((l) => {
+        const runs = l.runs.filter((r) => r.t || r.icon);
+        while (runs.length && runs[runs.length - 1].t !== undefined && !runs[runs.length - 1].t.trim()) runs.pop();
+        const last = runs[runs.length - 1], end = last ? last.x + (last.icon ? 32 : ctx.measureText(last.t).width) : 0;
+        const x0 = Math.round(132 - end / 2), h = l.h || 14, y = top + (l.y ?? 0);
+        for (const r of runs) {
+          if (r.icon) m.drawIcon(ctx, r.icon, x0 + r.x, y + Math.round((h - 32) / 2));
+          else uiText(ctx, r.t, x0 + r.x, y + Math.round((h - 14) / 2) + 11, { color: r.color, bold: r.bold, size: 12, base: 'alphabetic' });
+        }
+      });
+      ctx.restore();
       return;
     }
     this.lines.forEach((l, i) => line(l, 19, 28 + i * 14, 'left'));
@@ -664,7 +619,7 @@ export class ShopWin extends Win {
     const r = this.sellItems()[this.selSell];
     if (!r || this.pending) return;
     const { pos, it, qty } = r, m = this.mgr;
-    if (it.flag & 1) { m.notice('Sealed items cannot be\nsold, traded, or dropped.'); return; }
+    if (it.flag & 1) { m.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }
     let n = 1;
     if (isStackable(it.id)) {
       n = await this.askQty('How many are you willing to sell?', qty, 1, qty);

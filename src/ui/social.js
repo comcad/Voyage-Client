@@ -219,14 +219,30 @@ export class CharInfoWin extends Win {
   }
 
   // ---------------------------------------------------------------- lists
-  /** What the ITEM LIST shows: the equipped items, normal ones before cash ones. */
+  /**
+   * What the ITEM LIST shows, slot by slot (not the pet accessory or the mount's): at the weapon the cash weapon
+   * first, then in each slot the item hidden under a cash one, then the one shown (pet ability items left out).
+   */
   equipped() {
-    const g = this.g, me = this.info.id === g.player.id;
-    if (me) {
-      return Object.entries(g.inventory?.equipped || {}).map(([s, it]) => ({ slot: Number(s), id: it.id }))
-        .sort((a, b) => (a.slot < -99) - (b.slot < -99) || b.slot - a.slot).map((x) => x.id);
+    const { shown, hidden, cashWeapon } = this.slots(), out = [];
+    for (let i = 1; i < 52; i++) {
+      if (i === 14 || i === 18 || i === 19 || i === 20) continue;
+      if (i === 11 && Math.floor(cashWeapon / 100000) === 17) out.push(cashWeapon);
+      const h = hidden(i), v = shown(i);
+      if (h > 0) out.push(h);
+      if (v > 0 && Math.floor(v / 10000) !== 181) out.push(v);
     }
-    return [...(g.others.get(this.info.id)?.look?.equipIds || [])].filter(Boolean);
+    return out;
+  }
+  /** By look slot: the item shown there, the one hidden under it, and the cash weapon (yours from your inventory). */
+  slots() {
+    const g = this.g, eq = g.inventory?.equipped || {};
+    // yours from your inventory; the cash weapon cover (-111) is listed on its own, so the weapon slot shows the weapon
+    if (this.info.id === g.player.id) {
+      return { shown: (i) => (i === 11 ? eq[-11]?.id : eq[-(100 + i)]?.id || eq[-i]?.id), hidden: (i) => (i !== 11 && eq[-(100 + i)] ? eq[-i]?.id : 0), cashWeapon: eq[-111]?.id };
+    }
+    const look = g.others.get(this.info.id)?.lookData;
+    return { shown: (i) => look?.equips?.[i], hidden: (i) => look?.masked?.[i], cashWeapon: look?.cashWeapon };
   }
   wishItems() { return (this.info.wish || []).map((sn) => this.commodity?.get(sn)).filter(Boolean); }
   sideRows() { return this.side === 'item' ? this.equipped().map((id) => ({ id })) : this.side === 'wish' ? this.wishItems().map((c) => ({ id: c.ItemId, price: c.Price })) : []; }
@@ -236,20 +252,6 @@ export class CharInfoWin extends Win {
     const m = this.mgr, im = (n) => m.image(n), g = this.g, i = this.info, U = this.U;
     const bg = im(U[INFO_PANELS[this.panel].bg]);
     if (bg) ctx.drawImage(bg, 0, 0);
-    const me = i.id === g.player.id, ent = me ? g.player : g.others.get(i.id), look = me ? g.look : ent?.look;
-    if (look) {
-      // standing, animated
-      const a = (this.anim ??= { frame: 0, back: false, t: 0, at: performance.now() }), act = look.standAction(), now = performance.now();
-      a.t += Math.min(1000, now - a.at); a.at = now;
-      for (let n = 0; a.t >= look.delay(act, a.frame) && n < 10; n++) {
-        a.t -= look.delay(act, a.frame);
-        const f = look.nextFrame(act, a.frame, a.back); a.frame = f.frame; a.back = f.back;
-      }
-      if (a.frame >= look.frameCount(act)) a.frame = 0;
-      ctx.save(); ctx.beginPath(); ctx.rect(8, 27, 90, 118); ctx.clip();
-      drawParts(ctx, g.assets, look.compose(act, a.frame), 52, 133, false);
-      ctx.restore();
-    }
     const hn = U.Marry?.[i.married ? 'married' : 'unmarried'], heart = im(hn?._canvas ? hn : hn?.[0]);
     if (heart) ctx.drawImage(heart, 12, 31);
     // the name in white Arial 12 centred on the bar; level, fame and guild in black Arial 12, the job in Tahoma 9
@@ -260,16 +262,30 @@ export class CharInfoWin extends Win {
     this.text(ctx, String(i.fame), 160, 113, { size: 12 });
     this.text(ctx, i.guild || '', 160, 131, { size: 12 });
     this.text(ctx, i.alliance || '', 160, 149, { size: 12 });
+    this.drawAvatar(ctx);
     if (this.panel === 'pet') this.drawPet(ctx);
     else if (this.panel === 'taming') this.drawTaming(ctx);
     else if (this.panel === 'book') this.drawBook(ctx);
     if (this.side === 'exc') this.drawExc(ctx);
     else if (this.side) this.drawSide(ctx);
   }
+  /** The character standing, animated, over the window (a long weapon or tall hat reaches past its box). */
+  drawAvatar(ctx) {
+    const g = this.g, i = this.info, me = i.id === g.player.id, look = me ? g.look : g.others.get(i.id)?.look;
+    if (!look) return;
+    const a = (this.anim ??= { frame: 0, back: false, t: 0, at: performance.now() }), act = look.standAction(), now = performance.now();
+    a.t += Math.min(1000, now - a.at); a.at = now;
+    for (let n = 0; a.t >= look.delay(act, a.frame) && n < 10; n++) {
+      a.t -= look.delay(act, a.frame);
+      const f = look.nextFrame(act, a.frame, a.back); a.frame = f.frame; a.back = f.back;
+    }
+    if (a.frame >= look.frameCount(act)) a.frame = 0;
+    drawParts(ctx, g.assets, look.compose(act, a.frame), 52, 133, false);
+  }
   /** Name over a rule, a smaller line under it: the rows of every list here. */
   listRow(ctx, x, y, id, sub) {
     const m = this.mgr;
-    m.drawIcon(ctx, m.icon(id), x + 2, y + 1);
+    m.drawIcon(ctx, m.icon(id), x + 2, y + 1, id);   // with the coin on a cash item
     ctx.save(); ctx.beginPath(); ctx.rect(x + 38, y, 170, 36); ctx.clip();
     this.text(ctx, m.itemName(id), x + 40, y + 2, { size: 12 });
     sub?.(x + 40, y + 20);
@@ -291,14 +307,14 @@ export class CharInfoWin extends Win {
     if (!rows.length) this.text(ctx, this.side === 'item' ? 'No items equipped.' : 'The wish list is empty.', SIDE_X + 120, 80, { align: 'center', color: '#555' });
     this.scrollbar(ctx, SIDE_X + 220, 27, 122, this.sideFirst, rows.length, SIDE_ROWS);
   }
-  /** A pet's list: its accessory, then the ability items and rings worn for it (not the potion pouches). */
+  /** A pet's list: its accessory, then the ability items and rings worn for it, in slot order; the potion pouches are shared, so every pet lists them. */
   petEquips(p, k) {
     const g = this.g, self = this.info.id === g.player.id, look = g.others.get(this.info.id)?.lookData;
     const out = p.equip ? [p.equip] : [];
     for (let i = 0; i <= 51; i++) {
       const id = self ? g.inventory?.equipped?.[-(100 + i)]?.id : look?.equips?.[i];
-      if (!id || !(Math.floor(id / 10000) === 181 || id === 1822000 || id === 1832000) || id === 1812002 || id === 1812003) continue;
-      if (lookSlotPet(i) === k) out.push(id);
+      if (!id || !(Math.floor(id / 10000) === 181 || id === 1822000 || id === 1832000)) continue;
+      if (id === 1812002 || id === 1812003 || lookSlotPet(i) === k) out.push(id);
     }
     return out;
   }
@@ -340,7 +356,7 @@ export class CharInfoWin extends Win {
   }
   drawTaming(ctx) {
     const m = this.mgr, t = this.info.mount;
-    const ids = this.equipped().filter((id) => [190, 191].includes(Math.floor(id / 10000)));
+    const { shown } = this.slots(), ids = [18, 19, 20].map(shown).filter((id) => [190, 191].includes(Math.floor(id / 10000)));
     const mount = ids.find((id) => Math.floor(id / 10000) === 190);
     if (!t) { this.text(ctx, 'No taming mob.', 52, 230, { align: 'center', color: '#555' }); return; }
     if (mount) { const ic = m.icon(mount); if (ic) m.drawIcon(ctx, ic, 37, 228); }

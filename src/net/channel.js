@@ -1,7 +1,7 @@
 import { Connection } from './connection.js';
 import { PacketWriter } from './packet.js';
 import { C, S, S_NAMES } from './opcodes.js';
-import { readCharacterInfo, readCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
+import { readCharacterInfo, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
 
 /** CashShop item records (addCashItemInformation): cash id, account, item, SN, count, gift sender, expiry. */
 function readCashItem(r) {
@@ -353,6 +353,22 @@ export class ChannelSession {
       this.emit('avatarMega', { itemId, name, lines, channel, ear, look: readCharLook(r) });
     });
     on(S.CLEAR_AVATAR_MEGAPHONE, () => this.emit('avatarMegaClear'));
+    // MapleTV: SEND_TV (a receiver's look follows when flag & 2), REMOVE_TV, ENABLE_TV (an error code), MAPLE_TV_USE_RES (a message)
+    on(S.SEND_TV, (r) => {
+      const flag = r.ubyte(), type = r.ubyte(), from = readCharLook(r), fromName = r.string(), toName = r.string(), lines = [];
+      for (let i = 0; i < 5; i++) lines.push(r.string());
+      const seconds = r.int(), to = flag & 2 ? readCharLook(r) : null;
+      this.emit('tv', { type, from, fromName, toName, lines, seconds, to });
+    });
+    on(S.REMOVE_TV, () => this.emit('tvOff'));
+    on(S.ENABLE_TV, (r) => { if (r.ubyte()) this.emit('tvError', r.available ? r.ubyte() : 0); });
+    on(S.MAPLE_TV_USE_RES, (r) => this.emit('tvResult', r.available ? r.string() : ''));
+    // AVATAR_MEGAPHONE_RESULT: 'S' the line is over 15 seconds long, 'T' under level 11, else the server's own text
+    on(S.AVATAR_MEGAPHONE_RESULT, (r) => {
+      const code = r.ubyte();
+      this.emit('avatarMegaResult', code === 0x53 ? 'The waiting line is longer than 15 seconds. \r\nPlease try using it at a later time.'
+        : code === 0x54 ? 'This megaphone is only available for \r\ncharacters that are over Level 10.' : r.available ? r.string() : '');
+    });
 
     on(S.CHATTEXT, (r) => this.emit('chat', { id: r.int(), gm: r.bool(), text: r.string(), show: r.ubyte() }));
     // FAME_RESPONSE: 0 you raised (1) / dropped someone's fame, 5 someone raised / dropped yours, else an error code
@@ -654,7 +670,10 @@ export class ChannelSession {
       for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
       this.emit('petExceptions', owner, slot, sn, ids);
     });
-    on(S.CASH_PET_FOOD_RESULT, (r) => { const fail = r.ubyte(); this.emit('cashPetFood', fail ? -1 : r.ubyte()); });
+    // 0 then the pet that ate; 1 it can't eat it (-1); anything else nothing (-2)
+    // BLOW_WEATHER: its kind (0 cash weather), the item (0 stops it), the message
+    on(S.BLOW_WEATHER, (r) => { const type = r.ubyte(), id = r.int(); this.emit('weather', type, id, id && type === 0 && r.available ? r.string() : ''); });
+    on(S.CASH_PET_FOOD_RESULT, (r) => { const res = r.ubyte(); this.emit('cashPetFood', res === 0 ? r.ubyte() : res === 1 ? -1 : -2); });
     on(S.AUTO_HP_POT, (r) => this.emit('petPotion', 'hp', r.int()));
     on(S.AUTO_MP_POT, (r) => this.emit('petPotion', 'mp', r.int()));
     on(S.MOVE_PLAYER, (r) => { const id = r.int(); r.int(); this.emit('movePlayer', id, readMovement(r)); });
@@ -1160,8 +1179,16 @@ export class ChannelSession {
   find(name) { this.send(new PacketWriter(C.WHISPER).byte(0x05).string(name)); }
   /** Where a buddy is, for the Buddy tab's location line (answered with flag 0x48). */
   findBuddy(name) { this.send(new PacketWriter(C.WHISPER).byte(0x44).string(name)); }
+  /** USE_CASH_ITEM: the slot, the item, what that kind of item adds (add(writer)), then the tick. */
+  useCashItem(slot, itemId, add = null) {
+    const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId);
+    add?.(w);
+    this.send(w.int(Date.now() | 0));
+  }
+  /** WATER_OF_LIFE: no fields; the server opens the fairy's dialog. */
+  waterOfLife() { this.send(new PacketWriter(C.WATER_OF_LIFE)); }
   /** USE_CASH_ITEM for a Memo (509xxxx): who to, the note. */
-  useMemo(slot, itemId, to, text) { this.send(new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId).string(to).string(text)); }
+  useMemo(slot, itemId, to, text) { this.useCashItem(slot, itemId, (w) => w.string(to).string(text)); }
   /** BUDDYLIST_MODIFY: 1 add (name, group), 2 accept (cid), 3 delete / deny (cid) */
   buddyAdd(name, group = 'Default Group') { this.send(new PacketWriter(C.BUDDYLIST_MODIFY).byte(1).string(name).string(group)); }
   buddyAccept(cid) { this.send(new PacketWriter(C.BUDDYLIST_MODIFY).byte(2).int(cid)); }
@@ -1216,16 +1243,33 @@ export class ChannelSession {
   familySummonAnswer(family, accept) { this.send(new PacketWriter(C.FAMILY_SUMMON_RESPONSE).string(family).byte(accept ? 1 : 0)); }
   /**
    * USE_CASH_ITEM for the megaphones: slot, item, then by kind - Megaphone: text; Super: text, ear;
-   * Item: text, ear, an item or not (inventory type, slot); Triple: line count, lines, ear; Avatar (539): four lines, ear
+   * Item: text, ear, an item or not (inventory type, slot); Triple: line count (up to the last line written; empty
+   * ones before it go as ""), lines, ear; Avatar (539): four lines, ear, your look
    */
-  useMegaphone(slot, itemId, { text = '', lines = null, ear = false, item = null } = {}) {
-    const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId), kind = Math.floor(itemId / 1000) % 10;
-    if (Math.floor(itemId / 10000) === 539) { for (let i = 0; i < 4; i++) w.string(lines?.[i] || ''); w.byte(ear ? 1 : 0); }
-    else if (kind === 1) w.string(text);
-    else if (kind === 2) w.string(text).byte(ear ? 1 : 0);
-    else if (kind === 6) { w.string(text).byte(ear ? 1 : 0).byte(item ? 1 : 0); if (item) w.int(item.tab).int(item.slot); }
-    else if (kind === 7) { const ls = (lines || [text]).filter(Boolean).slice(0, 3); w.byte(ls.length); for (const l of ls) w.string(l); w.byte(ear ? 1 : 0); }
-    this.send(w);
+  useMegaphone(slot, itemId, { text = '', lines = null, ear = false, item = null, look = null } = {}) {
+    const kind = Math.floor(itemId / 1000) % 10;
+    this.useCashItem(slot, itemId, (w) => {
+      if (Math.floor(itemId / 10000) === 539) { for (let i = 0; i < 4; i++) w.string(lines?.[i] || ''); w.byte(ear ? 1 : 0); if (look) writeCharLook(w, look); }
+      else if (kind === 1) w.string(text);
+      else if (kind === 2) w.string(text).byte(ear ? 1 : 0);
+      else if (kind === 6) { w.string(text).byte(ear ? 1 : 0).byte(item ? 1 : 0); if (item) w.int(item.tab).int(item.slot); }
+      else if (kind === 7) {
+        const ls = (lines || [text]).slice(0, 3), n = ls[2] ? 3 : ls[1] ? 2 : 1;
+        w.byte(n); for (let i = 0; i < n; i++) w.string(ls[i] || ''); w.byte(ear ? 1 : 0);
+      }
+    });
+  }
+  /**
+   * USE_CASH_ITEM for MapleTV (5075000-5075005): a Megassenger (3-5) adds the ear; the plain kinds a flag (3 with a
+   * receiver, else 1); the plain and Heart kinds the receiver; then the five lines
+   */
+  useMapleTV(slot, itemId, { kind, mega, ear, to, lines }) {
+    this.useCashItem(slot, itemId, (w) => {
+      if (kind === 0) w.byte(to ? 3 : 1);
+      if (mega) w.byte(ear ? 1 : 0);
+      if (kind !== 1) w.string(to);
+      for (let i = 0; i < 5; i++) w.string(lines[i] || '');
+    });
   }
   /** SPOUSE_CHAT: to your husband or wife (the server finds them; the first string is ignored) */
   spouseChat(text) { this.send(new PacketWriter(C.SPOUSE_CHAT).string('').string(text)); }
@@ -1237,17 +1281,13 @@ export class ChannelSession {
   dueyDelete(id) { this.send(new PacketWriter(C.DUEY_ACTION).byte(5).int(id)); }
   dueyClose() { this.send(new PacketWriter(C.DUEY_ACTION).byte(7)); }
   /** A Chalkboard (537xxxx): its text; CLOSE_CHALKBOARD puts it away. */
-  useChalkboard(slot, itemId, text) { this.send(new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId).string(text)); }
+  useChalkboard(slot, itemId, text) { this.useCashItem(slot, itemId, (w) => w.string(text)); }
   closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
   /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
   rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
   rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
   /** USE_CASH_ITEM for a Teleport Rock (504xxxx): 0 then a map, or 1 then a character to chase (VIP rocks only) */
-  useRock(slot, itemId, { mapId, name }) {
-    const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId);
-    if (name) w.byte(1).string(name); else w.byte(0).int(mapId);
-    this.send(w);
-  }
+  useRock(slot, itemId, { mapId, name }) { this.useCashItem(slot, itemId, (w) => (name ? w.byte(1).string(name) : w.byte(0).int(mapId))); }
   /** MESSENGER: 0 open one (id 0) or accept an invitation (its id), 2 leave, 3 invite, 5 decline, 6 chat ("name : text") */
   messengerJoin(id = 0) { this.send(new PacketWriter(C.MESSENGER).byte(0).int(id)); }
   messengerLeave() { this.send(new PacketWriter(C.MESSENGER).byte(2)); }
