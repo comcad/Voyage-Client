@@ -1,4 +1,5 @@
 import { itemName, itemDesc, invType } from '../data.js';
+import { sfx } from '../audio.js';
 
 const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' };
 import { mapPath } from '../map.js';
@@ -129,10 +130,13 @@ export class Hud {
     }
   }
 
+  /** Esc: the window opened last closes; with none open, the Game Menu opens. */
   closeWindows() {
-    this.game.windows?.closeAll();
-    this.game.questWin?.close();
-    this.game.skillWin?.close();
+    const g = this.game;
+    if (g.windows?.closeTop()) return;
+    const bar = g.statusBar;
+    if (bar?.menu) { bar.menu = null; sfx.play('UI/MenuUp'); }
+    else if (bar) bar.toggleMenu('GameMenu', bar.menuBtn);
   }
 
   // ------------------------------------------------------------------ windows (canvas, ui/windows.js)

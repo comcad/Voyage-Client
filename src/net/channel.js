@@ -643,7 +643,7 @@ export class ChannelSession {
     // ships: at a station 1 = it is in (docked), 2 = it has gone; on a voyage 10 then 4 / 5 = the Balrog's ship
     // comes / goes
     on(S.CONTI_STATE, (r) => this.emit('ship', r.ubyte() === 1));
-    on(S.CONTI_MOVE, (r) => { if (r.ubyte() === 10) this.emit('ship', r.ubyte() === 4); });
+    on(S.CONTI_MOVE, (r) => { if (r.ubyte() !== 10) return; const b = r.ubyte(); this.emit('ship', b === 4); if (b === 4) this.emit('shipAttack'); });
     on(S.STOP_CLOCK, () => this.emit('clock', null));
     on(S.REMOVE_DOOR, (r) => { r.ubyte(); this.emit('doorRemove', r.int()); });
     on(S.SPAWN_PORTAL, (r) => { const from = r.int(), to = r.int(); this.emit('townPortal', from, to, r.available >= 4 ? { x: r.short(), y: r.short() } : null); });
@@ -832,7 +832,7 @@ export class ChannelSession {
       else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
-      else if (effect === 0 || effect === 8 || effect === 9) this.emit('foreignEffect', id, effect); // level up / job change / quest clear
+      else if ([0, 8, 9, 0x0d, 0x0f].includes(effect)) this.emit('foreignEffect', id, effect); // level up / job change / quest clear / card / item level up
     });
     on(S.SKILL_EFFECT, (r) => this.emit('foreignCharge', r.int(), r.int()));   // charging / winding up a skill
     // your own effects; 2 = a party member's buff (Bless, Haste, Holy Symbol...) reached you
@@ -851,6 +851,8 @@ export class ChannelSession {
       else if (type === 0x0a && r.available >= 1) this.emit('healNumber', null, r.ubyte());
       else if (type === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', null, r.ubyte(), e); }
       else if (type === 9) this.emit('questClearEffect');
+      else if (type === 7) this.emit('portalSound');
+      else if (type === 0x0f) this.emit('foreignEffect', null, 0x0f);   // an item of yours levelled up
       // 0x17: a picture on your character, e.g. a tutorial hint (UI/tutorial.img/<n>)
       else if (type === 0x17 && r.available >= 2) this.emit('avatarPicture', r.string());
       // 0x12: a scene (Effect/Direction*.img/...) played over the screen
@@ -923,6 +925,7 @@ export class ChannelSession {
       this.emit('moveMob', oid, start, readMovement(r), act, skill, level);
     });
     on(S.KILL_MONSTER, (r) => this.emit('killMob', r.int(), r.ubyte()));
+    on(S.CATCH_MONSTER_WITH_ITEM, (r) => { r.int(); this.emit('catchMob', r.int(), r.ubyte() !== 0); });   // mob, item, caught
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
     // damage (negative: healed), then - for one other monsters can hurt - its HP and max HP
     on(S.DAMAGE_MONSTER, (r) => {

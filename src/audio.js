@@ -14,68 +14,94 @@ export function sliderGain(v) {
   if (level >= 128) return 1;
   return Math.min(1, 10 ** ((625 - Math.trunc(1280000 / (15 * level + 128))) / 2000));
 }
-const BGM_FADE = 600;   // map music hands over in 600ms (the client's transition), not a hard cut
+// a new track starts at once while the old one fades out over 600ms on its own
+const BGM_FADE = 600;
+const STEPS = 19, DEFAULT_STEP = 15;
+const snap = (v) => Math.round(Math.max(0, Math.min(1, v)) * STEPS) / STEPS;
+const stepGain = (v) => sliderGain((Math.round(snap(v) * STEPS) + 1) / (STEPS + 1));
 
 class Music {
   constructor() {
-    this.el = new Audio();
-    this.el.loop = true;
-    this.level = this.loadVolume(); this.fadeK = 1;
-    this.applyVolume();
-    this.el.muted = load('maple.bgmMute') === '1';
+    this.level = this.loadVolume();
+    this.isMuted = load('maple.bgmMute') === '1';
+    this.track = null;          // { el, k: fade factor, timer }
+    this.fading = new Set();    // old tracks still fading out
     this.current = null;
-    // resume on any gesture: Firefox autoplays the silent start of a fade-in, then pauses it unrefused
-    const unlock = () => { if (this.current && this.el.src && this.el.paused) this.el.play().catch(() => {}); };
+    // resume on any gesture: browsers hold audio back until the first one
+    const unlock = () => { const el = this.track?.el; if (this.current && el?.src && el.paused) el.play().catch(() => {}); };
     addEventListener('pointerdown', unlock);
     addEventListener('keydown', unlock);
   }
 
   loadVolume() {
-    try { const v = Number(localStorage.getItem('maple.bgm')); return Number.isFinite(v) && localStorage.getItem('maple.bgm') !== null ? v : 0.5; } catch { return 0.5; }
+    try { const v = Number(localStorage.getItem('maple.bgm')); return snap(Number.isFinite(v) && localStorage.getItem('maple.bgm') !== null ? v : DEFAULT_STEP / STEPS); } catch { return DEFAULT_STEP / STEPS; }
   }
 
   setVolume(v) {
-    this.level = Math.max(0, Math.min(1, v));
+    this.level = snap(v);
     this.applyVolume();
     try { localStorage.setItem('maple.bgm', String(this.level)); } catch { /* ignore */ }
   }
-  applyVolume() { this.el.volume = sliderGain(this.level) * this.fadeK; }
-  /** Ramp the fade factor to `to` over BGM_FADE ms. */
-  fade(to) {
-    clearInterval(this.fadeTimer);
-    const from = this.fadeK, t0 = performance.now();
+  apply(t) { t.el.volume = Math.max(0, Math.min(1, stepGain(this.level) * t.k)); }
+  applyVolume() { for (const t of [this.track, ...this.fading]) if (t) this.apply(t); }
+  /** Ramp a track's fade factor to `to` over ms. */
+  ramp(t, to, ms) {
+    clearInterval(t.timer);
+    if (ms <= 0) { t.k = to; this.apply(t); return Promise.resolve(); }
+    const from = t.k, t0 = performance.now();
     return new Promise((resolve) => {
-      this.fadeTimer = setInterval(() => {
-        const k = Math.min(1, (performance.now() - t0) / BGM_FADE);
-        this.fadeK = from + (to - from) * k; this.applyVolume();
-        if (k >= 1) { clearInterval(this.fadeTimer); resolve(); }
+      t.timer = setInterval(() => {
+        const k = Math.min(1, (performance.now() - t0) / ms);
+        t.k = from + (to - from) * k; this.apply(t);
+        if (k >= 1) { clearInterval(t.timer); resolve(); }
       }, 30);
     });
   }
+  /** Let the playing track go: it fades out over ms by itself, then stops. */
+  release(ms) {
+    const t = this.track;
+    this.track = null;
+    if (!t) return;
+    if (t.el.paused || ms <= 0) { clearInterval(t.timer); t.el.pause(); return; }
+    this.fading.add(t);
+    this.ramp(t, 0, ms).then(() => { t.el.pause(); this.fading.delete(t); });
+  }
 
   get volume() { return this.level; }
-  get muted() { return this.el.muted; }
-  setMuted(m) { this.el.muted = !!m; save('maple.bgmMute', m ? '1' : '0'); }
+  get muted() { return this.isMuted; }
+  setMuted(m) {
+    this.isMuted = !!m;
+    for (const t of [this.track, ...this.fading]) if (t) t.el.muted = this.isMuted;
+    save('maple.bgmMute', m ? '1' : '0');
+  }
 
-  /** bgm: "Bgm00/FloralLife" style path from map info. Same track keeps playing across maps. */
-  async play(bgm) {
-    if (!bgm || bgm === this.current) return;
+  /**
+   * bgm: "Bgm00/FloralLife" style path from map info. Same track keeps playing across maps, unless forced.
+   * fadeOut: ms for the old track to fade (it overlaps the new one); fadeIn: ms for the new one to come up (0: at once).
+   */
+  async play(bgm, { loop = true, fadeOut = BGM_FADE, fadeIn = 0, force = false } = {}) {
+    if (!bgm || (bgm === this.current && !force)) return;
     this.current = bgm;
-    const [img, name] = bgm.split('/');
-    const url = `/assets/Sound/${img}.img/${name}.mp3`;
+    const [img, ...name] = bgm.split('/');
+    const url = `/assets/Sound/${img}.img/${name.join('/')}.mp3`;
     // Sound.wz may not be extracted: check first so a missing file doesn't spam errors
     const ok = await fetch(url, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
     if (this.current !== bgm) return;
-    // the old track fades out, the new one fades in
-    if (!this.el.paused && this.el.src) { await this.fade(0); if (this.current !== bgm) return; }
-    if (!ok) { this.el.pause(); this.el.removeAttribute('src'); return; }
-    this.el.src = url;
-    this.fadeK = 0; this.applyVolume();
-    this.el.play().catch(() => {});
-    this.fade(1);
+    this.release(fadeOut);
+    if (!ok) return;
+    const el = new Audio(url);
+    el.loop = loop; el.muted = this.isMuted;
+    const t = { el, k: fadeIn > 0 ? 0 : 1, timer: 0 };
+    this.track = t; this.apply(t);
+    el.play().catch(() => {});
+    if (fadeIn > 0) this.ramp(t, 1, fadeIn);
   }
 
-  stop() { this.current = null; this.el.pause(); }
+  /** Stop the music (fading out over fadeOut ms); the next play starts its track from the beginning. */
+  stop(fadeOut = 0) {
+    this.current = null;
+    this.release(fadeOut);
+  }
 }
 
 function load(k) { try { return localStorage.getItem(k); } catch { return null; } }
@@ -104,18 +130,23 @@ class Sfx {
   }
 
   loadVolume() {
-    try { const v = localStorage.getItem('maple.sfx'); return v !== null && Number.isFinite(Number(v)) ? Number(v) : 0.6; } catch { return 0.6; }
+    try { const v = localStorage.getItem('maple.sfx'); return snap(v !== null && Number.isFinite(Number(v)) ? Number(v) : DEFAULT_STEP / STEPS); } catch { return DEFAULT_STEP / STEPS; }
   }
 
+  // the volume and mute reach sounds already playing too
+  applyVolume() { if (this.master) this.master.gain.value = this.muted ? 0 : stepGain(this.volume); }
   setVolume(v) {
-    this.volume = Math.max(0, Math.min(1, v));
+    this.volume = snap(v); this.applyVolume();
     try { localStorage.setItem('maple.sfx', String(this.volume)); } catch { /* ignore */ }
   }
 
-  setMuted(m) { this.muted = !!m; save('maple.sfxMute', m ? '1' : '0'); }
+  setMuted(m) { this.muted = !!m; this.applyVolume(); save('maple.sfxMute', m ? '1' : '0'); }
 
   context() {
-    if (!this.ctx) { try { this.ctx = new AudioContext(); } catch { return null; } }
+    if (!this.ctx) {
+      try { this.ctx = new AudioContext(); } catch { return null; }
+      this.master = this.ctx.createGain(); this.master.connect(this.ctx.destination); this.applyVolume();
+    }
     return this.ctx;
   }
 
@@ -158,13 +189,24 @@ class Sfx {
     this.last.set(path, now);
     const buf = await this.buffer(path);
     if (!buf) return false;
-    const ctx = this.ctx;
-    if (!this.volume || this.muted || !ctx || ctx.state !== 'running') return true;
-    const src = ctx.createBufferSource(), gain = ctx.createGain();
-    src.buffer = buf; gain.gain.value = sliderGain(this.volume) * volume;
-    src.connect(gain).connect(ctx.destination);
-    src.start();
+    this.start(buf, volume);
     return true;
+  }
+
+  /** Loop path until the returned stop function is called (null when it doesn't exist or can't play now). */
+  async loop(path, { volume = 1 } = {}) {
+    const buf = await this.buffer(path);
+    return buf ? this.start(buf, volume, true) : null;
+  }
+
+  start(buf, volume, loop = false) {
+    const ctx = this.ctx;
+    if (this.muted || !ctx || ctx.state !== 'running') return null;
+    const src = ctx.createBufferSource(), gain = ctx.createGain();
+    src.buffer = buf; src.loop = loop; gain.gain.value = volume;
+    src.connect(gain).connect(this.master);
+    src.start();
+    return () => { try { src.stop(); } catch { /* already stopped */ } };
   }
 }
 

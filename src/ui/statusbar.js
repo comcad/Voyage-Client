@@ -360,6 +360,7 @@ export class StatusBar {
       sfx.play('UI/BtMouseClick'); this.menu = null; this.menuAction(b);
     }));
     this.menu = { name, x, y, bg, buttons };
+    sfx.play(name === 'GameMenu' ? 'UI/DlgNotice' : 'UI/MenuUp');
   }
 
   menuAction(b) {

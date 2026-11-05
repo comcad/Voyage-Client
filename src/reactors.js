@@ -47,7 +47,7 @@ export class Reactor {
     const hit = this.img?.[old]?.hit;
     this.hitAnim = hit && Object.keys(hit).some((k) => /^\d+$/.test(k)) ? new Anim(hit, false) : null;
     this.idle = this.stateAnim(state);
-    sfx.play(`Reactor/${this.id}/${old}/Hit`);
+    if (this.hitAnim) sfx.play(`Reactor/${this.id}/${old}/Hit`, { volume: this.volumeAt?.(this.x, this.y) ?? 1 });   // with its hit animation, quieter far off
   }
   /** The server removed it: its last hit animation plays out, then it is gone. */
   destroy(state = this.state) {

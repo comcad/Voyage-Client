@@ -33,7 +33,7 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   }
   return line * 120;
 }
-const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear' };
+const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook', 0x0f: 'ItemLevelUp' };
 
 /** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
 function balloonLines(ctx, text, max) {

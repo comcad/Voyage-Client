@@ -66,7 +66,7 @@ export class Pet {
     if (action >= 0 && action < 9) this.pose = action;
     else if (action >= 9) {
       const act = this.actionName(action);
-      if (act && this.data?.[act]) { this.forced = { act }; this.frame = 0; this.frameT = 0; if (type === 0) sfx.play(`Pet/${this.id}/${act}`); }
+      if (act && this.data?.[act]) { this.forced = { act }; this.frame = 0; this.frameT = 0; if (type === 0) sfx.play(`Pet/${this.id}/${act}`, { volume: this.g.volumeAt(this.x, this.y) }); }
     }
     if (text) this.chat = { text, t: 5, style: balloon ? Number(this.info.chatBalloon) || 0 : 0 };
   }

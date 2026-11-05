@@ -37,10 +37,11 @@ export class WindowManager {
   }
 
   isOpen(name) { return this.order.includes(this.wins[name]); }
-  open(name) {
+  /** Opened from a hotkey, a menu or Esc (sound): MenuUp. Opened by the game itself: silent, unless it has its own. */
+  open(name, sound = null) {
     const w = this.wins[name];
     if (!w) return null;
-    if (!this.order.includes(w)) { this.order.push(w); w.onOpen?.(); sfx.play(w.openSound || 'UI/MenuUp'); } else this.raise(w);
+    if (!this.order.includes(w)) { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; w.onOpen?.(); const s = w.openSound || sound; if (s) sfx.play(s); } else this.raise(w);
     return w;
   }
   close(w) {
@@ -52,21 +53,27 @@ export class WindowManager {
       return;
     }
     const i = this.order.indexOf(w);
-    if (i >= 0) { this.order.splice(i, 1); const s = w.closeSound === undefined ? 'UI/MenuDown' : w.closeSound; if (s) sfx.play(s); this.tip = null; w.onClose?.(); }   // closeSound null: closes silently
+    // closing (its X, the game) makes no sound of its own: only a hotkey or menu closing it plays MenuDown
+    if (i >= 0) { this.order.splice(i, 1); if (w.closeSound) sfx.play(w.closeSound); this.tip = null; w.onClose?.(); }
   }
   toggle(name, arg) {
     const w = this.wins[name];
     if (!w) return;
-    if (this.isOpen(name) && !w.wantsArg?.(arg)) { this.close(w); return; }
-    this.open(name);
+    if (this.isOpen(name) && !w.wantsArg?.(arg)) { if (w.closeSound === undefined) sfx.play('UI/MenuDown'); this.close(w); return; }
+    this.open(name, 'UI/MenuUp');
     w.setArg?.(arg);
   }
-  closeAll() {
-    const keep = this.order.filter((w) => w.modal || w.keepOnEscape || w === this.wins.minimap || w === this.wins.questalarm || (w.confirmClose && !w.closeOk));
-    for (const w of this.order) if (!keep.includes(w)) w.onClose?.();
-    for (const w of keep) if (w.confirmClose) this.close(w);
-    if (this.order.length > keep.length) sfx.play('UI/MenuDown');
-    this.order = keep;
+  /** Esc: the window opened last goes, with MenuUp. False when there is none to close. */
+  closeTop() {
+    let top = null;
+    for (const w of this.order) {
+      if (w.modal || w.keepOnEscape || w === this.wins.minimap || w === this.wins.questalarm) continue;
+      if (!top || (w.openedSeq || 0) > (top.openedSeq || 0)) top = w;
+    }
+    if (!top) return false;
+    sfx.play('UI/MenuUp');
+    this.close(top);
+    return true;
   }
   /** A transient window (dialog, shop) on top of everything. */
   show(w, sound = 'UI/DlgNotice') { this.order.push(w); if (sound) sfx.play(sound); return w; }
@@ -155,7 +162,11 @@ export class WindowManager {
   placeCarry(x, y) {
     const c = this.carry, w = this.top(x, y);
     this.carry = null;
-    if (w) { w.drop?.(x - w.x, y - w.y, c); if (!w.bindsKeys && c.kind === 'item') sfx.play('UI/DragEnd'); }
+    if (w) {
+      w.drop?.(x - w.x, y - w.y, c);
+      // an item put down in the inventory or on the equipment window makes the drop sound
+      if (c.kind === 'item' && (w === this.wins.inventory || w === this.wins.equip)) sfx.play('UI/DragEnd');
+    }
     else if (this.bar.contains?.(x, y)) this.bar.dropOnQuickSlot?.(x, y, c);
     else c.source?.dropOutside?.(c, x, y);
     return !!w;
@@ -179,7 +190,7 @@ export class WindowManager {
     if (w) {
       over = w.buttons.find((b) => b.visible && b.hit(x - w.x, y - w.y)) || null;
       if (over) over.hover = true;
-      if (over && over !== this.hovered) sfx.play('UI/BtMouseOver');
+      if (over && over !== this.hovered && over.enabled && !over.down) sfx.play('UI/BtMouseOver');   // not a disabled or held one
     }
     this.hovered = over;
     // the wheel slides rows under a still cursor: keep the tooltip down until the mouse itself moves,

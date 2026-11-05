@@ -244,11 +244,20 @@ export class SysOptWin extends Win {
     for (const [k, d] of Object.entries(SLIDERS)) {
       if (row !== d.row || Math.abs(ly - cy) > 8 || d.disabled) continue;
       if ((k === 'bgm' || k === 'sound') && lx >= MUTE_X - 2 && lx < 290) { if (k === 'bgm') music.setMuted(!music.muted); else sfx.setMuted(!sfx.muted); return; }
-      if (lx >= d.x0 - 12 && lx <= d.x1 + 12) { this.drag = k; this.slideTo(k, lx); return; }
+      if (lx >= d.x0 - 12 && lx <= d.x1 + 12) { sfx.play('UI/BtMouseClick'); this.drag = k; this.slideTo(k, lx); return; }
     }
   }
-  move(lx, ly) { if (this.drag) this.slideTo(this.drag, lx); else if (this.open) this.hover = this.listAt(lx, ly); }
-  up() { if (this.drag === 'sound') sfx.play('UI/BtMouseClick'); this.drag = null; } // a sample at the new effect volume
+  move(lx, ly) {
+    if (this.drag) { this.slideTo(this.drag, lx); return; }
+    if (this.open) { this.hover = this.listAt(lx, ly); return; }
+    // a slider's thumb sounds as the mouse comes onto it
+    const on = Object.entries(SLIDERS).find(([k, d]) => !d.disabled && Math.abs(ly - ROW_Y(d.row)) <= 7
+      && Math.abs(lx - (d.x0 + this.value(k) * (d.x1 - d.x0))) <= 11)?.[0] || null;
+    if (on && on !== this.thumbOver) sfx.play('UI/BtMouseOver');
+    this.thumbOver = on;
+  }
+  // a slider clicks when pressed and again when let go (the effect slider's at its new volume)
+  up() { if (this.drag) sfx.play('UI/BtMouseClick'); this.drag = null; }
 }
 
 /** A PNG of the game as it is on screen, saved like the client's own screenshots (MapleYYYYMMDD_HHMMSS). */
