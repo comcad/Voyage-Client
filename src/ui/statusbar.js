@@ -193,14 +193,14 @@ export class StatusBar {
 
   /**
    * A chat log line, wrapped at 535px into stored lines (continuations indented five spaces, except the system
-   * kinds). Megaphones add a coloured bar (bg) and little images in front of the first line (icons). The view
-   * jumps to the newest line unless you scrolled up in the last 5 seconds.
+   * kinds). Megaphones add a coloured bar (bg); the world ones (tag: { channel, ear }) put the channel tag after the
+   * sender on the first line. The view jumps to the newest line unless you scrolled up in the last 5 seconds.
    */
-  message(text, color = '#fff', { bg = null, icons = null, flush = null } = {}) {
+  message(text, color = '#fff', { bg = null, tag = null, item = null, flush = null } = {}) {
     const atBottom = this.scrollPos >= this.range() - 1;
     const indent = !(flush ?? FLUSH.has(String(color).toUpperCase()));
-    const pieces = this.wrap(String(text), icons?.length ? WRAP_MEGA : WRAP_W, WRAP_W);
-    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, icons: i ? null : icons }));
+    const pieces = this.wrap(String(text), tag ? WRAP_MEGA : WRAP_W, WRAP_W);
+    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, tag: i ? null : tag, item: i ? null : item }));
     let dropped = 0;
     while (this.lines.length > CHAT_MAX) { this.lines.shift(); dropped++; }
     if (this.range() < 3 || atBottom || performance.now() - this.scrolledAt > 5000) this.toBottom();
@@ -325,6 +325,9 @@ export class StatusBar {
     }
     if (type !== 'down') return false;
     if (this.edgeHover) { this.chatDrag = { y, h: this.chatH }; return true; }
+    // a megaphone line's channel tag with the ear: whisper to its sender
+    const hit = (this.tagHits || []).find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
+    if (hit) { this.whisperTo = hit.name; this.chooseTarget('whisper'); return true; }
     if (x < sb.x || x >= sb.x + 15 || y < sb.y || y >= sb.y + sb.h) return false;
     if (!on) return true;
     const step = (n) => { this.scrollBy(n); this.scrollHold = { n, t: 0.4 }; };
@@ -393,6 +396,9 @@ export class StatusBar {
 
   /** The tooltip for the quick slot under the mouse: the item's, or the skill's. */
   quickTip(x, y) {
+    // an Item Megaphone line in the log: its item
+    const line = (this.itemHits || []).find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
+    if (line) return { item: line.item };
     const i = this.quickAt(x, y), k = i >= 0 ? this.game.keymap?.[QUICK_KEYS[i]] : null, g = this.game, above = this.quickPos().y - 2;
     if (!k) return null;
     if ([2, 3, 7].includes(k.type)) {
@@ -609,6 +615,7 @@ export class StatusBar {
   drawChatLog(ctx) {
     const b = this.logBox(), rows = this.rows();
     const shown = this.lines.slice(this.scrollPos, this.scrollPos + rows);
+    this.tagHits = []; this.itemHits = [];
     ctx.save();
     ctx.fillStyle = BAND;
     ctx.fillRect(0, b.top, BAND_W, b.h);
@@ -618,17 +625,36 @@ export class StatusBar {
     ctx.beginPath(); ctx.rect(0, b.top, BAND_W, b.h); ctx.clip();
     shown.forEach((l, i) => {
       const y = b.line - (shown.length - 1 - i) * LINE_H;
-      let x = 3;
       if (l.bg) { ctx.fillStyle = l.bg; ctx.fillRect(0, y, SCROLL_X, LINE_H); }
-      for (const n of l.icons || []) {
-        if (n.text) { uiText(ctx, n.text, x, y, { color: l.color, size: 12, bold: true }); ctx.font = 'bold 12px Arial, sans-serif'; x += ctx.measureText(n.text).width + 2; continue; }
-        const im = this.assets.image(n);
-        if (im) { ctx.drawImage(im, x, y); x += im.width + 2; }
-      }
-      uiText(ctx, l.text, x, y, { color: l.color, size: 12 });
+      if (l.tag) this.drawTagged(ctx, l, y);
+      else uiText(ctx, l.text, 3, y, { color: l.color, size: 12 });
     });
     ctx.restore();
     this.drawChatScroll(ctx);
+  }
+  /**
+   * A world megaphone's first line: the sender (up to the first ':') at x 3, then right after the name the channel
+   * tag (UIWindow.img/Megaphone/ch0, with the whisper ear, or ch1 without) with the channel's two digits (Num) in
+   * it, then the rest from the sender's width + 39.
+   */
+  drawTagged(ctx, l, y) {
+    const M = this.game.windows.W.Megaphone, im = (n) => this.assets.image(n), cut = l.text.indexOf(':');
+    const who = cut >= 0 ? l.text.slice(0, cut).trimEnd() : l.text, rest = cut >= 0 ? l.text.slice(cut) : '';
+    uiText(ctx, who, 3, y, { color: l.color, size: 12 });
+    ctx.font = '12px Arial, sans-serif';
+    const p = 3 + Math.ceil(ctx.measureText(who).width), tag = im(M?.[l.tag.ear ? 'ch0' : 'ch1']), ch = l.tag.channel || 0;
+    if (tag) {
+      ctx.drawImage(tag, p + 1, y + 1);
+      // the sender's own name is the last word before the ':' (a medal may lead it)
+      if (l.tag.ear) this.tagHits.push({ x: p + 1, y: y + 1, w: tag.width, h: tag.height, name: who.trim().split(/\s+/).pop() });
+    }
+    const d1 = im(M?.Num?.[Math.floor(ch / 10) % 10]), d2 = im(M?.Num?.[ch % 10]);
+    if (d1) ctx.drawImage(d1, p + 15, y + 5);
+    if (d2) ctx.drawImage(d2, p + 20, y + 5);
+    // an Item Megaphone's item goes in brackets right after the ':' (its name looked up as it's drawn, so it is there once loaded)
+    const shown = l.item ? `: [${this.game.windows.itemName(l.item.id) || ''}]${rest.replace(/^:\s*/, '')}` : rest;
+    if (shown) uiText(ctx, shown, p + 36, y, { color: l.color, size: 12 });
+    if (l.item) this.itemHits.push({ x: 0, y, w: SCROLL_X, h: LINE_H, item: l.item });
   }
   /** VScr5: disabled while everything fits; the thumb only on an open log 52px or taller. */
   drawChatScroll(ctx) {

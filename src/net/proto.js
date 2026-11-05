@@ -35,6 +35,16 @@ export function readCharLook(r) {
   return look;
 }
 
+/** An avatar look, as readCharLook reads it. */
+export function writeCharLook(w, look) {
+  w.byte(look.gender).byte(look.skin).int(look.face).byte(look.mega ? 0 : 1).int(look.hair);
+  for (const [slot, id] of Object.entries(look.equips || {})) w.byte(Number(slot)).int(id);
+  w.byte(0xff);
+  for (const [slot, id] of Object.entries(look.masked || {})) w.byte(Number(slot)).int(id);
+  w.byte(0xff).int(look.cashWeapon || 0);
+  for (let i = 0; i < 3; i++) w.int(look.pets?.[i] || 0);
+}
+
 /** Item ids to render: the visible slots (not the pet's equip, 14), and the cash weapon drawn over the weapon. */
 export function lookEquipIds(look) {
   const ids = Object.entries(look.equips).filter(([s]) => Number(s) !== 14 && !(Number(s) >= 21 && Number(s) <= 48)).map(([, id]) => id);   // not what pets wear

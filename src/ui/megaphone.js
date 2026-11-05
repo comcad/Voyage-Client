@@ -1,40 +1,40 @@
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win } from './windows.js';
+import { CHAT_COLOR } from './statusbar.js';
 
 /**
- * The megaphone you just used asks what to say (UIWindow.img). Measured from the art:
- *   Megaphone/backgrnd (Megaphone), backgrnd1 (Super), backgrnd2 (Triple), 266x156: the text line x 19-244 y 58-72,
- *     DISPLAY WHISPER ICON on y 96-106 with its box after the label (x 142), the button band from y 114
- *   ItemMegaphone/backgrnd 239x215: the item slot centred on (120, 78) above its name bar (x 42-206, y 99-117),
- *     the text line x 19-220 y 131-145, MARK WHISPER ICON on y 166-176 (box at x 130), buttons from y 183
- *   AvatarMegaphone/backgrnd 196x193: WRITE NOTE's four lines x 42-153 from y 81 every 16px, the whisper row
- *     y 149-159 (box at x 136), its own BtOk / BtCancel from y 163
- * Drag an item from your inventory onto the Item Megaphone's slot to show it off.
+ * The megaphone windows (UIWindow.img), centred on the screen; the whisper box starts ticked. Window coordinates:
+ *   Super (Megaphone/backgrnd 266x156): the line (19, 58) 226 wide, whisper (14, 95), BtOK2 (146, 126), BtCancel2 (198, 126)
+ *   Item (ItemMegaphone/backgrnd 239x215): the line (19, 129) 202 wide, whisper (14, 161), BtOK2 (145, 186), BtCancel2 (186, 186);
+ *     drag an item from your inventory onto the slot to show it off. It doesn't hold the game up.
+ *   Triple (ArtMegaphone/backgrnd 435x182): three lines (19, 63 / 84 / 106) 395 wide, BtEx (350, 33),
+ *     BtPreView (277, 152), BtOK2 (340, 152), BtCancel2 (381, 152), whisper (18, 153)
+ *   Avatar (AvatarMegaphone/backgrnd 196x193): four lines from (48, 81) 107 wide, whisper (10, 147),
+ *     its own BtOk (52, 170) and BtCancel (102, 170)
+ * Every line takes up to 60 characters.
  */
-const KINDS = {
-  1: { bg: 'backgrnd', fields: [[19, 58, 226]], ear: [142, 95], band: 120 },
-  2: { bg: 'backgrnd1', fields: [[19, 58, 226]], ear: [142, 95], band: 120 },
-  7: { bg: 'backgrnd2', fields: [[19, 58, 226]], ear: [142, 95], band: 120 },
+const SPECS = {
+  2: { bg: (W) => W.Megaphone.backgrnd, fields: [[19, 58, 226, 15]], ear: [14, 95], ok: [146, 126], cancel: [198, 126] },
+  6: { bg: (W) => W.ItemMegaphone.backgrnd, fields: [[19, 129, 202, 16]], ear: [14, 161], ok: [145, 186], cancel: [186, 186] },
+  7: { bg: (W) => W.ArtMegaphone.backgrnd, fields: [63, 84, 106].map((y) => [19, y, 395, 16]), ear: [18, 153], ok: [340, 152], cancel: [381, 152] },
+  avatar: { bg: (W) => W.AvatarMegaphone.backgrnd, fields: [0, 1, 2, 3].map((i) => [48, 81 + i * 15, 107, 15]), ear: [10, 147], ok: [52, 170], cancel: [102, 170] },
 };
-const ITEM = { fields: [[19, 131, 202]], ear: [130, 165], band: 188 };
-const AVATAR = { fields: [0, 1, 2, 3].map((i) => [42, 81 + i * 16, 112]), ear: [136, 148], band: 166 };
 
 export class MegaphoneWin extends Win {
   constructor(mgr, slot, itemId) {
-    const W = mgr.W, avatar = Math.floor(itemId / 10000) === 539, kind = Math.floor(itemId / 1000) % 10;
-    const spec = avatar ? AVATAR : kind === 6 ? ITEM : KINDS[kind];
-    const bg = avatar ? W.AvatarMegaphone.backgrnd : kind === 6 ? W.ItemMegaphone.backgrnd : W.Megaphone[spec.bg];
-    super(mgr, bg, Math.round((800 - bg._w) / 2), 170);
-    this.modal = true; this.transient = true;
-    this.slot = slot; this.itemId = itemId; this.spec = spec; this.ear = false; this.item = null; this.kind = avatar ? 'avatar' : kind;
+    const W = mgr.W, avatar = Math.floor(itemId / 10000) === 539, kind = avatar ? 'avatar' : Math.floor(itemId / 1000) % 10;
+    const spec = SPECS[kind], bg = spec.bg(W);
+    super(mgr, bg, Math.round((800 - bg._w) / 2), Math.round((600 - bg._h) / 2));
+    this.modal = kind !== 6; this.transient = kind !== 6;   // the Item Megaphone stays open while you drag an item to it
+    this.slot = slot; this.itemId = itemId; this.spec = spec; this.ear = true; this.item = null; this.kind = kind;
     this.closeBtn.visible = false;
-    const B = mgr.B, okNode = avatar ? W.AvatarMegaphone.BtOk : B.BtOK, noNode = avatar ? W.AvatarMegaphone.BtCancel : B.BtCancel;
-    const ow = okNode.normal[0]._w, nw = noNode.normal[0]._w;
-    this.button(noNode, this.w - 10 - nw, spec.band, () => this.close());
-    this.button(okNode, this.w - 14 - nw - ow, spec.band, () => this.send());
-    this.fields = spec.fields.map(([x, y, w]) => {
-      const f = new TextField(mgr.game.statusBar.layer, x, y, w, 15, { max: avatar ? 18 : 60, color: '#000' });
+    const B = mgr.B;
+    this.button(avatar ? W.AvatarMegaphone.BtOk : B.BtOK2, ...spec.ok, () => this.send());
+    this.button(avatar ? W.AvatarMegaphone.BtCancel : B.BtCancel2, ...spec.cancel, () => this.close());
+    if (kind === 7) this.button(W.ArtMegaphone.BtPreView, 277, 152, () => this.preview());
+    this.fields = spec.fields.map(([x, y, w, h]) => {
+      const f = new TextField(mgr.game.statusBar.layer, x, y, w, h, { max: 60, color: '#000' });
       f.rect.x0 = x; f.rect.y0 = y;
       f.el.addEventListener('keydown', (e) => {
         e.stopPropagation();
@@ -47,11 +47,36 @@ export class MegaphoneWin extends Win {
   }
   frames() { return [...super.frames(), this.mgr.B.CheckBox?.[0], this.mgr.B.CheckBox?.[1]].filter(Boolean); }
 
-  send() {
-    const lines = this.fields.map((f) => f.value.trim());
-    if (!lines.some(Boolean)) { this.fields[0].focus(); return; }
-    this.g.net?.useMegaphone(this.slot, this.itemId, { text: lines[0], lines, ear: this.ear, item: this.item });
-    this.close();
+  /** Triple Megaphone: how it will look, in your chat only. */
+  preview() {
+    const hud = this.g.hud, name = this.g.player?.name || '';
+    hud.message('This is a preview option for the Triple Megaphone.', CHAT_COLOR.grey);
+    for (const f of this.fields) if (f.value.trim()) hud.message(`${name} : ${f.value.trim()}`, CHAT_COLOR.grey);
+  }
+  async send() {
+    if (this.sending) return;
+    this.sending = true;
+    try {
+      const lines = this.fields.map((f) => f.value.trim()), g = this.g;
+      if (this.kind === 7) {
+        if (lines.some((l) => !l) && !(await this.mgr.confirm('One of the lines has not been applied.\r\nWould you still like to use it?'))) return;
+        this.close();
+        if (!lines.some(Boolean)) return;
+        if (lines.some((l) => l.length > 60)) { this.mgr.notice('Use the megaphone to text up to 60 characters.'); return; }
+      } else if (this.kind === 'avatar') {
+        this.close();
+        if (!lines.join('')) { this.mgr.notice('Please enter the text.'); return; }
+        if (await g.cursed(lines.join(''))) { this.mgr.notice('Cursing is not allowed.'); return; }
+      } else if (this.kind === 6) {
+        if (!lines[0]) return;
+        if (!this.item && !(await this.mgr.confirm('You have not selected an item.\r\nAre you sure you still want to use the item?'))) return;
+        this.close();
+      } else {
+        this.close();
+        if (!(await g.megaphoneTextOk(lines[0]))) return;
+      }
+      g.cashSend(() => g.net?.useMegaphone(this.slot, this.itemId, { text: lines[0], lines, ear: this.ear, item: this.item, look: g.myLookData() }));
+    } finally { this.sending = false; }
   }
   close() { for (const f of this.fields) f.remove(); this.mgr.close(this); }
   onClose() { for (const f of this.fields) f.remove(); }
@@ -65,23 +90,21 @@ export class MegaphoneWin extends Win {
   body(ctx) {
     const m = this.mgr, [ex, ey] = this.spec.ear, box = m.image(m.B.CheckBox?.[this.ear ? 1 : 0]);
     if (box) ctx.drawImage(box, ex, ey);
-    if (this.kind === 6) {
-      if (this.item) {
-        const it = this.g.inventory?.[this.item.tab]?.[this.item.slot];
-        if (it) {
-          m.drawIcon(ctx, m.icon(it.id), 104, 62);
-          uiText(ctx, m.itemName(it.id) || '', 124, 102, { color: '#fff', bold: true, size: 11, align: 'center' });
-        }
-      } else uiText(ctx, 'Drag an item here', 124, 102, { color: '#cfe0ff', size: 11, align: 'center' });
+    if (this.kind === 6 && this.item) {
+      const it = this.g.inventory?.[this.item.tab]?.[this.item.slot];
+      if (it) {
+        m.drawIcon(ctx, m.icon(it.id), 104, 62);
+        uiText(ctx, m.itemName(it.id) || '', 124, 102, { color: '#fff', bold: true, size: 11, align: 'center' });
+      }
     }
   }
   down(lx, ly) {
     const [ex, ey] = this.spec.ear;
-    if (lx >= ex - 2 && lx < ex + 14 && ly >= ey - 2 && ly < ey + 14) { this.ear = !this.ear; sfx.play('UI/BtMouseClick'); }
+    if (lx >= ex && lx < ex + 160 && ly >= ey && ly < ey + 14) { this.ear = !this.ear; sfx.play('UI/BtMouseClick'); }
   }
-  /** An item from your inventory onto the Item Megaphone's slot. */
+  /** An item from your inventory onto the Item Megaphone (any tab, any item). */
   drop(lx, ly, c) {
     if (this.kind !== 6 || c.kind !== 'item' || typeof c.tab !== 'number') return;
-    if (lx >= 60 && lx < 190 && ly >= 50 && ly < 122) { this.item = { tab: c.tab, slot: c.slot }; }
+    this.item = { tab: c.tab, slot: c.slot };
   }
 }

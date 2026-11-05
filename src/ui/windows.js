@@ -31,8 +31,8 @@ export class WindowManager {
     const make = { inventory: InventoryWin, equip: EquipWin, stat: StatWin, skill: SkillWin, quest: QuestWin, minimap: MiniMapWin, keyconfig: KeyConfigWin };
     for (const [k, C] of Object.entries(make)) this.wins[k] = new C(this);
     await a.preload([...Object.values(this.wins).flatMap((w) => w.frames()), ...allCanvases(this.B.VScr), ...allCanvases(this.B.ItemNo),
-      ...allCanvases(this.W.UtilDlgEx), ...allCanvases(this.B.Notice3), ...allCanvases(this.B.YesNo3), ...allCanvases(this.W.ToolTip),
-      ...['BtOK', 'BtYes', 'BtNo', 'BtCancel'].flatMap((k) => allCanvases(this.B[k]))]);
+      ...allCanvases(this.W.UtilDlgEx), ...allCanvases(this.B.YesNo3), ...allCanvases(this.W.ItemProtector?.Icon), ...allCanvases(this.W.ToolTip),
+      ...['BtOK', 'BtOK2', 'BtCancel', 'BtCancel2'].flatMap((k) => allCanvases(this.B[k]))]);
     Promise.all(['Mob', 'Npc', 'Map'].map((k) => a.json(`String/${k}.img`))).then(([mob, npc, map]) => { this.strings = { mob, npc, map }; this.namesVersion++; });
   }
 
@@ -125,6 +125,13 @@ export class WindowManager {
     if (id) this.drawCashMark(ctx, id, x + 32, y + 32);
   }
   isCash(id) { return Number(this.info(id)?.cash) === 1; }
+  /** UIWindow.img/ItemProtector/Icon/0: the lock on a sealed item's icon, hung from its bottom-right corner like the coin. */
+  drawLockMark(ctx, it, x, y) {
+    const n = it?.flag & 1 && this.W.ItemProtector?.Icon?.[0], im = n && this.image(n);
+    if (!im) return;
+    const o = n.origin || [im.width, im.height];
+    ctx.drawImage(im, x + 32 - o[0], y + 32 - o[1]);
+  }
   /** CashShop.img/CashItem/0: the gold coin on a cash item's icon, hung from the icon's bottom-right corner. */
   drawCashMark(ctx, id, x, y, scale = 1) {
     const n = this.CS?.CashItem?.[0], im = n && this.isCash(id) && this.image(n);
@@ -247,12 +254,22 @@ export class WindowManager {
         this.game.fitBacking?.();
       }
     }
+    // text boxes sit over the canvas: under a question box they hide, let clicks through and let go of the keyboard
+    const modal = this.modal, top = modal ? this.order.indexOf(modal) : -1;
+    this.order.forEach((w, i) => {
+      const covered = i < top;
+      for (const f of w.textFields?.() || []) {
+        f.el.style.opacity = covered ? '0' : ''; f.el.style.pointerEvents = covered ? 'none' : '';
+        if (covered && document.activeElement === f.el) f.el.blur();
+      }
+    });
     if (this.carry?.node) {
       ctx.globalAlpha = this.carry.alpha ?? 0.7; this.drawIcon(ctx, this.carry.node, this.mouse.x - 16, this.mouse.y - 16); ctx.globalAlpha = 1;
     }
     const ty = this.tip?.above ? { bottom: this.tip.above } : null;
     if (this.tip?.item) this.drawItemTip?.(ctx, this, this.tip.item, this.mouse.x + 14, ty ?? this.mouse.y + 18);
     else if (this.tip?.skill) this.drawSkillTip?.(ctx, this, this.tip.skill, this.mouse.x, ty ?? this.mouse.y + 20);
+    else if (this.tip?.draw) this.tip.draw(ctx, this.mouse.x + 14, this.mouse.y + 18);   // a tooltip that draws itself
     else if (this.tip) drawTip(ctx, this.tip, this.mouse.x + 14, this.mouse.y + 18);
   }
 }
@@ -291,6 +308,8 @@ const tabAt = (rects, lx, ly) => (rects || []).findIndex(([x, w, y]) => lx >= x 
 /** The close box sits this far in from a window's right edge (12px wide, 5px margin). */
 const CLOSE_INSET = 17;
 export class Win {
+  /** The window's text boxes (page elements over the canvas): its `field` and `fields`. */
+  textFields() { return [this.field, ...(Array.isArray(this.fields) ? this.fields : [])].filter((f) => f?.el); }
   constructor(mgr, bg, x, y) {
     this.mgr = mgr; this.g = mgr.game; this.bg = bg; this.x = x; this.y = y;
     this.w = bg?._w || 175; this.h = bg?._h || 289;
@@ -387,6 +406,7 @@ class InventoryWin extends Win {
       const it = items[slot];
       if (!it || (m.carry?.slot === slot && m.carry.tab === this.tab)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
+      m.drawLockMark(ctx, it, x, y);
       // Use, Set-up and Etc items show their count even at 1; Cash ones only when stacked
       if (this.tab !== 1 && (it.quantity > 1 || (this.tab !== 5 && it.quantity >= 1))) m.count(ctx, it.quantity, x, y + 21);
     }
@@ -417,6 +437,7 @@ class InventoryWin extends Win {
     if (c.kind !== 'item' || typeof c.tab !== 'number') return;
     const it = this.g.inventory?.[c.tab]?.[c.slot];
     if (!it || this.g.dead) return;
+    if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
     let qty = 1;
     // throwing stars and bullets always go as a whole stack (the server drops them that way)
     if (c.tab !== 1 && it.quantity > 1 && ![207, 233].includes(Math.floor(it.id / 10000))) {
@@ -502,6 +523,7 @@ class EquipWin extends Win {
       const slot = this.shown(Number(cell)), it = eq[slot];
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
+      m.drawLockMark(ctx, it, x, y);
     }
     // cells that can't be used now are tinted red, and so is a worn item whose requirements you no longer meet
     ctx.fillStyle = 'rgba(255,0,0,0.25)';
@@ -534,6 +556,7 @@ class EquipWin extends Win {
     const slot = this.slotAt(lx, ly);
     if ((slot === 'hp' || slot === 'mp') && c.tab === 2) { this.g.setPetPotion(slot, c.id); return; }
     if (c.tab === 2 && isScroll(c.id)) { if (typeof slot === 'number' && slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
+    if (c.tab === 5 && c.id === 5060000) { if (typeof slot === 'number' && slot < 0) this.g.useItemTag(c.slot, slot); return; }   // an Item Tag onto what you wear
     if (c.tab !== 1) return;
     const it = this.g.inventory[1][c.slot], cat = Math.floor((it?.id || 0) / 10000);
     if (this.petOpen && lx >= PET_X) { if (it && typeof slot === 'number' && slot) this.g.equipPetCell(c.slot, it, slot, this.petSel); return; }
@@ -684,7 +707,7 @@ const NO_DBLCLICK = new Set([1121001, 1221001, 1321001, 2121001, 2221001, 232100
   21100005, 21110003, 21110004, 21110006, 21110007, 21110008, 21120005, 21120006, 21120007, 21120009, 21120010]);
 const SP_SHORT = ["You're lacking Level 1 Skills.", "You're lacking Level 1 or 2 Skills.", 'You are lacking in either 1st, 2nd, or 3rd level skills.'];
 /** Text cut to `w` px with "..", in the context's current font. */
-function cutText(ctx, s, w) {
+export function cutText(ctx, s, w) {
   if (ctx.measureText(s).width <= w) return s;
   while (s && ctx.measureText(`${s}..`).width > w) s = s.slice(0, -1);
   return `${s}..`;

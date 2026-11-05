@@ -44,10 +44,11 @@ export const ACTIONS = [
 
 export const INV_NAMES = { 1: 'Equip', 2: 'Use', 3: 'Set-up', 4: 'Etc', 5: 'Cash' };
 export const invType = (id) => Math.floor(id / 1000000);
-/** The key type an item dragged from inventory tab `tab` binds as: 2 a Use item, 3 a facial expression (516), 7 an effect (501, 429). */
+/** The key type an item dragged from inventory tab `tab` binds as: 2 a Use item (or cash pet food), 3 a facial expression (516), 7 an effect (501, 429). */
 export function itemKeyType(tab, id) {
   const cat = Math.floor(id / 10000);
   if (tab === 2) return 2;
+  if (tab === 5 && cat === 524) return 2;   // cash pet food goes on a key like a Use item
   if (tab === 5 && cat === 516) return 3;
   if ((tab === 5 && cat === 501) || (tab === 4 && cat === 429)) return 7;
   return null;
@@ -59,7 +60,7 @@ export function itemNode(id) {
   if (t === 1) {
     // equips the avatar never draws still have icons: pendants / belts / medals, pet equipment, mounts
     const cat = Math.floor(id / 10000);
-    const dir = [112, 113, 114].includes(cat) ? 'Accessory' : cat === 180 || cat === 181 ? 'PetEquip' : cat >= 190 && cat < 200 ? 'TamingMob' : cat === 170 ? 'Weapon' : null;
+    const dir = [112, 113, 114].includes(cat) ? 'Accessory' : cat >= 180 && cat <= 183 ? 'PetEquip' : cat >= 190 && cat < 200 ? 'TamingMob' : cat === 170 ? 'Weapon' : null;
     return { path: equipPath(id) || (dir && `Character/${dir}/${pad(id, 8)}.img`), key: null };
   }
   if (t === 9) return { path: `Item/Special/${pad(Math.floor(id / 10000), 4)}.img`, key: String(id) };   // packages, slot items

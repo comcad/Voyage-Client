@@ -1,6 +1,7 @@
 import { invType, itemName, itemIcon, itemInfo } from '../data.js';
 import { CharacterLook, drawParts, lookCanvases } from '../character.js';
 import { sfx } from '../audio.js';
+import { pad } from '../assets.js';
 import { PHYS } from '../physics.js';
 import { ACTION } from '../keymap.js';
 import { nameTag } from '../map.js';
@@ -89,6 +90,8 @@ const TRANSFER_ERRORS = {
 /** Couple rings (11120xx but 1112000) and friendship rings (11128x0 - 11128x2), bought for a partner. */
 const isCoupleRing = (id) => Math.floor(id / 100) === 11120 && id !== 1112000;
 const isFriendRing = (id) => Math.floor(id / 100) === 11128 && id % 10 < 3;
+/** A pet accessory (1802xxx, not the Pet Collar): the one piece of pet equipment the preview pet can try on. */
+const isPetAcc = (id) => Math.floor(id / 10000) === 180 && id !== 1802100;
 const prepaidOnly = (id) => id === 5400000 || id === 5401000 || Math.floor(id / 10) === 520000 || Math.floor(id / 1000) === 549 || id === 5221001 || id === 5222000;
 /** Items a character must reach a level to buy (BUY and RESERVE are greyed below it). */
 const LEVEL_GATE = { 507: 11, 539: 11, 503: 16, 514: 16, 520: 16, 504: 7 };
@@ -346,8 +349,7 @@ export class CashShopWin extends Win {
       const items = this.contents(c), first = items[0] && this.mgr.itemName(items[0].ItemId);
       return first ? `${first}${items.length > 1 ? ` + ${items.length - 1} more` : ''}` : 'Package';
     }
-    const n = this.mgr.itemName(c.ItemId) || '';
-    return Math.floor(c.ItemId / 10000) === 500 ? `[PET]${n}` : n;
+    return this.mgr.itemName(c.ItemId) || '';
   }
   /** The commodity's gender: its own, or for "either" (2) the equip's (or a package's first equip's). */
   genderOf(c) {
@@ -442,10 +444,51 @@ export class CashShopWin extends Win {
       if (!c.Price) { this.alert('You may not purchase the item since you already have it.'); return; }
       if (!(await this.alert('You already have the item(s) selected. Are\nyou sure you want to buy the item(s) again?', true))) return;
     }
+    const warn = await this.petWarning(c);
+    if (warn && !(await this.alert(warn, true))) return;
     const wallet = await this.dialog({ mode: 0, items: [c], text: 'Are you sure you want to buy this item?', wallets: mask });
     if (!wallet) return;
     if (this.tab === WISH) this.wishAfterBuy = c.SN;
     this.sendBuy({ c, wallet });
+  }
+  /** Your pets out, by the character's pet slots up to the first empty one: their item ids and their own names. */
+  petsOut() {
+    const inv = Object.values(this.g.inventory?.[5] || {}), out = [];
+    for (const sn of this.stats.pets || []) {
+      const it = sn && BigInt(sn) !== 0n && inv.find((i) => i.pet && BigInt(i.cashId ?? 0) === BigInt(sn));
+      if (!it) break;
+      out.push({ id: it.id, name: it.pet.name || this.mgr.itemName(it.id) || '' });
+    }
+    return out;
+  }
+  /**
+   * The pet warning before buying (for a package, its first item with one), or null:
+   * - pet food (524) / pet skill items (519): no pet out, or the names of the pets out it isn't for (its spec list);
+   * - a pet accessory (180): no pet out, or a pet out it has no art for (with two or more out the names aren't given).
+   */
+  async petWarning(c) {
+    const ids = this.isPackage(c) ? this.contents(c).map((x) => x.ItemId).filter(Boolean) : [c.ItemId];
+    const pets = this.petsOut(), a = this.mgr.assets;
+    const unfit = (fits) => pets.filter((p) => !fits(p)).map((p) => `${p.name} `).join('');
+    for (const id of ids) {
+      const cat = Math.floor(id / 10000);
+      if (cat === 519 || cat === 524) {
+        if (!pets.length) return 'This item cannot be used without a pet, and\nthis item cannot be used on a deceased pet.\nAre you sure you want to make the purchase?';
+        const spec = cat === 524 ? (await a.json('Item/Cash/0524.img'))?.[pad(id, 8)]?.spec : null, ok = new Set(Object.values(spec || {}).map(Number));
+        const names = unfit((p) => !!spec && ok.has(p.id));
+        if (names) return `${names}\nThis item cannot be used by the\npet you're currently raising.\nAre you sure you want to make the purchase?`;
+      } else if (cat === 180) {
+        if (!pets.length) return 'Only pets are allowed to wear this item.\nAre you sure you want to purchase this item?';
+        const art = await a.json(`Character/PetEquip/${pad(id, 8)}.img`);
+        const fits = new Set(Object.keys(art || {}).filter((k) => Math.floor(k / 10000) === 500).map((k) => k % 1000));
+        const names = unfit((p) => Math.floor(p.id / 10000) === 500 && fits.has(p.id % 1000));
+        if (names) {
+          return pets.length >= 2 ? 'One or more of your pets cannot equip\nthis item.\nContinue with purchase?'
+            : `${names}\nThe current pet you have\ncannot wear this item.\nAre you sure you want to purchase this item?`;
+        }
+      }
+    }
+    return null;
   }
   /** Already in the Cash Inventory or the item inventory (a package: any of its items). */
   owns(c) {
@@ -664,10 +707,12 @@ export class CashShopWin extends Win {
     if (kind === 516) { this.tryFace(c.ItemId); return; }
     if (kind === 501) { this.tryEffect(c.ItemId); return; }
     if (kind === 111) { this.tryRing(c.ItemId); return; }
+    if (kind >= 180 && kind <= 183 && !isPetAcc(c.ItemId)) return;   // of the pet equipment only the accessories go on
     const pkg = this.isPackage(c), g = this.stats.gender ?? 0;
     const forMe = (id) => { const d = Math.floor(id / 1000) % 10; return d > 1 || d === g; };
     const ids = pkg ? this.contents(c).map((x) => x.ItemId).filter((id) => invType(id) === 1 && forMe(id)) : [c.ItemId];
     if (!ids.length || ids.some((id) => invType(id) !== 1)) return;
+    for (const id of ids) if (isPetAcc(id)) this.loadPetAcc(id);
     if (!pkg && this.tried.has(c.ItemId)) {   // worn already: take it off, back to what you had there
       this.tried.delete(c.ItemId);
       const cat = Math.floor(c.ItemId / 10000);
@@ -785,6 +830,12 @@ export class CashShopWin extends Win {
     const av = this.av, M = PV_MAP;
     this.pvPet = { id, node, x: Math.max(M.left, Math.min(M.right, av.x + 70)), right: false, action: 'stand0', frame: 0, t: 0, hello: performance.now() + 3000 };
   }
+  /** A pet accessory's art (Character/PetEquip/<id>.img), loaded once. */
+  loadPetAcc(id) {
+    const m = (this.petAccArt ??= new Map()), a = this.mgr.assets;
+    if (!m.has(id)) { m.set(id, null); a.json(`Character/PetEquip/${pad(id, 8)}.img`).then(async (n) => { if (n) await a.preload(allCanvases(n)); m.set(id, n); }); }
+    return m.get(id);
+  }
   /** A lone pet aims for the character's x: it walks once more than 80px off and stops within 80px. */
   movePet(dt) {
     const p = this.pvPet, av = this.av;
@@ -809,9 +860,17 @@ export class CashShopWin extends Win {
       ctx.save();
       if (p.right) { ctx.translate(x, y); ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); } else ctx.drawImage(img, x - o[0], y - o[1]);
       ctx.restore();
+      // the accessory tried on, if it has art for this pet
+      const acc = this.worn?.find(isPetAcc), af = acc && this.loadPetAcc(acc)?.[p.id]?.[p.action]?.[p.frame], ai = af && m.image(af);
+      if (ai) {
+        const eo = af.origin || [0, 0];
+        ctx.save();
+        if (p.right) { ctx.translate(x, y); ctx.scale(-1, 1); ctx.drawImage(ai, -eo[0], -eo[1]); } else ctx.drawImage(ai, x - eo[0], y - eo[1]);
+        ctx.restore();
+      }
     }
     nameTag(ctx, m.itemName(p.id) || '', x, y + 2);
-    if (performance.now() < p.hello) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y: y + 44 }, 'Hello!', 'npc');
+    if (performance.now() < p.hello) this.g.vfx?.drawBalloon(ctx, { x: 0, y: 0 }, { x, y: y - (Number(p.node.stand0?.[0]?.origin?.[1]) || 33) + 77 }, 'Hello!', 'npc');
   }
   /** BUY EQUIPPED ITEM: everything tried on, one purchase after another. */
   async buyWorn() {
@@ -821,6 +880,16 @@ export class CashShopWin extends Win {
     if (!items.length) return;
     const total = items.reduce((t, c) => t + c.Price, 0), mask = this.walletsFor(total);
     if (!mask) { this.alert("You don't have enough cash."); return; }
+    // the first item that needs asking about is asked; the rest go through
+    for (const c of items) {
+      if (this.owns(c)) {
+        if (!c.Price) { this.alert('You may not purchase the item since you already have it.'); return; }
+        if (!(await this.alert('You already have the item(s) selected. Are\nyou sure you want to buy the item(s) again?', true))) return;
+        break;
+      }
+      const warn = await this.petWarning(c);
+      if (warn) { if (!(await this.alert(warn, true))) return; break; }
+    }
     const wallet = await this.dialog({ mode: 1, items, text: `Total ${total} NX.\nMake purchase?`, wallets: mask });
     if (!wallet || !this.begin()) return;
     this.multiBuy = true;
@@ -942,7 +1011,8 @@ export class CashShopWin extends Win {
       if (base) ctx.drawImage(base, x, y);
       if (!this.previewOn && this.selCell === i) { const f = im(C.CSList.ItemIcon); if (f) ctx.drawImage(f, x + 4, y + 4); }
       this.drawBigIcon(ctx, c, x + 7, y + 73);
-      uiText(ctx, clipText(ctx, this.nameOf(c), 112), x + 82, y + 6, { color: '#000' });
+      // in the cell a pet accessory reads "[PET]<name>"
+      uiText(ctx, clipText(ctx, `${isPetAcc(c.ItemId) ? '[PET]' : ''}${this.nameOf(c)}`, 112), x + 82, y + 6, { color: '#000' });
       this.drawSticker(ctx, c, x, y);
       const g = this.genderOf(c), gi = g >= 0 && im(C.CSIcon[g]);
       if (gi) ctx.drawImage(gi, x + 57, y + 58);
@@ -1152,9 +1222,7 @@ export class CashShopWin extends Win {
     const h = this.ready && this.hit(lx, ly);
     if (!h) return null;
     if (h.item && h.icon) {
-      if (this.isPackage(h.item)) {
-        return { title: this.nameOf(h.item), lines: this.contents(h.item).map((c) => `${this.mgr.itemName(c.ItemId) || '?'}${c.Count > 1 ? ` (${c.Count})` : ''}`) };
-      }
+      if (this.isPackage(h.item)) { const c = h.item; return { draw: (ctx, x, y) => this.drawPackageTip(ctx, c, x, y) }; }
       return { item: this.tipItem(h.item) };
     }
     if (h.best) return { item: this.tipItem(h.best) };
@@ -1164,6 +1232,78 @@ export class CashShopWin extends Win {
     }
     if (h.inv?.cashId) return { item: h.inv };
     return null;
+  }
+  /** A package item's regular price: the on-sale catalogue entry for the same item (the same period first), else its own. */
+  regularPrice(c) {
+    if (!this.onSaleBy) {
+      this.onSaleBy = new Map();
+      for (const x of this.bySN.values()) if (x.OnSale === 1 && x.ItemId) (this.onSaleBy.get(x.ItemId) || this.onSaleBy.set(x.ItemId, []).get(x.ItemId)).push(x);
+    }
+    const all = this.onSaleBy.get(c.ItemId) || [], r = all.find((x) => (x.Period || 0) === (c.Period || 0)) || all[0];
+    return r ? r.Price : c.Price;
+  }
+  /**
+   * A package's tooltip on the tooltip panel: its name centred, its description, then a 53px row per item (two
+   * columns past 9): the icon on CSDiscount/backgrnd, the name, the regular price struck through -> the package
+   * price with its discount badge (or the one price), "AVAILABLE FOR n DAYS." and CSDiscount/Line under it; then
+   * CSDiscount/total, both totals and the package's badge.
+   */
+  drawPackageTip(ctx, pkg, x, y) {
+    const m = this.mgr, D = this.C.CSDiscount, im = (n) => m.image(n), items = this.contents(pkg).filter((c) => c.ItemId);
+    const n = items.length, rows = n > 9 ? Math.ceil(n / 2) : n, rate = pkg.Discount || 0;
+    ctx.save();
+    ctx.font = '12px Arial, sans-serif';
+    let w = 260, col2 = 0;
+    items.forEach((c, i) => { if (n > 9 && i === rows) col2 = w; w = Math.max(w, ctx.measureText(m.itemName(c.ItemId) || '').width + (i >= rows ? col2 : 0) + 100); });
+    w = Math.ceil(Math.max(220, w));
+    if (n <= 9) col2 = w;
+    const desc = this.special[pkg.ItemId]?.desc, descLines = desc ? wrapText(ctx, String(desc).replace(/\\n|\r?\n/g, '\n'), w - 21, 12) : [];
+    const top = Math.max(1, descLines.length) * 18 + 30, h = rows * 53 + 65 + top - 30;
+    x = Math.min(x, 800 - w - 2); y = Math.min(y, 600 - h - 2);
+    ctx.fillStyle = 'rgba(0,0,64,0.627)';
+    ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
+    ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
+    const text = (t, tx, ty, o = {}) => uiText(ctx, t, x + tx, y + ty, { color: '#fff', size: 12, ...o });
+    const struck = (t, tx, ty, color) => {
+      text(t, tx, ty, { color });
+      ctx.fillStyle = color; ctx.fillRect(x + tx, y + ty + 6, Math.ceil(ctx.measureText(t).width), 1);
+      return ctx.measureText(t).width;
+    };
+    const arrow = im(D.arrow), aw = arrow?.width || 9;
+    text(this.nameOf(pkg), w / 2, 10, { bold: true, align: 'center' });
+    descLines.forEach((l, i) => text(l, 11, 35 + i * 18));
+    let origTotal = 0, newTotal = 0;
+    items.forEach((c, i) => {
+      const cx = i < rows ? 0 : col2, right = i < rows ? col2 : w, ry = top + (i < rows ? i : i - rows) * 53, tx = cx + 55;
+      const orig = this.regularPrice(c), now = Math.floor(((100 - rate) * c.Price) / 100), days = c.Period > 0 ? c.Period : 0;
+      origTotal += orig; newTotal += now;
+      const bg = im(D.backgrnd), line = im(D.Line);
+      if (bg) ctx.drawImage(bg, x + cx + 13, y + ry + 13);
+      m.drawIcon(ctx, m.icon(c.ItemId), x + cx + 14, y + ry + 14, c.ItemId);
+      if (line) ctx.drawImage(line, x + cx + 13, y + ry + 53);
+      const nameY = ry + (days ? 9 : 18), priceY = ry + (days ? 25 : 34);
+      ctx.font = '12px Arial, sans-serif';
+      text(m.itemName(c.ItemId) || '', tx, nameY);
+      const fmtNX = (v) => (c.Count > 1 ? `${c.Count} ${v} NX` : `${v} NX`);
+      if (orig === now) text(fmtNX(now), tx, priceY);
+      else {
+        const ow = struck(fmtNX(orig), tx, priceY, '#fff');
+        if (arrow) ctx.drawImage(arrow, x + tx + ow + 10, y + priceY + 2);
+        text(fmtNX(now), tx + ow + 10 + aw + 5, priceY);
+        this.drawDiscount(ctx, now ? Math.floor(((orig - now) * 100) / orig) : 100, x + right - 40, y + nameY - 1);
+      }
+      if (days) text(`AVAILABLE FOR ${days} DAYS.`, tx, ry + 40);
+    });
+    const ty = top + rows * 53 + 12, total = im(D.total), tw = total?.width || 39;
+    if (total) ctx.drawImage(total, x + 8, y + ty + 2);
+    ctx.font = '12px Arial, sans-serif';
+    const ow = struck(`${origTotal} NX`, tw + 14, ty - 1, '#ff0000');
+    if (arrow) ctx.drawImage(arrow, x + tw + 19 + ow, y + ty + 1);
+    text(`${newTotal} NX`, tw + 19 + ow + aw + 5, ty - 1);
+    this.drawDiscount(ctx, newTotal ? Math.floor(((origTotal - newTotal) * 100) / origTotal) : 100, x + w - 40, y + ty - 2);
+    ctx.restore();
   }
   /** A catalogue item's tooltip: the item, with its period ("AVAILABLE FOR n DAYS."). */
   tipItem(c) {

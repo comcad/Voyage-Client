@@ -68,7 +68,7 @@ export class WorldFx {
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
     this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
     await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
-      ...deep(this.W.MobGage, 3), ...canvases(this.T.fall)].filter(isCanvas));
+      ...deep(this.W.MobGage, 3), ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
   }
 
   // ---------------------------------------------------------------- triggers
@@ -320,20 +320,21 @@ export class WorldFx {
       const x = 800 - 36 - i * 34, y = this.buffTop, left = b.until - now, total = Math.max(1, b.dur || left);
       ctx.save();
       if (left < 10000 && Math.floor(now / 250) % 2 === 0) ctx.globalAlpha = 0.45;   // blinks as it runs out
-      ctx.drawImage(img, x, y + 32 - img.height);
-      // shade the elapsed part, sweeping clockwise from twelve o'clock
-      const done = Math.min(1, 1 - left / total);
-      if (done > 0) {
-        ctx.beginPath(); ctx.moveTo(x + 16, y + 16);
-        ctx.arc(x + 16, y + 16, 23, -Math.PI / 2, -Math.PI / 2 + done * Math.PI * 2);
-        ctx.closePath(); ctx.save(); ctx.clip(); ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(x, y, 32, 32); ctx.restore();
-      }
+      // an item's buff: its raw icon centred on UIWindow.img/IconBase/0; a skill's icon is its own box
+      const base = b.source < 0 && this.assets.image(this.W?.IconBase?.[0]);
+      if (b.source < 0) {
+        if (base) ctx.drawImage(base, x, y);
+        ctx.drawImage(img, x + Math.floor((32 - img.width) / 2), y + Math.floor((32 - img.height) / 2));
+      } else ctx.drawImage(img, x, y + 32 - img.height);
+      // the time left on UIWindow.img/Skill/CoolTime, the quick slots' cover: 15 (clear) at the start down to 0 as it runs out
+      const step = Math.max(0, Math.min(15, Math.floor(left / (total / 16)))), cool = this.W?.Skill?.CoolTime?.[step], cim = cool && this.assets.image(cool);
+      if (cim) ctx.drawImage(cim, x, y);
       ctx.restore();
     });
   }
   itemIcon(id) {
     this.icons ??= new Map();
-    if (!this.icons.has(id)) { this.icons.set(id, null); itemIcon(this.assets, id).then((n) => this.icons.set(id, n)); }
+    if (!this.icons.has(id)) { this.icons.set(id, null); itemIcon(this.assets, id, true).then((n) => this.icons.set(id, n)); }
     return this.icons.get(id);
   }
 }

@@ -17,6 +17,27 @@ export function frames(node) {
   return out;
 }
 
+/**
+ * The frame a list of frames shows `t` ms in (each frame its own delay, 100 without one): looping, or held on the
+ * last one once played through.
+ */
+export function frameAt(fr, t, loop = true) {
+  if (!fr?.length) return null;
+  const total = fr.reduce((s, f) => s + (Number(f.delay) || 100), 0) || 1;
+  let r = loop ? t % total : Math.min(t, total - 1), i = 0;
+  while (i < fr.length - 1 && r >= (Number(fr[i].delay) || 100)) r -= Number(fr[i++].delay) || 100;
+  return fr[i];
+}
+
+/** A WZ path like "Map/MapHelper.img/weather/snow": the .img file, then the node inside it. */
+export async function nodeAt(assets, path) {
+  const m = String(path || '').match(/^(.*?\.img)(?:\/(.*))?$/);
+  if (!m) return null;
+  let n = await assets.json(m[1]);
+  for (const k of (m[2] || '').split('/').filter(Boolean)) n = n?.[k];
+  return n ?? null;
+}
+
 export class Assets {
   constructor(base = '/assets') {
     this.base = base;

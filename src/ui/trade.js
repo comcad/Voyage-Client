@@ -66,6 +66,7 @@ export class TradeWin extends Win {
     const it = this.g.inventory?.[tab]?.[pos];
     const slot = this.nextSlot();
     if (!it || !slot || this.confirmed[0]) return;
+    if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
     let qty = 1;
     if (tab !== 1 && it.quantity > 1) {
       qty = await this.mgr.askNumber(`How many #t${it.id}# will you offer?\n(1 ~ ${it.quantity})`, it.quantity, 1, it.quantity);

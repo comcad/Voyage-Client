@@ -70,26 +70,22 @@ export class Hud {
 
   notice(n) {
     const { type, msg } = n;
-    if (type === 1) { this.game.windows.serverNotice(msg); return; }      // the server's pop-up: the metal plate
+    if (type === 1) { this.game.windows.serverNotice(msg); return; }      // the server's pop-up
     if (type === 4) { this.banner(msg); return; }                         // the scrolling notice along the top
     if (type === 2) { this.megaphone([msg], CHAT_BAR.mega); return; }   // Megaphone: this channel
     if (type === 3 || type === 8 || type === 10) {                       // Super / Item / Triple: the world
-      const lines = n.lines || [type === 8 && n.item ? `${msg} [${this.game.windows.itemName(n.item.id) || 'item'}]` : msg];
-      this.megaphone(lines, { ...(type === 8 ? CHAT_BAR.itemMega : CHAT_BAR.superMega), channel: n.channel, ear: n.ear });
+      const lines = n.lines || [msg];
+      this.megaphone(lines, { ...(type === 8 ? CHAT_BAR.itemMega : CHAT_BAR.superMega), channel: n.channel, ear: n.ear, item: type === 8 ? n.item : null });
       return;
     }
     this.message(type === 0 ? `[Notice] ${msg}` : msg, NOTICE_COLORS[type] || CHAT_COLOR.notice);
   }
-  /**
-   * Megaphone lines: their colour on their bar, the world ones led by the CH tag and channel number
-   * (UIWindow.img/Megaphone/ch0) and, when the sender allows whispers, the ear (Megaphone/0).
-   */
-  megaphone(lines, { color = '#fff', bg, channel, ear }) {
-    const M = this.game.windows.W.Megaphone, icons = [];
-    if (channel) icons.push(M?.ch0, { text: String(channel) });
-    if (ear) icons.push(M?.[0]);
-    this.assets.preload([M?.ch0, M?.[0]].filter(Boolean));
-    lines.forEach((l, i) => this.game.statusBar?.message(l, color, { bg, icons: i === 0 ? icons.filter(Boolean) : null }));
+  /** Megaphone lines: their colour on their bar; the world ones carry the channel tag (with the ear when the sender allows whispers). */
+  megaphone(lines, { color = '#fff', bg, channel, ear, item = null }) {
+    const M = this.game.windows.W.Megaphone;
+    this.assets.preload([M?.ch0, M?.ch1, ...Object.values(M?.Num || {})].filter((n) => n?._canvas));
+    if (item) this.game.windows.itemName(item.id);   // start loading its name
+    lines.forEach((l) => this.game.statusBar?.message(l, color, { bg, tag: channel ? { channel, ear } : null, item }));
   }
 
   /**

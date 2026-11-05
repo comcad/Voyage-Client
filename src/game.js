@@ -5,7 +5,7 @@ import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, mesoIcon, invType
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, localTalk, NpcDialog, MessageBox, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
+import { npcTalk, localTalk, NpcDialog, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -16,6 +16,13 @@ import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
 import { StatusBar, CHAT_COLOR, CHAT_BAR } from './ui/statusbar.js';
+import { Weather } from './weather.js';
+import { AvatarBanner } from './ui/avatarmega.js';
+import { MapleTVWin, MapleTVScreen } from './ui/mapletv.js';
+import { ItemGuardWin } from './ui/itemguard.js';
+import { ApResetWin, ApConfirmWin, SpResetWin, SpConfirmWin, branchOf, advancement, spBook } from './ui/reset.js';
+/** ENABLE_TV's error codes. */
+const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
 import { WindowManager, allCanvases } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
@@ -555,6 +562,7 @@ export class Game {
       action: 'stand1', frame: 0, frameT: 0, attack: null, ignoreFh: null, ignoreT: 0, chat: null,
     };
     this.effects = [];
+    this.weather = new Weather(this); this.avatarBanner = new AvatarBanner(this); this.mapleTV = new MapleTVScreen(this);
     this.others = new Map(); this.drops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
     this.boards = new ShopBoards(this);
     this.queue = []; this.loading = false;
@@ -596,9 +604,7 @@ export class Game {
     c.addEventListener('dblclick', (e) => {
       const p = at(e);
       if (wm.top(...p) || sb.contains(...p) || !this.net) return;
-      // your own chalkboard: put it away
-      const cr = this.player.chalk && this.player.chalkRect, wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
-      if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.net.closeChalkboard(); return; }
+      const wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
       // the QuestAlert bulb: its list of quests
       if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
       // a shop sign takes you into the shop
@@ -828,14 +834,49 @@ export class Game {
     win.event(e);
   }
 
-  /** A megaphone from the Cash tab: ask what to say (Megaphone, Super, Item, Triple and the Avatar messengers). */
+  /**
+   * A megaphone from the Cash tab: the Megaphone asks in the text prompt; the Super, Item, Triple and Avatar
+   * megaphones open their windows (the Item Megaphone not with a shop-type window open).
+   */
   async openMegaphone(slot, itemId) {
     const kind = Math.floor(itemId / 1000) % 10, avatar = Math.floor(itemId / 10000) === 539;
-    if (!avatar && ![1, 2, 6, 7].includes(kind)) { this.notice('This megaphone cannot be used here.'); return; }
-    if (!avatar && kind === 1 && (this.stats?.level || 0) < 10) { this.windows.notice('You may not use this until you\'re level 10.'); return; }
+    if (!avatar && ![1, 2, 5, 6, 7].includes(kind)) return;
+    if (!this.cashGate()) return;
+    if (kind === 5 && !avatar) {
+      if (itemId % 1000 > 5) return;
+      const tv = new MapleTVWin(this.windows, Number(slot), itemId);
+      await this.assets.preload(tv.frames());
+      this.windows.show(tv);
+      return;
+    }
+    if (kind === 1 && !avatar) {
+      const text = (await this.windows.askText('Enter your comments through the megaphone.', '', { max: 60 }))?.trim();
+      if (text && (await this.megaphoneTextOk(text))) this.cashSend(() => this.net?.useMegaphone(Number(slot), itemId, { text }));
+      return;
+    }
+    if (kind === 6 && !avatar && this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
     const win = new MegaphoneWin(this.windows, Number(slot), itemId);
     await this.assets.preload(win.frames());
     this.windows.show(win);
+  }
+  /** The Megaphone / Super Megaphone's checks on what you wrote: no curses, over level 10, up to 60 characters. */
+  async megaphoneTextOk(text) {
+    if (!text) return false;
+    if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return false; }
+    if ((this.stats?.level || 0) <= 10) { this.windows.notice('This megaphone is only available for \r\ncharacters that are over Level 10.'); return false; }
+    if (text.length > 80) return false;
+    if (text.length > 60) { this.windows.notice('Use the megaphone to text up to 60 characters.'); return false; }
+    return true;
+  }
+  /** Whether a line holds a word from Etc/Curse.img (ignoring case), or a control character. */
+  async cursed(text) {
+    if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text)) return true;
+    return (await this.maskCurses(text)) !== text;
+  }
+  /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
+  tradeOpen() {
+    const open = (w) => w && this.windows.order.includes(w);
+    return open(this.shopWin) || open(this.storageWin) || open(this.dueyWin) || this.windows.order.some((w) => w instanceof MegaphoneWin && w.kind === 6);
   }
 
   /** Duey: talking to him sends the parcels waiting for you, which opens his window; results come back as codes. */
@@ -853,15 +894,82 @@ export class Game {
 
   async openRock(slot, itemId) {
     if (this.windows.order.some((w) => w instanceof TeleportWin)) return;
+    if (this.dead) { this.windows.notice("You can't do it while you're dead."); return; }
+    if ((this.map?.info?.fieldLimit || 0) & 0x42) { this.windows.notice('You cannot teleport to this map.'); return; }
     const win = new TeleportWin(this.windows, Number(slot), itemId);
     await this.assets.preload(win.frames());
     this.windows.show(win);
   }
-  /** A Chalkboard: write on it and hold it up (not in the Free Market rooms); double-click it to put it away. */
+  /** A Chalkboard: write a note (up to 40 characters) and hold it up; not where stores open; click it to put it away. */
   async openChalkboard(slot, itemId) {
-    if (this.player.chalk) { this.net?.closeChalkboard(); return; }
-    const text = (await this.windows.askText('What would you like to write on your chalkboard?', '', { max: 60, width: 220 }))?.trim();
-    if (text) this.net?.useChalkboard(Number(slot), itemId, text);
+    if (!this.cashGate()) return;
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    if (Number(this.map?.info?.personalShop)) { this.windows.notice("You can't use it here in this map."); return; }
+    const text = (await this.windows.askText('Enter a note.', '', { max: 40 }))?.trim();
+    if (!text) return;
+    if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return; }
+    this.cashSend(() => this.net?.useChalkboard(Number(slot), itemId, text));
+  }
+  closeChalkboard(say) { this.net?.closeChalkboard(); this.player.chalk = null; if (say) this.hud.message(say, CHAT_COLOR.error); }
+  /** A weather item: not while weather is falling here or where the map forbids it; a message of up to 35 characters. */
+  async useWeather(slot, id) {
+    if (!this.cashGate()) return;
+    if (this.weather.active || (this.map?.info?.fieldLimit || 0) & 0x4000) { this.windows.notice('The effect is taking place right now.\r\nPlease try it later.'); return; }
+    if (!(await this.assets.json('Item/Cash/0512.img'))?.[pad(id, 8)]) return;
+    const text = (await this.windows.askText('Please enter the attached message', '', { max: 35 }))?.trim();
+    if (!text) return;
+    if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return; }
+    this.sendCashItem(slot, id, (w) => w.string(text));
+  }
+  /** AP Reset: pick a stat to take a point from, one to give it to, confirm; not with a shop-type window open. */
+  async useApReset(slot, id) {
+    if (!this.cashGate()) return;
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    if (branchOf(this.stats?.job || 0) > 8) return;
+    const from = await this.openStep(ApResetWin, false, null);
+    if (!from) return;
+    const to = await this.openStep(ApResetWin, true, from);
+    if (!to || !(await this.openStep(ApConfirmWin, from, to))) return;
+    this.sendCashItem(slot, id, (w) => w.int(to.flag).int(from.flag));
+  }
+  /** SP Reset: a skill of the item's advancement to take a point from, one to give it to, confirm (not as a beginner, or before that advancement). */
+  async useSpReset(slot, id) {
+    if (!this.cashGate()) return;
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    const job = this.stats?.job || 0, b = branchOf(job);
+    if (b === 0 || b >= 9 || id % 10 > advancement(job)) return;
+    const book = spBook(this.skills, id);
+    if (book === null) return;
+    await this.skills.book(book);
+    const from = await this.openStep(SpResetWin, book, false, null, id % 10);
+    if (!from) return;
+    const to = await this.openStep(SpResetWin, book, true, from, id % 10);
+    if (!to || !(await this.openStep(SpConfirmWin, from, to))) return;
+    this.sendCashItem(slot, id, (w) => w.int(to).int(from));
+  }
+  /** Item Guard: seal an item dragged onto its window (for good, or for the guard's info/protectTime days). */
+  async useItemGuard(slot, id) {
+    if (!this.cashGate()) return;
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    const node = (await this.assets.json('Item/Cash/0506.img'))?.[pad(id, 8)];
+    if (!node) return;
+    const pick = await this.openStep(ItemGuardWin, id, Number(node.info?.protectTime) || 0);
+    if (pick) this.sendCashItem(slot, id, (w) => w.int(pick.tab).int(pick.slot));
+  }
+  /** Item Tag (dragged onto something you wear: the server tags only worn items): print your name on it, once. */
+  async useItemTag(slot, equipSlot) {
+    const it = equipSlot < 0 ? this.inventory?.equipped?.[equipSlot] : null;
+    if (!it) return;
+    if (it.owner) { this.windows.notice('The item already has a printed name on it..'); return; }
+    if (!(await this.windows.confirm(`Woulid like to print your name on ${this.windows.itemName(it.id) || ''}?`))) return;
+    this.sendCashItem(slot, 5060000, (w) => w.short(equipSlot));
+  }
+  /** Miu Miu the Traveling Merchant: the server opens her shop (not on maps that forbid it, or with a shop-type window open). */
+  useMiuMiu(slot, id) {
+    if (!this.cashGate()) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x40000) { this.hud.message("You can't use it here in this map.", CHAT_COLOR.error); return; }
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    this.sendCashItem(slot, id);
   }
   /**
    * A chalkboard over a character's head: ChatBalloon.img/adboard/0 stretched round the text (white, up to
@@ -1082,6 +1190,7 @@ export class Game {
     const t = Math.floor(id / 1000000);
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
+    else if (slot && t === 5 && Math.floor(id / 10000) === 524) this.useCashPetFood(Number(slot), id);
     else if (slot && t === 2) { this.net.useItem(Number(slot), id); sfx.play(`Item/${pad(id, 8)}/Use`); }
     else if (slot && t === 3 && Math.floor(id / 10000) === 301) this.sitChair(id);
   }
@@ -1170,6 +1279,78 @@ export class Game {
       lead = await this.windows.confirm('Would you like to change your Boss Pet?\r\n (The "Item Ignore" skill, as well as \r\nthe stats for speed and jump will \r\nfollow that of the Lead Pet)');
     }
     this.net.spawnPet(slot, lead);
+  }
+
+  // ------------------------------------------------------------------ cash items
+  /**
+   * Cash items wait for the server to answer the last request (or 5s, should no answer come), and 500ms between
+   * requests.
+   */
+  cashFree() {
+    const since = performance.now() - (this.cashAt || -1e9);
+    return !(this.cashBusy && since < 5000) && since >= 500 && (this.stats?.hp ?? 1) > 0;
+  }
+  /** cashFree, saying so when it isn't. */
+  cashGate() {
+    if (this.cashFree()) return true;
+    this.windows.notice('Other requests are in process.\r\nPlease try again in a little bit.');
+    return false;
+  }
+  /** Opens a step window (one taking `done` last) once its art is in; resolves with what it answers. */
+  openStep(W, ...a) { return new Promise((r) => { const w = new W(this.windows, ...a, r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); }); }
+  /** A cash item's request (gated: a refusal says so), then the busy flag until the server answers, and its sound. */
+  cashSend(send) {
+    if (!this.cashGate()) return false;
+    send();
+    this.cashBusy = true; this.cashAt = performance.now();
+    sfx.play('Game/UseShopItem');
+    return true;
+  }
+  sendCashItem(slot, id, add) { return this.cashSend(() => this.net.useCashItem(slot, id, add)); }
+  /** Your avatar look as the server sends others': what shows in each slot, what's hidden under cash, the cash weapon, your pets. */
+  myLookData() {
+    const s = this.stats || {}, eq = this.inventory?.equipped || {}, equips = {}, masked = {};
+    for (const [k, it] of Object.entries(eq)) {
+      const n = -Number(k);
+      if (n > 0 && n < 100) { if (eq[-(n + 100)]) masked[n] = it.id; else equips[n] ??= it.id; }
+      else if (n > 100 && n !== 111) { equips[n - 100] = it.id; }
+    }
+    return { gender: s.gender ?? 0, skin: s.skin ?? 0, face: s.face, hair: s.hair, mega: false, equips, masked, cashWeapon: eq[-111]?.id || 0,
+      pets: this.petsOf(this.player.id).map((p) => p?.id || 0) };
+  }
+  /** Cash pet food (524xxxx): the lead pet must be out; the server picks the pet that eats it. */
+  useCashPetFood(slot, id) {
+    if (!this.cashFree()) return;
+    if (!this.petsOf(this.player.id)[0]) { this.hud.message('This item can only be used with a pet.', '#ffafaf'); return; }
+    this.sendCashItem(slot, id);
+  }
+  /**
+   * The Pet Name Tag renames the lead pet (none out: nothing): asked first if it has a name of its own; 4-12
+   * characters, trimmed, tabs made spaces, curse words masked; not its default name (any case) or the name it has.
+   */
+  async useNameTag(slot, id) {
+    if (!this.cashFree()) return;
+    const pet = this.petsOf(this.player.id)[0], it = pet && this.petItem(pet);
+    if (!it) return;
+    const def = this.windows.itemName(it.id) || '', cur = it.pet?.name || '';
+    if (cur.toLowerCase() !== def.toLowerCase() && !(await this.windows.confirm('The pet already has a name.\r\nWill you change it?'))) return;
+    let name = await this.windows.askText('Please name your pet.', '', { max: 12, minLen: 4 });
+    name = (name || '').trim();
+    if (!name) return;
+    if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(name.replace(/\t/g, ''))) { this.windows.notice('Cursing is not allowed.'); return; }
+    name = (await this.maskCurses(name)).replace(/\t/g, ' ');
+    if (name.toLowerCase() === def.toLowerCase() || name === cur) { this.windows.notice('That name is not available.'); return; }
+    if (!(await this.windows.confirm(`Do you want to name your pet\r\n'${name}'?`))) return;
+    this.sendCashItem(slot, id, (w) => w.string(name));
+  }
+  /** Words from Etc/Curse.img in a line, ignoring case, replaced with '*'. */
+  async maskCurses(text) {
+    this.curses ??= await this.assets.json('Etc/Curse.img').then((l) => Object.values(l || {}).filter((w) => typeof w === 'string' && w).map((w) => w.toLowerCase()));
+    let out = text;
+    for (const w of this.curses) {
+      for (let i = out.toLowerCase().indexOf(w); i >= 0; i = out.toLowerCase().indexOf(w, i + w.length)) out = out.slice(0, i) + '*'.repeat(w.length) + out.slice(i + w.length);
+    }
+    return out;
   }
 
   /** Pet food: the server feeds the hungriest; it is the one heard eating. */
@@ -1477,11 +1658,9 @@ export class Game {
     await this.vfx.load();
     const wm = this.windows;
     wm.drawItemTip = drawItemTip; wm.drawSkillTip = drawSkillTip;
-    wm.notice = (text, opts) => new Promise((r) => wm.show(new MessageBox(wm, 'notice', text, r, opts)));
-    // another player asking something of you: the metal YesNo2 plate (preloaded, as it may not be in yet)
-    wm.request = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'request', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
-    wm.serverNotice = (text, opts) => new Promise((r) => { const b = new MessageBox(wm, 'server', text, r, opts); this.assets.preload(b.frames()).then(() => wm.show(b)); });
-    wm.confirm = (text) => new Promise((r) => wm.show(new MessageBox(wm, 'yesno', text, r)));
+    wm.notice = (text) => new Promise((r) => wm.show(new UtilBox(wm, 'ok', text, r)));
+    wm.serverNotice = wm.notice;   // the server's pop-up is the same box
+    wm.confirm = (text) => new Promise((r) => wm.show(new UtilBox(wm, 'okcancel', text, r)));
     wm.okCancel = (text, kind = 'okcancel') => new Promise((r) => wm.show(new UtilBox(wm, kind, text, r)));
     wm.askWhisper = (def, names) => new Promise((r) => wm.show(new UtilBox(wm, 'whisper', 'Please enter the person you want to whisper to.', r, { def, names }), null));
     wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
@@ -1554,7 +1733,13 @@ export class Game {
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
-      avatarMega: (a) => this.hud.megaphone([`${a.name} : ${a.lines.filter(Boolean).join(' ')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }),
+      avatarMega: (a) => { this.hud.megaphone([`${a.name} : ${a.lines.join('')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
+      avatarMegaClear: () => this.avatarBanner.clear(),
+      tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show(d); },
+      tvOff: () => { this.tvWait = 0; this.mapleTV.clear(); },
+      tvError: (code) => { const t = TV_ERRORS[code]; if (t) this.hud.message(t, CHAT_COLOR.error); },
+      tvResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
+      avatarMegaResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
       spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
       groupChat: (c) => {
         if (!this.chatAllowed(c.mode) || (c.mode === 0 && this.windows.wins.userlist?.blockedName(c.name))) return;
@@ -1619,10 +1804,16 @@ export class Game {
       duey: later((e) => this.onDuey(e)),
       chalkboard: later((id, text) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.chalk = text; }),
       rocks: (vip, list) => { if (this.rocks) this.rocks[vip ? 'vip' : 'regular'] = list; },
-      rockError: () => this.windows.notice('The map could not be saved.'),
+      rockError: (code) => {
+        const name = this.rockTarget || ''; this.rockTarget = '';
+        const t = { 5: 'You cannot go to that place.', 8: 'You cannot go to that place.', 9: "It's the map you're currently on.", 10: 'This map is not available to enter for the list.',
+          11: 'Users below level 7 are not allowed \r\nto go out from Maple Island.' }[code]
+          ?? (code === 6 || code === 7 ? `${name} is currently difficult to locate, so\r\nthe teleport will not take place.` : null);
+        if (t) this.windows.notice(t);
+      },
       charBox: later((id, box) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.box = box; }),
       tradeError: (code) => { this.tradeWin?.ended(0); this.windows.notice(TRADE_ERRORS[code] || 'The trade could not be started.'); },
-      charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i)); },
+      charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i), null); },
       // a Party Search invitation comes as "PS: <leader>"
       // refused at once with party invites switched off, from someone on the Blacklist, or while another is up;
       // an auto-join one (Party Search) joins straight away
@@ -1671,8 +1862,10 @@ export class Game {
         const pet = this.pets.get(`${owner}:${slot}`);
         if (pet?.mine && BigInt.asIntN(64, sn) === BigInt.asIntN(64, pet.sn)) (this.petExcluded ??= new Map()).set(pet.uid, ids);
       }),
+      weather: later((type, id, text) => { if (id) this.weather.start(id, text); else this.weather.stop(); }),
       cashPetFood: later((slot) => {
-        if (slot < 0) { this.windows.notice('Your pet cannot consume this food.\r\nPlease check again.'); return; }
+        if (slot === -1) { this.windows.notice('Your pet cannot consume this food.\r\nPlease check again.'); return; }
+        if (slot < 0) return;
         const pet = this.pets.get(`${this.player.id}:${slot}`);
         if (pet) sfx.play(`Pet/${pet.id}/eat`);
       }),
@@ -1770,7 +1963,7 @@ export class Game {
       removeNpc: later((oid) => this.killLife(oid, 0)),
       drop: later((d) => this.spawnDrop(d)),
       removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
-      inventory: (ops) => this.onInventory(ops),
+      inventory: (ops, unlock) => { if (unlock) this.cashBusy = false; this.onInventory(ops); },
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s)); },
       shopResult: (code, extra) => this.shopWin?.result(code, extra),
@@ -2074,7 +2267,7 @@ export class Game {
 
   onStats(s, enable) {
     if (!this.stats) return;
-    if (enable) { this.apPending = false; this.scriptPending = 0; this.pickupAnswered(); }
+    if (enable) { this.apPending = false; this.scriptPending = 0; this.cashBusy = false; this.pickupAnswered(); }
     const before = this.stats.level, exp0 = this.stats.exp;
     Object.assign(this.stats, s);
     if (s.level > before) this.petEvent('e_levelup');
@@ -2141,6 +2334,9 @@ export class Game {
       this.charging = null;   // a skill being charged doesn't carry over
       this.keydown = null;
       this.rush = null;
+      this.weather.stop();   // weather belongs to the map it fell on
+      // a chalkboard can't be held up where stores open
+      if (this.player.chalk && Number(map.info?.personalShop)) this.closeChalkboard('You cannot use the chalkboard here.');
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
@@ -2510,6 +2706,15 @@ export class Game {
   }
 
   useInventoryItem(tab, slot, it) {
+    if (tab === 5 && this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (tab === 5 && it.id === 5170000) { this.useNameTag(slot, it.id); return; }                  // Pet Name Tag
+    if (tab === 5 && it.id === 5180000) { if (this.cashFree()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
+    if (tab === 5 && Math.floor(it.id / 10000) === 524) { this.useCashPetFood(slot, it.id); return; }
+    if (tab === 5 && Math.floor(it.id / 10000) === 512) { this.useWeather(slot, it.id); return; }
+    if (tab === 5 && it.id === 5050000) { this.useApReset(slot, it.id); return; }
+    if (tab === 5 && (it.id === 5060001 || Math.floor(it.id / 1000) === 5061)) { this.useItemGuard(slot, it.id); return; }
+    if (tab === 5 && it.id > 5050000 && it.id <= 5050004) { this.useSpReset(slot, it.id); return; }
+    if (tab === 5 && Math.floor(it.id / 10000) === 545 && Math.floor(it.id / 1000) !== 5451) { this.useMiuMiu(slot, it.id); return; }
     if (tab === 5 && it.pet) { this.summonPet(slot, it); return; }        // summon / send the pet home
     if (tab === 5 && Math.floor(it.id / 10000) === 514) { this.openShop(it.id); return; }      // a Shop Permit
     if (tab === 5 && Math.floor(it.id / 10000) === 503) { this.openMerchant(it.id); return; }   // a Hired Merchant
@@ -2834,6 +3039,7 @@ export class Game {
     const sid = scroll.id, modifier = Math.floor(sid / 1000) === 2049;
     if (!scrollFits(sid, eq.id)) { this.notice('This scroll cannot be used on this item.'); return; }
     if (!modifier && !(eq.slots > 0)) { this.notice('This item has no upgrades available.'); return; }
+    if (eq.flag & 1 && !(await this.windows.confirm('Due to the potency of the scroll,\r\nthe sealed item might be destroyed.\r\nAre you sure you still want to use the scroll?'))) return;
     const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && Math.floor(sid / 100) !== 20490;
     const white = hasWhite && (await this.windows.confirm('Would you like to use a #bWhite Scroll#k too?\nIt keeps the upgrade slot if the scroll fails.'));
     if (inv[2][scrollSlot] !== scroll) return;          // it moved while you were deciding
@@ -3160,6 +3366,7 @@ export class Game {
     this.statusBar?.update(dt);
     this.windows?.update(dt);
     this.vfx?.update(dt);
+    this.weather.update(dt);
     this.questAlert?.update(dt * 1000); this.questAlert?.tick();
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
@@ -5609,6 +5816,9 @@ export class Game {
       // a double-click on a window (or the status bar) is the window's, never the NPC behind it
       if (this.windows?.top(c.x, c.y) || this.statusBar?.contains?.(c.x, c.y)) continue;
       const wx = c.x + Math.round(this.cam.x), wy = c.y + Math.round(this.cam.y);
+      // a click on your own chalkboard puts it away
+      const cr = this.player.chalk && this.player.chalkRect;
+      if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.closeChalkboard('The chalkboard has closed.'); return; }
       // the quest icon over an NPC's head opens it with one click
       for (const e of this.vfx?.questIcons.keys() || []) {
         const r = this.vfx.questIconRect(e);
@@ -5777,6 +5987,8 @@ export class Game {
     map.drawBacks(ctx, cam, true);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
+    this.weather.draw(ctx);
+    this.mapleTV.draw(ctx, cam, this.map);
     drawPartyHp(ctx, this, cam);
     this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
 
@@ -5797,6 +6009,8 @@ export class Game {
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
     if (ui) {
       this.vfx?.drawHud(ctx);
+      this.weather.drawNotice(ctx);
+      this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top
       this.drawQuestTimers(ctx);
@@ -5923,7 +6137,12 @@ export class Game {
 
   drawBalloons(ctx, cam) {
     // pets talk from just over their heads, without a name in front
-    for (const pet of this.pets.values()) if (pet.chat && !pet.hidden) this.vfx?.drawBalloon(ctx, cam, { x: pet.x, y: pet.y + 44 }, pet.chat.text, `pet/${pet.chat.style || 0}`);
+    // a pet's balloon sits on top of the pet: its standing frame's height, so a tall pet's is higher
+    for (const pet of this.pets.values()) {
+      if (!pet.chat || pet.hidden) continue;
+      const at = pet.drawPos(), top = Number(pet.data?.stand0?.[0]?.origin?.[1]) || 33;
+      this.vfx?.drawBalloon(ctx, cam, { x: at.x, y: at.y - top + 77 }, pet.chat.text, `pet/${pet.chat.style || 0}`);
+    }
     // NPCs: the arrow just over the head; not while a quest icon is there
     for (const e of this.map.life) {
       if (!e.chat || this.vfx?.questIcons.has(e)) continue;

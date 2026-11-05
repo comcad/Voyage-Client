@@ -78,7 +78,7 @@ export class Pet {
     const ms = dt * 1000;
     if (this.mine) {
       this.acc += ms;
-      while (this.acc >= TICK) { this.acc -= TICK; this.tick(); }
+      while (this.acc >= TICK) { this.acc -= TICK; this.drawFromX = this.x; this.drawFromY = this.y; this.tick(); }
     } else this.replay(dt);
     this.animate(ms);
     if (this.chat && (this.chat.t -= dt) <= 0) this.chat = null;
@@ -377,10 +377,17 @@ export class Pet {
     const left = flip ? this.x + o[0] - img.width : this.x - o[0], top = this.y - o[1];
     return wx >= left && wx < left + img.width && wy >= top && wy < top + img.height;
   }
+  /** Where it is drawn: your pet between its last two 30ms steps, so it glides every frame (not across a jump to the owner). */
+  drawPos() {
+    const dx = this.x - this.drawFromX, dy = this.y - this.drawFromY;
+    if (!this.mine || !(Math.abs(dx) < 64 && Math.abs(dy) < 64)) return { x: this.x, y: this.y };
+    const k = Math.min(1, this.acc / TICK);
+    return { x: this.drawFromX + dx * k, y: this.drawFromY + dy * k };
+  }
   draw(ctx, cam) {
     if (this.hidden) return;
-    const fr = frames(this.node()), node = fr[this.frame] || fr[0], img = node && this.g.assets.image(node);
-    const x = Math.round(this.x - cam.x), y = Math.round(this.y - cam.y);
+    const fr = frames(this.node()), node = fr[this.frame] || fr[0], img = node && this.g.assets.image(node), at = this.drawPos();
+    const x = Math.round(at.x - cam.x), y = Math.round(at.y - cam.y);
     if (img) {
       const o = node.origin || [img.width / 2, img.height];
       ctx.save();
