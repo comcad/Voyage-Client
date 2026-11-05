@@ -1,6 +1,6 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach } from './physics.js';
-import { CharacterLook, drawParts, lookCanvases, equipPath } from './character.js';
+import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
@@ -357,6 +357,9 @@ const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 2001
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
+const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
+/** A tired mount: tiredness at least (level / 3) x 10 + 95 (checked on SET_TAMING_MOB_INFO / SPAWN_PLAYER). */
+const mountTired = (level, tired) => tired >= Math.floor(level / 3) * 10 + 95;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 /** How much movement (ms) gathers before it goes to the server, as the client does. */
@@ -1440,6 +1443,18 @@ export class Game {
     const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
     // the last speed buff given sets it, a slowing one too (Dark Sight's -30); jump takes the strongest
     const buff = (k) => (k === 'speed' ? active.findLast((b) => b.speed)?.speed || 0 : Math.max(0, ...active.filter((b) => b[k]).map((b) => b[k])));
+    // on a mount: the mount's speed / jump (TamingMob/<n>.img/info, at least 80)
+    // plus the incSpeed / incJump of the two mount-slot items (the mount and its saddle), plus the buffs' speed / jump
+    // only on the skill mounts 1932001-1932005 and 1932007-1932011; then at most 190 / 123. Your other
+    // equipment doesn't count.
+    const ride = this.riding && this.mountData(this.riding.item)?.stats;
+    if (ride) {
+      const worn = this.inventory?.equipped || {}, inc = (k) => [-18, -19].reduce((t, s) => t + (Number(this.windows?.info?.(worn[s]?.id)?.[k]) || 0), 0);
+      const id = this.riding.item, skillMount = (id > 1932000 && id < 1932006) || (id > 1932006 && id < 1932012);
+      const speed = inc('incSpeed') + (skillMount ? buff('speed') : 0) + Math.max(80, Number(ride.speed) || 100);
+      const jump = inc('incJump') + (skillMount ? buff('jump') : 0) + Math.max(80, Number(ride.jump) || 100);
+      return { speed: Math.min(190, speed) / 100, jump: Math.min(123, jump) / 100 };
+    }
     const pct = (k, max) => Math.max(80, Math.min(max, 100 + this.equipStat(k) + buff(k))) / 100;
     const slow = (this.diseases || []).find((d) => d.skill === SLOW && d.until > now);   // Slow: down to its x%
     return { speed: slow ? Math.min(pct('speed', 140), (slow.x || 80) / 100) : pct('speed', 140), jump: pct('jump', 123) };
@@ -1708,9 +1723,22 @@ export class Game {
       foreignCancel: later((id, m1, m2) => this.onOther(id, (rp) => {
         if (rp.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
         if (BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
+        if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) rp.mount = 0;
         if (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK) rp.hidden = false;
         if (BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
       })),
+      // a mount's level / exp / tiredness; levelling up plays the pet level-up effect on its rider (the client's)
+      mountInfo: later(async (id, level, exp, tired, up) => {
+        const ent = id === this.player.id ? this.player : this.others.get(id);
+        if (id === this.player.id) this.mountInfo = { level, exp, tired };
+        if (ent) ent.mountTired = mountTired(level, tired);
+        const node = up && ent && (await this.assets.json('Effect/PetEff.img'))?.Basic?.LevelUp;
+        if (!node) return;
+        const anim = new Anim(node, false);
+        await this.assets.preload(anim.frames);
+        this.fx.push({ anim, follow: ent, flip: false });
+      }),
+      foreignMount: later((id, item) => this.onOther(id, (rp) => { rp.mount = item; this.mountData(item); })),
       foreignPartner: later((id) => this.onOther(id, (rp) => { rp.partner = true; })),
       foreignHidden: later((id) => this.onOther(id, (rp) => { rp.hidden = true; })),
       foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
@@ -1768,11 +1796,13 @@ export class Game {
         else delete this.skills.cooldowns[id];
       },
       buff: (b) => {
+        if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); }
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
           watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
+        if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) this.riding = null;
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
         this.diseases = (this.diseases || []).filter((d) => !((d.m1 & m1) || (d.m2 & m2)));
       },
@@ -2215,6 +2245,8 @@ export class Game {
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look;
     rp.box = d.box; rp.rings = d.rings; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
+    rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
     if (rp.chair) this.chairArt(rp.chair);
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     this.others.set(d.id, rp);
@@ -4130,6 +4162,8 @@ export class Game {
 
   /** Buffs and other SPECIAL_MOVE skills. */
   castSpecial(id, lv) {
+    // the riding skill used again while on the mount gets off it: CANCEL_BUFF with the skill, no SPECIAL_MOVE
+    if (this.riding?.skill === id) { this.net?.cancelBuff(id); return true; }
     if (TELEPORTS.has(id)) return this.teleport(id, lv);
     if (id === HEAL) return this.castHeal(id, lv);
     const p = this.player, node = this.skills.node(id);
@@ -4334,6 +4368,44 @@ export class Game {
       ctx.drawImage(img, Math.round(d.x - o[0] - cam.x), Math.round(d.y - o[1] - cam.y));
       ctx.restore();
     }
+  }
+
+  /**
+   * The avatar's head vector, where an effect with pos 1 hangs (the QuestAlert bulb): the brow of the current
+   * action's first frame, mirrored with the facing; on a mount it rides up with the rider - plus the riding
+   * frame's navel less the plain frame's.
+   */
+  headAnchor(ent = this.player, look = this.look) {
+    const action = ent.action || look.standAction(), base = look.compose(action, 0);
+    let [bx, by] = base.brow || [0, 0];
+    const mountId = ent === this.player ? this.riding?.item : ent.mount, mount = action !== 'dead' && this.mountData(mountId)?.img;
+    if (mount) {
+      const riding = composeMounted(look, mount, mountId, action, null, 0, ent.mountTired), n = base.navel || [0, 0];
+      bx += riding.navel[0] - n[0]; by += riding.navel[1] - n[1];
+    }
+    return { x: ent.x + (ent.facingRight ? -bx : bx), y: ent.y + by };
+  }
+
+  // ------------------------------------------------------------------ mounts
+  /**
+   * A mount's art (Character/TamingMob/<id>.img) and its riding stats (TamingMob/<info/tamingMob>.img/info: speed,
+   * jump, fatigue), loaded once; null until ready.
+   */
+  mountData(id) {
+    if (!id) return null;
+    this.mounts ??= new Map();
+    if (!this.mounts.has(id)) {
+      this.mounts.set(id, null);
+      (async () => {
+        const img = await this.assets.json(`Character/TamingMob/${pad(id, 8)}.img`);
+        if (!img) return;
+        const tm = Number(img.info?.tamingMob) || 0;
+        const stats = tm ? (await this.assets.json(`TamingMob/${pad(tm, 4)}.img`))?.info : null;
+        await this.assets.preload(mountCanvases(img));
+        this.mounts.set(id, { img, stats });
+      })();
+    }
+    return this.mounts.get(id);
   }
 
   // ------------------------------------------------------------------ sitting
@@ -5791,7 +5863,17 @@ export class Game {
     ctx.save(); ctx.translate(Math.round(x), Math.round(y)); if (ent.facingRight) ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); ctx.restore();
   }
   drawChar(ctx, cam, ent, look, local) {
-    const parts = look.compose(ent.action, ent.frame, ent.expr);
+    // on a mount (not as a ghost: dead clears it): the mount, its saddle and mount equipment, the rider
+    // on it; the mount's frames run on their own clock from when its pose last changed
+    const mountId = local ? this.riding?.item : ent.mount, mount = ent.action !== 'dead' && this.mountData(mountId)?.img;
+    let parts;
+    if (mount) {
+      const worn = local ? this.inventory?.equipped || {} : null, eqs = ent.lookData?.equips || {};
+      const gear = (local ? [worn[-19]?.id, worn[-20]?.id] : [eqs[19], eqs[20]]).map((g) => g && this.mountData(g)?.img).filter(Boolean);
+      const tired = local ? this.player.mountTired : ent.mountTired, pose = mountPose(mountId, ent.action, tired);
+      if (ent.mountPose !== pose) { ent.mountPose = pose; ent.mountT0 = performance.now(); }
+      parts = composeMounted(look, mount, mountId, ent.action, ent.expr, performance.now() - ent.mountT0, tired, gear);
+    } else parts = look.compose(ent.action, ent.frame, ent.expr);
     const sx = ent.x - cam.x, sy = ent.y - cam.y;
     const chair = local ? ent.seat?.item : ent.action === 'sit' && ent.chair;
     if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight);
