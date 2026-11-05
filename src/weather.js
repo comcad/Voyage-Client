@@ -1,4 +1,4 @@
-import { sfx } from './audio.js';
+import { music, sfx } from './audio.js';
 import { pad, nodeAt, frameAt } from './assets.js';
 import { allCanvases } from './ui/windows.js';
 import { uiText } from './ui/wzui.js';
@@ -16,7 +16,8 @@ const BURSTS = [{ every: 200, count: 1 }, { every: 1000, count: 5 }, { every: 50
  *   each set on its own timer (type 3: BURSTS).
  * - floatType: the message's UIWindow.img/FloatNotice/<n> frame, its left / tiled middle / right stretched round the
  *   text, centred at y 160, for 20s.
- * - bgmPath: a sound to play with it.
+ * - bgmPath: a sound to play with it: as the music (isBgmOrEffect 1) or an effect, looped when `repeat` is set.
+ *   When the weather ends, an effect stops and the field's music comes back.
  */
 export class Weather {
   constructor(g) { this.g = g; this.cur = null; }
@@ -41,12 +42,20 @@ export class Weather {
       for (let i = 0; i < n; i++) cur.pieces.push(this.piece(cur));
     }
     this.cur = cur;
+    this.stopSound?.(); this.stopSound = null;   // the last weather's sound goes with it
     if (info.bgmPath) {
-      const p = String(info.bgmPath).replace(/^Sound\//, '').replace('.img', '');
-      sfx.play(p);
+      const p = String(info.bgmPath).replace(/^Sound\//, '').replace('.img', ''), loop = !!Number(info.repeat);
+      if (Number(info.isBgmOrEffect)) music.play(p, { loop, fadeOut: 1000, fadeIn: 1000, force: true });
+      else if (loop) { const stop = await sfx.loop(p); if (seq === this.seq) this.stopSound = stop; else stop?.(); }
+      else sfx.play(p);
     }
   }
-  stop() { this.seq = (this.seq || 0) + 1; this.cur = null; }
+  /** restore: the weather ended on this map, so the field's music comes back. */
+  stop(restore = true) {
+    this.seq = (this.seq || 0) + 1; this.cur = null;
+    this.stopSound?.(); this.stopSound = null;
+    if (restore) this.g.restoreFieldMusic();
+  }
 
   /**
    * A falling piece, by the item's info/direction: it starts anywhere on the screen and in 3-6s goes 300px down (0),

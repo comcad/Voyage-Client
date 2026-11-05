@@ -148,6 +148,7 @@ export class LoginScene {
     this.canvas.addEventListener('pointerdown', (e) => {
       this.mouse = pos(e); this.hover();
       for (const b of this.buttons()) b.down = b.enabled && b.hit(this.mouse.x, this.mouse.y);
+      for (const b of this.buttons()) if (b.down && b.downSound) sfx.play(b.downSound);   // a channel sounds as it is pressed
       if (!this.panning() || this.dialogs.length) this.topLayer()?.onPointer?.(this.mouse.x, this.mouse.y);
     });
     addEventListener('pointerup', (e) => {
@@ -156,7 +157,8 @@ export class LoginScene {
       const target = this.buttons().find((b) => b.down && b.enabled && b.hit(this.mouse.x, this.mouse.y));
       for (const b of this.buttons()) b.down = false;
       this.hover();
-      if (target) { sfx.play(target.sound || 'UI/BtMouseClick'); target.onClick?.(); }   // a button may have its own click sound
+      // the click, unless the button already sounded on press; a race also plays its own sound after it
+      if (target) { if (!target.downSound) sfx.play(target.sound || 'UI/BtMouseClick'); if (target.alsoSound) sfx.play(target.alsoSound); target.onClick?.(); }
     }, { signal });
     this.canvas.addEventListener('wheel', (e) => {
       if (this.panning() || this.dialogs.length) return;
@@ -770,7 +772,7 @@ export class LoginScene {
             if (channel !== i) select.anim.reset();
             channel = i; b.lastClick = performance.now();
           });
-          b.enabled = !!c; b.users = c?.load || 0; b.sound = 'UI/WorldSelect';
+          b.enabled = !!c; b.users = c?.load || 0; b.downSound = 'UI/WorldSelect';
           return b;
         });
         this.assets.preload([...chButtons.flatMap((b) => b.frames()), WS.channel.chgauge, ...select.frames()]).then(() => this.hover());
@@ -1367,7 +1369,7 @@ export class LoginScene {
         if (pick === k) { if (performance.now() - (this.lastRaceClick || 0) < 400) resolve(pick); this.lastRaceClick = performance.now(); return; }
         fade = { from: pick, t: 0 }; pick = k; this.lastRaceClick = performance.now();
       }));
-      for (const b of buttons) b.sound = 'UI/RaceSelect';
+      for (const b of buttons) b.alsoSound = 'UI/RaceSelect';
       const select = this.button(R.BtSelect, 566, 416, () => resolve(pick));
       const nav = this.chrome(3, { world, channel, back: () => resolve(null) });
       this.setScreen({

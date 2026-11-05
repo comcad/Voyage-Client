@@ -376,6 +376,23 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
+// a monster's blow on a player sounds only for its first two attacks and attackF
+const CHAR_DAM = { 0: 'CharDam1', 1: 'CharDam2', 8: 'CharDamF' };
+// another player's level up, job change, quest clear, monster card and item level up, heard in full
+const FOREIGN_SOUND = { 0: 'Game/LevelUp', 8: 'Game/JobChanged', 9: 'Game/QuestClear', 0x0d: 'Game/mCardGet', 0x0f: 'Game/ItemLevelUp' };
+// Grenade and Poison Bomb make no weapon swing; Grenade's throw is Use2; Blast's cast follows the charge on the weapon
+const GRENADE = 5201002, BLAST = 1221009, NO_SWING = new Set([GRENADE, 14111006]);
+const BLAST_USE = { 1211003: 'Use2', 1211004: 'Use2', 1211005: 'Use3', 1211006: 'Use3', 21111005: 'Use3', 1211007: 'Use4', 1211008: 'Use4',
+  15101006: 'Use4', 1221003: 'Use5', 1221004: 'Use5', 11111007: 'Use5' };
+// a held Big Bang or Piercing Arrow loops its Loop sound
+const LOOP_HOLDS = new Set([2121001, 2221001, 2321001, 3221001]);
+// Avenger keeps its own Hit over a cash star's
+const AVENGERS = new Set([4111005, 14111002]);
+// shots that make no Attack2 as they leave: Hurricane, Battleship Cannon / Torpedo, Wind Piercing, Wind Shot, the
+// homing ones, Shadow Meso, Storm Break, Vampire
+const SILENT_SHOTS = new Set([3121004, 13111002, 5221007, 5221008, 13111006, 13111007, 5211006, 5220011, 22151002, 4111004, 13101005, 14101006]);
+// Barrage, Demolition and the like: only their first line sounds their Hit (Arrow Bomb's only if it hurt)
+const FIRST_HIT_ONLY = new Set([5121007, 15111004, 5121004, 22171002, 3101005]);
 /** Riding skills: Monster Rider, Battleship, and the skill vehicles (Spaceship, Yeti, Witch's Broomstick, Barlog...). */
 const MONSTER_RIDERS = new Set([1004, 10001004, 20001004, 20011004]), BATTLESHIP = 5221006;
 const SKILL_VEHICLE_SKILLS = new Set([1013, 1017, 1018, 1019, 10001014, 10001019, 10001022, 10001023, 20001019, 20001022, 20001023,
@@ -667,6 +684,11 @@ export class Game {
     for (const n of notes) await this.windows.notice(`#bNote from ${n.from}#k\n${n.text}`);
     this.net?.discardNotes(notes.map((n) => n.id));
   }
+  /** After weather music: the field's music back (a changed one is restarted), or the map's. */
+  restoreFieldMusic() {
+    if (this.fieldBgm) music.play(this.fieldBgm, { fadeOut: 1000, fadeIn: 1000, force: true });
+    else music.play(this.map?.info?.bgm);
+  }
   enterCashShop() { if (this.net && !this.inCashShop && !this.dead) this.net.enterCashShop(); }
   /** SET_CASH_SHOP: the server took us off the map; swap the world for the shop screen. */
   openCashShop(d) {
@@ -676,8 +698,9 @@ export class Game {
     this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
-    music.play('BgmUI/ShopBgm');
-    this.csWin = this.windows.show(new CashShopWin(this.windows, d));
+    this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
+    music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
+    this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
   /** The status bar's chat line is a page element over the canvas: hide it while the shop screen is up. */
   showChatBox(on) { const el = this.statusBar?.chat?.el; if (el) el.style.visibility = on ? '' : 'hidden';
@@ -705,7 +728,7 @@ export class Game {
       this.channel = entered.channel;
       const info = entered.info;
       if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
-      if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; }
+      if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
       await loaded;
@@ -907,7 +930,7 @@ export class Game {
       if (win) { win.setList(e.list); return; }
       const w = new DueyWin(this.windows, e.list);
       await this.assets.preload(w.frames());
-      this.dueyWin = this.windows.show(w);
+      this.dueyWin = this.windows.show(w, null);
     } else if (e.op === 'gone') win?.gone(e.id);
     else if (e.op === 'arrived') this.hud.message(e.from ? `A parcel from ${e.from} is waiting for you. Visit Duey to collect it.` : 'A parcel is waiting for you. Visit Duey to collect it.', '#ffe08a');
     else if (e.op === 'result') { const t = dueyResult(e.code); if (t) this.windows.notice(t); }
@@ -1189,7 +1212,7 @@ export class Game {
     else if (m === MENU.MINIMAP) {
       // the window stays: the key cycles Max -> Min bar -> MinMap -> Max
       const w = this.windows.wins.minimap;
-      if (!this.windows.order.includes(w)) this.windows.open('minimap'); else w?.cycle();
+      if (!this.windows.order.includes(w)) this.windows.open('minimap', 'UI/MenuUp'); else w?.cycle();
     }
     else if (m === MENU.WORLDMAP) this.windows.toggle('worldmap');
     else if (m === MENU.KEYS) this.windows.toggle('keyconfig');
@@ -1600,6 +1623,7 @@ export class Game {
     if (now - t[kind] < 200) return;
     t[kind] = now;
     this.net.petAutoPot(lead.sn, Number(slot), id, flag);
+    sfx.play(`Item/${pad(id, 8)}/Use`);
     if (kind === 'mp') this.petMpArmed = false;
   }
   /** Set the potion a pet drinks (dropped on PET HP / PET MP): the lead pet needs the pouch, the potion must restore it. */
@@ -1667,7 +1691,6 @@ export class Game {
   /** Hook a ChannelSession's events to this game. `entered` is the result of session.enter(). */
   async goOnline(entered, uiRoot) {
     const info = entered.info;
-    sfx.play('Game/GameIn');
     this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.linked = info.linked;
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
@@ -1791,7 +1814,7 @@ export class Game {
       notifyLevel: (n) => this.hud.message(`<${n.type === 2 ? 'Guild' : 'Family'}> ${n.name} has reached Lv. ${n.level}.`, CHAT_COLOR.error),
       tradeOpen: (t) => {
         if (this.tradeWin) return;
-        const w = this.tradeWin = this.windows.show(new TradeWin(this.windows));
+        const w = this.tradeWin = this.windows.show(new TradeWin(this.windows), null);
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         this.windows.open('inventory');
       },
@@ -1808,7 +1831,7 @@ export class Game {
         this.playerShop?.end();
         const win = new PlayerShopWin(this.windows, d);
         await this.assets.preload(win.frames());      // its art the first time a shop opens
-        this.playerShop = this.windows.show(win);
+        this.playerShop = this.windows.show(win, null);
       }),
       shopItems: later((items, mesos) => this.playerShop?.setItems(items, mesos)),
       merchantCheck: later((code) => this.onMerchantCheck(code)),
@@ -1856,6 +1879,8 @@ export class Game {
       clock: later((secs) => { this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt(); }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
       ship: later((here) => this.moveShip(here)),
+      // the Balrog's ship comes alongside: its music cuts in, for the rest of the voyage
+      shipAttack: later(() => { if (this.ship) music.play('Bgm04/ArabPirate', { fadeOut: 0, fadeIn: 0 }); }),
       mistSpawn: later((d) => this.addMist(d)),
       mistRemove: later((oid) => this.mists?.delete(oid)),
       doorSpawn: later((d) => {
@@ -1885,6 +1910,11 @@ export class Game {
         if (pet?.mine && BigInt.asIntN(64, sn) === BigInt.asIntN(64, pet.sn)) (this.petExcluded ??= new Map()).set(pet.uid, ids);
       }),
       weather: later((type, id, text) => { if (id) this.weather.start(id, text); else this.weather.stop(); }),
+      // 4: a sound from Sound/Field.img; 6: the map's music changes until the next map
+      fieldEffect: later((type, str) => {
+        if (type === 4 && str) sfx.play(`Field/${str}`);
+        if (type === 6 && str) { this.fieldBgm = str.replace(/^Sound\//, '').replace('.img', ''); music.play(this.fieldBgm); }
+      }),
       cashPetFood: later((slot) => {
         if (slot === -1) { this.windows.notice('Your pet cannot consume this food.\r\nPlease check again.'); return; }
         if (slot < 0) return;
@@ -1947,6 +1977,7 @@ export class Game {
         const ent = id === this.player.id ? this.player : this.others.get(id);
         if (id === this.player.id) this.mountInfo = { level, exp, tired };
         if (ent) ent.mountTired = mountTired(level, tired);
+        if (up && ent) sfx.play('Game/LevelUp');
         const node = up && ent && (await this.assets.json('Effect/PetEff.img'))?.Basic?.LevelUp;
         if (!node) return;
         const anim = new Anim(node, false);
@@ -1970,6 +2001,7 @@ export class Game {
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
       }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
+      catchMob: (item, ok) => { if (item === 2270002) sfx.play(ok ? 'Game/CatchSuccess' : 'Game/CatchFaild'); },   // Element Rock
       // damage the server deals by itself (poison, Ninja Ambush) or a heal: its number over the monster; one other
       // monsters can hurt also has its red bar follow the HP the server sends
       mobDamaged: later((oid, dmg, hp, maxHp) => {
@@ -1980,18 +2012,25 @@ export class Game {
       }),
       mobHp: later((oid, pct) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { e.hp = Math.round((e.maxHp * pct) / 100); e.hpPct = pct; e.hpShownUntil = performance.now() + 5000; } }),
       bossHp: later((d) => this.vfx?.bossHp(d)),
-      foreignEffect: later((chrId, effect) => { const rp = this.others.get(chrId), name = this.vfx?.foreign(effect); if (rp && name) this.vfx.play(name, rp); }),
+      // level up, job change, quest clear, a monster card, an item levelling up: everyone hears it in full
+      foreignEffect: later((chrId, effect) => {
+        const rp = chrId === null ? this.player : this.others.get(chrId), name = this.vfx?.foreign(effect);
+        if (!rp) return;
+        if (name) this.vfx.play(name, rp);
+        if (FOREIGN_SOUND[effect]) sfx.play(FOREIGN_SOUND[effect]);
+      }),
+      portalSound: () => sfx.play('Game/Portal'),
       spawnNpc: later((n) => this.spawnLife('Npc', n, false)),
       removeNpc: later((oid) => this.killLife(oid, 0)),
       drop: later((d) => this.spawnDrop(d)),
       removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
       inventory: (ops, unlock) => { if (unlock) this.cashBusy = false; this.onInventory(ops); },
       npcTalk: (d) => this.showNpcDialog(d),
-      shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s)); },
+      shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s), null); },
       shopResult: (code, extra) => this.shopWin?.result(code, extra),
       storageOpen: (s) => {
         if (this.storageWin) this.windows.close(this.storageWin);
-        this.storageWin = this.windows.show(new StorageWin(this.windows, s));
+        this.storageWin = this.windows.show(new StorageWin(this.windows, s), null);
       },
       storageItems: (type, items) => this.storageWin?.setType(type, items),
       storageAll: (items) => this.storageWin?.setAll(items),
@@ -2383,7 +2422,7 @@ export class Game {
       this.charging = null;   // a skill being charged doesn't carry over
       this.keydown = null;
       this.rush = null;
-      this.weather.stop();   // weather belongs to the map it fell on
+      this.weather.stop(false);   // weather belongs to the map it fell on
       // a chalkboard can't be held up where stores open
       if (this.player.chalk && Number(map.info?.personalShop)) this.closeChalkboard('You cannot use the chalkboard here.');
       this.fade = { dir: 'in', t0: performance.now() };
@@ -2398,6 +2437,7 @@ export class Game {
       if (!this.net) history.replaceState(null, '', `?map=${id}`);
       this.hooks.onMap?.(map);
       this.hud?.setMap(map);
+      this.fieldBgm = null;
       music.play(map.info.bgm);
       this.net?.mapLoaded();
     } catch (e) {
@@ -2444,7 +2484,7 @@ export class Game {
       // one we control tells the server each path it plans, as it starts on it
       e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity); };
     }
-    if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`); }
+    if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`, { volume: this.volumeAt(e.x, e.y) }); }
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
     if (kind === 'Npc' && this.vfx) this.vfx.questT = 0;   // its quest icon at once
@@ -2467,7 +2507,7 @@ export class Game {
     e.queuedKill = null;
     this.dying?.delete(e.oid);
     this.releaseDrops(e);
-    if (anim && e.kind === 'Mob') sfx.play(`Mob/${pad(Number(e.spawn.id), 7)}/Die`);
+    if (anim && e.kind === 'Mob') sfx.play(`Mob/${pad(Number(e.spawn.id), 7)}/Die`, { volume: this.volumeAt(e.x, e.y) });
     if (e.kind === 'Mob' && Number(e.spawn.id) === this.vfx?.boss?.oid) this.vfx.boss = null; // the gauge goes with its boss
     if (anim && e.anims.die1) e.kill(); else e.removed = true;
   }
@@ -2532,7 +2572,7 @@ export class Game {
         let len = 0; for (let i = 0; i < rp.look.frameCount(rp.attack); i++) len += rp.look.delay(rp.attack, i);
         rp.boomerangUntil = performance.now() + len * rp.attackScale;
       }
-      if (a.skill) this.playSkillEffect(a.skill, rp, a.kind !== 'magic', 'effect', rp.attackScale); else this.playWeaponSound(rp);
+      if (a.skill) this.playSkillEffect(a.skill, rp, false, 'effect', rp.attackScale);
       this.remoteAfterimage(rp, a.skill, a.kind);
       delay = rp.look.attackDelay(rp.attack) * rp.attackScale;
       if (SHAKERS.has(a.skill)) this.startShake(a.skill, 400 - Math.min(400, Math.hypot(rp.x - this.player.x, rp.y - this.player.y)), delay);
@@ -2566,7 +2606,7 @@ export class Game {
         const land = () => {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
           this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
-          this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null);
+          this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null, a.kind === 'ranged' && [5020, 5021].includes(Math.floor(a.projectile / 1000)) ? a.projectile : 0);
           if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
         };
         const planned = plan?.targets.find((p) => p.mob === e);
@@ -2582,7 +2622,8 @@ export class Game {
     if (rp && d.damage === -1 && d.fake) { this.playSkillEffect(d.fake, rp, false, 'special'); setExpression(rp, 2, HIT_FACE_TIME); this.vfx?.damage(rp, [0], 'violet'); return; }
     if (rp) this.vfx?.damage(rp, [d.damage], 'violet');
     if (rp && d.damage > 0) setExpression(rp, 1, HIT_FACE_TIME);
-    if (rp && d.from >= 0 && d.mobId) sfx.play(`Mob/${pad(d.mobId, 7)}/CharDam${d.from + 1}`);
+    const dam = rp && d.mobId && CHAR_DAM[d.from];
+    if (dam) sfx.play(`Mob/${pad(d.mobId, 7)}/${dam}`, { volume: this.volumeAt(rp.x, rp.y) });
   }
 
   /** Drops a monster let go of while our blow was still on its way: they come out as it dies. */
@@ -2612,7 +2653,7 @@ export class Game {
     const fromMob = mob?.kind === 'Mob';
     const fromX = fromMob ? mob.x : d.fromX ?? d.x, fromY = fromMob ? mob.y : d.fromY ?? y;
     pending.delete(d.oid);
-    if (d.mode === 1 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem'); }
+    if (d.mode === 1 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem', { volume: this.volumeAt(fromX, fromY) }); }
     // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
     const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
@@ -3125,6 +3166,7 @@ export class Game {
       this.damageNumbers(mob, dmgs, true);
       if (kill) this.finishKill(mob);
     } else { mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x); this.damageNumbers(mob, dmgs, false); }
+    dmgs.forEach((d, line) => this.hitSound(sm.skill, mob, d, line));
     const node = sm.node?.attack1?.info?.hit;
     if (!node) return;
     const anim = new Anim(node, false);
@@ -3439,6 +3481,7 @@ export class Game {
     this.updateDrops(dt);
     this.updateFx(dt);
     this.runTimers(dt);
+    if (this.skillLoop && !this.skillLoop.held()) { this.skillLoop.stop(); this.skillLoop = null; }
     this.playTimeNote();
     this.mapleTip();
     if (this.shake) this.shakeStep(dt);
@@ -3915,11 +3958,10 @@ export class Game {
     const fresh = rp.wasDead === false;
     rp.wasDead = dead;
     if (!dead) { this.vfx?.untomb(rp); return; }
-    const at = this.tombPoint(rp.x, rp.y), p = this.player;
+    const at = this.tombPoint(rp.x, rp.y);
     this.vfx?.tomb(rp, at.x, at.y, fresh);
     if (!fresh) return;
-    const d = Math.hypot(at.x - p.x, at.y - p.y);
-    sfx.play('Game/Tombstone', { volume: (d < 250 ? 100 : d <= 1000 ? 120 - 0.08 * d : 40) / 100 });
+    sfx.play('Game/Tombstone', { volume: this.volumeAt(at.x, at.y) });
   }
   /** Dead: the body (unseen, but it's what is sent) keeps falling with no input, off a ladder or rope too. */
   updateDeadBody(dt) {
@@ -4090,12 +4132,13 @@ export class Game {
     }
     const pose = (opts.held ? opts.pose : p.attack) || this.defaultAttackAction(kind), scale = opts.held ? this.attackScale() : p.attackScale;
     const hitDelay = this.look.attackDelay(pose) * scale, trailAt = this.hitFrame(pose, kind);
+    // the weapon swings with its trail, as well as any cast sound
+    const swingSound = kind !== 'magic' && !NO_SWING.has(skillId);
     if (!opts.held) {
-      this.after(this.frameTime(pose, trailAt) * scale, () => this.playAfterimage(pose, trailAt, skillId));
+      this.after(this.frameTime(pose, trailAt) * scale, () => { this.playAfterimage(pose, trailAt, skillId); if (swingSound) this.playWeaponSound(p); });
       if (opts.stage2) { this.playSkillEffect(skillId, p, false, 'special'); sfx.play(`Skill/${pad(skillId, 7)}/Use2`); }
-      else if (skillId && !heal) this.playSkillEffect(skillId, p, kind !== 'magic', 'effect', scale);
-      else if (!skillId) this.playWeaponSound(p);
-    } else sfx.play(`Skill/${pad(skillId, 7)}/Use`);
+      else if (skillId && !heal) this.playSkillEffect(skillId, p, false, 'effect', scale);
+    } else { sfx.play(`Skill/${pad(skillId, 7)}/Use`); if (swingSound) this.playWeaponSound(p); }
 
     const mobCount = ld?.mobCount || 1;
     // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
@@ -4104,6 +4147,7 @@ export class Game {
     const base = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
     const lines = sp ? Math.min(15, base * 2) : base, half = Math.floor(lines / 2);
     const ammo = kind === 'ranged' ? this.ammoItem((ld?.bulletConsume || ld?.bulletCount || 1) * (sp ? 2 : 1)) : 0;
+    const cash = kind === 'ranged' ? this.cashBullet() : 0;
     const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
     const kept = opts.prefer && opts.prefer.alive && !opts.prefer.dying && !opts.prefer.queuedKill ? [opts.prefer] : null;
     const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
@@ -4171,11 +4215,11 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash);
           this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash);
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -4422,7 +4466,11 @@ export class Game {
     const keys = Object.keys(set?.[lv]?.[action] || {}).filter((k) => /^\d+$/.test(k)).map(Number);
     const frame = kind === 'ranged' ? Math.min(1, last) : kind === 'magic' ? last : keys.length ? Math.min(...keys) : last;
     let t = 0; for (let i = 0; i < frame; i++) t += look.delay(action, i);
-    this.after(t * (rp.attackScale || 1), () => { if (rp.attack === action) this.playAfterimage(action, frame, skillId, rp); });
+    this.after(t * (rp.attackScale || 1), () => {
+      if (rp.attack !== action) return;
+      this.playAfterimage(action, frame, skillId, rp);
+      if (kind === 'melee') this.playWeaponSound(rp);   // their shots sound as they fly instead
+    });
   }
   /** Run fn after ms of game time (timers pause with the game, unlike setTimeout). */
   after(ms, fn) { if (ms <= 0) fn(); else (this.timers ??= []).push({ t: ms / 1000, fn }); }
@@ -4456,7 +4504,18 @@ export class Game {
     this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
     if (node?.keydown) this.loopSkillEffect(id, p, 'keydown', () => this.charging?.id === id);
     if (frames(node?.prepare).length) this.playSkillEffect(id, p, false, 'prepare');
+    this.holdLoop(id);
     return true;
+  }
+  /** A held skill's Loop sound, until it is let go (or cut short). */
+  async holdLoop(id) {
+    if (!LOOP_HOLDS.has(id)) return;
+    const held = () => this.charging?.id === id || this.keydown?.id === id;
+    const stop = await sfx.loop(`Skill/${pad(id, 7)}/Loop`);
+    if (!stop) return;
+    if (!held()) { stop(); return; }
+    this.skillLoop?.stop();
+    this.skillLoop = { held, stop };
   }
   releaseCharge() {
     const c = this.charging;
@@ -4530,7 +4589,7 @@ export class Game {
     this.keydown = { id, lv, t: 0, tick: 0, last: -Infinity, pose };
     p.frame = 0; p.frameT = 0;
     this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
-    sfx.play(`Skill/${pad(id, 7)}/Use`);
+    if (LOOP_HOLDS.has(id)) this.holdLoop(id); else sfx.play(`Skill/${pad(id, 7)}/Use`);
     this.keydownArt(this.keydown);
     return true;
   }
@@ -5023,6 +5082,14 @@ export class Game {
     for (const k of Object.keys(use).map(Number).sort((a, b) => a - b)) if (ok(use[k].id) && use[k].quantity >= count) return use[k].id;
     return 0;
   }
+  /** The first cash bullet in the cash inventory that suits the weapon (bow / crossbow 5020, claw 5021, gun 5022). */
+  cashBullet() {
+    const kind = { 145: 5020, 146: 5020, 147: 5021, 149: 5022 }[Math.floor(this.weaponId() / 10000)];
+    const cash = this.inventory?.[5] || {};
+    if (!kind) return 0;
+    for (const k of Object.keys(cash).map(Number).sort((a, b) => a - b)) if (Math.floor(cash[k].id / 1000) === kind) return cash[k].id;
+    return 0;
+  }
   hasAmmo(skillId) {
     if (skillId % 10000000 === 1000 || NO_AMMO_SHOTS.has(skillId)) return true; // Three Snails, Soul Blade, Shark Wave
     const noAmmoBuffs = [...SOUL_ARROWS, 4121006]; // Soul Arrow x3, Shadow Claw
@@ -5425,6 +5492,7 @@ export class Game {
     const node = await this.shotArt(skillId, ammoId, ent);
     const anim = node ? new Anim(node, true) : null;
     if (anim) await this.assets.preload(anim.frames);
+    this.shotSound(ent, skillId, ammoId, sx, sy);
     this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur: flightMs(tx - sx) / 1000, flip: tx > sx });
   }
   async shotArt(skillId, ammoId, ent) {
@@ -5488,6 +5556,7 @@ export class Game {
     const map = this.map, img = await loadReactorImg(this.assets, d.id);
     if (!img || this.map !== map) return;
     const r = new Reactor(d, img, map);
+    r.volumeAt = (x, y) => this.volumeAt(x, y);
     await this.assets.preload(r.frames());
     if (this.map === map) this.reactors.set(d.oid, r);
   }
@@ -5586,18 +5655,36 @@ export class Game {
   }
 
   /** Weapon swing: each weapon names its sound in info/sfx (swordL, bow, tGlove, gun...). */
-  playWeaponSound(ent) {
+  playWeaponSound(ent, sound = 'Attack', x = ent?.x, y = ent?.y) {
     const look = ent === this.player ? this.look : ent?.look;
     if (!look) return;
-    sfx.play(`Weapon/${look.weapon?.info?.sfx || 'barehands'}/Attack`);
+    sfx.play(`Weapon/${look.weapon?.info?.sfx || 'barehands'}/${sound}`, { volume: ent === this.player ? 1 : this.volumeAt(x, y) });
+  }
+  /**
+   * An arrow, star or bullet leaving: the weapon's Attack2, from where it starts. Not without ammo (Soul Arrow, Shadow
+   * Claw), nor for the skills that send their own shot (Hurricane, the Battleship's guns, homing shots...).
+   */
+  shotSound(ent, skillId, ammoId, x, y) {
+    if (!ammoId || SILENT_SHOTS.has(skillId)) return;
+    if (ent === this.player && this.buffs.some((b) => [...SOUL_ARROWS, 4121006].includes(b.source))) return;
+    this.playWeaponSound(ent, 'Attack2', x, y);
+  }
+  /** A sound made at x, y: full within 250px of you, fading to 40% at 1000px. */
+  volumeAt(x, y) {
+    const d = Math.hypot(x - this.player.x, y - this.player.y);
+    return (d < 250 ? 100 : d <= 1000 ? 120 - 0.08 * d : 40) / 100;
   }
 
   /**
-   * swing: fall back to the weapon's swing when the skill has no Use sound (most physical attacks).
+   * The third argument is unused (the weapon's swing plays with the attack's trail).
    * branch: 'effect' when cast, 'affected' on whoever a party buff reached (no sound: the caster's played).
    */
-  async playSkillEffect(id, ent, swing = false, branch = 'effect', rate = 1) {
-    if (branch === 'effect') sfx.play(`Skill/${pad(id, 7)}/Use`).then((found) => { if (!found && swing) this.playWeaponSound(ent); });
+  async playSkillEffect(id, ent, _unused = false, branch = 'effect', rate = 1) {
+    // others' casts are silent, apart from boarding the Battleship
+    if (branch === 'effect' && (ent === this.player || id === BATTLESHIP) && !MONSTER_MAGNETS.has(id)) {
+      const use = id === GRENADE ? 'Use2' : id === BLAST ? BLAST_USE[this.activeCharge()?.id] || 'Use' : 'Use';
+      sfx.play(`Skill/${pad(id, 7)}/${use}`);
+    }
     const node = this.byCharLevel(await this.skills?.ensure(id), ent);
     if (branch !== 'effect') { const fx = Game.fxNode(node?.[branch]); if (fx) this.pushEffect(fx, ent, rate); return; }
     // a skill with an effect per pose (Brandish: effect/0 with brandish1, effect/1 with brandish2) plays the one
@@ -5635,15 +5722,30 @@ export class Game {
    * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
    * faces. Without a head point, the middle of its body.
    */
-  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null) {
+  /**
+   * One damage line's sound: the skill's Hit, or the monster's Damage when there is none (a miss: Hit only).
+   * A cash star or bullet (cash) has its own Hit instead, on the first line that hurt; Avenger keeps the skill's.
+   */
+  hitSound(id, mob, d, line, cash = 0) {
+    const volume = mob ? this.volumeAt(mob.x, mob.y) : 1;
+    const damage = () => { if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`, { volume }); };
+    const hitOr = (path) => sfx.has(path).then((found) => (found ? sfx.play(path, { volume }) : damage()));
+    if (cash && !AVENGERS.has(id)) {
+      if (line > 0 || !(d > 0)) damage(); else hitOr(`CashEffect/${pad(cash, 8)}/Hit`);
+      return;
+    }
+    const hit = id && !(FIRST_HIT_ONLY.has(id) && (line > 0 || (id === 3101005 && !(d > 0))));
+    if (hit) hitOr(`Skill/${pad(id, 7)}/Hit`); // 7-digit keys (0001000); Cygnus/Aran ids are 8
+    else damage();
+  }
+  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0) {
     const node = id ? this.byCharLevel(await this.skills?.ensure(id), by) : null;
     const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
     // Seven's two stars twice... (a miss makes no monster damage sound)
     dmgs.forEach((d, line) => this.after(lineDelay(id, line, ...this.lineTiming(by)), () => {
-      if (id) sfx.play(`Skill/${pad(id, 7)}/Hit`); // keys are 7-digit (0001000); Cygnus/Aran ids are 8
-      if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`);
+      this.hitSound(id, mob, d, line, cash);
       if (!fx) return;
       const head = mob.node?.head;
       const x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
@@ -5665,6 +5767,7 @@ export class Game {
     const sx = from.x + (from.facingRight ? 20 : -20), sy = from.y - 30;
     const tx = to ? to.x : from.x + (from.facingRight ? 400 : -400), ty = to ? to.y - (to.node?._h || 40) / 2 : sy;
     const dur = Math.min(0.45, Math.max(0.12, Math.abs(tx - sx) / 1200));
+    this.shotSound(from, skillId, ammoId, sx, sy);
     this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur, flip: tx > sx, onHit });
   }
 
@@ -5867,7 +5970,7 @@ export class Game {
     }
     this.petHitPots(m, lost, from);
     this.vfx?.damage(p, [lost], 'violet');
-    if (from >= 0) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/CharDam${from + 1}`);
+    if (CHAR_DAM[from]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[from]}`);
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
     // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
@@ -5921,6 +6024,8 @@ export class Game {
   }
   /** A monster casts: its effect plays on it; if we control it, the server hears the cast and applies the skill. */
   async mobSkillStart(m, s) {
+    const n = s.action || 1;
+    sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/Skill${n === 17 ? 'F' : n}`, { volume: this.volumeAt(m.x, m.y) });
     if (m.controlled && this.net && m.oid != null) {
       const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
       this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
@@ -5974,7 +6079,7 @@ export class Game {
 
   /** A monster starts an attack: its sound and effect; if we control it, the server hears which attack it was. */
   mobAttackStart(m, a, spots) {
-    sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/Attack${a.n}`);
+    sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/Attack${a.n === 9 ? 'F' : a.n}`, { volume: this.volumeAt(m.x, m.y) });
     // an area attack marks the spots that will erupt with its areaWarning, on the ground of each
     const warn = spots && a.info.areaWarning && Game.fxNode(a.info.areaWarning);
     if (warn) {
