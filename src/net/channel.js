@@ -581,7 +581,8 @@ export class ChannelSession {
       let combo = 0;
       if (morph === 2) r.short(); else if (hiMask & 0x200000) combo = r.ubyte(); // morph value / Combo Attack's value (1 + orbs)
       r.int(); r.int(); r.short(); r.skip(4); r.int(); r.skip(11); r.short(); r.skip(9); r.int(); r.short(); r.ubyte();
-      r.long(); r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
+      const mount = r.int(); r.int();   // Monster Riding: the mount's item id (0 on foot), the skill
+      r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
       const job = r.short();
       const look = readCharLook(r);
       r.int(); const itemEffect = r.int(), chair = r.int();
@@ -590,9 +591,10 @@ export class ChannelSession {
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
-      let chalk = null, rings = null, berserk = false;
+      let chalk = null, rings = null, berserk = false, mountInfo = null;
       if (r.available >= 13) {
-        r.skip(12); box = readBox(r);                               // mount (level / exp / tiredness), then a shop or game sign
+        mountInfo = { level: r.int(), exp: r.int(), tired: r.int() };   // the mount's level / exp / tiredness
+        box = readBox(r);                                           // then a shop or game sign
         if (r.available && r.ubyte() === 1) chalk = r.string();     // then a chalkboard's text
         if (r.available >= 3) rings = readRingLook(r);
         // New Year cards received, then whether Berserk is on
@@ -601,7 +603,7 @@ export class ChannelSession {
           berserk = r.available > 0 && r.ubyte() !== 0;
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -700,11 +702,15 @@ export class ChannelSession {
     const SHARP_EYES = [3121002, 3221002];
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
     const WATK = 0x100000000n, WDEF = 0x200000000n, MATK = 0x400000000n, MDEF = 0x800000000n, HANDS = 0x4000000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
+    const RIDING = 0x20000000000000n;   // BuffStat.MONSTER_RIDING, in the first mask
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
       const n = popcount(BigInt.asUintN(64, m1)) + popcount(BigInt.asUintN(64, m2));
       if (!n) return;
+      // Monster Riding (first mask): short 0, then the mount's item id where the source goes and the skill (Monster
+      // Rider, Battleship...) where the duration goes; it lasts until cancelled
+      if (BigInt.asUintN(64, m1) & RIDING) { r.short(); const mount = r.int(), skill = r.int(); this.emit('buff', { m1, m2, source: skill, duration: 2 ** 31, mount }); return; }
       const start = r.pos;
       // giveBuff: per stat (short value, int source, int duration ms)
       r.pos = start + 2;
@@ -835,6 +841,8 @@ export class ChannelSession {
     // short id + short level; an ordinary foreign buff has values and zeros there instead, so the id tells them apart
     on(S.GIVE_FOREIGN_BUFF, (r) => {
       const id = r.int(), m1 = r.long(), m2 = r.long();
+      // another player gets on a mount (showMonsterRiding): short 0, the mount's item id, the skill
+      if (BigInt.asUintN(64, m1) & RIDING && r.available >= 10) { r.short(); this.emit('foreignMount', id, r.int()); return; }
       // Dark Sight or Wind Walk: drawn see-through
       if (BigInt.asUintN(64, m2) & 0x40000000000n || BigInt.asUintN(64, m1) & 0x400000000n) { this.emit('foreignHidden', id); return; }
       if (BigInt.asUintN(64, m2) & 0x400000000000000n) { this.emit('foreignPartner', id); return; }   // Shadow Partner
@@ -845,6 +853,8 @@ export class ChannelSession {
       const src = r.int(), skill = src & 0xffff, level = src >>> 16;
       if (skill >= 100 && skill <= 200 && level > 0 && level < 256) this.emit('foreignDisease', id, { m1, m2, skill, level });
     });
+    // a mount's level, exp and tiredness (its rider, then a byte: it just levelled up)
+    on(S.SET_TAMING_MOB_INFO, (r) => this.emit('mountInfo', r.int(), r.int(), r.int(), r.int(), r.ubyte() === 1));
     on(S.CANCEL_FOREIGN_BUFF, (r) => { const id = r.int(); this.emit('foreignCancel', id, r.long(), r.long()); });
     on(S.CANCEL_SKILL_EFFECT, (r) => this.emit('foreignSkillCancel', r.int()));
     on(S.DAMAGE_PLAYER, (r) => {
@@ -1092,6 +1102,9 @@ export class ChannelSession {
   specialMove(skillId, level, pos) {
     const w = new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level);
     if (pos) w.pos(pos).byte(0);
+    // the client ends every SPECIAL_MOVE with a short; Cosmic reads it only for Monster Rider (and would take it for a
+    // position on the others), so it goes on that one alone
+    if (skillId % 10000000 === 1004) w.short(0);
     this.send(w);
   }
   /** Heal: which party members it reaches (one bit per party slot), then a delay. */

@@ -14,7 +14,6 @@ import { questFlow } from './ui/quests-ui.js';
  * list of them (list3 ready, list1 available, list0 in progress).
  */
 const ADMIN = 9010000, RETRY = 10000, ARRIVED = 'Quest Arrived!  Double-click the icon located on top of the Character.';
-const HEAD = 46;   // the bulb hangs this far above the feet
 
 export class QuestAlert {
   constructor(game) {
@@ -104,8 +103,8 @@ export class QuestAlert {
   rect() {
     const f = this.anim?.node, p = this.g.player, im = f && this.g.assets.image(f);
     if (!im || !p) return null;
-    const o = f.origin || [0, 0];
-    return { x: Math.round(p.x - o[0]), y: Math.round(p.y - HEAD - o[1]), w: im.width, h: im.height, im };
+    const o = f.origin || [0, 0], a = this.g.headAnchor();   // QuestAlert's pos is 1: the avatar's head vector
+    return { x: Math.round(a.x - o[0]), y: Math.round(a.y - o[1]), w: im.width, h: im.height, im };
   }
   draw(ctx, cam) {
     const r = this.rect();

@@ -104,6 +104,8 @@ export class CharacterLook {
       if (k) { drawn[ci] = eq[ci][k]; this.weapon = eq[ci][k]; }
     }
     this.equips = drawn.filter(Boolean);
+    // what a rider doesn't show: the weapon (and a cash weapon over it) and the shield (body parts 10 and 11 on a mount)
+    this.handNodes = new Set([drawn[wi], ci >= 0 ? drawn[ci] : null, eq[ids.findIndex((id) => Math.floor(id / 10000) === 109)]].filter(Boolean));
     // which of them are face / eye accessories (101 / 102): drawn by expression rather than by action
     this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(cat(i)) ? n : null).filter(Boolean));
     // what stays on a dead character: the headgear (cap, face / eye accessory, earrings); clothes and weapon come off
@@ -176,7 +178,7 @@ export class CharacterLook {
    * Returns [{node, x, y, z}] in local coordinates (feet at 0,0, facing left).
    * expr = { name, frame }: a Face.img expression (smile, cry, blink...) in place of its default.
    */
-  compose(action, frame, expr = null) {
+  compose(action, frame, expr = null, mounted = false) {
     let bf = this.body?.[action]?.[frame];
     if (!bf) return [];
     // a frame that points at another pose's frame (alert2, shot, brandish1...) draws that one, turned clockwise about
@@ -208,6 +210,7 @@ export class CharacterLook {
       return !z.startsWith('back') && (!this.hasCap || z !== 'hairOverHead');
     });
     for (const eq of this.equips) {
+      if (mounted && this.handNodes?.has(eq)) continue;
       if (dead && !this.deadKeep?.has(eq)) continue;
       let node = eq[ha]?.[hf];
       // a face / eye accessory follows the face: its art for the expression (smile, cry...) or its default;
@@ -257,8 +260,83 @@ export class CharacterLook {
     if (ref?.move) out.move = [Number(ref.move[0]) || 0, Number(ref.move[1]) || 0];
     if (ref?.rotate) out.rotate = Number(ref.rotate) || 0;
     out.brow = anchors.get('brow');
+    out.navel = anchors.get('navel');
     return out;
   }
+}
+
+const MOUNT_BASIC = new Set(['walk1', 'walk2', 'stand1', 'stand2', 'tired', 'prone', 'fly', 'jump']);
+const SKILL_MOUNT_CLIMBERS = new Set([1932003, 1932004, 1932005, 1932007, 1932008, 1932009, 1932010, 1932011]);
+
+/**
+ * The mount's own pose for its rider's action: alert counts as stand1; walk1/2,
+ * stand1/2, tired, prone, fly and jump are kept; a mount item (190) also keeps ladder / rope; a skill mount (193)
+ * keeps fireburner, coolingeffect, alert2, alert3, cannon and torpedo, ladder / rope only on 1932003-5 and 1932007-11,
+ * float only on 1932001-2; anything else is stand1. A tired mount stands in its tired pose.
+ */
+export function mountPose(mountId, action, tired) {
+  const kind = Math.floor(mountId / 10000), climb = action === 'ladder' || action === 'rope';
+  if (action === 'alert') action = 'stand1';
+  let keep = MOUNT_BASIC.has(action);
+  if (!keep && kind === 190) keep = climb;
+  if (!keep && kind === 193) {
+    keep = ['fireburner', 'coolingeffect', 'alert2', 'alert3', 'cannon', 'torpedo'].includes(action)
+      || (climb && SKILL_MOUNT_CLIMBERS.has(mountId)) || (action === 'float' && (mountId === 1932001 || mountId === 1932002));
+  }
+  const pose = keep ? action : 'stand1';
+  return tired && (pose === 'stand1' || pose === 'stand2') ? 'tired' : pose;
+}
+
+/**
+ * A rider on a mount: the mount's frame for its pose, then (a mount item, 190) the
+ * saddle's and the mount equipment's art for that mount, pose and frame (Character/TamingMob/<saddle>.img/<mount>/...);
+ * the rider sits (body pose sit) - on a ladder or rope they take the rope pose - without weapon or shield. Every part
+ * hangs on the mount frame's navel and they all sort together by Base/zmap. The frame follows the mount's own delays;
+ * ms is the time in this pose. gear: the saddle / mount equipment images (or null).
+ */
+export function composeMounted(look, mount, mountId, action, expr, ms, tired = false, gear = []) {
+  const pose = mountPose(mountId, action, tired);
+  const rider = look.compose(action === 'ladder' || action === 'rope' ? 'rope' : 'sit', 0, expr, true);
+  const anim = frames(mount[pose] || mount.stand1);
+  if (!anim.length) return rider;
+  const total = anim.reduce((t, f) => t + (Number(f.delay) || 100), 0);
+  let t = ms % total, index = 0;
+  for (let i = 0; i < anim.length; i++) { const d = Number(anim[i].delay) || 100; if (t < d) { index = i; break; } t -= d; }
+  const canvases = Object.values(anim[index]).filter(isCanvas);
+  if (Math.floor(mountId / 10000) === 190) {
+    for (const g of gear) {
+      const gf = g?.[mountId]?.[mount[pose] ? pose : 'stand1']?.[index];
+      if (gf) canvases.push(...Object.values(gf).filter(isCanvas));
+    }
+  }
+  const ref = canvases.find((c) => c.map?.navel) || canvases[0];
+  const navel = ref?.map?.navel || [0, 0];
+  const out = [];
+  for (const c of canvases) {
+    const o = c.origin || [0, 0], n = c.map?.navel;
+    const [px, py] = n ? [navel[0] - n[0], navel[1] - n[1]] : [0, 0];   // each part's navel on the same point
+    out.push({ node: c, x: px - o[0], y: py - o[1], z: ZINDEX?.get(c.z) ?? 60 });
+  }
+  const rn = rider.navel || [0, 0], dx = navel[0] - rn[0], dy = navel[1] - rn[1];
+  for (const p of rider) out.push({ ...p, x: p.x + dx, y: p.y + dy });
+  out.sort((a, b) => b.z - a.z);
+  out.brow = rider.brow && [rider.brow[0] + dx, rider.brow[1] + dy];
+  out.navel = navel;
+  out.pose = pose;
+  return out;
+}
+
+/** Every canvas a mount can draw, for preloading. */
+export function mountCanvases(mount) {
+  // a mount is pose / frame / part; a saddle or mount equipment is mount id / pose / frame / part
+  const out = [], walk = (n, depth) => {
+    for (const [k, v] of Object.entries(n || {})) {
+      if (k === 'info' || !v || typeof v !== 'object') continue;
+      if (isCanvas(v)) out.push(v); else if (depth < 4) walk(v, depth + 1);
+    }
+  };
+  walk(mount, 0);
+  return out;
 }
 
 /** whole: snap to whole game pixels (crisp); false lets slow drifts like a ghost's circle move smoothly. */
