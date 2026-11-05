@@ -202,9 +202,11 @@ export class GameMap {
       && x >= p.x - 20 && x < p.x + 20 && y >= p.y - 50 && y < p.y + 50);
   }
   /** The script touch portal (type 9) whose hRange x vRange box (100 x 100 by default) holds this point, last listed first. */
-  scriptPortalAt(x, y) {
+  scriptPortalAt(x, y) { return this.boxPortalAt(x, y, 9); }
+  /** The portal of type pt whose hRange x vRange box (100 x 100 by default) holds this point, last listed first. */
+  boxPortalAt(x, y, pt) {
     return this.portals.findLast((p) => {
-      if (p.pt !== 9) return false;
+      if (p.pt !== pt) return false;
       const hw = Math.trunc((p.hRange ?? 100) / 2), hh = Math.trunc((p.vRange ?? 100) / 2);
       return x >= p.x - hw && x < p.x + hw && y >= p.y - hh && y < p.y + hh;
     });
@@ -230,9 +232,10 @@ export class GameMap {
     return this.swimAreas.some((r) => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2);
   }
 
-  ladderAt(x, y, up) {
-    return this.ladders.find((l) => Math.abs(l.x - x) < 12 &&
-      (up ? y > l.y1 && y <= l.y2 + 5 : y >= l.y1 - 10 && y < l.y2));
+  /** The first ladder / rope within 10px of the x span from (x1, y1) to (x2, y2) whose height overlaps the y span. */
+  ladderIn(x1, y1, x2, y2) {
+    const left = Math.min(x1, x2) - 10, right = Math.max(x1, x2) + 10, top = Math.min(y1, y2), bottom = Math.max(y1, y2);
+    return this.ladders.find((l) => l.x >= left && l.x <= right && top <= l.y2 && l.y1 <= bottom);
   }
 
   update(dt) {

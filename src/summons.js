@@ -13,6 +13,8 @@ export const PUPPETS = new Set([3111002, 3211002, 13111004]);
 export const PUPPET_RANGE = 421;     // Cosmic hands you the monsters within this of your puppet (distanceSq < 177777)
 const ATTACK_EVERY = 1.6;     // seconds between a summon's attacks (at least its attack animation)
 const SYNC_EVERY = 0.4;
+/** Octopus, Wrath of the Octopi and Gaviota: the summons that still attack while you are on a ladder or rope. */
+const LADDER_ATTACKERS = new Set([5211001, 5220002, 5211002]);
 
 export class Summon {
   constructor(game, d) {
@@ -115,6 +117,7 @@ export class Summon {
   }
   tryAttack(dt) {
     if (!this.canAttack || !this.node?.attack1 || this.state === 'summoned') return;
+    if (this.g.player?.ladder && !LADDER_ATTACKERS.has(this.skill)) return;
     if ((this.attackT -= dt) > 0) return;
     const info = this.node.attack1.info, ld = this.g.skills.levelData(this.skill, this.level) || {};
     const mobs = this.targets(info, ld.mobCount || 1);

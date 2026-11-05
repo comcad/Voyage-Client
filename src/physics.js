@@ -142,9 +142,11 @@ export class Footholds {
 
   /** Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh. */
   fall(ent, dt, ignore = null, swimming = false) {
+    // moved by the average of the speed before and after gravity, so a jump peaks at v²/2g whatever the frame time
+    const vy0 = ent.vy;
     if (!swimming) ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
     const nx = ent.x + ent.vx * dt;
-    const ny = ent.y + ent.vy * dt;
+    const ny = ent.y + (swimming ? ent.vy : (vy0 + ent.vy) / 2) * dt;
 
     // walls: those of the floor we are over
     const under = ent.vx ? this.below(ent.x, ent.y, Infinity, ignore) : null;

@@ -345,18 +345,16 @@ export class PetSelectDialog extends Win {
 
 // ==================================================================== notices
 /**
- * The death notice (UIWindow.img/Notice/0, 286x146): the tombstone and "PRESS OK TO BE REVIVED. Once you have revived,
- * you will be sent to a safe town nearby." are in the art; OK (Basic BtOK, 65x24) sits centred in its grey strip along
- * the bottom: inside the borders x 5-280, and between the separator line (row 110) and the bottom bevel (row 140).
+ * The death notice (UIWindow.img/Notice/0, 286x146, at (257, 97)): the tombstone and "PRESS OK TO BE REVIVED. Once
+ * you have revived, you will be sent to a safe town nearby." are in the art, with Basic BtOK2 at (124, 115).
  * Enter answers it too.
  */
 export class DeathNotice extends Win {
   constructor(mgr, done) {
-    super(mgr, mgr.W.Notice[0], Math.round((800 - 286) / 2), 90);
+    super(mgr, mgr.W.Notice[0], 257, 97);
     this.modal = true; this.done = done;
     this.closeBtn.visible = false;
-    const ok = mgr.B.BtOK, w = ok.normal[0]._w, h = ok.normal[0]._h;
-    this.button(ok, Math.floor((5 + 281 - w) / 2), Math.floor((111 + 140 - h) / 2), () => this.finish());
+    this.button(mgr.B.BtOK2, 124, 115, () => this.finish());
   }
   finish() { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(); }
   key(e) { if (e.key === 'Enter' || e.key === ' ') this.finish(); }

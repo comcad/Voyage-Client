@@ -12,7 +12,7 @@ import { settings } from './settings.js';
  *   quest icons      UI/UIWindow.img/QuestIcon (2 book: quest to hand in, 0 bulb: quest to start, 1 bubble: in progress)
  *   boss HP          UI/UIWindow.img/MobGage (icon frame, [ track ], Gage/<colour> fill)
  *   buffs            skill / item icons at the top right, shaded clockwise as they run out
- *   tombstone        Effect/Tomb.img fall (frames 0-11 drop, 12-19 land)
+ *   tombstone        Effect/Tomb.img fall (spins down 600px in 880ms, then lands)
  */
 const SETS = { red: ['NoRed1', 'NoRed0'], crit: ['NoCri1', 'NoCri0'], violet: ['NoViolet1', 'NoViolet0'], blue: ['NoBlue1', 'NoBlue0'] };
 // damage numbers, as openms recovered the original: opaque for 400ms, fading over the next 600, rising 30px
@@ -111,8 +111,17 @@ export class WorldFx {
     if (!node) return;
     this.hints = [{ text, wrap: Math.max(40, width), until: performance.now() + Math.max(1, seconds) * 1000, ent, node }];
   }
-  /** A tombstone for `ent`: it lands where the ghost is (following the death knock-back), not where the blow fell. */
-  tomb(ent) { this.tombs.push({ anim: new Anim(this.T.fall, false), ent }); }
+  /**
+   * A tombstone for `ent` at (x, y). Fresh, it spins down from 600px above, landing 880ms later (its frames on their
+   * own clock); otherwise it is lying there already (its last frame).
+   */
+  tomb(ent, x, y, fresh = true) {
+    this.untomb(ent);
+    const anim = new Anim(this.T.fall, false);
+    if (!fresh) { anim.i = anim.frames.length - 1; anim.done = true; }
+    this.tombs.push({ anim, ent, x, y, fresh, t0: performance.now() });
+  }
+  untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
   mapChanged() { this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
@@ -175,13 +184,12 @@ export class WorldFx {
       for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24 });
     }
   }
-  /** Tombstones (drawn behind the characters, so the ghost floats in front): drop from above during frames 0-11, then land. */
+  /** Tombstones, drawn behind the characters so the ghost floats in front. */
   drawTombs(ctx, cam) {
-    const im = (n) => this.assets.image(n);
+    const im = (n) => this.assets.image(n), now = performance.now();
     for (const t of this.tombs) {
-      const a = t.anim, fallMs = 12 * 80, at = Math.min(fallMs, a.i < 12 ? a.i * 80 + a.t : fallMs);
-      // +1: the stone's art sits a pixel left of the ghost's middle
-      drawAt(ctx, im, a.node, Math.round(t.ent.x) + 1 - cam.x, Math.round(t.ent.y) - cam.y - 320 * (1 - at / fallMs), 1);
+      const drop = t.fresh ? Math.round(600 * Math.max(0, 1 - (now - t.t0) / 880)) : 0;
+      drawAt(ctx, im, t.anim.node, t.x - cam.x, t.y - drop - cam.y, 1);
     }
   }
 
