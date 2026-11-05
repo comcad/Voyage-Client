@@ -271,8 +271,9 @@ const idRun = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const NO_LADDER = new Set([4121004, 4221004, 5001005, 15001003, 5221006, 1013, 1014, 1017, 1018, 1019, 10001014, 10001015,
   10001019, 20001019, 10001022, 20001022, 10001023, 20001023, 22131001, 22181003, ...idRun(1027, 1031),
   ...idRun(10001027, 10001031), ...idRun(20001027, 20001031), ...idRun(20011027, 20011031), 2311002, ...PUPPETS, 4221006]);
-/** Characters on a ladder or rope are drawn facing left, whichever way they face. */
+/** Characters on a ladder or rope, and ghosts, are drawn facing left whichever way they face. */
 const CLIMBING = /^(ladder|rope)2?$/;
+const drawnRight = (ent) => !!ent.facingRight && ent.action !== 'dead' && !CLIMBING.test(ent.action);
 /**
  * Spells that strike what is in their box: Thunder Bolt, Heal, Explosion, Ice Strike, Shining Ray, Big Bang, Meteor
  * Shower, Blizzard, Genesis, Fire Demon, Ice Demon, Fire Pillar, Fire Strike, Ninja Ambush and Evan's. Any other spell
@@ -1138,7 +1139,7 @@ export class Game {
   drawItemFx(ctx, cam, ent, parts, front, dx = 0, dy = 0) {
     const fx = ent.itemFx;
     if (!fx?.layers) return;
-    const right = ent.facingRight && !CLIMBING.test(ent.action);
+    const right = drawnRight(ent);
     const now = performance.now(), e = fx.node, dir = right ? -1 : 1, brow = parts.brow || [0, -55];
     if (!front && Number(e.spectrum)) {
       const life = Number(e.delay) || 1000, a = (e.alpha ?? 128) / 255;
@@ -2392,6 +2393,7 @@ export class Game {
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
+      if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
       this.snapCamera();
       if (!this.net) history.replaceState(null, '', `?map=${id}`);
       this.hooks.onMap?.(map);
@@ -2976,11 +2978,11 @@ export class Game {
     }
     const moving = ent.equipFxX !== undefined && Math.abs(ent.x - ent.equipFxX) > 0.5;
     ent.equipFxX = ent.x;
-    const right = ent.facingRight && !CLIMBING.test(ent.action);
+    const right = drawnRight(ent);
     for (const f of ent.equipFx) f.update(dt, f.head ? ent.browAt || { x: ent.x, y: ent.y - 55 } : ent, right, moving);
   }
   drawEquipFx(ctx, cam, ent, parts, front, dx = 0, dy = 0) {
-    const brow = parts.brow || [0, -55], x = ent.x + dx, y = ent.y + dy, right = ent.facingRight && !CLIMBING.test(ent.action);
+    const brow = parts.brow || [0, -55], x = ent.x + dx, y = ent.y + dy, right = drawnRight(ent);
     ent.browAt = { x: x + brow[0] * (right ? -1 : 1), y: y + brow[1] };
     for (const f of ent.equipFx || []) {
       const at = f.head ? ent.browAt : { x, y };
@@ -3422,8 +3424,8 @@ export class Game {
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
     if (this.net) this.touchReactors();
+    if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
     if (this.fade?.dir !== 'out') { if (this.dead) this.updateDeadBody(dt); else this.updatePlayer(dt); }   // you stand still while the old map goes dark
-    else this.pendingSkill = 0;
     for (const rp of this.others.values()) { rp.update(dt); this.watchDeath(rp); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
     this.stepItemFx(this.player, dt);
@@ -3558,8 +3560,7 @@ export class Game {
       const hw = this.pressedSkill();   // Hero's Will still goes
       if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
       if (p.ladder) { p.attack = null; this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
-      if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
-      else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
+      this.coast(dt);
       this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
     }
@@ -3610,17 +3611,18 @@ export class Game {
       const y0 = p.y;
       p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
-      const leave = { fh: -(l.id || 0), stance: this.currentStance() };   // how you were on it, for those watching
+      const leaving = () => ({ fh: -(l.id || 0), stance: this.currentStance() });   // how you were on it, for those watching
       if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
+        const leave = leaving();
         p.ladder = null; p.vy = -JUMP * (swim ? 0.3 : 0.5); p.vx = dir * PHYS.walk * ms.speed * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
         this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy, leave };
         this.lastJumpDir = dir;
       } else if (v < 0 && p.y < l.y1) {
         // the top: off onto the floor above it when it has one (uf), else you stay at the top
-        if (l.uf) { p.ladder = null; p.vy = 0; p.y = l.y1 - 5; this.moveEvent = { kind: 'leave', leave }; } else { p.y = l.y1; p.vy = 0; }
+        if (l.uf) { this.moveEvent = { kind: 'leave', leave: leaving() }; p.ladder = null; p.vy = 0; p.y = l.y1 - 5; } else { p.y = l.y1; p.vy = 0; }
       } else if (v > 0 && p.y > l.y2) {
+        this.moveEvent = { kind: 'leave', leave: leaving() };
         p.ladder = null; p.vx = 0; p.vy = 0; p.y = l.y2 + 1;
-        this.moveEvent = { kind: 'leave', leave };
       }
       this.advanceFrame(action, p.y !== y0 ? dt : 0);   // the frames only run while you move
       this.touchPortal();
@@ -3665,7 +3667,7 @@ export class Game {
     if (p.fh && this.portalCooldown <= 0) {
       const portal = map.portalAt(p.x, p.y);
       // touch portals fire once on entry, not every frame you stand in them
-      const touch = portal && TOUCH_PORTALS.has(portal.pt) && portal.pt !== 3;
+      const touch = portal && TOUCH_PORTALS.has(portal.pt);
       const touched = touch && portal !== this.touchedPortal;
       this.touchedPortal = touch ? portal : null;
       if (portal && (inp.hit('up') || touched)) { this.usePortal(portal); if (!touched) return; }
@@ -3921,8 +3923,14 @@ export class Game {
   }
   /** Dead: the body (unseen, but it's what is sent) keeps falling with no input, off a ladder or rope too. */
   updateDeadBody(dt) {
-    const p = this.player, fh = this.map.fh;
+    const p = this.player;
     p.ladder = null; p.seat = null; p.attack = null;
+    if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
+    this.coast(dt);
+  }
+  /** No input: on a floor you slide to a stop, in the air you fall (and stop on landing). */
+  coast(dt) {
+    const p = this.player, fh = this.map.fh;
     if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
     else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
   }
@@ -6086,23 +6094,19 @@ export class Game {
     const ev = this.moveEvent, left = !p.facingRight;
     this.moveEvent = null;
     const air = this.airAction();
-    // leaving a ladder or rope: two instant steps where you let go, first still on it, then off it
-    if (ev?.leave) {
-      const at = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: 0, vy: 0, duration: 0 };
-      this.moveBuf.push({ ...at, fh: ev.leave.fh, stance: ev.leave.stance }, { ...at, fh: 0, stance: stanceByte(air, left) });
-    }
+    // two instant steps at one spot, before and after a change, so those watching snap rather than slide
+    const pair = (at, before, after) => { const s = { ...at, vx: 0, vy: 0, duration: 0 }; this.moveBuf.push({ ...s, ...before }, { ...s, ...after }); };
+    const here = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y) };
+    // leaving a ladder or rope: where you let go, first still on it, then off it
+    if (ev?.leave) pair(here, ev.leave, { fh: 0, stance: stanceByte(air, left) });
     if (ev?.kind === 'jump') this.moveBuf.push({ cmd: 1, rx: Math.round(ev.vx), ry: Math.round(ev.vy), stance: stanceByte(air, left), duration: 0 });
     if (ev?.kind === 'down') {
-      const at = { cmd: 15, x: Math.round(ev.x), y: Math.round(ev.y) - 1, vx: 0, vy: 0, ofh: ev.ofh, duration: 0 };
-      this.moveBuf.push({ ...at, fh: ev.ofh, stance: stanceByte('prone', left) }, { ...at, fh: 0, stance: stanceByte(air, left) });
+      pair({ cmd: 15, x: Math.round(ev.x), y: Math.round(ev.y) - 1, ofh: ev.ofh }, { fh: ev.ofh, stance: stanceByte('prone', left) }, { fh: 0, stance: stanceByte(air, left) });
       this.downOfh = ev.ofh;
     }
     // catching a ladder or rope: two instant steps on it, first as you were, then on it, so those watching snap onto
     // it rather than slide over to it
-    if (ev?.kind === 'grab' && p.ladder) {
-      const at = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: 0, vy: 0, duration: 0 };
-      this.moveBuf.push({ ...at, fh: ev.fh, stance: ev.stance }, { ...at, fh: -(p.ladder.id || 0), stance: this.currentStance() });
-    }
+    if (ev?.kind === 'grab' && p.ladder) pair(here, { fh: ev.fh, stance: ev.stance }, { fh: -(p.ladder.id || 0), stance: this.currentStance() });
     // the frame you land on still counts as in the air, stopped where you meet the floor; the ground starts after it
     const landed = !!p.fh && this.wasAirborne && !this.dead;
     this.wasAirborne = !p.fh && !p.ladder;
@@ -6337,8 +6341,7 @@ export class Game {
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
     const seeThrough = local ? this.hidden() || this.gmHidden : ent.hidden;   // Dark Sight / Wind Walk / GM hide: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
-    // a ghost always faces left, and so does anyone on a ladder or rope (its art is never mirrored)
-    const mirror = !dead && !CLIMBING.test(ent.action) && ent.facingRight;
+    const mirror = drawnRight(ent);
     drawParts(ctx, this.assets, parts, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead);
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
