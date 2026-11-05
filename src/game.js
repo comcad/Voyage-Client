@@ -3666,7 +3666,7 @@ export class Game {
           // a little hop first, then down through the floor: it stays ignored until we are well past it
           if (below) {
             this.moveEvent = { kind: 'down', ofh: p.fh.id, x: p.x, y: p.y };
-            p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump');
+            p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump');
           }
           else if (!dir) action = 'prone';   // nothing to drop to: stay lying down
         } else {
@@ -3675,7 +3675,7 @@ export class Game {
           const J = PHYS.walk * ms.speed;   // not slowed in water
           if (dir * p.vx < J * 0.8) p.vx += dir * J * 0.8;
           if (dir * p.vx > J) p.vx = dir * J;
-          p.fh = null; p.vy = -JUMP * (swim ? 0.7 : 1);
+          p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * (swim ? 0.7 : 1);   // leaving a floor lifts you 1px
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
           sfx.play('Game/Jump');
         }
@@ -3779,7 +3779,7 @@ export class Game {
       p.x = t.x; p.y = t.y - 10; p.vx = 0; p.vy = 0; p.fh = null; p.ladder = null; p.seat = null;
       this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance, duration: 0 });
       this.moveTotal += 30; this.movePos = { x: p.x, y: p.y }; this.wasAirborne = true; this.downOfh = 0;
-      this.touchedBoxPortal = map.boxPortalAt(p.x, p.y, 3);
+      this.touchedBoxPortal = map.boxPortalAt(p.x, p.y, 3) || null;
       this.playTeleportEffect(p.x, p.y);
       this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
       return;
@@ -3798,7 +3798,7 @@ export class Game {
     if (this.portalCooldown > 0) return;
     const p = this.player, portal = this.map.boxPortalAt(p.x, p.y, 3);
     const enter = portal && this.touchedBoxPortal !== undefined && portal !== this.touchedBoxPortal && portal.tm !== 999999999;
-    this.touchedBoxPortal = portal;
+    this.touchedBoxPortal = portal || null;   // undefined only until the first check on a map
     if (enter) this.usePortal(portal);
   }
   /**
@@ -5779,6 +5779,7 @@ export class Game {
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
     if (knock && this.holdsStance()) knock = 0;
     if (knock) {
+      if (p.fh) p.y = Math.floor(p.y - 1);
       p.fh = null; p.ladder = null;
       p.vx = impact(p.vx || 0, knock * KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
     }
