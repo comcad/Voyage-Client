@@ -1,5 +1,5 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
-import { Footholds, PHYS, accelerate, approach } from './physics.js';
+import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
@@ -365,6 +365,16 @@ const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
+/** Riding skills: Monster Rider, Battleship, and the skill vehicles (Spaceship, Yeti, Witch's Broomstick, Barlog...). */
+const MONSTER_RIDERS = new Set([1004, 10001004, 20001004, 20011004]), BATTLESHIP = 5221006;
+const SKILL_VEHICLE_SKILLS = new Set([1013, 1017, 1018, 1019, 10001014, 10001019, 10001022, 10001023, 20001019, 20001022, 20001023,
+  ...[1027, 1028, 1029, 1030, 1031].flatMap((n) => [n, 10000000 + n, 20000000 + n, 20010000 + n])]);
+/** The skill vehicles: 1932001-1932005 and 1932007-1932011. */
+const isSkillVehicle = (id) => (id > 1932000 && id < 1932006) || (id > 1932006 && id < 1932012);
+/** Usable on a mount: Space Dash (on a skill vehicle), Space Beam, and on the Battleship its skills, Maple Warrior and Hero's Will. */
+const SPACE_DASHES = new Set([1014, 10001015]), SPACE_BEAMS = new Set([1015, 10001016]);
+const RIDE_SHIP_SKILLS = new Set([5201002, 5201003, 5211001, 5211002, 5211004, 5211005, 5220002, 5221000, 5221007, 5221008, 5221010,
+  14111006, 21121008, 22171004]);
 /** A tired mount: tiredness at least (level / 3) x 10 + 95 (checked on SET_TAMING_MOB_INFO / SPAWN_PLAYER). */
 const mountTired = (level, tired) => tired >= Math.floor(level / 3) * 10 + 95;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
@@ -1631,7 +1641,7 @@ export class Game {
     const ride = this.riding && this.mountData(this.riding.item)?.stats;
     if (ride) {
       const worn = this.inventory?.equipped || {}, inc = (k) => [-18, -19].reduce((t, s) => t + (Number(this.windows?.info?.(worn[s]?.id)?.[k]) || 0), 0);
-      const id = this.riding.item, skillMount = (id > 1932000 && id < 1932006) || (id > 1932006 && id < 1932012);
+      const skillMount = isSkillVehicle(this.riding.item);
       const speed = inc('incSpeed') + (skillMount ? buff('speed') : 0) + Math.max(80, Number(ride.speed) || 100);
       const jump = inc('incJump') + (skillMount ? buff('jump') : 0) + Math.max(80, Number(ride.jump) || 100);
       return { speed: Math.min(190, speed) / 100, jump: Math.min(123, jump) / 100 };
@@ -3373,6 +3383,7 @@ export class Game {
     this.updateDiseases(dt);
     if (this.net) this.touchReactors();
     if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
+    else this.pendingSkill = 0;
     for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
     this.stepItemFx(this.player, dt);
@@ -3489,21 +3500,32 @@ export class Game {
   }
   land(d) { d.landed = true; d.falling = false; d.cx = d.x; d.cy = d.y; d.angle = 0; d.phase = 0; }
 
+  /** A skill double-clicked in the skill window: used next frame as if its key were pressed. */
+  clickSkill(id) { this.pendingSkill = id; }
+  /** The skill a key (or a double-click this frame) starts now. */
+  pressedSkill() {
+    if (this.clickedSkill) { this.skillKeyPressed = true; return this.clickedSkill; }
+    return this.heldSkill();
+  }
+
   updatePlayer(dt) {
+    this.clickedSkill = this.pendingSkill || 0; this.pendingSkill = 0;
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
     let dir = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
     if (this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
-      const hw = this.heldSkill();   // Hero's Will still goes
+      const hw = this.pressedSkill();   // Hero's Will still goes
       if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
       if (p.ladder) { this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
       if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
-      else { fh.fall(p, dt, p.ignoreFh); if (p.fh) p.vx = 0; }
-      this.advanceFrame(p.fh ? look.standAction() : 'jump', dt);
+      else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
+      this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
     }
-    const ms = this.moveStats(), WALK = PHYS.walk * ms.speed, JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
+    const ms = this.moveStats(), JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
+    const swim = map.swimming(p.x, p.y), WALK = PHYS.walk * ms.speed * (swim ? PHYS.swimDec : 1);
+    const inY = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
     if (p.fh || p.ladder) this.fjUsed = false;   // Flash Jump comes back once you land
@@ -3529,7 +3551,7 @@ export class Game {
       const k = this.keydown;
       k.t += dt;
       if (this.heldSkill() === k.id && !this.dead && !this.hasDisease(STUN)) {
-        if (p.fh) p.vx = 0; else fh.fall(p, dt, p.ignoreFh);
+        if (p.fh) p.vx = 0; else this.playerFall(dt, 0, 0, ms);
         this.advanceFrame(k.pose, dt);
         if (HURRICANES.has(k.id)) this.hurricaneShot(k);
         if (this.keydown) return;
@@ -3545,7 +3567,7 @@ export class Game {
       p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
       if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
-        p.ladder = null; p.vy = -JUMP * 0.5; p.vx = dir * WALK * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
+        p.ladder = null; p.vy = -JUMP * (swim ? 0.3 : 0.5); p.vx = dir * PHYS.walk * ms.speed * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
         this.lastJumpDir = dir;
         p.regrabT = 0.35;              // jumping off with up still held must not catch the same rope again
         sfx.play('Game/Jump');
@@ -3562,14 +3584,14 @@ export class Game {
 
     if (p.attack) {
       action = p.attack;
-      if (p.fh) p.vx = 0; else fh.fall(p, dt, p.ignoreFh);
+      if (p.fh) p.vx = 0; else this.playerFall(dt, 0, 0, ms);
       if (this.advanceFrame(action, dt)) p.attack = null;
       return;
     }
 
     // seated (a map seat or a chair): moving, jumping, attacking or a skill stands you up; otherwise you stay put
     if (p.seat) {
-      if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.heldSkill() || this.macroQueue?.length) this.standUp();
+      if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.pressedSkill() || this.macroQueue?.length) this.standUp();
       else {
         this.advanceFrame('sit', dt);
         return;
@@ -3586,7 +3608,7 @@ export class Game {
         this.skillKeyPressed = false;
         if (used) return;
       }
-      const skill = this.heldSkill();
+      const skill = this.pressedSkill();
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
       if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     }
@@ -3613,8 +3635,9 @@ export class Game {
 
     if (p.fh) {
       if (dir) p.facingRight = dir > 0;
-      // holding jump keeps jumping: each landing jumps again (a down-jump still needs its own press)
-      if (!this.hasDisease(WEAKEN) && (this.hitAction(ACTION.JUMP) || (this.holdAction(ACTION.JUMP) && !inp.is('down')))) {   // Weakness: no jumping
+      // holding jump keeps jumping: each landing jumps again (a down-jump still needs its own press); in water a jump
+      // goes at most every 300ms
+      if (!this.hasDisease(WEAKEN) && (this.hitAction(ACTION.JUMP) || (this.holdAction(ACTION.JUMP) && !inp.is('down'))) && this.swimJumpReady(swim)) {   // Weakness: no jumping
         if (inp.is('down')) {
           const below = fh.below(p.x, p.y + 1, Infinity, p.fh);   // any floor under us, however far down
           // a little hop first, then down through the floor: it stays ignored until we are well past it
@@ -3626,9 +3649,10 @@ export class Game {
         } else {
           // the client's jump: a direction adds 0.8 of the walk speed to what you already had, up to the walk speed
           p.vx ||= 0;
-          if (dir * p.vx < WALK * 0.8) p.vx += dir * WALK * 0.8;
-          if (dir * p.vx > WALK) p.vx = dir * WALK;
-          p.fh = null; p.vy = -JUMP;
+          const J = PHYS.walk * ms.speed;   // not slowed in water
+          if (dir * p.vx < J * 0.8) p.vx += dir * J * 0.8;
+          if (dir * p.vx > J) p.vx = dir * J;
+          p.fh = null; p.vy = -JUMP * (swim ? 0.7 : 1);
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
           this.lastJumpDir = dir;
           sfx.play('Game/Jump');
@@ -3636,7 +3660,7 @@ export class Game {
       } else {
         // walking speeds up and slows down rather than starting and stopping dead (moved by the step's average speed)
         const v0 = p.vx || 0;
-        p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel, WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
+        p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel * (swim ? PHYS.swimDec : 1), WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
         const dx = ((v0 + p.vx) / 2) * dt;
         if (dx) { const r = fh.walk(p, dx); if (r === 'edge') p.vy = 0; else if (r === 'wall') p.vx = 0; }
         if (inp.is('down') && !dir) action = 'prone';
@@ -3645,14 +3669,23 @@ export class Game {
     }
     if (!p.fh) {
       p.vx ||= 0;
-      if (dir) {
-        p.facingRight = dir > 0;
-        p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
-      } else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
-      fh.fall(p, dt, p.ignoreFh);
+      if (dir) p.facingRight = dir > 0;
+      if (swim) {
+        // a stroke: the jump key (pressed, or its key repeat while held) sends you up; nothing else rises
+        const key = this.keysFor(5, ACTION.JUMP).some((c) => inp.hit(c) || inp.repeated(c));
+        if (key && !this.hasDisease(WEAKEN) && this.swimJumpReady(true)) {
+          p.vy = -PHYS.swimSpeed * 5 * this.swimShoe(ms).v;
+          this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
+        }
+        this.playerFall(dt, dir, inY, ms);
+      } else {
+        if (dir) p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
+        else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
+        fh.fall(p, dt, p.ignoreFh);
+      }
       // landing keeps half the speed when you hold the same way (or nothing) and stops you holding the other way
       if (p.fh) p.vx = dir * p.vx >= 0 ? p.vx * 0.5 : 0;
-      action = p.fh ? look.standAction() : 'jump';
+      action = p.fh ? look.standAction() : this.airAction();
     }
     action ??= look.standAction();
 
@@ -3660,6 +3693,33 @@ export class Game {
     p.x = Math.max(fh.left + 25, Math.min(fh.right - 25, p.x));     // the client's side walls: footholds' extent, 25px in
     if (p.y > b.bottom + 300) this.placeAtPortal(map.spawnPortal(null));
     this.advanceFrame(action, dt);
+  }
+
+  /** Off the ground (not on a ladder): swimming in water, else jumping. */
+  airAction() { const p = this.player; return this.map?.swimming(p.x, p.y) ? 'fly' : 'jump'; }
+  /**
+   * In water your speed stat (or your mount's) sets how fast you swim both ways, and the mount's or your shoes' swim
+   * (a percentage) scales the sideways speed.
+   */
+  swimShoe(ms = this.moveStats()) {
+    const ride = this.riding && this.mountData(this.riding.item)?.stats;
+    const shoes = !ride && this.windows?.info?.(this.inventory?.equipped?.[-7]?.id);
+    const pct = Number((ride || shoes)?.swim ?? 100);
+    return { acc: 1, speed: ms.speed * pct / 100, v: ms.speed };
+  }
+  /** Off the ground: in water you swim (no gravity; left / right and up / down steer it), else you fall. */
+  playerFall(dt, dir = 0, inY = 0, ms = null) {
+    const p = this.player, fh = this.map.fh;
+    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe(ms || this.moveStats())); fh.fall(p, dt, p.ignoreFh, true); }
+    else fh.fall(p, dt, p.ignoreFh);
+  }
+  /** In water a jump or a stroke is taken at most every 300ms. */
+  swimJumpReady(swim) {
+    if (!swim) return true;
+    const now = performance.now();
+    if (now - (this.swimJumpAt || -Infinity) < 300) return false;
+    this.swimJumpAt = now;
+    return true;
   }
 
   /**
@@ -3771,6 +3831,10 @@ export class Game {
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
+    if (this.riding && !this.skillKeyPressed) return false;   // a key held down on a mount doesn't repeat
+    const ride = this.rideRule(id);
+    if (ride === 'off') { this.net?.cancelBuff(id); return true; }
+    if (!ride) return false;
     // in Dark Sight only Assassinate goes; with Vanish learned, anything but Dark Sight itself
     if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
@@ -3798,6 +3862,27 @@ export class Game {
   }
 
   /**
+   * On a mount (a tamed monster, 190, or a vehicle, 193) a riding skill gets you off it (CANCEL_BUFF with that skill,
+   * no SPECIAL_MOVE) when it is the kind for what you ride, and does nothing otherwise: it never starts a second ride.
+   * Space Dash goes on a skill vehicle, Space Beam always, the Battleship's own skills on the Battleship; anything else
+   * is refused with a notice. 'off', 'go' or null (refused).
+   */
+  rideRule(id) {
+    const ride = this.riding?.item, kind = Math.floor((ride || 0) / 10000);
+    if (kind !== 190 && kind !== 193) return 'go';
+    const skillVehicle = isSkillVehicle(ride);
+    const ship = kind === 193 && !skillVehicle;
+    if (SKILL_VEHICLE_SKILLS.has(id)) return skillVehicle ? 'off' : null;
+    if (MONSTER_RIDERS.has(id)) return kind === 190 ? 'off' : null;
+    if (id === BATTLESHIP) return ship ? 'off' : null;
+    if (SPACE_DASHES.has(id)) return skillVehicle ? 'go' : null;
+    if (SPACE_BEAMS.has(id)) return 'go';
+    if (RIDE_SHIP_SKILLS.has(id)) return ship ? 'go' : null;
+    this.notice(kind === 190 ? 'Not available while riding on the tamed monster.' : 'Not available during the ride.');
+    return null;
+  }
+
+  /**
    * Basic attack (skillId 0) or skill. kind: melee | ranged | magic | special.
    * Damage, MP cost and ammo are validated by Cosmic; the client picks targets and rolls damage.
    * opts.held: a shot of a skill whose key is held (Hurricane, Piercing Arrow), fired from the pose it holds;
@@ -3813,7 +3898,7 @@ export class Game {
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
     if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
-    if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.info?.swim) return false;
+    if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.swimming(p.x, p.y)) return false;
     // a plain attack in Dark Sight (without Vanish) only brings you out of it
     const ds = !skillId && !opts.final && this.darkSight();
     if (ds && !sb.level(VANISH)) {
@@ -4369,8 +4454,6 @@ export class Game {
 
   /** Buffs and other SPECIAL_MOVE skills. */
   castSpecial(id, lv) {
-    // the riding skill used again while on the mount gets off it: CANCEL_BUFF with the skill, no SPECIAL_MOVE
-    if (this.riding?.skill === id) { this.net?.cancelBuff(id); return true; }
     if (TELEPORTS.has(id)) return this.teleport(id, lv);
     if (id === HEAL) return this.castHeal(id, lv);
     const p = this.player, node = this.skills.node(id);
@@ -4735,7 +4818,8 @@ export class Game {
    */
   flashJump(id, lv) {
     const p = this.player, ld = this.skills.levelData(id, lv);
-    if (!this.skillKeyPressed || p.fh || p.ladder || p.attack || this.fjUsed || (p.vy || 0) > 0) return false;
+    if (!this.skillKeyPressed || p.fh || p.ladder || p.attack || this.fjUsed) return false;
+    if ((p.vy || 0) > 0 && !this.map.swimming(p.x, p.y)) return false;   // falling, except in water
     if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
     if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
     const n = Math.floor(lv / 4), dir = p.facingRight ? 1 : -1;
@@ -5839,7 +5923,7 @@ export class Game {
     let st = 'stand';
     if (p.seat) st = 'sit';
     else if (p.ladder) st = p.ladder.l ? 'ladder' : 'rope';
-    else if (!p.fh) st = 'jump';
+    else if (!p.fh) st = this.airAction();
     else if (p.action === 'prone') st = 'prone';
     else if (p.action.startsWith('walk')) st = 'walk';
     return stanceByte(st, !p.facingRight);
@@ -5862,10 +5946,11 @@ export class Game {
     // in the air (cmd 15), and every step until you land names that floor, so those watching let you through it
     const ev = this.moveEvent, left = !p.facingRight;
     this.moveEvent = null;
-    if (ev?.kind === 'jump') this.moveBuf.push({ cmd: 1, rx: Math.round(ev.vx), ry: Math.round(ev.vy), stance: stanceByte('jump', left), duration: 0 });
+    const air = this.airAction();
+    if (ev?.kind === 'jump') this.moveBuf.push({ cmd: 1, rx: Math.round(ev.vx), ry: Math.round(ev.vy), stance: stanceByte(air, left), duration: 0 });
     if (ev?.kind === 'down') {
       const at = { cmd: 15, x: Math.round(ev.x), y: Math.round(ev.y) - 1, vx: 0, vy: 0, ofh: ev.ofh, duration: 0 };
-      this.moveBuf.push({ ...at, fh: ev.ofh, stance: stanceByte('prone', left) }, { ...at, fh: 0, stance: stanceByte('jump', left) });
+      this.moveBuf.push({ ...at, fh: ev.ofh, stance: stanceByte('prone', left) }, { ...at, fh: 0, stance: stanceByte(air, left) });
       this.downOfh = ev.ofh;
     }
     // the frame you land on still counts as in the air, stopped where you meet the floor; the ground starts after it
@@ -5877,7 +5962,7 @@ export class Game {
       // on a ladder or rope its id, negative: those watching put you on it, in its layer (0 would leave you in the
       // layer of the last floor, sometimes behind it)
       fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000 };
-    if (landed) Object.assign(el, { vy: 0, fh: 0, stance: stanceByte('jump', left) });
+    if (landed) Object.assign(el, { vy: 0, fh: 0, stance: stanceByte(air, left) });
     if (this.downOfh) Object.assign(el, { cmd: 15, ofh: this.downOfh });
     if (p.fh || p.ladder) this.downOfh = 0;
     const last = this.moveBuf[this.moveBuf.length - 1];
