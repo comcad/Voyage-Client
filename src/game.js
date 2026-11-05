@@ -264,6 +264,15 @@ const HEAL = 2301002;
 /** Attack spells need the ground (or water), except Heal and Explosion. */
 const AIR_SPELLS = new Set([HEAL, EXPLOSION]);
 /**
+ * On a ladder or rope only buffs go, and not these: Ninja Ambush, Dash, Battleship, the beginner / Noblesse / Legend
+ * riding and travel skills, Evan's Magic Shield and Soul Stone, Mystic Door, Puppet and Smokescreen.
+ */
+const idRun = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+const NO_LADDER = new Set([4121004, 4221004, 5001005, 15001003, 5221006, 1013, 1014, 1017, 1018, 1019, 10001014, 10001015,
+  10001019, 20001019, 10001022, 20001022, 10001023, 20001023, 22131001, 22181003, ...idRun(1027, 1031),
+  ...idRun(10001027, 10001031), ...idRun(20001027, 20001031), ...idRun(20011027, 20011031), 2311002, 3111002, 3211002,
+  13111004, 4221006]);
+/**
  * Spells that strike what is in their box: Thunder Bolt, Heal, Explosion, Ice Strike, Shining Ray, Big Bang, Meteor
  * Shower, Blizzard, Genesis, Fire Demon, Ice Demon, Fire Pillar, Fire Strike, Ninja Ambush and Evan's. Any other spell
  * hits the first monster in a wedge in front of you.
@@ -3530,7 +3539,6 @@ export class Game {
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
     if (p.fh || p.ladder) this.fjUsed = false;   // Flash Jump comes back once you land
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
-    if (p.regrabT > 0) p.regrabT -= dt;
 
     // Rush's dash, on the 30ms clock
     if (this.rush) {
@@ -3562,23 +3570,27 @@ export class Game {
     if (this.net && !p.seat && this.pickupKey()) this.tryPickup();
     if (p.ladder) {
       const l = p.ladder;
+      // a buff cast here plays ladder2 / rope2, and you hang still until it's over
+      if (p.attack) { if (this.advanceFrame(p.attack, dt)) p.attack = null; return; }
+      const skill = this.pressedSkill();   // only buffs go here (useSkill turns the rest down)
+      if (skill && this.skills && performance.now() >= (this.attackLock || 0) && this.useSkill(skill)) return;
       const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
       p.vx = 0; p.vy = v * PHYS.climb;   // the speed sent while climbing
+      const y0 = p.y;
       p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
       if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
         p.ladder = null; p.vy = -JUMP * (swim ? 0.3 : 0.5); p.vx = dir * PHYS.walk * ms.speed * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
+        this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
         this.lastJumpDir = dir;
-        p.regrabT = 0.35;              // jumping off with up still held must not catch the same rope again
-        sfx.play('Game/Jump');
-      } else if (p.y < l.y1) {
-        p.ladder = null; p.vy = 0;
-        p.fh = fh.below(l.x, l.y1 - 20, 40);
-        p.y = p.fh ? Footholds.yAt(p.fh, p.x) : l.y1;
-      } else if (p.y > l.y2) {
-        p.ladder = null; p.vx = 0; p.vy = 0;
+      } else if (v < 0 && p.y < l.y1) {
+        // the top: off onto the floor above it when it has one (uf), else you stay at the top
+        if (l.uf) { p.ladder = null; p.vy = 0; p.y = l.y1 - 5; } else { p.y = l.y1; p.vy = 0; }
+      } else if (v > 0 && p.y > l.y2) {
+        p.ladder = null; p.vx = 0; p.vy = 0; p.y = l.y2 + 1;
       }
-      this.advanceFrame(action, v !== 0 ? dt : 0);
+      this.advanceFrame(action, p.y !== y0 ? dt : 0);   // the frames only run while you move
+      this.touchPortal();
       return;
     }
 
@@ -3616,21 +3628,26 @@ export class Game {
 
     if (inp.hit('up') && p.fh && this.useDoorAt(p)) return;
     this.scriptTouch();
+    this.touchPortal();
     if (p.fh && this.portalCooldown <= 0) {
       const portal = map.portalAt(p.x, p.y);
       // touch portals fire once on entry, not every frame you stand in them
-      const touched = portal && TOUCH_PORTALS.has(portal.pt) && portal !== this.touchedPortal;
-      this.touchedPortal = portal && TOUCH_PORTALS.has(portal.pt) ? portal : null;
+      const touch = portal && TOUCH_PORTALS.has(portal.pt) && portal.pt !== 3;
+      const touched = touch && portal !== this.touchedPortal;
+      this.touchedPortal = touch ? portal : null;
       if (portal && (inp.hit('up') || touched)) { this.usePortal(portal); if (!touched) return; }
     }
-    // up grabs a ladder / rope you are over, whether or not left / right is held too (mid-jump included)
-    if (inp.is('up') && !(p.regrabT > 0)) {
-      const l = map.ladderAt(p.x, p.y, true);
-      if (l && (!p.fh || p.y > l.y1 + 5)) { this.grab(l); return; }
-    }
-    if (inp.is('down') && p.fh && !dir) {
-      const l = map.ladderAt(p.x, p.y, false);
-      if (l && Math.abs(p.y - l.y1) < 15) { this.grab(l); p.y = l.y1 + 6; return; }
+    // on the floor, up grabs a ladder / rope whose bottom is at most 20px above your feet (lifting you onto it), and
+    // down one whose top is at most 10px below them; left / right may be held too
+    if (p.fh && this.canClimb()) {
+      const x = Math.round(p.x), y = Math.round(p.y);
+      if (inp.is('up')) {
+        const l = map.ladderIn(x, y - 20, x, y);
+        if (l) { this.grab(l); p.y = Math.min(y, l.y2); return; }
+      } else if (inp.is('down')) {
+        const l = map.ladderIn(x, y, x, y + 10);
+        if (l && l.y1 >= y && l.y1 <= y + 10) { this.grab(l); p.y = l.y1; return; }
+      }
     }
 
     if (p.fh) {
@@ -3654,7 +3671,6 @@ export class Game {
           if (dir * p.vx > J) p.vx = dir * J;
           p.fh = null; p.vy = -JUMP * (swim ? 0.7 : 1);
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
-          this.lastJumpDir = dir;
           sfx.play('Game/Jump');
         }
       } else {
@@ -3670,6 +3686,7 @@ export class Game {
     if (!p.fh) {
       p.vx ||= 0;
       if (dir) p.facingRight = dir > 0;
+      const x0 = p.x, y0 = p.y;
       if (swim) {
         // a stroke: the jump key (pressed, or its key repeat while held) sends you up; nothing else rises
         const key = this.keysFor(5, ACTION.JUMP).some((c) => inp.hit(c) || inp.repeated(c));
@@ -3682,6 +3699,11 @@ export class Game {
         if (dir) p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
         else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
         fh.fall(p, dt, p.ignoreFh);
+      }
+      // falling or sinking (not on the way up) with up held catches a ladder / rope the step passed within 10px of
+      if (!p.fh && p.vy > 0 && inp.is('up') && this.canClimb()) {
+        const l = map.ladderIn(Math.round(x0), Math.round(y0), Math.round(p.x), Math.round(p.y));
+        if (l) { this.grab(l); this.advanceFrame(l.l ? 'ladder' : 'rope', 0); return; }
       }
       // landing keeps half the speed when you hold the same way (or nothing) and stops you holding the other way
       if (p.fh) p.vx = dir * p.vx >= 0 ? p.vx * 0.5 : 0;
@@ -3762,6 +3784,17 @@ export class Game {
     else this.net.enterPortal(portal.pn);   // the server runs a portal's script, if it has one, from here too
   }
   /**
+   * Touch portals (type 3) take you as soon as you are inside their hRange x vRange box: on a floor, in the air or on
+   * a ladder or rope (some sit on a rope, for climbing to the next map). Once per entry.
+   */
+  touchPortal() {
+    if (this.portalCooldown > 0) return;
+    const p = this.player, portal = this.map.boxPortalAt(p.x, p.y, 3);
+    const enter = portal && portal !== this.touchedBoxPortal && portal.tm !== 999999999;
+    this.touchedBoxPortal = portal;
+    if (enter) this.usePortal(portal);
+  }
+  /**
    * Type 9 portals run their script when you walk into them, with no sound or fade and no map change: one request
    * at a time (until the server enables actions again), after the portal's delay, and an onlyOnce portal not
    * twice in a row.
@@ -3796,7 +3829,13 @@ export class Game {
 
   grab(l) {
     const p = this.player;
+    this.moveEvent = { kind: 'grab', fh: p.fh?.id || 0, stance: this.currentStance() };   // how you were before it
     p.ladder = l; p.fh = null; p.x = l.x; p.vx = 0; p.vy = 0;
+  }
+  /** Mounts can't climb, except Monster Rider's (190xxxx) and those of 1932001-1932005 and 1932007-1932011. */
+  canClimb() {
+    const id = this.riding?.item;
+    return !id || Math.floor(id / 10000) !== 193 || (id >= 1932001 && id <= 1932011 && id !== 1932006);
   }
 
   advanceFrame(action, dt) {
@@ -3838,6 +3877,8 @@ export class Game {
     // in Dark Sight only Assassinate goes; with Vanish learned, anything but Dark Sight itself
     if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
+    if (this.player.ladder && (kind !== 'special' || NO_LADDER.has(id) || MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id)
+      || id === EXPLOSION || id === CHAKRA || HURRICANES.has(id) || id === PIERCING_ARROW)) return false;
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION) return this.holdCharge(id, lv);
     if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
     if (id === CHAKRA) return this.castChakra(id, lv);
@@ -3896,6 +3937,7 @@ export class Game {
     const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
+    if (p.ladder && kind !== 'special') return false;   // no attacks of any kind on a ladder or rope
     if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.swimming(p.x, p.y)) return false;
@@ -4457,7 +4499,7 @@ export class Game {
     if (TELEPORTS.has(id)) return this.teleport(id, lv);
     if (id === HEAL) return this.castHeal(id, lv);
     const p = this.player, node = this.skills.node(id);
-    const action = this.skills.action(id) || 'alert2';
+    const action = p.ladder ? (p.ladder.l ? 'ladder2' : 'rope2') : this.skills.action(id) || 'alert2';
     if (this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
     this.playSkillEffect(id, p);
     const needsPos = node?.summon || id === 2311002; // summons and Mystic Door are placed at the caster
@@ -5953,6 +5995,12 @@ export class Game {
       this.moveBuf.push({ ...at, fh: ev.ofh, stance: stanceByte('prone', left) }, { ...at, fh: 0, stance: stanceByte(air, left) });
       this.downOfh = ev.ofh;
     }
+    // catching a ladder or rope: two instant steps on it, first as you were, then on it, so those watching snap onto
+    // it rather than slide over to it
+    if (ev?.kind === 'grab' && p.ladder) {
+      const at = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: 0, vy: 0, duration: 0 };
+      this.moveBuf.push({ ...at, fh: ev.fh, stance: ev.stance }, { ...at, fh: -(p.ladder.id || 0), stance: this.currentStance() });
+    }
     // the frame you land on still counts as in the air, stopped where you meet the floor; the ground starts after it
     const landed = !!p.fh && this.wasAirborne;
     this.wasAirborne = !p.fh && !p.ladder;
@@ -6188,7 +6236,9 @@ export class Game {
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
     const seeThrough = local ? this.hidden() || this.gmHidden : ent.hidden;   // Dark Sight / Wind Walk / GM hide: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
-    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, dead ? false : ent.facingRight, seeThrough ? 0.5 : 1, !dead);   // a ghost always faces left
+    // a ghost always faces left, and so does anyone on a ladder or rope (its art is never mirrored)
+    const mirror = !dead && !/^(ladder|rope)2?$/.test(ent.action) && ent.facingRight;
+    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, mirror, seeThrough ? 0.5 : 1, !dead);
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
