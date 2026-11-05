@@ -369,6 +369,8 @@ const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
 const MONSTER_RIDERS = new Set([1004, 10001004, 20001004, 20011004]), BATTLESHIP = 5221006;
 const SKILL_VEHICLE_SKILLS = new Set([1013, 1017, 1018, 1019, 10001014, 10001019, 10001022, 10001023, 20001019, 20001022, 20001023,
   ...[1027, 1028, 1029, 1030, 1031].flatMap((n) => [n, 10000000 + n, 20000000 + n, 20010000 + n])]);
+/** The skill vehicles: 1932001-1932005 and 1932007-1932011. */
+const isSkillVehicle = (id) => (id > 1932000 && id < 1932006) || (id > 1932006 && id < 1932012);
 /** Usable on a mount: Space Dash (on a skill vehicle), Space Beam, and on the Battleship its skills, Maple Warrior and Hero's Will. */
 const SPACE_DASHES = new Set([1014, 10001015]), SPACE_BEAMS = new Set([1015, 10001016]);
 const RIDE_SHIP_SKILLS = new Set([5201002, 5201003, 5211001, 5211002, 5211004, 5211005, 5220002, 5221000, 5221007, 5221008, 5221010,
@@ -1154,9 +1156,8 @@ export class Game {
     }
   }
 
-  /** Skill keys held down (repeat like the real client while held); a skill double-clicked this frame counts as its key pressed. */
+  /** Skill keys held down (repeat like the real client while held). */
   heldSkill() {
-    if (this.clickedSkill) { this.skillKeyPressed = true; return this.clickedSkill; }
     for (const code of new Set([...this.input.down, ...this.input.pressed])) {
       const k = this.keymap[CODE_TO_SC[code]];
       if (k?.type === 1) { this.skillKeyPressed = this.input.hit(code); return k.action; }
@@ -1640,7 +1641,7 @@ export class Game {
     const ride = this.riding && this.mountData(this.riding.item)?.stats;
     if (ride) {
       const worn = this.inventory?.equipped || {}, inc = (k) => [-18, -19].reduce((t, s) => t + (Number(this.windows?.info?.(worn[s]?.id)?.[k]) || 0), 0);
-      const id = this.riding.item, skillMount = (id > 1932000 && id < 1932006) || (id > 1932006 && id < 1932012);
+      const skillMount = isSkillVehicle(this.riding.item);
       const speed = inc('incSpeed') + (skillMount ? buff('speed') : 0) + Math.max(80, Number(ride.speed) || 100);
       const jump = inc('incJump') + (skillMount ? buff('jump') : 0) + Math.max(80, Number(ride.jump) || 100);
       return { speed: Math.min(190, speed) / 100, jump: Math.min(123, jump) / 100 };
@@ -3501,6 +3502,11 @@ export class Game {
 
   /** A skill double-clicked in the skill window: used next frame as if its key were pressed. */
   clickSkill(id) { this.pendingSkill = id; }
+  /** The skill a key (or a double-click this frame) starts now. */
+  pressedSkill() {
+    if (this.clickedSkill) { this.skillKeyPressed = true; return this.clickedSkill; }
+    return this.heldSkill();
+  }
 
   updatePlayer(dt) {
     this.clickedSkill = this.pendingSkill || 0; this.pendingSkill = 0;
@@ -3509,11 +3515,11 @@ export class Game {
     if (this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
-      const hw = this.heldSkill();   // Hero's Will still goes
+      const hw = this.pressedSkill();   // Hero's Will still goes
       if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
       if (p.ladder) { this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
       if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
-      else { this.playerFall(dt); if (p.fh) p.vx = 0; }
+      else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
       this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
     }
@@ -3545,7 +3551,7 @@ export class Game {
       const k = this.keydown;
       k.t += dt;
       if (this.heldSkill() === k.id && !this.dead && !this.hasDisease(STUN)) {
-        if (p.fh) p.vx = 0; else this.playerFall(dt);
+        if (p.fh) p.vx = 0; else this.playerFall(dt, 0, 0, ms);
         this.advanceFrame(k.pose, dt);
         if (HURRICANES.has(k.id)) this.hurricaneShot(k);
         if (this.keydown) return;
@@ -3578,14 +3584,14 @@ export class Game {
 
     if (p.attack) {
       action = p.attack;
-      if (p.fh) p.vx = 0; else this.playerFall(dt);
+      if (p.fh) p.vx = 0; else this.playerFall(dt, 0, 0, ms);
       if (this.advanceFrame(action, dt)) p.attack = null;
       return;
     }
 
     // seated (a map seat or a chair): moving, jumping, attacking or a skill stands you up; otherwise you stay put
     if (p.seat) {
-      if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.heldSkill() || this.macroQueue?.length) this.standUp();
+      if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.pressedSkill() || this.macroQueue?.length) this.standUp();
       else {
         this.advanceFrame('sit', dt);
         return;
@@ -3602,7 +3608,7 @@ export class Game {
         this.skillKeyPressed = false;
         if (used) return;
       }
-      const skill = this.heldSkill();
+      const skill = this.pressedSkill();
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
       if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
     }
@@ -3671,7 +3677,7 @@ export class Game {
           p.vy = -PHYS.swimSpeed * 5 * this.swimShoe(ms).v;
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
         }
-        this.playerFall(dt, dir, inY);
+        this.playerFall(dt, dir, inY, ms);
       } else {
         if (dir) p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
         else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
@@ -3702,9 +3708,9 @@ export class Game {
     return { acc: 1, speed: ms.speed * pct / 100, v: ms.speed };
   }
   /** Off the ground: in water you swim (no gravity; left / right and up / down steer it), else you fall. */
-  playerFall(dt, dir = 0, inY = 0) {
+  playerFall(dt, dir = 0, inY = 0, ms = null) {
     const p = this.player, fh = this.map.fh;
-    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe()); fh.fall(p, dt, p.ignoreFh, true); }
+    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe(ms || this.moveStats())); fh.fall(p, dt, p.ignoreFh, true); }
     else fh.fall(p, dt, p.ignoreFh);
   }
   /** In water a jump or a stroke is taken at most every 300ms. */
@@ -3825,6 +3831,7 @@ export class Game {
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
+    if (this.riding && !this.skillKeyPressed) return false;   // a key held down on a mount doesn't repeat
     const ride = this.rideRule(id);
     if (ride === 'off') { this.net?.cancelBuff(id); return true; }
     if (!ride) return false;
@@ -3863,7 +3870,7 @@ export class Game {
   rideRule(id) {
     const ride = this.riding?.item, kind = Math.floor((ride || 0) / 10000);
     if (kind !== 190 && kind !== 193) return 'go';
-    const skillVehicle = (ride > 1932000 && ride < 1932006) || (ride > 1932006 && ride < 1932012);
+    const skillVehicle = isSkillVehicle(ride);
     const ship = kind === 193 && !skillVehicle;
     if (SKILL_VEHICLE_SKILLS.has(id)) return skillVehicle ? 'off' : null;
     if (MONSTER_RIDERS.has(id)) return kind === 190 ? 'off' : null;
@@ -4447,7 +4454,6 @@ export class Game {
 
   /** Buffs and other SPECIAL_MOVE skills. */
   castSpecial(id, lv) {
-    if (this.riding?.skill === id) { this.net?.cancelBuff(id); return true; }
     if (TELEPORTS.has(id)) return this.teleport(id, lv);
     if (id === HEAL) return this.castHeal(id, lv);
     const p = this.player, node = this.skills.node(id);
