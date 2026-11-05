@@ -10,7 +10,25 @@ export const PHYS = {
   // pushes at 2*floatDrag2/100 but only up to walkSpeed/walkForce*floatDrag2 (~9px/s), and letting go drags
   // at floatDrag2*floatCoefficient/100 - so a jump keeps the speed it left the ground with
   walkAccel: 1400, walkBrake: 800, airAccel: 200, airLimit: (125 / 140000) * 10000, airDrag: 1,
+  // in water (Physics.img swimForce / swimSpeed / floatDrag1 over the mass of 100, swimSpeedDec)
+  swimAccel: 1200, swimSpeed: 140, swimDrag: 1000, swimDec: 0.9,
 };
+
+/**
+ * Off the ground in water: no gravity. Held left / right pushes up to the swim speed and letting go drags to a stop;
+ * you sink to the swim speed, to 0.3 of it holding up and 1.5 of it holding down. `shoe` scales the push (acc) and
+ * the top speed (speed).
+ */
+export function swimVelocity(ent, inX, inY, dt, shoe = { acc: 1, speed: 1 }) {
+  const max = PHYS.swimSpeed * shoe.speed, a = PHYS.swimAccel * shoe.acc, drag = PHYS.swimDrag * dt;
+  const over = (v) => (v > max ? Math.max(max, v - drag) : v < -max ? Math.min(-max, v + drag) : v);
+  let vx = over(ent.vx || 0), vy = over(ent.vy || 0);
+  vx = inX ? accelerate(vx, inX * a, max, dt) : approach(vx, 0, drag);
+  if (inY < 0) { const t = max * 0.3; vy = vy > t ? Math.max(t, vy - a * dt) : Math.min(t, vy + a * dt * 0.5); }
+  else if (inY > 0) vy = max * 1.5;
+  else vy = accelerate(vy, a, max, dt);
+  ent.vx = vx; ent.vy = vy;
+}
 
 /** Speed up toward the force's side of +-limit without passing it (the client's accelerate). */
 export function accelerate(v, accel, limit, dt) {
@@ -45,9 +63,12 @@ export class Footholds {
     const ys = this.all.flatMap((f) => [f.y1, f.y2]);
     this.left = Math.min(...xs); this.right = Math.max(...xs);
     this.top = Math.min(...ys); this.bottom = Math.max(...ys);
+    this.ceiling = Number.isFinite(this.top) ? this.top - 300 : -Infinity;   // nothing in the air goes higher (the map raises it to VRTop + 65)
   }
 
   get(id) { return this.byId.get(id); }
+  /** Whether x,y is in water (the map sets this). */
+  swimming() { return false; }
   static yAt(f, x) { return f.x1 === f.x2 ? f.y1 : f.y1 + ((f.y2 - f.y1) * (x - f.x1)) / (f.x2 - f.x1); }
 
   /** Floor directly below (or at) x,y within maxDrop pixels. */
@@ -119,9 +140,9 @@ export class Footholds {
     return this.right - 25;
   }
 
-  /** Airborne step. Mutates ent.x/y/vx/vy/fh. */
-  fall(ent, dt, ignore = null) {
-    ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
+  /** Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh. */
+  fall(ent, dt, ignore = null, swimming = false) {
+    if (!swimming) ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
     const nx = ent.x + ent.vx * dt;
     const ny = ent.y + ent.vy * dt;
 
@@ -147,5 +168,6 @@ export class Footholds {
     }
     if (land) { ent.x = land.x; ent.y = Footholds.yAt(land.f, land.x); ent.vy = 0; ent.fh = land.f; return; }
     ent.x = x; ent.y = ny;
+    if (ent.y < this.ceiling) { ent.y = this.ceiling; ent.vy = 0; }
   }
 }

@@ -979,7 +979,7 @@ class SkillWin extends Win {
   dblclick(lx, ly) {
     if (this.macroOpen && lx >= this.skillW) return;
     const r = this.rowAt(lx, ly), id = r >= 0 ? this.list[r] : 0;
-    if (id && this.g.skills.level(id) > 0 && !NO_DBLCLICK.has(id)) this.g.useSkill(id);
+    if (id && this.g.skills.level(id) > 0 && !NO_DBLCLICK.has(id)) this.g.clickSkill(id);
   }
   wheel(dy) {
     if (this.macroOpen && this.mgr.mouse.x - this.x >= this.skillW) { this.mFirst = Math.max(0, Math.min(5 - MACRO_ROWS, this.mFirst + Math.sign(dy))); return; }

@@ -1,5 +1,5 @@
 import { pad, isCanvas, frames } from './assets.js';
-import { Footholds, PHYS, accelerate, approach } from './physics.js';
+import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -98,6 +98,8 @@ export class GameMap {
     this.data = data;
     this.info = data.info || {};
     this.fh = new Footholds(data.foothold);
+    this.fh.swimming = (x, y) => this.swimming(x, y);
+    if (data.info?.VRTop !== undefined) this.fh.ceiling = Math.max(this.fh.ceiling, Number(data.info.VRTop) + 65);
     this.ladders = Object.entries(data.ladderRope || {}).map(([id, l]) => ({ ...l, id: Number(id) }));   // the id goes in movement
 
     // Bounds: VR* when present, else derived from footholds.
@@ -219,6 +221,13 @@ export class GameMap {
     if (old) { old.anim = new Anim(old.hidden.exit, false); old.phase = 'exit'; }
     if (near) { near.anim = new Anim(near.hidden.start, false); near.phase = 'start'; }
     this.shownHidden = near;
+  }
+
+  /** In water: everywhere on a swim map (info/swim), else inside one of its info/swimArea boxes. */
+  swimming(x, y) {
+    if (Number(this.info.swim) === 1) return true;
+    this.swimAreas ??= Object.values(this.info.swimArea || {}).map((r) => ({ x1: Number(r.x1), y1: Number(r.y1), x2: Number(r.x2), y2: Number(r.y2) }));
+    return this.swimAreas.some((r) => x >= r.x1 && x <= r.x2 && y >= r.y1 && y <= r.y2);
   }
 
   ladderAt(x, y, up) {
@@ -658,7 +667,9 @@ export class Life {
     if (!this.canMove) { this.faceTarget(dt); return; }
     if (this.flying) { this.flyStep(dt); return; }
     if (!this.fh) {                                   // mid-jump (or knocked off a ledge)
-      this.footholds.fall(this, dt);
+      // in water it sinks (no gravity), still pushed the way it was going
+      if (this.swimming()) { swimVelocity(this, this.dir || 0, 0, dt); this.footholds.fall(this, dt, null, true); }
+      else this.footholds.fall(this, dt);
       if (this.fh) { this.vx = 0; this.walkState(); }
       return;
     }
@@ -756,7 +767,9 @@ export class Life {
     return (PHYS.walk * Math.max(10, Math.min(140, base + this.speedMod))) / 100;
   }
   /** Its flying speed: 200px/s (the map's flySpeed) times its flySpeed over 100, held to 10-140 the same way. */
-  get flySpeed() { return (200 * Math.max(10, Math.min(140, this.flySpeedStat + this.speedMod))) / 100; }
+  get flySpeed() { return ((this.swimming() ? PHYS.swimSpeed : 200) * Math.max(10, Math.min(140, this.flySpeedStat + this.speedMod))) / 100; }
+  /** In water: 0.9 of its walking speed, a jump of 0.7, swimming (140px/s) rather than flying (200px/s). */
+  swimming() { return this.footholds.swimming(this.x, this.y); }
   get speedMod() {
     let mod = 0;
     if (this.status.second & MOB_SPEED) for (const e of this.statusArt.values()) if (e.second & MOB_SPEED) mod = e.value || 0;
@@ -832,7 +845,8 @@ export class Life {
         this.dir = walk ? (Math.random() < 0.5 ? -1 : 1) : 0;
         this.moveT = Math.floor((walk ? 500 + Math.random() * 1000 : 1000 + Math.random() * 2000) / 90) * 0.09;
       }
-      this.vx = this.dir ? accelerate(this.vx, this.dir * PHYS.walkAccel, this.speed, dt) : approach(this.vx, 0, PHYS.walkBrake * dt);
+      const k = this.swimming() ? PHYS.swimDec : 1;
+      this.vx = this.dir ? accelerate(this.vx, this.dir * PHYS.walkAccel * k, this.speed * k, dt) : approach(this.vx, 0, PHYS.walkBrake * dt);
       if (this.dir) this.facingRight = this.dir > 0;
     }
     const { x, y, fh } = this;
@@ -890,13 +904,13 @@ export class Life {
   /** A jump: up at the jump speed a character has (555px/s), keeping its walking speed the way it goes. */
   jump() {
     if (!this.fh) return;
-    this.fh = null; this.vy = -PHYS.jump; this.vx = this.dir * this.walkSpeed;
+    this.fh = null; this.vy = -PHYS.jump * (this.swimming() ? 0.7 : 1); this.vx = this.dir * this.walkSpeed;
     this.setState(this.anims.jump ? 'jump' : 'move');
   }
   /** It walks along its floor; a platform's edge or a wall stops it (standing) until its next move. */
   walkStep(dt) {
     const fh = this.fh, x = this.x, y = this.y;
-    if (this.footholds.walk(this, this.dir * this.walkSpeed * dt) !== 'ok') {
+    if (this.footholds.walk(this, this.dir * this.walkSpeed * (this.swimming() ? PHYS.swimDec : 1) * dt) !== 'ok') {
       this.fh = fh; this.x = x; this.y = y;
       this.setState('stand');
     }

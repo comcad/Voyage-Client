@@ -729,7 +729,13 @@ export class ChannelSession {
       if (!n) return;
       // Monster Riding (first mask): short 0, then the mount's item id where the source goes and the skill (Monster
       // Rider, Battleship...) where the duration goes; it lasts until cancelled
-      if (BigInt.asUintN(64, m1) & RIDING) { r.short(); const mount = r.int(), skill = r.int(); this.emit('buff', { m1, m2, source: skill, duration: 2 ** 31, mount }); return; }
+      // A refresh of a ride already on (another buff ending) comes as a plain buff: the skill, then the time left
+      if (BigInt.asUintN(64, m1) & RIDING) {
+        r.short(); const a = r.int(), b = r.int(), k = Math.floor(a / 10000);
+        if (k === 190 || k === 193) this.emit('buff', { m1, m2, source: b, duration: 2 ** 31, mount: a });
+        else this.emit('buff', { m1, m2, source: a, duration: 2 ** 31 });
+        return;
+      }
       const start = r.pos;
       // giveBuff: per stat (short value, int source, int duration ms)
       r.pos = start + 2;

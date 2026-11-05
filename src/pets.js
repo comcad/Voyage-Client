@@ -1,6 +1,6 @@
 import { frames } from './assets.js';
 import { sfx } from './audio.js';
-import { Footholds, PHYS, accelerate, approach } from './physics.js';
+import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { allCanvases } from './ui/windows.js';
 
 /**
@@ -122,11 +122,12 @@ export class Pet {
   computeAction(p) {
     if (this.inX) this.facingLeft = this.inX < 0;
     if (this.ladder && p.ladder) { this.facingLeft = !p.facingRight; return 15; }
-    if (!this.fh) return 3;
+    if (!this.fh) return this.swimming() ? 6 : 3;
     if (this.inX) return 1;
     if (this.fullness() <= 50) return 12;
     return POSE_ACT[this.pose] || 2;
   }
+  swimming() { return !!this.g.map?.swimming(this.x, this.y); }
   fullness() { return this.mine ? this.g.petItem(this)?.pet?.fullness ?? 100 : 100; }
 
   /** Standing still for over 5s, a 50% chance every 5s of an idle line; a monolog every 30 minutes. */
@@ -157,13 +158,14 @@ export class Pet {
       this.jumpReq = true;
       return;
     }
-    if (!this.fh) return;
+    const swim = this.swimming();
+    if (!this.fh && !swim) return;
 
-    // the owner out of reach (300 x 200 around it) and standing: it reappears by them
+    // the owner out of reach (300 x 200 around it) and standing (in water, anywhere): it reappears by them
     if (!(p.x >= this.x - 300 && p.x < this.x + 300 && p.y >= this.y - 200 && p.y < this.y + 200)) {
-      const ground = fh.below(p.x, p.y - 10);
+      const ground = !swim && fh.below(p.x, p.y - 10);
       const gy = ground ? Footholds.yAt(ground, p.x) : Infinity;
-      if (p.y >= gy - 50 && p.y < gy + 50) {
+      if (swim || (p.y >= gy - 50 && p.y < gy + 50)) {
         this.x = p.x; this.y = p.y - 10; this.vx = 0; this.vy = 0; this.fh = null; this.ladder = null;
         this.event(3); this.event(4);
         g.petEffect(this, 1);
@@ -172,14 +174,16 @@ export class Pet {
     }
 
     // a wall within 40px ahead: jump it (unless already against it at the end of its floor)
-    if (this.inX) {
+    if (this.inX && !swim) {
       const w = this.wallAhead(fh, this.inX, 40);
       if (w && !(w.adjacent && (this.inX < 0 ? this.x - this.fh.x1 < 1 : this.fh.x2 - this.x < 1))) { this.jumpReq = true; return; }
     }
 
+    // in water: a stroke every step while over 50px below the owner (it never steers up or down, so it sinks)
+    if (swim && this.y - p.y > 50) this.jumpReq = true;
     // the owner up on another platform over it: jump for it
     const og = g.ownerGroup, grp = og && fh.groups.get(og);
-    if (grp && this.fh.group !== og && p.y < this.y && this.x > grp.x1 && this.x < grp.x2) {
+    if (grp && this.fh && this.fh.group !== og && p.y < this.y && this.x > grp.x1 && this.x < grp.x2) {
       if (!this.want) this.inX = Math.round(p.x) === Math.round(this.x) ? (p.facingRight ? 1 : -1) : this.x <= p.x ? 1 : -1;
       this.want = 0; this.jumpReq = true;
       return;
@@ -241,10 +245,10 @@ export class Pet {
   }
 
   physics(fh) {
-    const dt = TICK / 1000, WALK = PHYS.walk * this.speed * this.sprint, JUMP = PHYS.jump * this.jump;
+    const dt = TICK / 1000, swim = this.swimming(), WALK = PHYS.walk * this.speed * this.sprint, JUMP = PHYS.jump * this.jump;
     if (this.ladder) {
       if (this.jumpReq && this.inX) {
-        this.ladder = null; this.vy = -JUMP * 0.5; this.vx = this.inX * WALK * 1.3; this.jumpReq = false;
+        this.ladder = null; this.vy = -JUMP * (swim ? 0.3 : 0.5); this.vx = this.inX * WALK * 1.3; this.jumpReq = false;
       }
       return;
     }
@@ -254,10 +258,10 @@ export class Pet {
         const d = this.inX;
         if (d * this.vx < WALK * 0.8) this.vx += d * WALK * 0.8;
         if (d && d * this.vx > WALK) this.vx = d * WALK;
-        this.fh = null; this.vy = -JUMP;
+        this.fh = null; this.vy = -JUMP * (swim ? 0.7 : 1);
       } else {
-        const v0 = this.vx;
-        this.vx = this.inX ? accelerate(v0, this.inX * PHYS.walkAccel, WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
+        const v0 = this.vx, k = swim ? PHYS.swimDec : 1;   // walking in water: 0.9 of the push and of the speed
+        this.vx = this.inX ? accelerate(v0, this.inX * PHYS.walkAccel * k, WALK * k, dt) : approach(v0, 0, PHYS.walkBrake * dt);
         const dx = ((v0 + this.vx) / 2) * dt;
         if (dx && !this.atEdge(fh, dx)) {
           const r = fh.walk(this, dx);
@@ -266,8 +270,17 @@ export class Pet {
         }
       }
     }
+    // swimming: a stroke up, then no gravity; it sinks to the swim speed
+    if (!this.fh && swim) {
+      if (this.jumpReq) { this.jumpReq = false; this.vy = -PHYS.swimSpeed * 5 * this.speed; }
+      for (let k = 0; k < 3 && !this.fh; k++) {
+        swimVelocity(this, this.inX, 0, dt / 3, { acc: 1, speed: this.speed });
+        fh.fall(this, dt / 3, null, true);
+        if (this.fh) this.vx = this.inX * this.vx >= 0 ? this.vx * 0.5 : 0;
+      }
+    }
     // in the air in 10ms steps, so a jump rises as high as a character's
-    for (let k = 0; k < 3 && !this.fh; k++) {
+    for (let k = 0; k < 3 && !this.fh && !swim; k++) {
       this.vx = this.inX ? accelerate(this.vx, this.inX * PHYS.airAccel, PHYS.airLimit, dt / 3) : approach(this.vx, 0, PHYS.airDrag * dt / 3);
       fh.fall(this, dt / 3);
       if (this.fh) this.vx = this.inX * this.vx >= 0 ? this.vx * 0.5 : 0;
