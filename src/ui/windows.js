@@ -379,6 +379,7 @@ class InventoryWin extends Win {
   }
   /** The coin button: drop 10 ~ 50,000 mesos on the ground (Cosmic's MesoDropHandler range). */
   async dropMesos() {
+    if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
     const max = Math.min(50000, this.g.meso || 0);
     if (max < 10) { this.g.notice('You need at least 10 mesos to drop.'); return; }
     const v = await this.mgr.askNumber(`How many mesos will you drop?\n(10 ~ ${max.toLocaleString('en-US')})`, 10, 10, max);
@@ -427,6 +428,7 @@ class InventoryWin extends Win {
   }
   drop(lx, ly, c) {
     if (c.kind !== 'item') return;
+    if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
     const to = this.slotAt(lx, ly);
     if (c.tab === 2 && isScroll(c.id) && this.tab === 1 && to && this.g.inventory[1][to]) { this.g.useScroll(c.slot, to); return; }
     if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);

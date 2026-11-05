@@ -713,7 +713,7 @@ export class Game {
       const fx = this.player.itemFxId;
       if (fx) { if (this.itemCount(fx)) net.useItemEffect(fx); else this.setItemEffect(this.player, 0); }
       if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
-      if (this.stats.hp <= 0 && !this.dead) this.die();   // still dead after the switch
+      if (this.stats.hp <= 0 && !this.dead) this.die(false);   // still dead after the switch
     } catch (e) {
       console.error(e);
       this.hooks.onLoading?.(false);
@@ -802,7 +802,7 @@ export class Game {
   runMacro(i) {
     const m = this.macros?.[i];
     const ids = (m?.skills || []).filter((id) => id && this.skills?.level(id));
-    if (!ids.length || this.macroQueue?.length) return;
+    if (!ids.length || this.macroQueue?.length || this.dead) return;
     this.macroQueue = ids;
     if (m.shout && m.name) this.net?.chat(m.name);
   }
@@ -1069,7 +1069,7 @@ export class Game {
 
   /** A face expression from its key (F1-F7 = 1 hit .. 7 stunned): shown here and sent to the map. */
   emote(n) {
-    if (!EMOTES[n - 1] || this.player.dead) return;
+    if (!EMOTES[n - 1]) return;   // a ghost can make faces too
     const now = performance.now();
     if (now - (this.lastEmote || 0) < 2000) return;   // one every 2s
     this.lastEmote = now;
@@ -1207,7 +1207,7 @@ export class Game {
   }
 
   useItemById(id) {
-    if (this.hidden()) return;
+    if (this.hidden() || this.dead) return;
     const t = Math.floor(id / 1000000);
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
@@ -1871,7 +1871,7 @@ export class Game {
       }),
       showChair: later((id, itemId) => { const rp = this.others.get(id); if (rp) rp.chair = itemId; if (itemId) this.chairArt(itemId); }),
       cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
-      removePlayer: later((id) => { this.others.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
+      removePlayer: later((id) => { this.vfx?.untomb(this.others.get(id)); this.others.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
       petSpawn: later((d) => this.addPet(d)),
       petRemove: later((owner, slot, reason) => this.removePet(owner, slot, reason)),
       petMove: later((owner, slot, moves) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.applyMovement(moves); }),
@@ -2076,7 +2076,7 @@ export class Game {
     this.playHourAt = performance.now() + 3600000; this.playHours = 1;
     this.basicGuide();
     // logged off (or dropped) while dead: the server kept the 0 HP, so come back as the ghost, still to be revived
-    if (this.stats.hp <= 0 && !this.dead) this.die();
+    if (this.stats.hp <= 0 && !this.dead) this.die(false);
   }
 
   /**
@@ -2304,22 +2304,48 @@ export class Game {
     }
     if (s.sp !== undefined || s.level !== undefined) this.skillWin?.render();
     if (this.stats.hp <= 0 && !this.dead) this.die();
-    if (this.stats.hp > 0) this.dead = false;
+    if (this.stats.hp > 0 && this.dead) this.revive();
     this.hud.update(this.stats);
   }
 
-  async die() {
+  /**
+   * HP 0: the character turns into its ghost over a tombstone, and a little over 2.2s later the death notice asks.
+   * fresh is false when you come back to a map already dead (the stone is lying there, no sound).
+   */
+  async die(fresh = true) {
     this.dead = true;
-    const p = this.player;
-    p.action = 'dead'; p.frame = 0; p.frameT = 0; p.attack = null; p.seat = null;   // the character turns into its ghost
-    // the tombstone drops onto the body first, then the client asks
-    this.vfx?.tomb(this.player); sfx.play('Game/Tombstone');
-    await new Promise((r) => setTimeout(r, 1500));
-    await new Promise((done) => {   // the client's own death notice (UIWindow.img/Notice/0), high and clear of the ghost
-      const w = new DeathNotice(this.windows, done);
-      this.assets.preload(w.frames()).then(() => this.windows.show(w));
+    const p = this.player, death = this.death = {};
+    p.action = 'dead'; p.frame = 0; p.frameT = 0; p.attack = null; p.seat = null; p.ladder = null;
+    this.charging = null; this.endKeydown(); this.macroQueue = null;
+    const at = this.tombPoint(p.x, p.y);
+    this.vfx?.tomb(p, at.x, at.y, fresh);
+    if (fresh) sfx.play('Game/Tombstone');
+    await new Promise((r) => setTimeout(r, 2200));
+    if (this.death !== death) return;   // brought back meanwhile
+    const ok = await new Promise((done) => {   // UIWindow.img/Notice/0
+      const w = death.notice = new DeathNotice(this.windows, () => done(true));
+      death.cancel = () => done(false);
+      this.assets.preload(w.frames()).then(() => { if (this.death === death) this.windows.show(w); });
+      setTimeout(() => { if (this.death === death) w.finish(); }, 600000);   // left open 10 minutes, it answers itself
     });
-    this.net.respawn();
+    if (ok && this.death === death) this.net.respawn();
+  }
+  /**
+   * HP back while dead (Resurrection): the notice closes unanswered, the stone and ghost go, and you stand on the floor
+   * under the stone.
+   */
+  revive() {
+    this.dead = false;
+    const p = this.player, t = this.tombOf(p), d = this.death;
+    this.death = null;
+    if (d?.notice) { d.notice.answered = true; this.windows.close(d.notice); }
+    d?.cancel?.();
+    this.vfx?.untomb(p);
+    p.action = this.look.standAction(); p.frame = 0; p.frameT = 0;
+    if (!t) return;
+    p.x = t.x; p.y = t.y - 5; p.vx = 0; p.vy = 0; p.ladder = null;
+    p.fh = this.map.fh.below(p.x, p.y, 40);
+    if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
   }
 
   levelUpEffect() { this.vfx?.play('LevelUp', this.player); }
@@ -2728,7 +2754,7 @@ export class Game {
   }
 
   useInventoryItem(tab, slot, it) {
-    if (tab === 5 && this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
     if (tab === 5 && it.id === 5170000) { this.useNameTag(slot, it.id); return; }                  // Pet Name Tag
     if (tab === 5 && it.id === 5180000) { if (this.cashFree()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
     if (tab === 5 && Math.floor(it.id / 10000) === 524) { this.useCashPetFood(slot, it.id); return; }
@@ -3057,7 +3083,8 @@ export class Game {
   async useScroll(scrollSlot, equipSlot) {
     const inv = this.inventory, scroll = inv?.[2]?.[scrollSlot];
     const eq = equipSlot < 0 ? inv?.equipped?.[equipSlot] : inv?.[1]?.[equipSlot];
-    if (!scroll || !eq || !isScroll(scroll.id) || this.player.dead) return;
+    if (!scroll || !eq || !isScroll(scroll.id)) return;
+    if (this.dead) { this.notice("You can't do it once you're dead."); return; }
     if (equipSlot > 0 && !(this.skills?.level(1003) > 0)) { this.notice('Scrolls can only be used on equipped items.'); return; }
     const sid = scroll.id, modifier = Math.floor(sid / 1000) === 2049;
     if (!scrollFits(sid, eq.id)) { this.notice('This scroll cannot be used on this item.'); return; }
@@ -3395,9 +3422,9 @@ export class Game {
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
     if (this.net) this.touchReactors();
-    if (!this.dead && this.fade?.dir !== 'out') this.updatePlayer(dt);   // you stand still while the old map goes dark
+    if (this.fade?.dir !== 'out') { if (this.dead) this.updateDeadBody(dt); else this.updatePlayer(dt); }   // you stand still while the old map goes dark
     else this.pendingSkill = 0;
-    for (const rp of this.others.values()) { rp.update(dt); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
+    for (const rp of this.others.values()) { rp.update(dt); this.watchDeath(rp); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
     stepExpression(this.player, this.look, dt);
     this.stepItemFx(this.player, dt);
     this.stepEquipFx(this.player, this.look, dt);
@@ -3839,6 +3866,67 @@ export class Game {
     this.moveEvent = { kind: 'grab', fh: p.fh?.id || 0, stance: this.currentStance() };   // how you were before it
     p.ladder = l; p.fh = null; p.x = l.x; p.vx = 0; p.vy = 0;
   }
+  // ------------------------------------------------------------------ death
+  /**
+   * Where the tombstone of someone dying at (x, y) lands: on the floor under x (looking from 20px over their feet)
+   * if it is at most 80px down, else under x + 15 if that one is, else under x - 15 however far down. With no floor
+   * under x it stays where they died.
+   */
+  tombPoint(x, y) {
+    x = Math.round(x); y = Math.round(y);
+    const floor = (fx) => {
+      let best = null;
+      for (const f of this.map.fh.floors) {
+        if (fx < f.x1 || fx > f.x2) continue;
+        const fy = Footholds.yAt(f, fx);
+        if (fy >= y - 20 && (best === null || fy < best)) best = fy;
+      }
+      return best === null ? null : Math.round(best);
+    };
+    const a = floor(x);
+    if (a === null) return { x, y };
+    if (a <= y + 80) return { x, y: a };
+    const b = floor(x + 15);
+    if (b !== null && b <= y + 80) return { x: x + 15, y: b };
+    const c = floor(x - 15);
+    return c !== null ? { x: x - 15, y: c } : { x, y };
+  }
+  tombOf(ent) { return this.vfx?.tombs.find((t) => t.ent === ent) || null; }
+  /**
+   * A ghost goes round a 10px circle centred 20px over its tombstone, once every 2s from its left side, in whole
+   * pixels; a fresh one fades in over 2.5s.
+   */
+  ghostAt(ent) {
+    const t = this.tombOf(ent);
+    if (!t) return null;
+    const ms = performance.now() - t.t0, a = (2 * Math.PI * ms) / 2000;
+    return { x: Math.round(t.x - 10 * Math.cos(a)), y: Math.round(t.y - 20 - 10 * Math.sin(a)), alpha: t.fresh ? Math.min(1, ms / 2500) : 1 };
+  }
+  /**
+   * Someone else turning into a ghost gets a tombstone where they are, falling with the sound (quieter the further
+   * off: full within 250px, 40% beyond 1000px); one already dead when you see them has it lying there; brought
+   * back, it goes.
+   */
+  watchDeath(rp) {
+    const dead = rp.state === 'dead';
+    if (rp.wasDead === dead) return;
+    const fresh = rp.wasDead === false;
+    rp.wasDead = dead;
+    if (!dead) { this.vfx?.untomb(rp); return; }
+    const at = this.tombPoint(rp.x, rp.y), p = this.player;
+    this.vfx?.tomb(rp, at.x, at.y, fresh);
+    if (!fresh) return;
+    const d = Math.hypot(at.x - p.x, at.y - p.y);
+    sfx.play('Game/Tombstone', { volume: (d < 250 ? 100 : d <= 1000 ? 120 - 0.08 * d : 40) / 100 });
+  }
+  /** Dead: the body (unseen, but it's what is sent) keeps falling with no input, off a ladder or rope too. */
+  updateDeadBody(dt) {
+    const p = this.player, fh = this.map.fh;
+    p.ladder = null; p.seat = null; p.attack = null;
+    if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
+    else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
+  }
+
   /** Mounts can't climb, except Monster Rider's (190xxxx) and those of 1932001-1932005 and 1932007-1932011. */
   canClimb() {
     const id = this.riding?.item;
@@ -5971,7 +6059,8 @@ export class Game {
   currentStance() {
     const p = this.player;
     let st = 'stand';
-    if (p.seat) st = 'sit';
+    if (this.dead) st = 'dead';
+    else if (p.seat) st = 'sit';
     else if (p.ladder) st = p.ladder.l ? 'ladder' : 'rope';
     else if (!p.fh) st = this.airAction();
     else if (p.action === 'prone') st = 'prone';
@@ -6015,14 +6104,14 @@ export class Game {
       this.moveBuf.push({ ...at, fh: ev.fh, stance: ev.stance }, { ...at, fh: -(p.ladder.id || 0), stance: this.currentStance() });
     }
     // the frame you land on still counts as in the air, stopped where you meet the floor; the ground starts after it
-    const landed = !!p.fh && this.wasAirborne;
+    const landed = !!p.fh && this.wasAirborne && !this.dead;
     this.wasAirborne = !p.fh && !p.ladder;
     // the speeds are the physics' own, not how far you moved this frame: catching a rope snaps you onto it, and that
     // jump must not read as a burst of speed that carries you past it for those watching
     const el = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y), vx: Math.round(p.vx || 0), vy: Math.round(p.fh ? 0 : p.vy || 0),
       // on a ladder or rope its id, negative: those watching put you on it, in its layer (0 would leave you in the
       // layer of the last floor, sometimes behind it)
-      fh: p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000 };
+      fh: this.dead ? 0 : p.ladder ? -(p.ladder.id || 0) : p.fh?.id || 0, stance: this.currentStance(), duration: dt * 1000 };
     if (landed) Object.assign(el, { vy: 0, fh: 0, stance: stanceByte(air, left) });
     if (this.downOfh) Object.assign(el, { cmd: 15, ofh: this.downOfh });
     if (p.fh || p.ladder) this.downOfh = 0;
@@ -6054,7 +6143,7 @@ export class Game {
    * Kept in fractions, drawn at whole pixels so sprites don't shimmer.
    */
   updateCamera(dt) {
-    const p = this.player, f = (this.camF ??= { x: p.x, y: p.y - CAM_LIFT });
+    const p = (this.dead && this.ghostAt(this.player)) || this.player, f = (this.camF ??= { x: p.x, y: p.y - CAM_LIFT });
     const ms = dt * 1000, k = CAM_DAMPING * 1000;
     const axis = (from, to) => {
       const d = Math.abs(to - from);
@@ -6234,15 +6323,14 @@ export class Game {
       if (ent.mountPose !== pose) { ent.mountPose = pose; ent.mountT0 = performance.now(); }
       parts = composeMounted(look, mount, mountId, ent.action, ent.expr, performance.now() - ent.mountT0, tired, gear);
     } else parts = look.compose(ent.action, ent.frame, ent.expr);
-    const sx = ent.x - cam.x, sy = ent.y - cam.y;
+    // dead: the ghost (body action "dead") circles over its tombstone, and all that is drawn of them goes with it
+    const dead = ent.action === 'dead', ghost = dead ? this.ghostAt(ent) : null;
+    const gx = ghost ? ghost.x - ent.x : 0, gy = ghost ? ghost.y - ent.y : 0;
+    const sx = ent.x + gx - cam.x, sy = ent.y + gy - cam.y;
     const chair = local ? ent.seat?.item : ent.action === 'sit' && ent.chair;
     if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight);
-    // while protected after a hit, alternate gray and normal every 60ms, as the original does
-    const blink = local && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
-    // dead: the ghost (body action "dead") hovers over the tombstone, drifting smoothly round a small circle
-    // (not snapped to whole game pixels, so it glides instead of stepping)
-    const dead = ent.action === 'dead', t = performance.now() / 700;
-    const gx = dead ? Math.cos(t) * 3 : 0, gy = dead ? -24 + Math.sin(t) * 3 : 0;
+    // while protected after a hit, alternate gray and normal every 60ms, as the original does (never a ghost)
+    const blink = local && !dead && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
     this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
@@ -6251,7 +6339,7 @@ export class Game {
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     // a ghost always faces left, and so does anyone on a ladder or rope (its art is never mirrored)
     const mirror = !dead && !CLIMBING.test(ent.action) && ent.facingRight;
-    drawParts(ctx, this.assets, parts, sx + gx, sy + gy, mirror, seeThrough ? 0.5 : 1, !dead);
+    drawParts(ctx, this.assets, parts, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead);
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
@@ -6301,7 +6389,9 @@ export class Game {
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
     for (const e of list) {
       const text = `${e.name} : ${e.chat.text}`, quote = (e === this.player ? this.look : e.look)?.chatBalloon;
-      if (this.vfx?.drawBalloon(ctx, cam, e, text, quote ? String(quote) : '0')) continue;   // a quote ring's balloon   // ChatBalloon.img; the drawn box is the offline fallback
+      // a ghost speaks from where it floats, in the dead balloon
+      const ghost = e.action === 'dead' ? this.ghostAt(e) : null, style = ghost ? 'dead' : quote ? String(quote) : '0';
+      if (this.vfx?.drawBalloon(ctx, cam, ghost || e, text, style)) continue;   // a quote ring's balloon   // ChatBalloon.img; the drawn box is the offline fallback
       const lines = wrap(ctx, text, 160);
       const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14, h = lines.length * 15 + 8;
       const x = Math.round(e.x - cam.x - w / 2), y = Math.round(e.y - cam.y - 90 - h);
