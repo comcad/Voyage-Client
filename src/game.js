@@ -2141,8 +2141,8 @@ export class Game {
           this.hud.message(text, QUEST_GREY);
         }
       },
-      // the game's small box with its OK; back to the login screen once it is clicked
-      disconnected: () => this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => this.leave()),
+      // the game's small box with its OK; back to the login screen once it is clicked (no leave-page warning now)
+      disconnected: () => { this.leaving = true; this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => this.leave()); },
     });
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
@@ -2668,9 +2668,10 @@ export class Game {
     e.heldDrops = null;
     for (const d of held || []) this.spawnDrop(d);
   }
-  /** Drops still held or loading belong to the map they fell on. */
+  /** Drops still held or loading belong to the map they fell on, and so do the monsters still dying there. */
   clearDrops() {
     this.drops.clear();
+    this.dying?.clear();
     for (const d of this.pendingDrops.values()) d.gone = true;
     this.pendingDrops.clear();
   }
@@ -2705,10 +2706,11 @@ export class Game {
   }
 
   removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
-    const d = this.drops.get(oid);
-    if (!d) { const p = this.pendingDrops.get(oid); if (p) { p.gone = true; this.pendingDrops.delete(oid); } return; }
-    if (anim === 4) { this.explodeMeso(oid, delay); return; }
     if (chr === this.player.id && (anim === 2 || anim === 5)) this.pickupAnswered();
+    const d = this.drops.get(oid);
+    // still held or loading: it stays in pendingDrops, marked gone, so a repeat announcement of it is ignored too
+    if (!d) { const p = this.pendingDrops.get(oid); if (p) p.gone = true; return; }
+    if (anim === 4) { this.explodeMeso(oid, delay); return; }
     const pet = anim === 5 && this.pets.get(`${chr}:${petSlot}`);
     if (pet) { if (chr === this.player.id) sfx.play('Game/PickUpItem'); this.pickUp(d, pet); return; }
     // a pet's pickup without that pet flies to its owner

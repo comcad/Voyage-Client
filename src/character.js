@@ -97,10 +97,10 @@ export class CharacterLook {
     this.weapon = eq[wi];
     // a cash weapon (170) is drawn in the weapon's place, with its art for that kind of weapon (its 30, 33, 47... node);
     // with no art for it, neither is drawn
-    const drawn = [...eq], art = ci >= 0 && wi >= 0 ? eq[ci][cat(wi) % 100] : null;
-    if (ci >= 0) drawn[ci] = null;
-    if (ci >= 0 && wi >= 0) drawn[wi] = art || null;
-    else if (ci >= 0 && wi < 0) {   // no weapon under it: the first kind of weapon it has art for
+    const drawn = [...eq];
+    if (ci >= 0 && wi >= 0) { drawn[ci] = null; drawn[wi] = eq[ci][cat(wi) % 100] || null; }
+    else if (ci >= 0) {   // no weapon under it: the first kind of weapon it has art for
+      drawn[ci] = null;
       const k = Object.keys(eq[ci] || {}).find((x) => /^\d+$/.test(x));
       if (k) { drawn[ci] = eq[ci][k]; this.weapon = eq[ci][k]; }
     }
