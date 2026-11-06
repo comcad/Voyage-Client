@@ -861,6 +861,7 @@ export class ChannelSession {
       else if (type === 9) this.emit('questClearEffect');
       else if (type === 7) this.emit('portalSound');
       else if (type === 0x0f) this.emit('foreignEffect', null, 0x0f);   // an item of yours levelled up
+      else if (type === 0x15 && r.available >= 1) this.emit('wheelsLeft', r.ubyte());   // a Wheel of Destiny revived you
       // 0x17: a picture on your character, e.g. a tutorial hint (UI/tutorial.img/<n>)
       else if (type === 0x17 && r.available >= 2) this.emit('avatarPicture', r.string());
       // 0x12: a scene (Effect/Direction*.img/...) played over the screen
@@ -1397,7 +1398,10 @@ export class ChannelSession {
   innerPortal(name, from, to) { this.send(new PacketWriter(C.USE_INNER_PORTAL).byte(0).string(name).pos(from).pos(to)); }
   /** A scene's move to another map. */
   directionField(id) { this.send(new PacketWriter(C.CHANGE_MAP).byte(0).int(id).string('').byte(0).byte(0).byte(0)); }
-  respawn() { this.send(new PacketWriter(C.CHANGE_MAP).byte(1).int(0).string('').byte(0).byte(0).byte(0)); }
+  /** Answer the death notice: back to the town, or (wheel) revived on this map by a Wheel of Destiny. */
+  respawn(wheel = false) { this.send(new PacketWriter(C.CHANGE_MAP).byte(1).int(0).string('').byte(0).byte(wheel ? 1 : 0).byte(0)); }
+  /** The death notice offers a revive item: its id and where the tombstone lies. */
+  useDeathItem(itemId, x, y) { this.send(new PacketWriter(C.USE_DEATHITEM).int(itemId).int(x).int(y)); }
   npcTalk(oid, pos) { this.send(new PacketWriter(C.NPC_TALK).int(oid).pos(pos)); }
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */
   npcReply(lastType, action, selection) {

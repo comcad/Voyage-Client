@@ -83,6 +83,8 @@ const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'Y
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 /** Teleport can be used again this long after it lands (ms), and this long after Meteor Shower, Blizzard or Genesis. */
 const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
+/** The cash item the death notice offers to revive you on the spot. */
+const WHEEL_OF_DESTINY = 5510000;
 /** fieldLimit bit: no movement skills (Teleport, Monster Magnet...) on this map. */
 const FIELD_NO_MOVEMENT_SKILLS = 0x2;
 
@@ -2170,6 +2172,7 @@ export class Game {
       scriptProgress: (t) => this.questMsg.script(t),
       npcScripts: (list) => { this.npcScripts = new Map(list.map((e) => [e.id, e.name])); },
       questClearEffect: () => { this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); },
+      wheelsLeft: (n) => this.hud.message(`You have used 1 Wheel of Destiny in order to revive at the current map. (${n} left)`, CHAT_COLOR.grey),
       avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
@@ -2430,6 +2433,9 @@ export class Game {
   /**
    * HP 0: the character turns into its ghost over a tombstone, and a little over 2.2s later the death notice asks.
    * fresh is false when you come back to a map already dead (the stone is lying there, no sound).
+   * With a Wheel of Destiny on a map that allows it, the notice offers it: the item is announced as the notice
+   * opens (the stone glows, Effect/BasicEff.img/TombUpgrade), and Yes revives you here. Left open 10 minutes, the
+   * notice sends you to the town.
    */
   async die(fresh = true) {
     this.dead = true;
@@ -2441,13 +2447,28 @@ export class Game {
     if (fresh) sfx.play('Game/Tombstone');
     await new Promise((r) => setTimeout(r, 2200));
     if (this.death !== death) return;   // brought back meanwhile
-    const ok = await new Promise((done) => {   // UIWindow.img/Notice/0
-      const w = death.notice = new DeathNotice(this.windows, () => done(true));
-      death.cancel = () => done(false);
-      this.assets.preload(w.frames()).then(() => { if (this.death === death) this.windows.show(w); });
-      setTimeout(() => { if (this.death === death) w.finish(); }, 600000);   // left open 10 minutes, it answers itself
+    const wheel = this.wheelRevivable();
+    const answer = await new Promise((done) => {
+      const w = death.notice = new DeathNotice(this.windows, wheel ? 'wheel' : 'ok', (yes) => done({ yes }));
+      death.cancel = () => done(null);
+      this.assets.preload(w.frames()).then(() => {
+        if (this.death !== death) return;
+        this.windows.show(w);
+        if (wheel) { this.net.useDeathItem(WHEEL_OF_DESTINY, at.x, at.y); this.vfx?.play('TombUpgrade', { x: at.x, y: at.y }); }
+      });
+      setTimeout(() => { if (this.death === death) w.finish(false); }, 600000);
     });
-    if (ok && this.death === death) this.net.respawn();
+    if (answer && this.death === death) this.net.respawn(answer.yes);
+  }
+  /**
+   * Whether the death notice offers a Wheel of Destiny: you hold one, and the map isn't an event field (field types
+   * 1, 3-5, 7, 10, 11, 15), a 9xxxxxxxx map, the ship rides (200090xxx) or 390xxxxxx.
+   */
+  wheelRevivable() {
+    const type = Number(this.map?.info?.fieldType) || 0, id = this.map?.id || 0;
+    if ([1, 3, 4, 5, 7, 10, 11, 15].includes(type)) return false;
+    if (Math.floor(id / 100000000) === 9 || Math.floor(id / 1000) === 200090 || Math.floor(id / 1000000) === 390) return false;
+    return this.itemCount(WHEEL_OF_DESTINY) >= 1;
   }
   /**
    * HP back while dead (Resurrection): the notice closes unanswered, the stone and ghost go, and you stand on the floor
