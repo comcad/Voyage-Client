@@ -557,12 +557,14 @@ export class LoginScene {
 
   /** Pincode-style prompt with one input line. Resolves with the text or null. */
   async prompt(label, { password = true, pattern = null, max = 16 } = {}) {
-    const P = this.L.Pincode, N = this.L.Notice;
+    const P = this.L.Pincode;
     const x = (W - 362) / 2, y = (H - 219) / 2;
     let onOk = () => {}, onCancel = () => {};
     const d = {
       sprites: [new WzSprite(P.backgrnd[0], x, y)],
-      buttons: [this.button(N.BtYes, x + 196, y + 172, () => onOk()), this.button(N.BtNo, x + 276, y + 172, () => onCancel())],
+      // Pincode BtYes / BtNo, as v83's PIN window places them: Cancel at (196, 150), OK mirrored at (90, 150) so the
+      // pair is centred on the 362-wide window
+      buttons: [this.button(P.BtYes, x + 90, y + 150, () => onOk()), this.button(P.BtNo, x + 196, y + 150, () => onCancel())],
     };
     await this.assets.preload([...d.sprites, ...d.buttons].flatMap((p) => p.frames()));
     return new Promise((resolve) => {
