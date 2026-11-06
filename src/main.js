@@ -51,6 +51,8 @@ async function online(assets) {
   if (new URLSearchParams(location.search).has('debug')) globalThis.maple = game; // inspect from the console
   await game.goOnline(entered, $('ui-root'));
   game.start();
+  // closing the tab, reloading or going back while in game asks first (the browser's own prompt)
+  addEventListener('beforeunload', (e) => { if (!game.leaving) { e.preventDefault(); e.returnValue = ''; } });
   assets.preload(lookCanvases(look, look.actionList())); // every body action, for skills
   window.game = game;
 }

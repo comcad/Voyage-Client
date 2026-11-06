@@ -375,7 +375,7 @@ export class StatusBar {
       case 'BtComm': g.windows.toggle('userlist'); break;
       case 'BtGameOpt': g.windows.toggle('gameopt'); break;
       case 'BtSysOpt': g.windows.toggle('sysopt'); break;
-      case 'BtQuit': g.windows.confirm('Are you sure you want to quit the game?').then((ok) => { if (ok) location.reload(); }); break;
+      case 'BtQuit': g.windows.confirm('Are you sure you want to quit the game?').then((ok) => { if (ok) g.leave(); }); break;
       default: g.notice('This feature is not available yet.');
     }
   }
@@ -626,7 +626,8 @@ export class StatusBar {
     ctx.beginPath(); ctx.rect(0, b.top, BAND_W, b.h); ctx.clip();
     shown.forEach((l, i) => {
       const y = b.line - (shown.length - 1 - i) * LINE_H;
-      if (l.bg) { ctx.fillStyle = l.bg; ctx.fillRect(0, y, SCROLL_X, LINE_H); }
+      // minimized, the one line's colour fills the whole row
+      if (l.bg) { ctx.fillStyle = l.bg; if (rows === 1) ctx.fillRect(0, b.top, SCROLL_X, b.h); else ctx.fillRect(0, y, SCROLL_X, LINE_H); }
       if (l.tag) this.drawTagged(ctx, l, y);
       else uiText(ctx, l.text, 3, y, { color: l.color, size: 12 });
     });

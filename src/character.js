@@ -95,11 +95,12 @@ export class CharacterLook {
     const cat = (i) => Math.floor(ids[i] / 10000);
     const wi = eq.findIndex((n, i) => n && cat(i) >= 130 && cat(i) < 170), ci = eq.findIndex((n, i) => n && cat(i) === 170);
     this.weapon = eq[wi];
-    // a cash weapon (170) is drawn in the weapon's place, with its art for that kind of weapon (its 30, 33, 47... node)
-    const drawn = [...eq], art = ci >= 0 && wi >= 0 ? eq[ci][cat(wi) % 100] : null;
-    if (ci >= 0) drawn[ci] = null;
-    if (art) drawn[wi] = art;
-    else if (ci >= 0 && wi < 0) {   // no weapon under it: the first kind of weapon it has art for
+    // a cash weapon (170) is drawn in the weapon's place, with its art for that kind of weapon (its 30, 33, 47... node);
+    // with no art for it, neither is drawn
+    const drawn = [...eq];
+    if (ci >= 0 && wi >= 0) { drawn[ci] = null; drawn[wi] = eq[ci][cat(wi) % 100] || null; }
+    else if (ci >= 0) {   // no weapon under it: the first kind of weapon it has art for
+      drawn[ci] = null;
       const k = Object.keys(eq[ci] || {}).find((x) => /^\d+$/.test(x));
       if (k) { drawn[ci] = eq[ci][k]; this.weapon = eq[ci][k]; }
     }

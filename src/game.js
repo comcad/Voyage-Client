@@ -601,7 +601,7 @@ export class Game {
     };
     this.effects = [];
     this.weather = new Weather(this); this.avatarBanner = new AvatarBanner(this); this.mapleTV = new MapleTVScreen(this);
-    this.others = new Map(); this.drops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
+    this.others = new Map(); this.drops = new Map(); this.pendingDrops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
     this.boards = new ShopBoards(this);
     this.queue = []; this.loading = false;
     this.fps = 0; this._frames = 0; this._fpsT = 0;
@@ -689,13 +689,15 @@ export class Game {
     if (this.fieldBgm) music.play(this.fieldBgm, { fadeOut: 1000, fadeIn: 1000, force: true });
     else music.play(this.map?.info?.bgm);
   }
+  /** Back to the login screen, without the leave-page warning. */
+  leave() { this.leaving = true; location.reload(); }
   enterCashShop() { if (this.net && !this.inCashShop && !this.dead) this.net.enterCashShop(); }
   /** SET_CASH_SHOP: the server took us off the map; swap the world for the shop screen. */
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
-    this.others.clear(); this.drops.clear(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
+    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
@@ -742,7 +744,7 @@ export class Game {
       console.error(e);
       this.hooks.onLoading?.(false);
       await this.windows.notice(fromCashShop ? 'Leaving the Cash Shop failed. Please log in again.' : 'Changing channel failed. Please log in again.');
-      location.reload();
+      this.leave();
     } finally {
       this.switching = false;
     }
@@ -2105,8 +2107,8 @@ export class Game {
         if (!rp) return;
         rp.charge = null;
         if (level) rp.level = level;
-        if (TELEPORTS.has(skillId)) this.playTeleportEffect(rp.x, rp.y);   // its art is BasicEff's, not the skill's
-        else this.playSkillEffect(skillId, rp);
+        // another player's skill art isn't drawn; only the teleport flash is
+        if (TELEPORTS.has(skillId)) this.playTeleportEffect(rp.x, rp.y);
       }),
       // a skill being charged or wound up: they stand in its prepare pose, with its keydown art, until it goes off
       foreignCharge: later(async (chrId, skillId) => {
@@ -2139,8 +2141,8 @@ export class Game {
           this.hud.message(text, QUEST_GREY);
         }
       },
-      // the game's small box with its OK; back to the login screen once it is clicked
-      disconnected: () => this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => location.reload()),
+      // the game's small box with its OK; back to the login screen once it is clicked (no leave-page warning now)
+      disconnected: () => { this.leaving = true; this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => this.leave()); },
     });
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
@@ -2461,7 +2463,7 @@ export class Game {
       if (this.player.chalk && Number(map.info?.personalShop)) this.closeChalkboard('You cannot use the chalkboard here.');
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
-      this.others.clear(); this.drops.clear(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
+      this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null;
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
@@ -2666,27 +2668,35 @@ export class Game {
     e.heldDrops = null;
     for (const d of held || []) this.spawnDrop(d);
   }
+  /** Drops still held or loading belong to the map they fell on, and so do the monsters still dying there. */
+  clearDrops() {
+    this.drops.clear();
+    this.dying?.clear();
+    for (const d of this.pendingDrops.values()) d.gone = true;
+    this.pendingDrops.clear();
+  }
   async spawnDrop(d) {
+    // the server announces a player's drop twice (mode 1, then 0): keep the first, even while its icon loads
+    const pending = this.pendingDrops;
+    if (d.gone || this.drops.has(d.oid) || (pending.has(d.oid) && pending.get(d.oid) !== d)) return;
+    pending.set(d.oid, d);
     // the server drops loot as soon as it counts the kill; hold it until our hit lands and it dies
     const src = this.lifeByOid.get(d.dropper) || this.dying?.get(d.dropper);
     if (src && !src.pending && (src.pendingHits > 0 || src.queuedKill)) { (src.heldDrops ??= []).push(d); return; }
-    // the server announces a player's drop twice (mode 1, then 0): keep the first, even while its icon loads
-    const pending = (this.pendingDrops ??= new Set());
-    if (this.drops.has(d.oid) || pending.has(d.oid)) return;
-    pending.add(d.oid);
     // an item with info/iconReward lies on the ground as that animation (the item with a key sign over it)
     const reward = d.meso ? null : await itemRewardIcon(this.assets, d.id);
     let node = d.meso ? await mesoIcon(this.assets, d.id) : reward || await itemIcon(this.assets, d.id, true);
     if (d.meso && node) node = mesoTiming(node, d.id);
     const anim = new Anim(node || null);
     await this.assets.preload(anim.frames);
+    if (d.gone) return;   // picked up or expired meanwhile, or we left the map
+    pending.delete(d.oid);
     if (!this.map) return;
     const y = d.y;
     // monster loot leaves from where the monster is now
     const mob = this.lifeByOid.get(d.dropper) || this.dying?.get(d.dropper);
     const fromMob = mob?.kind === 'Mob';
     const fromX = fromMob ? mob.x : d.fromX ?? d.x, fromY = fromMob ? mob.y : d.fromY ?? y;
-    pending.delete(d.oid);
     if (d.mode === 1 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem', { volume: this.volumeAt(fromX, fromY) }); }
     // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
@@ -2696,10 +2706,11 @@ export class Game {
   }
 
   removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
-    const d = this.drops.get(oid);
-    if (!d) return;
-    if (anim === 4) { this.explodeMeso(oid, delay); return; }
     if (chr === this.player.id && (anim === 2 || anim === 5)) this.pickupAnswered();
+    const d = this.drops.get(oid);
+    // still held or loading: it stays in pendingDrops, marked gone, so a repeat announcement of it is ignored too
+    if (!d) { const p = this.pendingDrops.get(oid); if (p) p.gone = true; return; }
+    if (anim === 4) { this.explodeMeso(oid, delay); return; }
     const pet = anim === 5 && this.pets.get(`${chr}:${petSlot}`);
     if (pet) { if (chr === this.player.id) sfx.play('Game/PickUpItem'); this.pickUp(d, pet); return; }
     // a pet's pickup without that pet flies to its owner
