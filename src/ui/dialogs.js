@@ -5,7 +5,7 @@ import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases, drawTabStrip } from './windows.js';
 import { Anim } from '../map.js';
-import { richText, drawRich, optionAt, LIGHT_COLORS } from './richtext.js';
+import { richText, drawRich, optionAt, LIGHT_COLORS, QUEST_STATES } from './richtext.js';
 
 /**
  * Stage 3 of the v83 in-game UI, drawn on the canvas through the WindowManager:
@@ -21,7 +21,9 @@ function textRef(mgr) {
   return {
     player: g.player.name, item: (id) => mgr.itemName(id) || '...', icon: (id) => mgr.icon(id),
     mob: (id) => s.mob?.[id]?.name || `monster ${id}`, npc: (id) => s.npc?.[id]?.name || `NPC ${id}`,
-    map: mapName, count: (id) => g.itemCount(id), skill: (id) => g.skills?.name(id) ?? '', skillIcon: (id) => { const n = g.skills?.icon(id); if (!n) g.skills?.ensure(id)?.then?.(() => { mgr.namesVersion++; }); return n; },
+    map: mapName, count: (id) => g.itemCount(id), skill: (id) => g.skills?.name(id) ?? '',
+    quest: (id) => g.quests?.name(id) ?? '', questState: (id) => QUEST_STATES[g.quests?.status(id) ?? 0],
+    kills: (n) => g.quests?.killText(n) ?? '', record: (id) => g.quests?.recordText(id) ?? '', skillIcon: (id) => { const n = g.skills?.icon(id); if (!n) g.skills?.ensure(id)?.then?.(() => { mgr.namesVersion++; }); return n; },
     // #f paths into the UI files we hold (UI/UIWindow.img/..., UI/Basic.img/...)
     image: (path) => {
       const [, file, ...rest] = path.split('/');

@@ -178,6 +178,53 @@ export class QuestBook {
     return mobs.map((m, i) => ({ id: m.id, need: m.count ?? 0, have: Number(prog.slice(i * 3, i * 3 + 3)) || 0 }));
   }
 
+  /**
+   * #a<n># in quest text: quest n/10, monster slot n%10 (from 1). Nothing unless that quest is started;
+   * else "have / need", have being the slot's 3 digits of the quest's record (0 when the record is shorter).
+   */
+  killText(n) {
+    const q = Math.floor(n / 10), slot = n % 10, rec = this.started[q];
+    if (rec === undefined) return '';
+    const have = slot * 3 <= rec.length ? parseInt(rec.slice(slot * 3 - 3, slot * 3), 10) || 0 : 0;
+    const need = this.mobProgress(q, rec)[slot - 1]?.need ?? 0;
+    return `${have} / ${need}`;
+  }
+
+  /** One key of a quest's ex record ("key=value;key=value"), or '' when it has none. */
+  exValue(id, key) {
+    for (const part of String(this.ex[id] ?? '').split(';')) {
+      const at = part.indexOf('=');
+      if (at >= 0 && part.slice(0, at) === key) return part.slice(at + 1);
+    }
+    return '';
+  }
+
+  /**
+   * #j<key># in quest <id>'s text: a key of that quest's ex record, shown as the client
+   * shows it. rank: the UI/Basic.img/PQuestRank image (F when empty); try/vic/cmp/lose/draw/min "%4d"; sec "%2d";
+   * gvup try - vic - draw - lose; have...: Acquire (1 or more) / Fail; pop your fame; popgap fame - popS;
+   * level your level; any other key its value as it is. The Title Challenge gauges and counts (gauge..., per...,
+   * scnt, cmpcnt) need data this client does not keep, so they show nothing.
+   * Returns { text } or { rank }.
+   */
+  jValue(id, key, { fame = 0, level = 0 } = {}) {
+    const raw = this.exValue(id, key), num = (k) => parseInt(this.exValue(id, k), 10) || 0;
+    const pad = (n, w) => String(n).padStart(w, ' ');
+    if (/^(gauge|per)/.test(key) || key === 'scnt' || key === 'cmpcnt') return { text: '' };
+    if (key === 'rank') return { rank: raw || 'F' };
+    if (['try', 'vic', 'cmp', 'lose', 'draw', 'min'].includes(key)) return { text: pad(parseInt(raw, 10) || 0, 4) };
+    if (key === 'gvup') return { text: String(num('try') - num('vic') - num('draw') - num('lose')) };
+    if (key.startsWith('have')) return { text: (parseInt(raw, 10) || 0) < 1 ? 'Fail' : 'Acquire' };
+    if (key === 'sec') return { text: pad(parseInt(raw, 10) || 0, 2) };
+    if (key === 'pop') return { text: String(fame) };
+    if (key === 'popgap') return { text: String(fame - num('popS')) };
+    if (key === 'level') return { text: String(level) };
+    return { text: raw };
+  }
+
+  /** #R<id># in quest text: that quest's in-progress record, or "(empty)" when it isn't started. */
+  recordText(id) { return this.started[id] ?? '(empty)'; }
+
   /** How many of an item count toward a check: those carried, plus the worn copy. */
   held(ctx, id) { return ctx.itemCount(id) + (ctx.equipped?.(id) ? 1 : 0); }
   /** count > 0: at least that many; 0 or missing: none at all; -N: at most N. */

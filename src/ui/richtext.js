@@ -4,12 +4,20 @@ import { uiText } from './wzui.js';
  * NPC / quest script markup laid out for the canvas:
  *   #b #r #g #d #k colours, #e bold, #n not bold (colour kept), #h player name, #t/#z item, #o mob, #p / #@ NPC,
  *   #m map, #c item count, #i/#v item icon (inline, 32px), #s skill icon, #q skill name, #L<n># ... #l a clickable option,
+ *   #y quest name, #u quest state ("Not Started" / "In Progress" / "Ended"),
+ *   #a a quest's monster kill count ("have / need"), #R a quest's in-progress record ("(empty)" when not started),
+ *   #j<key># a value from the shown quest's ex record (see QuestBook.jValue; rank is an inline image),
  *   #f<path># / #F<path># a UI image (UtilDlgEx/list0 "QUEST IN PROGRESS" and the like). Ids may end in ':' (#v4000000:#).
  * bullet: indent options this far, leaving room for the dot drawn before each one.
- * ref supplies names and icons: { player, item(id), mob(id), npc(id), map(id), count(id), icon(id) }.
+ * ref supplies names and icons: { player, item(id), mob(id), npc(id), map(id), count(id), icon(id), quest(id), questState(id), kills(n), record(id), j(key) }.
  * Returns { lines, height }; each line is { y, h, runs, opt } with runs of
  * { t, x, color, bold } or { icon, x }.
  */
+/**
+ * #y / #u in quest and NPC text: #y<id># is Quest/QuestInfo.img/<id>/name; #u<id># is
+ * "In Progress" when the quest is started, else "Ended" when it is completed, else "Not Started".
+ */
+export const QUEST_STATES = ['Not Started', 'In Progress', 'Ended'];
 const COLORS = { b: '#0047b3', r: '#d00000', g: '#2a8a00', d: '#7a2ad0', k: '#000' };
 const LINE_H = 15, ICON_H = 34;
 
@@ -19,7 +27,7 @@ export const LIGHT_COLORS = { b: '#9fd6ff', r: '#ff9a9a', g: '#a6f08a', d: '#e2b
 export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0, imgPad = null, boldE = true } = {}) {
   const palette = { ...COLORS, ...colors };
   const tokens = String(text).replace(/\\r\\n|\\n/g, '\n').replace(/\\r/g, '').replace(/\r\n|\r/g, '\n')
-    .split(/(#[fF][^#\n]+#|#W[a-zA-Z]+#|#h[^#\n]{0,3}#|#[tzopmcivsqLB@](?:\d+:?#)?|#[a-zA-Z@]|\n)/);
+    .split(/(#j[^#\n]*#|#[fF][^#\n]+#|#W[a-zA-Z]+#|#h[^#\n]{0,3}#|#[tzopmcivsqyuaRLB@](?: *\d+:?#)?|#[a-zA-Z@]|\n)/);
   const lines = [];
   let line = null, color = base, bold = false, opt = null, x = 0;
   const newLine = () => { line = { runs: [], opt, h: lineH, x0: opt !== null ? bullet : 0 }; lines.push(line); x = line.x0; };
@@ -52,13 +60,28 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
     line.h = imgPad !== null ? Math.max(line.h, Math.max(16, node._h || 0) + imgPad) : Math.max(line.h, (node._h || 0) + (bullet ? 18 : 8));
     x += (node._w || 0) + 4;
   };
+  // an image inside the line (the #j rank letter), unlike #f / #W headings that take a line of their own
+  const inlineImage = (node) => {
+    if (!node) return;
+    const w = node._w || 0;
+    if (x + w > width && x > line.x0) newLine();
+    line.runs.push({ img: node, x });
+    line.h = Math.max(line.h, (node._h || 0) + 2);
+    x += w;
+  };
   for (const tk of tokens) {
     if (!tk) continue;
+    if (/^#j[^#\n]*#$/.test(tk)) {
+      const v = ref.j?.(tk.slice(2, -1));
+      if (v?.rank !== undefined) inlineImage(ref.image?.(`UI/Basic.img/PQuestRank/${v.rank}`));
+      else if (v?.text) put(v.text);
+      continue;
+    }
     if (tk === '\n') { newLine(); continue; }
     if (tk.length > 3 && /^#[fF]/.test(tk) && tk.endsWith('#') && tk.includes('/')) { image(ref.image?.(tk.slice(2, -1))); continue; }
     if (/^#W[a-zA-Z]+#$/.test(tk)) { image(ref.image?.(tk.slice(2, -1))); continue; }   // a quest heading (Quest/summary, reward, prob)
     if (/^#h[^#\n]{0,3}#$/.test(tk)) { put(ref.player); continue; }   // the player's name, as #h0# or #h #
-    const m = tk.match(/^#([a-zA-Z@])(\d+)?:?#?$/);
+    const m = tk.match(/^#([a-zA-Z@]) *(\d+)?:?#?$/);   // the client reads ids like atoi: leading spaces are skipped
     if (!m) { put(tk); continue; }
     const [, code, num] = m, id = Number(num);
     if (palette[code]) color = code === 'k' ? base : palette[code];
@@ -73,6 +96,10 @@ export function richText(ctx, text, width, ref, { base = '#000', size = 11, colo
     else if (code === 'i' || code === 'v') icon(ref.icon(id));
     else if (code === 's') { const n = ref.skillIcon?.(id); if (n) icon(n); }
     else if (code === 'q') put(ref.skill?.(id) ?? '');
+    else if (code === 'y') put(ref.quest?.(id) ?? '');
+    else if (code === 'u') put(ref.questState?.(id) ?? '');
+    else if (code === 'a') put(ref.kills?.(id) ?? '');
+    else if (code === 'R' && num !== undefined) put(ref.record?.(id) ?? '');
     else if (code === 'L') { opt = id; if (x > line.x0) newLine(); line.opt = id; line.x0 = bullet; x = Math.max(x, bullet); }
     else if (code === 'l') { opt = null; }
   }
