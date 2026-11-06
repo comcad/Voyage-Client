@@ -189,7 +189,16 @@ export function readCharacterInfo(r) {
   const book = { cover: r.int(), cards: {} };
   r.ubyte();
   for (let n = r.short(); n > 0; n--) { const id = 2380000 + r.short(); book.cards[id] = r.ubyte(); }
-  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book, rings };
+  // new-year cards (Cosmic's encodeNewYearCard), then each quest's ex record (quest id, then its "key=value;..."
+  // string), which #j in quest text reads
+  const questEx = {};
+  try {
+    for (let n = r.short(); n > 0; n--) {
+      r.int(); r.int(); r.string(); r.bool(); r.long(); r.int(); r.string(); r.bool(); r.bool(); r.long(); r.string();
+    }
+    for (let n = r.short(); n > 0; n--) { const id = r.ushort(); questEx[id] = r.string(); }
+  } catch { /* an older server that stops after the monster book */ }
+  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book, rings, questEx };
 }
 
 /** Movement fragments (AbstractMovementPacketHandler.parseMovement). */

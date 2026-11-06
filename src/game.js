@@ -1739,6 +1739,7 @@ export class Game {
     this.questMsg = new QuestMessages(); this.questTimers = new Map();
     await this.quests.load();
     this.quests.setState(info.quests);
+    this.quests.ex = { ...info.questEx };
     this.questLayerTags();
     if (wm.wins.questalarm.state.opened) wm.open('questalarm');   // and the Quest Helper, unless it was closed
     this.questAlert = new QuestAlert(this);

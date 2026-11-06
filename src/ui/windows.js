@@ -2,7 +2,7 @@ import { isCanvas } from '../assets.js';
 import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
-import { richText, drawRich } from './richtext.js';
+import { richText, drawRich, QUEST_STATES } from './richtext.js';
 import { isPartyQuest, questSort, TITLE_AREA } from '../quests.js';
 
 /**
@@ -1203,6 +1203,9 @@ class QuestWin extends Win {
       player: this.g.player.name, item: (id) => m.itemName(id) || `item ${id}`, mob: (id) => s.mob?.[id]?.name || `monster ${id}`,
       npc: (id) => s.npc?.[id]?.name || `NPC ${id}`, map: (id) => mapName(id), count: (id) => this.g.itemCount(id), icon: (id) => m.icon(id),
       skill: (id) => { const g = this.g; if (!g.skills?.strings) return ''; return g.skills.name(id); },
+      quest: (id) => this.g.quests?.name(id) ?? '', questState: (id) => QUEST_STATES[this.g.quests?.status(id) ?? 0],
+      kills: (n) => this.g.quests?.killText(n) ?? '', record: (id) => this.g.quests?.recordText(id) ?? '',
+      j: (key) => (this.sel ? this.g.quests?.jValue(this.sel, key, { fame: this.g.stats?.fame ?? 0, level: this.g.stats?.level ?? 0 }) : null),
       skillIcon: (id) => { const g = this.g, n = g.skills?.icon(id); if (!n) g.skills?.ensure(id)?.then?.(() => { m.namesVersion++; }); return n; },
       image: (path) => { if (!path.includes('/')) return W[path] || null; const [, file, ...rest] = path.split('/'); let n = file === 'UIWindow.img' ? m.W : file === 'Basic.img' ? m.B : null; for (const k of rest) n = n?.[k]; return n?._canvas ? n : null; },
     };
