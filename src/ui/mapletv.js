@@ -4,7 +4,7 @@ import { CharacterLook, drawParts, lookCanvases } from '../character.js';
 import { lookEquipIds } from '../net/proto.js';
 import { TextField, uiText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * The MapleTV messengers (5075000-5075005): kind 0 plain, 1 Star, 2 Heart; 5075003-5075005 are the Megassengers,
@@ -18,7 +18,7 @@ export class MapleTVWin extends Win {
   constructor(mgr, slot, itemId) {
     const T = mgr.W.MapleTV, n = itemId % 10, kind = n % 3, mega = n >= 3;
     const bg = T[mega ? (kind === 1 ? 'backgrnd4' : 'backgrnd3') : kind === 1 ? 'backgrnd2' : 'backgrnd'];
-    super(mgr, bg, Math.round((VIEW_W - bg._w) / 2), Math.round((VIEW_H - bg._h) / 2));
+    super(mgr, bg, Math.round((UI_W - bg._w) / 2), Math.round((UI_H - bg._h) / 2));
     this.modal = true; this.transient = true; this.closeBtn.visible = false;
     this.slot = slot; this.itemId = itemId; this.kind = kind; this.mega = mega; this.ear = true; this.toOn = kind === 2;
     const by = mega ? 217 : 207;
@@ -55,7 +55,7 @@ export class MapleTVWin extends Win {
   key(e) { if (e.key === 'Escape') this.close(); }
   draw(ctx) {
     super.draw(ctx);
-    const scale = this.g.canvas.clientWidth / VIEW_W;
+    const scale = this.g.canvas.clientWidth / UI_W;
     for (const f of this.fields) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale); }
     if (this.to) this.to.el.style.visibility = this.toOn ? '' : 'hidden';
   }

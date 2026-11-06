@@ -1,4 +1,4 @@
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 /**
  * Quest progress lines near the top of the screen ("Blue Snail 3 / 10"): bold yellow #FFC600 with a 1px black
  * outline, centred on x 400. Five slots, the first at y 150 and the others 20px higher each; a line fades out
@@ -36,9 +36,9 @@ export class QuestMessages {
       ctx.globalAlpha = 1 - age / s.life;
       const y = slotY(i);
       ctx.fillStyle = '#000';
-      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) ctx.fillText(s.text, VIEW_W / 2 + dx, y + dy);
+      for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) ctx.fillText(s.text, UI_W / 2 + dx, y + dy);
       ctx.fillStyle = '#ffc600';
-      ctx.fillText(s.text, VIEW_W / 2, y);
+      ctx.fillText(s.text, UI_W / 2, y);
     });
     ctx.restore();
   }

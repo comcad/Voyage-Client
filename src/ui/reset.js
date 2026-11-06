@@ -1,6 +1,6 @@
 import { Win, cutText, drawTabStrip } from './windows.js';
 import { uiText } from './wzui.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /** AP Reset's six rows: the stat (as the packet names it by its stat flag), and the y of its row and button. */
 export const AP_ROWS = [
@@ -52,7 +52,7 @@ export function apDisabled(s, give, from) {
 export class ApResetWin extends Win {
   constructor(mgr, give, from, done) {
     const R = mgr.W.Reset, bg = R.AP[give ? 'backgrnd2' : 'backgrnd'];
-    super(mgr, bg, Math.round((VIEW_W - bg._w) / 2), Math.round((VIEW_H - bg._h) / 2));
+    super(mgr, bg, Math.round((UI_W - bg._w) / 2), Math.round((UI_H - bg._h) / 2));
     this.modal = true; this.transient = true; this.done = done; this.give = give; this.from = from;
     this.closeBtn.visible = false;
     const s = this.g.stats || {};
@@ -84,7 +84,7 @@ export class ApResetWin extends Win {
 export class ApConfirmWin extends Win {
   constructor(mgr, from, to, done) {
     const R = mgr.W.Reset, bg = R.AP.backgrnd3, B = mgr.B;
-    super(mgr, bg, Math.round((VIEW_W - bg._w) / 2), Math.round((VIEW_H - bg._h) / 2));
+    super(mgr, bg, Math.round((UI_W - bg._w) / 2), Math.round((UI_H - bg._h) / 2));
     this.modal = true; this.transient = true; this.done = done; this.from = from; this.to = to;
     this.closeBtn.visible = false;
     const cw = B.BtCancel2.normal[0]._w, ow = B.BtOK2.normal[0]._w;
@@ -124,7 +124,7 @@ const SP_ROW_Y = 99, SP_ROW_H = 40;
 export class SpResetWin extends Win {
   constructor(mgr, book, give, from, adv, done) {
     const R = mgr.W.Reset, bg = R.SP[give ? 'backgrnd2' : 'backgrnd'];
-    super(mgr, bg, Math.round((VIEW_W - bg._w) / 2), Math.round((VIEW_H - bg._h) / 2));
+    super(mgr, bg, Math.round((UI_W - bg._w) / 2), Math.round((UI_H - bg._h) / 2));
     this.modal = true; this.transient = true; this.done = done; this.give = give; this.from = from; this.first = 0; this.adv = adv;
     this.closeBtn.visible = false;
     const sb = this.g.skills;
@@ -166,7 +166,7 @@ function drawSkillRow(ctx, m, sb, id, y, on, change = 0, line = false) {
 export class SpConfirmWin extends Win {
   constructor(mgr, from, to, done) {
     const bg = mgr.W.Reset.SP.backgrnd3, B = mgr.B;
-    super(mgr, bg, Math.round((VIEW_W - bg._w) / 2), Math.round((VIEW_H - bg._h) / 2));
+    super(mgr, bg, Math.round((UI_W - bg._w) / 2), Math.round((UI_H - bg._h) / 2));
     this.modal = true; this.transient = true; this.done = done; this.from = from; this.to = to;
     this.closeBtn.visible = false;
     const cw = B.BtCancel2.normal[0]._w, ow = B.BtOK2.normal[0]._w;

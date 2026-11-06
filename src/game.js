@@ -10,7 +10,7 @@ import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
-import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
+import { CODE_TO_SC, defaultKeymap, ACTION, MENU, DEFAULT_QUICKSLOTS } from './keymap.js';
 import { loadControls } from './controls.js';
 import { PadInput } from './gamepad.js';
 import { TouchControls } from './ui/touch.js';
@@ -44,7 +44,7 @@ import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.
 import { UserListWin, PartyHpWin, GuildContractWin, GuildMarkWin, heracleSays } from './ui/userlist.js';
 import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
-import { uiText } from './ui/wzui.js';
+import { uiText, TextField } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
@@ -55,7 +55,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings } from './settings.js';
-import { VIEW_W, VIEW_H, applyResolution } from './view.js';
+import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution } from './view.js';
 import { DirectionScene } from './direction.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
@@ -672,6 +672,7 @@ export class Game {
     this.invincible = 0; this.portalCooldown = 0;
     this.stats = null; this.inventory = null; this.meso = 0;
     this.keymap = defaultKeymap();
+    this.quickKeys = [...DEFAULT_QUICKSLOTS];   // the quick slots' keys, from the server
     this.buffs = [];   // {source, until, m1, m2}
     this.fx = [];      // skill effect animations {anim, x, y, flip, follow}
     this.shots = [];   // projectiles {anim, x, y, tx, ty, t, dur, onHit}
@@ -683,7 +684,9 @@ export class Game {
    */
   bindUiPointer() {
     const sb = this.statusBar, c = this.canvas;
-    const at = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * VIEW_W / r.width, (e.clientY - r.top) * VIEW_H / r.height]; };
+    // the interface's point (UI SIZE), and the field's
+    const at = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * UI_W / r.width, (e.clientY - r.top) * UI_H / r.height]; };
+    const field = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * VIEW_W / r.width, (e.clientY - r.top) * VIEW_H / r.height]; };
     const wm = this.windows;
     // windows sit above the bar: they see the event first, the bar only gets what they leave
     const route = (type, e) => this.uiLocked || (wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e)));
@@ -699,13 +702,13 @@ export class Game {
       const tw = wm.top(...p);
       if (tw?.rclick) { tw.rclick(p[0] - tw.x, p[1] - tw.y); return; }
       // right-click another player: Personal Info / Whisper / Party Invite / Trade
-      const rp = !wm.top(...p) && !sb.contains(...p) && this.playerAt(...p);
+      const rp = !wm.top(...p) && !sb.contains(...p) && this.playerAt(...field(e));
       if (rp && this.net) wm.show(new PlayerMenu(wm, rp, Math.round(p[0]), Math.round(p[1])));
     });
     // double-click a character (yourself included) for their Character Info
     c.addEventListener('dblclick', (e) => {
-      const p = at(e);
-      if (wm.top(...p) || sb.contains(...p) || !this.net) return;
+      const u = at(e), p = field(e);
+      if (wm.top(...u) || sb.contains(...u) || !this.net) return;
       const wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
       // the QuestAlert bulb: its list of quests
       if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
@@ -724,7 +727,10 @@ export class Game {
       const dy = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
       if (wm.pointer('wheel', ...at(e), dy) || sb.wheel(...at(e), dy)) e.preventDefault();
     }, { passive: false });
-    const place = this.placeUi = () => sb.place({ left: 0, top: 0 }, c.clientWidth / VIEW_W);
+    const place = this.placeUi = () => {
+      TextField.stretchY = c.clientWidth ? (c.clientHeight / c.clientWidth) * (VIEW_W / VIEW_H) : 1;
+      sb.place({ left: 0, top: 0 }, c.clientWidth / UI_W);
+    };
     new ResizeObserver(place).observe(c);
     place();
   }
@@ -817,10 +823,11 @@ export class Game {
   /** The other player under a canvas point. */
   /**
    * The field's cursor under the mouse, as v83 picks it each frame when no window is there: 1 over an NPC, 2 over
-   * another player (who wins over an NPC), else 0.
+   * another player (who wins over an NPC), else 0. (x, y) is the interface's point.
    */
   fieldCursor(x, y) {
     if (x < 0 || !this.map || this.windows?.top(x, y) || this.statusBar?.contains?.(x, y)) return 0;
+    x *= UI_SCALE; y *= UI_SCALE;
     if (this.playerAt(x, y)) return 2;
     const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
     for (const e of this.map.life) {
@@ -1818,7 +1825,7 @@ export class Game {
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
     this.touch = new TouchControls(this, uiRoot);
-    this.statusBar.layout(VIEW_W, VIEW_H);
+    this.statusBar.layout(UI_W, UI_H);
     await this.statusBar.load();
     this.windows = new WindowManager(this, this.statusBar);
     await this.windows.load();
@@ -2186,6 +2193,8 @@ export class Game {
       storageError: (code) => this.storageWin?.error(code),
       quest: (id, status, data) => this.onQuest(id, status, data),
       keymap: (km) => { this.keymap = km; this.dropForeignSkillKeys(); this.keyBar.render(); this.skillWin?.render(); },
+      // the client answers with the keys it now holds
+      quickslots: (keys) => { this.quickKeys = keys || [...DEFAULT_QUICKSLOTS]; this.net?.changeQuickslots(this.quickKeys); this.statusBar?.render(); },
       skills: (list) => {
         for (const s of list) {
           this.skills.setLevel(s.id, s);
@@ -2413,7 +2422,7 @@ export class Game {
     const T = this.windows.W.Quest?.TimeQuest, im = (n) => this.windows.image(n), now = performance.now();
     if (!T) return;
     let y = 50;
-    const x = VIEW_W - 100;
+    const x = UI_W - 100;
     for (const t of this.questTimers.values()) {
       const bg = im(T.TimeBar?.backgrnd), g = T.TimeBar?.TimeGage || {};
       if (bg) ctx.drawImage(bg, x, y);
@@ -5207,7 +5216,7 @@ export class Game {
     const left = Math.max(0, Math.ceil((this.clock.end - performance.now()) / 1000));
     const hours = left >= 3600, box = this.assets.image(hours ? art.boxHour : art.box);
     if (!box) return;
-    const bx = Math.round((VIEW_W - box.width) / 2), by = 22;   // under the server's scrolling notice
+    const bx = Math.round((UI_W - box.width) / 2), by = 22;   // under the server's scrolling notice
     ctx.drawImage(box, bx, by);
     const two = (n) => String(n).padStart(2, '0');
     const put = (ch, x) => { const img = this.assets.image(art.digits[ch]); if (img) ctx.drawImage(img, bx + x, by + 11); return img?.width || 0; };
@@ -6906,7 +6915,7 @@ export class Game {
   handleClicks() {
     for (const c of this.input.clicks) {
       // a double-click on a window (or the status bar) is the window's, never the NPC behind it
-      if (this.windows?.top(c.x, c.y) || this.statusBar?.contains?.(c.x, c.y)) continue;
+      if (this.windows?.top(c.x / UI_SCALE, c.y / UI_SCALE) || this.statusBar?.contains?.(c.x / UI_SCALE, c.y / UI_SCALE)) continue;
       const wx = c.x + Math.round(this.cam.x), wy = c.y + Math.round(this.cam.y);
       // a click on your own chalkboard puts it away
       const cr = this.player.chalk && this.player.chalkRect;
@@ -7053,15 +7062,15 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
   }
 
-  /** System Option SCREEN SIZE: the view, the bar and the open windows follow the new size. */
+  /** System Option SCREEN SIZE / UI SIZE: the view, the bar and the open windows follow the new size. */
   setResolution() {
     applyResolution();
     this.cam.w = VIEW_W; this.cam.h = VIEW_H;
-    this.statusBar?.layout(VIEW_W, VIEW_H);
+    this.statusBar?.layout(UI_W, UI_H);
     this.placeUi?.();
     for (const w of this.windows?.order || []) {
-      if (w === this.csWin) { w.x = (VIEW_W - w.w) >> 1; w.y = (VIEW_H - w.h) >> 1; continue; }
-      w.x = Math.max(-w.w + 40, Math.min(VIEW_W - 40, w.x)); w.y = Math.max(0, Math.min(VIEW_H - 40, w.y));
+      if (w === this.csWin) { w.x = (UI_W - w.w) >> 1; w.y = (UI_H - w.h) >> 1; continue; }
+      w.x = Math.max(-w.w + 40, Math.min(UI_W - 40, w.x)); w.y = Math.max(0, Math.min(UI_H - 40, w.y));
     }
     if (this.map && this.camF) this.placeCamera();
   }
@@ -7069,7 +7078,11 @@ export class Game {
   render() {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
-    if (this.inCashShop) { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H); this.windows?.draw(ctx); return; }
+    if (this.inCashShop) {
+      ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+      ctx.save(); ctx.scale(UI_SCALE, UI_SCALE); this.windows?.draw(ctx); ctx.restore();
+      return;
+    }
     const cam = { ...this.cam, x: Math.round(this.cam.x) + (this.shake?.dx || 0), y: Math.round(this.cam.y) + (this.shake?.dy || 0) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -7122,6 +7135,7 @@ export class Game {
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
     this.vfx?.drawScreen(ctx);
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
+    ctx.save(); ctx.scale(UI_SCALE, UI_SCALE);   // the interface, at System Option's UI SIZE
     if (ui) {
       this.vfx?.drawHud(ctx);
       this.drawAranCombo(ctx);
@@ -7139,6 +7153,7 @@ export class Game {
       this.windows?.draw(ctx);
     }
     this.vfx?.drawBoss(ctx);
+    ctx.restore();
     const dark = this.darkness;
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
   }

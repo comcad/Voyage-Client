@@ -2,7 +2,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * Maple Messenger (UIWindow.img/Messenger/backgrnd, 295x364): up to three people chatting from anywhere in
@@ -103,7 +103,7 @@ export class MessengerWin extends Win {
   draw(ctx) {
     super.draw(ctx);
     this.field.rect.x = this.x + 12; this.field.rect.y = this.y + 319;
-    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / VIEW_W);
+    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
   }
   body(ctx) {
     const im = (n) => this.mgr.image(n), now = performance.now();

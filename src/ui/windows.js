@@ -6,7 +6,8 @@ import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { richText, drawRich, QUEST_STATES } from './richtext.js';
 import { isPartyQuest, questSort, TITLE_AREA } from '../quests.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
+import { CODE_TO_SC, DEFAULT_QUICKSLOTS } from '../keymap.js';
 
 /**
  * In-game windows from UI/UIWindow.img, drawn on the game canvas like the v83 client:
@@ -180,8 +181,8 @@ export class WindowManager {
     this.mouse = { x, y };
     if (this.drag) {
       const d = this.drag;
-      d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(VIEW_W - 40, x - d.dx)));
-      d.win.y = Math.round(Math.max(0, Math.min(VIEW_H - 40, y - d.dy)));
+      d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(UI_W - 40, x - d.dx)));
+      d.win.y = Math.round(Math.max(0, Math.min(UI_H - 40, y - d.dy)));
       if (type === 'up') { this.drag = null; d.win.dragged?.(); }
       return true;
     }
@@ -835,7 +836,7 @@ class SkillWin extends Win {
       if (box) ctx.drawImage(box, X + 166, 241);
     }
     const f = this.nameField;
-    if (f) { f.rect.x = this.x + X + 59; f.rect.y = this.y + 215; f.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / VIEW_W); }
+    if (f) { f.rect.x = this.x + X + 59; f.rect.y = this.y + 215; f.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W); }
   }
   macroDown(lx, ly) {
     const X = this.skillW;
@@ -1615,23 +1616,93 @@ const PALETTE = { x: 9, y: 267, step: 34, cols: 18 };
 const FUNCTIONS = [...Array.from({ length: 28 }, (_, i) => [4, i]), ...[50, 51, 52, 53, 54].map((a) => [5, a]), ...[100, 101, 102, 103, 104, 105, 106].map((a) => [6, a])];
 const MACRO_TIP = 'Register the frequently-used skills for a quick access with a single button.';
 
-/** Key Setting's confirmations: the notice picture with KeyConfig's OK (160, 55) and Cancel (210, 55). */
+/**
+ * Key Setting's confirmations: the notice picture with KeyConfig's OK (160, 55) and Cancel (210, 55). Resetting to
+ * the defaults (0) warns on OK, and leaving without saving (2) on Cancel when the quick slots were changed, that the
+ * quick slots go with it.
+ */
+const QUICK_CANCEL_TIP = { title: "The changes you've made to the Quick Slot will also be canceled.", lines: [] };
 class KeyConfigNotice extends Win {
-  constructor(mgr, n, done) {
+  constructor(mgr, n, done, quickChanged = false) {
     const W = mgr.W.KeyConfig, bg = W.notice[n];
-    super(mgr, bg, (VIEW_W - (bg?._w || 266)) >> 1, (VIEW_H - (bg?._h || 85)) >> 1);
+    super(mgr, bg, (UI_W - (bg?._w || 266)) >> 1, (UI_H - (bg?._h || 85)) >> 1);
     this.buttons = []; this.modal = true; this.done = done; this.closeSound = null;
-    this.button(W.BtOK, 160, 55, () => this.finish(true));
-    this.button(W.BtCancel, 210, 55, () => this.finish(false));
+    const ok = this.button(W.BtOK, 160, 55, () => this.finish(true));
+    const cancel = this.button(W.BtCancel, 210, 55, () => this.finish(false));
+    if (n === 0) ok.tip = () => QUICK_CANCEL_TIP;
+    if (n === 2 && quickChanged) cancel.tip = () => QUICK_CANCEL_TIP;
   }
   finish(ok) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(ok); }
   key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false); }
 }
 
+/**
+ * CHANGE QUICK SLOTS: KeyConfig/quickslotConfig/backgrnd (266x238), centred, with the quick slots' eight keys as
+ * BtQuickSetting buttons from (65, 113), 35px apart, the second row at y 147. Each shows what its key is bound to
+ * and its key's label (quickslotConfig/key/<scancode>) 2px in. Click a slot, or Tab to it, then press a key: one
+ * without a label there is disabled, and one already on a slot is in use. Arrows move between the slots, or between
+ * OK (157, 208) and CANCEL (210, 208); Tab switches between the slots and the buttons; Escape drops the selection,
+ * then cancels; Enter is OK. A click in the window off the slots drops the selection.
+ */
+const QS_NUMPAD = { Numpad1: 2, Numpad2: 3, Numpad3: 4, Numpad4: 5, Numpad5: 6, Numpad6: 7, Numpad7: 8, Numpad8: 9, Numpad9: 10, Numpad0: 11 };
+const qsPos = (i) => [65 + (i % 4) * 35, i < 4 ? 113 : 147];
+class QuickSlotConfigWin extends Win {
+  constructor(mgr, keys, keymap, iconFor, done) {
+    const Q = mgr.W.KeyConfig.quickslotConfig, bg = Q.backgrnd;
+    super(mgr, bg, (UI_W - bg._w) >> 1, (UI_H - bg._h) >> 1);
+    this.buttons = []; this.modal = true; this.closeSound = null;
+    Object.assign(this, { Q, quick: [...keys], keymap, iconFor, done });
+    this.focus = -1; this.slot = 0; this.btn = 0;   // focus: -1 nothing, 0 a slot, 1 OK / CANCEL
+    this.slots = this.quick.map((_, i) => this.button(Q.BtQuickSetting, ...qsPos(i), () => { this.focus = 0; this.slot = i; }));
+    this.ok = this.button(mgr.W.KeyConfig.BtOK, 157, 208, () => this.finish(true));
+    this.cancel = this.button(mgr.W.KeyConfig.BtCancel, 210, 208, () => this.finish(false));
+  }
+  frames() { return [...super.frames(), ...allCanvases(this.Q.key)]; }
+  finish(ok) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(ok ? this.quick : null); }
+  key(e) {
+    if (e.key === 'Enter') this.finish(true);
+    else if (this.focus !== -1) { this.focus = -1; this.slot = 0; this.btn = 0; }
+    else this.finish(false);
+  }
+  keys(e) {
+    const f = this.focus, i = this.slot;
+    switch (e.code) {
+      case 'Tab': if (f === 0) { this.focus = 1; this.btn = 0; } else { this.focus = 0; this.slot = 0; } return true;
+      case 'ArrowLeft': if (f === 0 && i !== 0 && i !== 4) this.slot--; else if (f === 1) this.btn = 0; return true;
+      case 'ArrowRight': if (f === 0 && i !== 3 && i !== 7) this.slot++; else if (f === 1) this.btn = 1; return true;
+      case 'ArrowUp': if (f === 0 && i > 3) this.slot -= 4; return true;
+      case 'ArrowDown': if (f === 0 && i < 4) this.slot += 4; return true;
+    }
+    if (f === 0 && !e.repeat) this.assign(QS_NUMPAD[e.code] ?? CODE_TO_SC[e.code]);
+    return true;
+  }
+  assign(sc) {
+    if (!sc || !this.Q.key?.[sc]) { this.mgr.notice('The key you just pressed is a key that has been disabled.'); return; }
+    if (this.quick.includes(sc)) { this.mgr.notice('This key is already being used.'); return; }
+    this.quick[this.slot] = sc;
+  }
+  up() {
+    const { x, y } = this.mgr.mouse, lx = x - this.x, ly = y - this.y;
+    if (this.contains(x, y) && !(lx >= 65 && lx <= 202 && ly >= 113 && ly <= 177)) this.focus = -1;
+  }
+  body(ctx) {
+    const m = this.mgr;
+    // the chosen slot stays lit with the mouse on it
+    this.slots.forEach((b, i) => { b.focused = this.focus === 0 && this.slot === i; b.forceState = b.focused ? 'keyFocused' : null; });
+    this.ok.focused = this.focus === 1 && this.btn === 0; this.cancel.focused = this.focus === 1 && this.btn === 1;
+    this.quick.forEach((sc, i) => {
+      const [x, y] = qsPos(i), icon = this.iconFor(this.keymap?.[sc === 54 ? 42 : sc]);
+      if (icon && m.image(icon)) m.drawIcon(ctx, icon, x, y); else if (icon) m.assets.preload([icon]);
+      const label = m.image(this.Q.key?.[sc]);
+      if (label) ctx.drawImage(label, x + 2, y + 2);
+    });
+  }
+}
+
 class KeyConfigWin extends Win {
   constructor(mgr) {
     const W = mgr.W.KeyConfig;
-    super(mgr, W.backgrnd, (VIEW_W >> 1) - 314, (VIEW_H >> 1) - 186);
+    super(mgr, W.backgrnd, (UI_W >> 1) - 314, (UI_H >> 1) - 186);
     this.buttons = [];
     this.W = W; this.draft = {}; this.picked = null; this.bindsKeys = true;
     // Keyboard / Controller / Touch tabs on the button strip; the controller and touch layouts stay in this browser
@@ -1642,28 +1713,36 @@ class KeyConfigWin extends Win {
     this.button(W.BtDefault, 112, 236, async () => {
       if (!(await this.ask(0))) return;
       if (this.tab !== 'keyboard') { this.tabs.reset(this.tab); return; }
-      this.draft = (await import('../keymap.js')).defaultKeymap(); this.picked = null;
+      this.draft = (await import('../keymap.js')).defaultKeymap(); this.picked = null; this.setQuickKeys(DEFAULT_QUICKSLOTS);
     });
     this.button(W.BtDelete, 177, 236, async () => {   // the art reads CLEAR ALL
       if (!(await this.ask(1))) return;
       if (this.tab !== 'keyboard') { this.tabs.clear(this.tab); return; }
       this.draft = {}; this.picked = null;
     });
-    this.button(W.BtQuickSlot, 260, 236, () => mgr.bar.setQuickOpen(!mgr.bar.quickOpen));
+    // CHANGE QUICK SLOTS: its OK puts the keys on the quick slots at once; they are kept with this window's OK
+    this.button(W.BtQuickSlot, 260, 236, () => {
+      const w = new QuickSlotConfigWin(mgr, this.g.quickKeys, this.draft, (b) => this.iconFor(b), (keys) => { if (keys) this.setQuickKeys(keys); });
+      mgr.assets.preload(w.frames()).then(() => mgr.show(w));
+    });
   }
   frames() { return [...super.frames(), ...allCanvases(this.W.icon), ...allCanvases(this.W.key)]; }
   onOpen() {
     this.draft = Object.fromEntries(Object.entries(this.g.keymap || {}).map(([k, v]) => [k, { ...v }])); this.picked = null;
     this.ctlDraft = cloneControls(this.g.controls); this.tabs.picked = null;
     this.g.touch?.suspend(true);
+    this.quickBefore = [...this.g.quickKeys];
   }
-  onClose() { this.g.touch?.suspend(false); }
+  /** Leaving without OK puts the quick slots back as well. */
+  onClose() { this.g.touch?.suspend(false); if (this.quickChanged()) this.setQuickKeys(this.quickBefore); }
+  setQuickKeys(keys) { this.g.quickKeys = [...keys]; this.mgr.bar.render(); }
+  quickChanged() { return !!this.quickBefore && this.g.quickKeys.some((k, i) => k !== this.quickBefore[i]); }
 
   /** KeyConfig/notice/<n> (0 reset, 1 delete all, 2 save changes) with OK / Cancel: true for OK. */
-  ask(n) { return new Promise((r) => this.mgr.show(new KeyConfigNotice(this.mgr, n, r))); }
+  ask(n) { return new Promise((r) => this.mgr.show(new KeyConfigNotice(this.mgr, n, r, this.quickChanged()))); }
   changed() {
     const before = this.g.keymap || {}, same = (a, b) => a?.type === b?.type && a?.action === b?.action;
-    return [...new Set([...Object.keys(before), ...Object.keys(this.draft)])].some((sc) => !same(before[sc], this.draft[sc]))
+    return this.quickChanged() || [...new Set([...Object.keys(before), ...Object.keys(this.draft)])].some((sc) => !same(before[sc], this.draft[sc]))
       || JSON.stringify(this.ctlDraft) !== JSON.stringify(this.g.controls);
   }
   /** Closed another way than OK / Cancel with changes made: "Save changes?" (OK saves); it closes either way. */
@@ -1678,6 +1757,8 @@ class KeyConfigWin extends Win {
       changes.push({ key: Number(sc), type: b?.type || 0, action: b?.action || 0 });
     }
     if (changes.length) g.net?.changeKeymap(changes);
+    g.net?.changeQuickslots(g.quickKeys);
+    this.quickBefore = [...g.quickKeys];
     g.keymap = { ...this.draft };
     this.mgr.bar.render();
     g.controls = cloneControls(this.ctlDraft);
@@ -1793,7 +1874,7 @@ function drawTip(ctx, tip, x, y) {
   ctx.font = '12px Arial, sans-serif';
   const w = Math.ceil(Math.max(tw + 20, ...lines.map((l) => ctx.measureText(l).width + 20), 80));
   const h = 24 + lines.length * 15 + (lines.length ? 4 : 0);
-  x = Math.min(x, VIEW_W - w - 2); y = Math.min(y, VIEW_H - h - 2);
+  x = Math.min(x, UI_W - w - 2); y = Math.min(y, UI_H - h - 2);
   ctx.fillStyle = 'rgba(0,0,64,0.627)';
   ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
   ctx.fillStyle = '#fff';

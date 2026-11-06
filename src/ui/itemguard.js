@@ -1,5 +1,5 @@
 import { Win } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 const NEVER = 0x0217E646BB058000n;   // FILETIME 2079-01-01: no expiry
 const FT_EPOCH = 116444736000000000n;
@@ -17,7 +17,7 @@ const fmt = (d) => `${d.getMonth() + 1}-${d.getDate()}-${d.getFullYear()} ${Stri
 export class ItemGuardWin extends Win {
   constructor(mgr, itemId, days, done) {
     const P = mgr.W.ItemProtector;
-    super(mgr, P.backgrnd, Math.round((VIEW_W - P.backgrnd._w) / 2), Math.round((VIEW_H - P.backgrnd._h) / 2));
+    super(mgr, P.backgrnd, Math.round((UI_W - P.backgrnd._w) / 2), Math.round((UI_H - P.backgrnd._h) / 2));
     this.closeBtn.visible = false;   // neither modal nor closed by clicks elsewhere: items are dragged onto it from the inventory
     this.itemId = itemId; this.days = days; this.done = done; this.pick = null;
     this.button(P.BtCancel, 136, 157, () => this.finish(null));

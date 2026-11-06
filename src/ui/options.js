@@ -1,7 +1,7 @@
 import { music, sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
 import { settings, saveSettings, MOB_INFO } from '../settings.js';
-import { RESOLUTIONS, VIEW_W, VIEW_H, resolutionName, resolutionIndex } from '../view.js';
+import { RESOLUTIONS, UI_W, UI_H, UI_SCALE, maxUiScale, resolutionName, resolutionIndex } from '../view.js';
 
 /**
  * Game Menu windows from UI/UIWindow.img: Change Channel, Game Option, System Option.
@@ -33,7 +33,7 @@ export class ChannelWin extends Win {
     // the middle piece (10px) repeats down to the last row's bottom; two rows make the original's 143px window
     this.tiles = Math.max(2, Math.ceil((CELL_Y + rows * CELL_DY - 2 - 67) / 10));
     this.w = 436; this.h = 67 + this.tiles * 10 + 36;
-    this.x = Math.round((VIEW_W - this.w) / 2); this.y = Math.round((VIEW_H - 71 - this.h) / 2);
+    this.x = Math.round((UI_W - this.w) / 2); this.y = Math.round((UI_H - 71 - this.h) / 2);
     const by = this.h - 36 + 9;
     this.cancel.x = 436 - 16 - 47; this.cancel.y = by;
     this.change.x = this.cancel.x - 6 - 91; this.change.y = by;
@@ -115,26 +115,48 @@ export class GameOptWin extends Win {
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
  *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
- * An eleventh row, SCREEN SIZE (the game's resolution, a combo box), is added under them: the art's MONSTER INFO row
- * with a new label, the OK / CANCEL band moved down under it.
+ * Three rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
+ * under them: SCREEN SIZE (the game's resolution, a combo box), UI SIZE (a slider from 100% to as large as the
+ * screen size allows, in 10% steps, its value beside it; it takes effect when let go) and FIT TO SCREEN (a check box:
+ * the game is stretched to fill the window, with no black bars).
  * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
- * the art, 30px lower with the added row.
+ * the art, 90px lower with the added rows.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
  */
 const ROW_Y = (i) => 46 + i * 30;
 const SLIDERS = {
   quality: { row: 0, x0: 104, x1: 238 }, bgm: { row: 1, x0: 92, x1: 208 }, sound: { row: 2, x0: 92, x1: 208 },
   mouse: { row: 4, x0: 96, x1: 238, disabled: true }, hpAlert: { row: 5, x0: 100, x1: 244 }, mpAlert: { row: 6, x0: 100, x1: 244 },
+  uiScale: { row: 11, x0: 100, x1: 236 },
 };
 const MUTE_X = 246, COMBO = { x: 66, w: 172 }, CHECK_X = 64, VIEW_X = 61;   // WINDOW / FULL SCREEN start further left
 const SHOT_PLACES = ['Downloads Folder'];
-const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, WIN_H = ART_H + 30;
-// the labels' 5x7 letters, drawn white on a dark outline
+const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, FIT_ROW = 12, ADDED = 3, WIN_H = ART_H + ADDED * 30;
+// the labels' 5x7 letters (white on a dark outline) and the rows' digits (navy, as the art's 100%)
 const GLYPHS = {
+  F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'], T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
+  O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'], ' ': ['...', '...', '...', '...', '...', '...', '...'],
+  0: ['.####.', '#....#', '#....#', '#....#', '#....#', '#....#', '.####.'], 1: ['.#', '##', '.#', '.#', '.#', '.#', '.#'],
+  2: ['.####.', '#....#', '.....#', '...##.', '.##...', '#.....', '######'], 3: ['.####.', '#....#', '.....#', '..###.', '.....#', '#....#', '.####.'],
+  4: ['....#.', '...##.', '..#.#.', '.#..#.', '######', '....#.', '....#.'], 5: ['######', '#.....', '#####.', '.....#', '.....#', '#....#', '.####.'],
+  6: ['.####.', '#.....', '#####.', '#....#', '#....#', '#....#', '.####.'], 7: ['######', '.....#', '....#.', '...#..', '..#...', '..#...', '..#...'],
+  8: ['.####.', '#....#', '#....#', '.####.', '#....#', '#....#', '.####.'], 9: ['.####.', '#....#', '#....#', '.#####', '.....#', '#....#', '.####.'],
+  '%': ['.#....#', '#.#..#.', '.#..#..', '...#...', '..#..#.', '.#..#.#', '#....#.'],
   S: ['.###.', '#...#', '#....', '.###.', '....#', '#...#', '.###.'], C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
   R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'], E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
   N: ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'], I: ['#', '#', '#', '#', '#', '#', '#'],
   Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+};
+// the rows' own 4px-wide letters, as in SHAKE UP THE SCREEN WHEN USING SKILLS
+const SMALL = {
+  S: ['.##.', '#..#', '#...', '.##.', '...#', '#..#', '.##.'], T: ['###', '.#.', '.#.', '.#.', '.#.', '.#.', '.#.'],
+  R: ['###.', '#..#', '#..#', '###.', '#..#', '#..#', '#..#'], E: ['####', '#...', '#...', '###.', '#...', '#...', '####'],
+  C: ['.##.', '#..#', '#...', '#...', '#...', '#..#', '.##.'], H: ['#..#', '#..#', '#..#', '####', '#..#', '#..#', '#..#'],
+  O: ['.##.', '#..#', '#..#', '#..#', '#..#', '#..#', '.##.'], F: ['####', '#...', '#...', '###.', '#...', '#...', '#...'],
+  I: ['###', '.#.', '.#.', '.#.', '.#.', '.#.', '###'], L: ['#...', '#...', '#...', '#...', '#...', '#...', '####'],
+  W: ['#..#..#', '#..#..#', '#..#..#', '#..#..#', '#..#..#', '#..#..#', '.##.##.'], N: ['#..#', '#..#', '##.#', '#.##', '#..#', '#..#', '#..#'],
+  D: ['###.', '#..#', '#..#', '#..#', '#..#', '#..#', '###.'], ' ': ['..', '..', '..', '..', '..', '..', '..'],
 };
 export class SysOptWin extends Win {
   constructor(mgr) {
@@ -157,10 +179,10 @@ export class SysOptWin extends Win {
   revert() {
     const b = this.before;
     if (!b) return;
-    const size = settings.resolution;
+    const size = settings.resolution, scale = settings.uiScale, fit = settings.fit;
     for (const k of Object.keys(settings)) settings[k] = b[k];
     saveSettings();
-    if (settings.resolution !== size) this.g.setResolution?.();
+    if (settings.resolution !== size || settings.uiScale !== scale || settings.fit !== fit) this.g.setResolution?.();
     music.setVolume(b.bgm); sfx.setVolume(b.sound);
     if (music.muted !== b.bgmMute) music.setMuted(b.bgmMute);
     if (sfx.muted !== b.soundMute) sfx.setMuted(b.soundMute);
@@ -172,10 +194,13 @@ export class SysOptWin extends Win {
     if (k === 'bgm') return music.volume;
     if (k === 'sound') return sfx.volume;
     if (k === 'mouse') return 0.5;
+    if (k === 'uiScale') { const max = maxUiScale(); return max > 1 ? ((this.pendingScale ?? UI_SCALE) - 1) / (max - 1) : 0; }
     return settings[k];
   }
+  off(k) { return SLIDERS[k].disabled || this.muted(k) || (k === 'uiScale' && maxUiScale() <= 1); }
   setValue(k, v) {
-    if (k === 'bgm') music.setVolume(v);
+    if (k === 'uiScale') this.pendingScale = Math.round((1 + v * (maxUiScale() - 1)) * 10) / 10;
+    else if (k === 'bgm') music.setVolume(v);
     else if (k === 'sound') sfx.setVolume(v);
     else { settings[k] = k === 'quality' ? v : Math.round(v * 20) / 20; saveSettings(); }
   }
@@ -193,27 +218,36 @@ export class SysOptWin extends Win {
   }
 
   // ---------------------------------------------------------------- frame
-  /** The SCREEN SIZE row: a copy of the MONSTER INFO row with its label cleared and lettered, then the button band. */
+  /** The added rows: copies of the MONSTER INFO row with their labels cleared and lettered, then the button band. */
   extraRow(ctx) {
     const bg = this.mgr.image(this.bg);
     if (!bg) return;
-    const src = ROW_Y(EXTRA_ROW) - 14, top = ROWS_END;
-    ctx.drawImage(bg, 0, src, 299, 30, 0, top, 299, 30);
-    ctx.drawImage(bg, 0, ROWS_END, 299, ART_H - ROWS_END, 0, top + 30, 299, ART_H - ROWS_END);
-    ctx.drawImage(bg, 10, ROW_Y(1) - 12, 12, 24, 10, top + 2, 44, 24);   // a plain stretch of a label's fill
-    this.label(ctx, 'SCREEN', 32, top + 6); this.label(ctx, 'SIZE', 32, top + 16);
+    const src = ROW_Y(EXTRA_ROW) - 14;
+    for (let i = 0; i < ADDED; i++) {
+      const top = ROWS_END + i * 30;
+      ctx.drawImage(bg, 0, src, 299, 30, 0, top, 299, 30);
+      ctx.drawImage(bg, 10, ROW_Y(1) - 12, 12, 24, 10, top + 2, 44, 24);   // a plain stretch of a label's fill
+    }
+    ctx.drawImage(bg, 0, ROWS_END, 299, ART_H - ROWS_END, 0, ROWS_END + ADDED * 30, 299, ART_H - ROWS_END);
+    this.label(ctx, 'SCREEN', 32, ROWS_END + 6); this.label(ctx, 'SIZE', 32, ROWS_END + 16);
+    this.label(ctx, 'UI SIZE', 32, ROWS_END + 41);
+    this.label(ctx, 'FIT TO', 32, ROWS_END + 66); this.label(ctx, 'SCREEN', 32, ROWS_END + 76);
+    this.label(ctx, 'STRETCH TO FILL THE WINDOW', CHECK_X + 16, ROW_Y(FIT_ROW) - 3, '#224466', null, SMALL, false);
+    this.label(ctx, `${Math.round((this.pendingScale ?? UI_SCALE) * 100)}%`, 270, ROW_Y(SLIDERS.uiScale.row) - 3, '#224466', null);
   }
-  label(ctx, text, cx, y) {
-    const rows = [...text].map((ch) => GLYPHS[ch]), w = rows.reduce((n, g) => n + g[0].length + 1, -1);
-    const put = (color, grow) => {
-      ctx.fillStyle = color;
-      let x = Math.round(cx - w / 2);
+  /** Lettering centred on cx (or from it): white on the labels' dark outline, or one colour with no outline. */
+  label(ctx, text, cx, y, color = '#ffffff', outline = '#993366', font = GLYPHS, centred = true) {
+    const rows = [...text].map((ch) => font[ch]), w = rows.reduce((n, g) => n + g[0].length + 1, -1);
+    const put = (fill, grow) => {
+      ctx.fillStyle = fill;
+      let x = Math.round(centred ? cx - w / 2 : cx);
       for (const g of rows) {
         g.forEach((line, gy) => [...line].forEach((c, gx) => { if (c === '#') ctx.fillRect(x + gx - grow, y + gy - grow, 1 + 2 * grow, 1 + 2 * grow); }));
         x += g[0].length + 1;
       }
     };
-    put('#993366', 1); put('#ffffff', 0);
+    if (outline) put(outline, 1);
+    put(color, 0);
   }
   body(ctx) {
     this.extraRow(ctx);
@@ -224,12 +258,13 @@ export class SysOptWin extends Win {
       if (l && mid && r) {
         ctx.drawImage(l, d.x0, cy - 4); ctx.drawImage(mid, d.x0 + 3, cy - 4, d.x1 - d.x0 - 6, 8); ctx.drawImage(r, d.x1 - 3, cy - 4);
       }
-      const off = d.disabled || this.muted(k);
+      const off = this.off(k);
       const t = im(off ? S.thumbDisabled : this.drag === k ? S.thumbPressed : S.thumbNormal) || im(S.thumbNormal);
       if (t) ctx.drawImage(t, Math.round(d.x0 + this.value(k) * (d.x1 - d.x0) - 11), cy - 7);
       if (k === 'bgm' || k === 'sound') this.check(ctx, MUTE_X, cy, this.muted(k));
     }
     this.check(ctx, CHECK_X, ROW_Y(7), settings.shake);
+    this.check(ctx, CHECK_X, ROW_Y(FIT_ROW), !!settings.fit);
     const full = !!document.fullscreenElement;
     this.check(ctx, VIEW_X, ROW_Y(9) - 7, !full);
     this.check(ctx, VIEW_X, ROW_Y(9) + 7, full);
@@ -279,6 +314,7 @@ export class SysOptWin extends Win {
     }
     const row = Math.round((ly - 46) / 30), cy = ROW_Y(row);
     if (row === 7 && lx >= CHECK_X - 2 && lx < 290 && Math.abs(ly - cy) <= 8) { settings.shake = !settings.shake; saveSettings(); return; }
+    if (row === FIT_ROW && lx >= CHECK_X - 2 && lx < 290 && Math.abs(ly - cy) <= 8) { settings.fit = !settings.fit; saveSettings(); this.g.setResolution?.(); return; }
     if (row === 9 && lx >= VIEW_X - 2 && lx < 290) {
       const full = ly > cy;
       if (full && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});
@@ -286,7 +322,7 @@ export class SysOptWin extends Win {
       return;
     }
     for (const [k, d] of Object.entries(SLIDERS)) {
-      if (row !== d.row || Math.abs(ly - cy) > 8 || d.disabled) continue;
+      if (row !== d.row || Math.abs(ly - cy) > 8 || d.disabled || (k === 'uiScale' && this.off(k))) continue;
       if ((k === 'bgm' || k === 'sound') && lx >= MUTE_X - 2 && lx < 290) { if (k === 'bgm') music.setMuted(!music.muted); else sfx.setMuted(!sfx.muted); return; }
       if (lx >= d.x0 - 12 && lx <= d.x1 + 12) { sfx.play('UI/BtMouseClick'); this.drag = k; this.slideTo(k, lx); return; }
     }
@@ -295,13 +331,20 @@ export class SysOptWin extends Win {
     if (this.drag) { this.slideTo(this.drag, lx); return; }
     if (this.open) { this.hover = this.listAt(lx, ly); return; }
     // a slider's thumb sounds as the mouse comes onto it
-    const on = Object.entries(SLIDERS).find(([k, d]) => !d.disabled && Math.abs(ly - ROW_Y(d.row)) <= 7
+    const on = Object.entries(SLIDERS).find(([k, d]) => !d.disabled && !(k === 'uiScale' && this.off(k)) && Math.abs(ly - ROW_Y(d.row)) <= 7
       && Math.abs(lx - (d.x0 + this.value(k) * (d.x1 - d.x0))) <= 11)?.[0] || null;
     if (on && on !== this.thumbOver) sfx.play('UI/BtMouseOver');
     this.thumbOver = on;
   }
-  // a slider clicks when pressed and again when let go (the effect slider's at its new volume)
-  up() { if (this.drag) sfx.play('UI/BtMouseClick'); this.drag = null; }
+  // a slider clicks when pressed and again when let go (the effect slider's at its new volume); UI SIZE applies then
+  up() {
+    if (this.drag) sfx.play('UI/BtMouseClick');
+    if (this.drag === 'uiScale' && this.pendingScale !== undefined) {
+      if (this.pendingScale !== UI_SCALE) { settings.uiScale = this.pendingScale; saveSettings(); this.g.setResolution?.(); }
+      this.pendingScale = undefined;
+    }
+    this.drag = null;
+  }
 }
 
 /** A PNG of the game as it is on screen, saved like the client's own screenshots (MapleYYYYMMDD_HHMMSS). */

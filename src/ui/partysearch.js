@@ -1,7 +1,7 @@
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * Party Search (UIWindow.img/PartySearch, backgrnd 305x407): title y 8-21, tab strip y 22-42 (Tab 0 Party,
@@ -91,7 +91,7 @@ export class PartySearchWin extends Win {
     this.stopBtn.enabled = this.state !== 'idle';
     this.startBtn.enabled = this.leader;
     super.draw(ctx);
-    const scale = this.g.canvas.clientWidth / VIEW_W;
+    const scale = this.g.canvas.clientWidth / UI_W;
     for (const f of Object.values(this.fields)) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + 130; f.layout({ left: 0, top: 0 }, scale); }
   }
   body(ctx) {

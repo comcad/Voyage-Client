@@ -107,15 +107,17 @@ export class TextField {
   focus() { this.el.focus(); }
   show(v) { this.el.style.display = v ? '' : 'none'; }
   remove() { this.el.remove(); }
-  /** Place the input over its canvas rect, given the canvas' on-screen box and scale. */
-  layout(box, scale) {
+  /** Place the input over its canvas rect, given the canvas' on-screen box and scale (sy: the height's, when stretched). */
+  layout(box, scale, sy = scale * TextField.stretchY) {
     const { x, y, w, h } = this.rect;
     Object.assign(this.el.style, {
-      left: `${box.left + x * scale}px`, top: `${box.top + y * scale}px`,
-      width: `${w * scale}px`, height: `${h * scale}px`, fontSize: `${Math.max(9, 12 * scale)}px`,
+      left: `${box.left + x * scale}px`, top: `${box.top + y * sy}px`,
+      width: `${w * scale}px`, height: `${h * sy}px`, fontSize: `${Math.max(9, 12 * Math.min(scale, sy))}px`,
     });
   }
 }
+/** How much taller than wide the game canvas is drawn (FIT TO SCREEN stretches it); set by Game. */
+TextField.stretchY = 1;
 
 /** Draws text the way the client's UI does: small Arial with an optional 1px dark outline. */
 export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'left', bold = false, outline = null, base = 'top', font = null } = {}) {

@@ -4,6 +4,7 @@ import { EXP, jobName, itemIcon, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText } from './wzui.js';
 import { settings } from '../settings.js';
+import { DEFAULT_QUICKSLOTS } from '../keymap.js';
 
 /**
  * The v83 status bar (UI/StatusBar.img), drawn on the game canvas across the bottom 71px,
@@ -50,8 +51,8 @@ const FLUSH = new Set([CHAT_COLOR.grey, CHAT_COLOR.yellow, CHAT_COLOR.result, CH
 // invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
 const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
 export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
-// quick slot keys: Shift Ins Home PgUp / Ctrl Del End PgDn (scancodes), labelled by StatusBar.img/key/0-7
-const QUICK_KEYS = [42, 82, 71, 73, 29, 83, 79, 81];
+// the quick slots show the keys in game.quickKeys (Key Setting's CHANGE QUICK SLOTS), each labelled by
+// UIWindow.img/KeyConfig/quickslotConfig/key/<scancode> 2px into its icon box
 // the panel sits 2px in from the right edge on top of the bar (beside it, on a screen wide enough); each slot's 32x32
 // icon box, from the panel's corner
 const BAR_W = 800, QUICK_W = 151, QUICK_X = 153, QUICK_ICONS = [[7, 8], [42, 8], [77, 8], [112, 8], [7, 41], [42, 41], [77, 41], [112, 41]];
@@ -109,7 +110,7 @@ export class StatusBar {
 
     const menuFrames = Object.entries(MENU_ITEMS).flatMap(([w, list]) => [this.W[w].backgrnd, ...list.flatMap((b) => stateFrames(this.W[w][b]))]);
     await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
-      S.gauge.bar, S.gauge.graduation, S.gauge.gray, ...canvases(S.number), ...canvases(S.key), ...canvases(this.B.LevelNo),
+      S.gauge.bar, S.gauge.graduation, S.gauge.gray, ...canvases(S.number), ...canvases(this.W.KeyConfig?.quickslotConfig?.key), ...canvases(this.B.LevelNo),
       ...this.hpFlash.frames, ...this.mpFlash.frames, ...this.allButtons().flatMap((b) => b.frames()), ...this.chatMaxBtn.frames(), ...menuFrames]);
     this.render();
   }
@@ -136,7 +137,7 @@ export class StatusBar {
     this.y = viewH - BAR_H; this.w = viewW;
     this.side = viewW >= BAR_W + 2 * QUICK_X - QUICK_W;
     const mid = (viewW - BAR_W) >> 1;
-    this.ox = this.side ? Math.min(mid, viewW - BAR_W - 2 * QUICK_X + QUICK_W) : mid;
+    this.ox = Math.floor(this.side ? Math.min(mid, viewW - BAR_W - 2 * QUICK_X + QUICK_W) : mid);
     if (this.chat?.rect) { this.chat.rect.x = this.ox + CHAT.x; this.chat.rect.y = this.y + CHAT.y; }
   }
 
@@ -393,7 +394,7 @@ export class StatusBar {
   /** Rebuild the quick slot icons from the keymap (called whenever the keymap or skills change). */
   async render() {
     const g = this.game;
-    this.quick = await Promise.all(QUICK_KEYS.map(async (sc) => {
+    this.quick = await Promise.all(this.quickKeys.map(async (sc) => {
       const k = g.keymap?.[sc];
       if (!k) return null;
       // skills, items and macros by their own icons; menus, actions and faces by the key setting's
@@ -410,7 +411,7 @@ export class StatusBar {
     // an Item Megaphone line in the log: its item
     const line = (this.itemHits || []).find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
     if (line) return { item: line.item };
-    const i = this.quickAt(x, y), k = i >= 0 ? this.game.keymap?.[QUICK_KEYS[i]] : null, g = this.game, above = this.quickPos().y - 2;
+    const i = this.quickAt(x, y), k = i >= 0 ? this.game.keymap?.[this.quickKeys[i]] : null, g = this.game, above = this.quickPos().y - 2;
     if (!k) return null;
     if ([2, 3, 7].includes(k.type)) {
       for (const tab of [2, 3, 4, 5]) for (const it of Object.values(g.inventory?.[tab] || {})) if (it?.id === k.action) return { item: it, above };
@@ -425,6 +426,9 @@ export class StatusBar {
     if (open) this.render();
   }
 
+  /** The quick slots' keys; right Shift's bindings are left Shift's. */
+  get quickKeys() { return (this.game.quickKeys || DEFAULT_QUICKSLOTS).map((sc) => (sc === 54 ? 42 : sc)); }
+
   /** The open panel's top-left corner: right above the bar's right end, or beside the bar on the bottom edge. */
   quickPos() { return this.side ? { x: BAR_W + QUICK_X - QUICK_W, y: this.y + BAR_H - 80 } : { x: BAR_W - QUICK_X, y: this.y - 80 }; }
 
@@ -435,7 +439,7 @@ export class StatusBar {
     const p = this.quickPos();
     const i = QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
     if (i < 0) return;
-    const sc = QUICK_KEYS[i];
+    const sc = this.quickKeys[i];
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
     else if (c.kind === 'item' && itemKeyType(c.tab, c.id)) this.game.bindKey(sc, itemKeyType(c.tab, c.id), c.id);
     else if (c.kind === 'bind') this.game.bindKey(sc, c.b.type, c.b.action);   // a macro, or a slot moved to another
@@ -451,7 +455,7 @@ export class StatusBar {
   }
   /** Pick a slot's binding up: dropped on another slot it moves there, dropped off the bar it is taken off the key. */
   pickQuick(x, y) {
-    const i = this.quickAt(x, y), sc = QUICK_KEYS[i], k = i >= 0 ? this.game.keymap?.[sc] : null, node = this.quick[i]?.node;
+    const i = this.quickAt(x, y), sc = this.quickKeys[i], k = i >= 0 ? this.game.keymap?.[sc] : null, node = this.quick[i]?.node;
     if (!k || !node || this.game.windows.carry) return false;
     const bar = this;
     this.game.windows.startCarry({ kind: 'bind', b: { ...k }, fromQuick: sc, x: x + this.ox, y, at: performance.now(),
@@ -700,8 +704,8 @@ export class StatusBar {
     const S = this.S, base = this.assets.image(S.base.quickSlot);
     const { x: x0, y: y0 } = this.quickPos();
     if (base) ctx.drawImage(base, x0, y0);
-    QUICK_KEYS.forEach((sc, i) => {
-      const cx = x0 + 9 + (i % 4) * 35, cy = y0 + 9 + Math.floor(i / 4) * 34;
+    const labels = this.W.KeyConfig?.quickslotConfig?.key;
+    this.quickKeys.forEach((sc, i) => {
       const q = this.quick[i], icon = q?.node && this.assets.image(q.node);
       if (icon) {
         // the icon sits in its 32x32 box by its origin; a Use item's count is at the box's bottom-left, as in the inventory
@@ -716,8 +720,8 @@ export class StatusBar {
           if (cim) ctx.drawImage(cim, ix, iy); else if (cool) this.assets.preload([cool]);
         }
       }
-      const label = this.assets.image(S.key[i]);
-      if (label) ctx.drawImage(label, cx, cy);
+      const label = this.assets.image(labels?.[sc]);
+      if (label) ctx.drawImage(label, x0 + QUICK_ICONS[i][0] + 2, y0 + QUICK_ICONS[i][1] + 2);
     });
   }
 

@@ -2,7 +2,7 @@ import { music, sfx } from './audio.js';
 import { pad, nodeAt, frameAt } from './assets.js';
 import { allCanvases } from './ui/windows.js';
 import { uiText } from './ui/wzui.js';
-import { VIEW_W, VIEW_H } from './view.js';
+import { VIEW_W, VIEW_H, UI_W } from './view.js';
 
 const isCanvas = (n) => !!n?._canvas;
 /** Burst weather (type 3): each of its five frame sets goes off `count` times every `every` ms. */
@@ -116,7 +116,7 @@ export class Weather {
     if (!l || !m || !r) return;
     ctx.save(); ctx.font = '12px Arial, sans-serif';
     const tw = Math.ceil(ctx.measureText(c.message).width), n = Math.max(1, Math.ceil(tw / m.width));
-    const w = l.width + n * m.width + r.width, x = Math.floor((VIEW_W - w) / 2), y = 160;
+    const w = l.width + n * m.width + r.width, x = Math.floor((UI_W - w) / 2), y = 160;
     ctx.globalAlpha = 0xc0 / 255;
     ctx.drawImage(l, x, y);
     for (let i = 0; i < n; i++) ctx.drawImage(m, x + l.width + i * m.width, y);

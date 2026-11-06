@@ -4,7 +4,7 @@ import { lookEquipIds } from '../net/proto.js';
 import { EMOTES } from '../game.js';
 import { allCanvases } from './windows.js';
 import { uiText } from './wzui.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 const W = 225, SLIDE = 300, SHOW = 10000;
 
@@ -39,7 +39,7 @@ export class AvatarBanner {
     if (!c.out && now - c.at >= SHOW) c.out = now;
     const inK = Math.min(1, (now - c.at) / SLIDE), outK = c.out ? Math.min(1, (now - c.out) / SLIDE) : 0;
     if (outK >= 1) { this.cur = null; return; }
-    const x = Math.round(VIEW_W - W * inK + W * outK), y = 0;
+    const x = Math.round(UI_W - W * inK + W * outK), y = 0;
     const f = frameAt(c.art, now - c.at), bg = f && as.image(f);
     if (bg) ctx.drawImage(bg, x, y);
     drawParts(ctx, as, c.look.compose(c.look.standAction(), 0, c.expr), x + 82, y + 85, false);

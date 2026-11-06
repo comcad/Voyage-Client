@@ -8,7 +8,7 @@ import { nameTag } from '../map.js';
 import { EMOTES, setExpression, stepExpression } from '../game.js';
 import { uiText, TextField, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * The Cash Shop (UI/CashShop.img), a full 800x600 screen. Its parts, by their top-left corner:
@@ -124,7 +124,7 @@ function clipText(ctx, text, width, size = 12) {
 
 export class CashShopWin extends Win {
   constructor(mgr, d) {
-    super(mgr, null, (VIEW_W - 800) >> 1, (VIEW_H - 600) >> 1);
+    super(mgr, null, (UI_W - 800) >> 1, (UI_H - 600) >> 1);
     this.w = 800; this.h = 600; this.fixed = true; this.buttons = [];
     this.available = d.available !== 0; this.account = d.account || ''; this.bestTable = d.best || [];
     this.serverData = d; this.stock = d.stock || new Map();
@@ -942,7 +942,7 @@ export class CashShopWin extends Win {
     }
     if (this.chatField) {
       this.chatField.rect.x = this.x + 50; this.chatField.rect.y = this.y + 214;
-      this.chatField.layout({ left: 0, top: 0 }, this.mgr.game.canvas.clientWidth / VIEW_W);
+      this.chatField.layout({ left: 0, top: 0 }, this.mgr.game.canvas.clientWidth / UI_W);
     }
     if (this.previewOn) { const on = im(C.Base.PreviewOnOff.On[0]); if (on) ctx.drawImage(on, 13, 9); }
     else { const off = im(C.Base.PreviewOnOff.Off[0]); if (off) ctx.drawImage(off, 90, 10); }
@@ -1260,7 +1260,7 @@ export class CashShopWin extends Win {
     if (n <= 9) col2 = w;
     const desc = this.special[pkg.ItemId]?.desc, descLines = desc ? wrapText(ctx, String(desc).replace(/\\n|\r?\n/g, '\n'), w - 21, 12) : [];
     const top = Math.max(1, descLines.length) * 18 + 30, h = rows * 53 + 65 + top - 30;
-    x = Math.min(x, VIEW_W - w - 2); y = Math.min(y, VIEW_H - h - 2);
+    x = Math.min(x, UI_W - w - 2); y = Math.min(y, UI_H - h - 2);
     ctx.fillStyle = 'rgba(0,0,64,0.627)';
     ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
     ctx.fillStyle = '#fff';
@@ -1408,7 +1408,7 @@ class CsNoticeDialog extends Win {
   constructor(shop, { mode, items, text, wallets }, done) {
     const mgr = shop.mgr, n = items.length;
     const H = mode === 3 ? 170 : 40 * n + [156, 175, 194][mode];
-    super(mgr, null, Math.round((VIEW_W - 286) / 2), Math.round((VIEW_H - H) / 2));
+    super(mgr, null, Math.round((UI_W - 286) / 2), Math.round((UI_H - H) / 2));
     this.buttons = [];
     this.shop = shop; this.mode = mode; this.items = items; this.message = text; this.wallets = wallets; this.done = done;
     this.w = 286; this.h = H; this.modal = true;
@@ -1470,7 +1470,7 @@ class CsAlert extends Win {
   constructor(shop, text, cancel, done) {
     const lines = wrapText((CsAlert.scratch ??= document.createElement('canvas').getContext('2d')), String(text), 236, 11);
     const body = Math.max(30, lines.length * 14 + 14), H = 21 + body + 12 + 42;
-    super(shop.mgr, null, Math.round((VIEW_W - 266) / 2), Math.round((VIEW_H - H) / 2));
+    super(shop.mgr, null, Math.round((UI_W - 266) / 2), Math.round((UI_H - H) / 2));
     this.buttons = [];
     this.shop = shop; this.lines = lines; this.bodyH = body; this.done = done; this.w = 266; this.h = H; this.modal = true;
     if (cancel) {
@@ -1503,7 +1503,7 @@ function editBox(shop, w, h, max, margin = 0) {
 /** Keep an edit box over its place (x, y) in a dialog. */
 function placeBox(win, f, x, y) {
   f.rect.x = win.x + x; f.rect.y = win.y + y;
-  f.layout({ left: 0, top: 0 }, win.mgr.game.canvas.clientWidth / VIEW_W);
+  f.layout({ left: 0, top: 0 }, win.mgr.game.canvas.clientWidth / UI_W);
 }
 
 /**
@@ -1584,7 +1584,7 @@ class ComboBox {
 class SearchPopup extends Win {
   constructor(shop, done) {
     const P = shop.C.CSItemSearch.PopUp, mgr = shop.mgr;
-    super(mgr, P.backgrnd, (VIEW_W - 265) >> 1, (VIEW_H - 135) >> 1);
+    super(mgr, P.backgrnd, (UI_W - 265) >> 1, (UI_H - 135) >> 1);
     this.buttons = [];
     this.shop = shop; this.done = done; this.w = 265; this.h = 135; this.modal = true; this.mouse = { x: -1, y: -1 };
     this.ranges = Object.values(shop.C.CSItemSearch.Price || {}).map((r) => [Number(r[0]), Number(r[1])]);
@@ -1653,7 +1653,7 @@ class SearchPopup extends Win {
 class CsPartnerDialog extends Win {
   constructor(shop, done) {
     const mgr = shop.mgr;
-    super(mgr, shop.C.CSNotice[2].backgrnd, (VIEW_W - 266) >> 1, (VIEW_H - 142) >> 1);
+    super(mgr, shop.C.CSNotice[2].backgrnd, (UI_W - 266) >> 1, (UI_H - 142) >> 1);
     this.buttons = [];
     this.shop = shop; this.done = done; this.w = 266; this.h = 142; this.modal = true;
     this.fields = [editBox(shop, 122, 13, 12), editBox(shop, 210, 13, 34), editBox(shop, 210, 13, 34)];
@@ -1706,7 +1706,7 @@ class CsPartnerDialog extends Win {
 class CouponDialog extends Win {
   constructor(shop, done) {
     const mgr = shop.mgr;
-    super(mgr, mgr.W.Coupon.backgrnd, (VIEW_W - 266) >> 1, (VIEW_H - 125) >> 1);
+    super(mgr, mgr.W.Coupon.backgrnd, (UI_W - 266) >> 1, (UI_H - 125) >> 1);
     this.buttons = [];
     this.shop = shop; this.done = done; this.w = 266; this.h = 125; this.modal = true;
     this.field = editBox(shop, 230, 15, 32, 1);
@@ -1813,7 +1813,7 @@ class CsRulesNotice extends Win {
 class CsNameDialog extends Win {
   constructor(shop) {
     const mgr = shop.mgr, C = shop.C.CSChangeName;
-    super(mgr, C.Base.backgrnd, (VIEW_W - 266) >> 1, (VIEW_H - 124) >> 1);
+    super(mgr, C.Base.backgrnd, (UI_W - 266) >> 1, (UI_H - 124) >> 1);
     this.buttons = [];
     this.shop = shop; this.w = 266; this.h = 124; this.modal = true; this.checked = ''; this.sn = shop.transferSN;
     this.field = editBox(shop, 212, 13, 12);
@@ -1867,7 +1867,7 @@ class CsNameDialog extends Win {
 class CsWorldDialog extends Win {
   constructor(shop, worlds, done) {
     const mgr = shop.mgr;
-    super(mgr, shop.C.CSTransferWorld.Base.backgrnd, (VIEW_W - 209) >> 1, (VIEW_H - 101) >> 1);
+    super(mgr, shop.C.CSTransferWorld.Base.backgrnd, (UI_W - 209) >> 1, (UI_H - 101) >> 1);
     this.buttons = [];
     this.shop = shop; this.done = done; this.w = 209; this.h = 101; this.modal = true; this.mouse = { x: -1, y: -1 };
     this.combo = new ComboBox(mgr, mgr.B.ComboBox, 103, 50, 100, 17, worlds, { back: '#eeeeee', hover: '#a5a198', frame: '#999999' },

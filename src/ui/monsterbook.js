@@ -2,7 +2,7 @@ import { pad, frames } from '../assets.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * The Monster Book (UIWindow.img/MonsterBook, 475x349), laid out as openms recovered it.
@@ -25,7 +25,7 @@ const INFO = 9;
 export class MonsterBookWin extends Win {
   constructor(mgr) {
     const B = mgr.W.MonsterBook;
-    super(mgr, B.backgrnd, Math.round((VIEW_W - 475) / 2), 60);
+    super(mgr, B.backgrnd, Math.round((UI_W - 475) / 2), 60);
     this.B = B; this.cat = INFO; this.page = 0; this.sel = 0; this.tab = 0; this.dpage = 0; this.menu = null;
     this.closeBtn.visible = false;
     this.button(B.BtClose, 429, 8, () => mgr.close(this));
@@ -152,7 +152,7 @@ export class MonsterBookWin extends Win {
     }
     this.field.show(grid);
     this.field.rect.x = this.x + 49; this.field.rect.y = this.y + 30;
-    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / VIEW_W);
+    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
   }
   onClose() { this.field?.show(false); this.menu = null; }
   text2(ctx, t, x, y, o = {}) { uiText(ctx, String(t), x, y, { color: TEXT, size: 12, ...o }); }

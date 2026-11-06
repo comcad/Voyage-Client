@@ -2,7 +2,7 @@ import { invType } from '../data.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, drawTabStrip } from './windows.js';
-import { VIEW_W, VIEW_H } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * Duey's Maple Home Delivery (UIWindow.img/Delivery, backgrnd 290x350), opened by talking to Duey. Measured:
@@ -97,7 +97,7 @@ export class DueyWin extends Win {
     this.recvBtn.visible = this.delBtn.visible = !send; this.sendBtn.visible = send;
     this.recvBtn.enabled = this.delBtn.enabled = this.sel >= 0;
     super.draw(ctx);
-    const scale = this.g.canvas.clientWidth / VIEW_W;
+    const scale = this.g.canvas.clientWidth / UI_W;
     for (const f of [this.to, this.mesos]) { f.show(send); f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale); }
   }
   body(ctx) {
