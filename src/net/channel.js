@@ -1159,6 +1159,8 @@ export class ChannelSession {
     this.send(w.byte(facingLeft ? 1 : 0));
   }
   cancelBuff(skillId) { this.send(new PacketWriter(C.CANCEL_BUFF).int(skillId)); }
+  /** One of your curses is past its time: asks the server to lift it (no body). */
+  cancelDebuff() { this.send(new PacketWriter(C.CANCEL_DEBUFF)); }
   /** Sit on a chair item (Install 0301xxxx). */
   /** Through a Mystic Door: its owner, and whether you are going from town out to the field. */
   useDoor(owner, fromTown) { this.send(new PacketWriter(C.USE_DOOR).int(owner).byte(fromTown ? 1 : 0)); }
