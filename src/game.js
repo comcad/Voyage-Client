@@ -400,6 +400,15 @@ const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 2001
 /** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
 const MORPH = 0x2n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
+/**
+ * The timed stats whose running out the client reports (CANCEL_DEBUFF): in the low mask Stun, Poison, Seal,
+ * Darkness, Weakness and Curse; in the high mask Slow, Reverse (0x80000) and the stats at 0x100, 0x8000 and
+ * 0x80000000000-0x200000000000.
+ */
+const EXPIRY_CHECKED = {
+  low: 0x2000000000000n | 0x4000000000000n | 0x8000000000000n | 0x10000000000000n | 0x4000000000000000n | 0x8000000000000000n,
+  high: 0x1n | 0x100n | 0x8000n | 0x80000n | 0x80000000000n | 0x100000000000n | 0x200000000000n,
+};
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
@@ -1761,7 +1770,7 @@ export class Game {
       return { speed: Math.min(190, speed) / 100, jump: Math.min(123, jump) / 100 };
     }
     const pct = (k, max) => Math.max(80, Math.min(max, 100 + this.equipStat(k) + buff(k))) / 100;
-    const slow = (this.diseases || []).find((d) => d.skill === SLOW && d.until > now);   // Slow: down to its x%
+    const slow = (this.diseases || []).find((d) => d.skill === SLOW);   // Slow: down to its x%
     return { speed: slow ? Math.min(pct('speed', 140), (slow.x || 80) / 100) : pct('speed', 140), jump: pct('jump', 123) };
   }
 
@@ -6345,7 +6354,8 @@ export class Game {
   }
   /**
    * A monster's curse on you (Seal, Darkness, Weakness, Stun, Curse, Poison, Slow, Reverse...): its affected
-   * animation loops over you (or at your feet) until it wears off or the server lifts it. While it lasts, Stun
+   * animation loops over you (or at your feet) until the server lifts it; once its time is up the client asks for
+   * that every frame (see updateDiseases). While it lasts, Stun
    * holds you still, Seal stops skills, Weakness stops jumping, Slow takes your speed down to its x% and Reverse
    * swaps left and right.
    */
@@ -6366,14 +6376,21 @@ export class Game {
     rp.diseases = (rp.diseases || []).filter((x) => x.skill !== d.skill);
     rp.diseases.push({ ...d, until: Date.now() + (Number(lv?.time) || 30) * 1000, anim, head: Number(node?.pos) === 1 });
   }
-  hasDisease(skill) { return (this.diseases || []).some((d) => d.skill === skill && d.until > Date.now()); }
+  hasDisease(skill) { return (this.diseases || []).some((d) => d.skill === skill); }
+  /**
+   * Your curses last until the server lifts them (CANCEL_BUFF); while one of Stun, Poison, Seal, Darkness,
+   * Weakness, Curse, Slow, Reverse and the few other stats in EXPIRY_CHECKED is within 100ms of its end or past
+   * it, CANCEL_DEBUFF goes out every frame. Other players' curses still end on their own timer.
+   */
   updateDiseases(dt) {
     const now = Date.now();
     for (const ent of [this, ...this.others.values()]) {
       if (!ent.diseases?.length) continue;
-      ent.diseases = ent.diseases.filter((d) => d.until > now);
+      if (ent !== this) ent.diseases = ent.diseases.filter((d) => d.until > now);
       for (const d of ent.diseases) d.anim?.update(dt * 1000);
     }
+    const due = (d) => now - d.until > -100 && ((BigInt.asUintN(64, BigInt(d.m2 ?? 0)) & EXPIRY_CHECKED.low) || (BigInt.asUintN(64, BigInt(d.m1 ?? 0)) & EXPIRY_CHECKED.high));
+    if (this.diseases?.some(due)) this.net?.cancelDebuff();
   }
   drawDiseases(ctx, cam, p = this.player, list = this.diseases) {
     for (const d of list || []) {
