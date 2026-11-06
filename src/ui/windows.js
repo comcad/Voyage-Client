@@ -6,6 +6,7 @@ import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { richText, drawRich, QUEST_STATES } from './richtext.js';
 import { isPartyQuest, questSort, TITLE_AREA } from '../quests.js';
+import { VIEW_W, VIEW_H } from '../view.js';
 
 /**
  * In-game windows from UI/UIWindow.img, drawn on the game canvas like the v83 client:
@@ -179,8 +180,8 @@ export class WindowManager {
     this.mouse = { x, y };
     if (this.drag) {
       const d = this.drag;
-      d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(800 - 40, x - d.dx)));
-      d.win.y = Math.round(Math.max(0, Math.min(600 - 40, y - d.dy)));
+      d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(VIEW_W - 40, x - d.dx)));
+      d.win.y = Math.round(Math.max(0, Math.min(VIEW_H - 40, y - d.dy)));
       if (type === 'up') { this.drag = null; d.win.dragged?.(); }
       return true;
     }
@@ -834,7 +835,7 @@ class SkillWin extends Win {
       if (box) ctx.drawImage(box, X + 166, 241);
     }
     const f = this.nameField;
-    if (f) { f.rect.x = this.x + X + 59; f.rect.y = this.y + 215; f.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / 800); }
+    if (f) { f.rect.x = this.x + X + 59; f.rect.y = this.y + 215; f.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / VIEW_W); }
   }
   macroDown(lx, ly) {
     const X = this.skillW;
@@ -1618,7 +1619,7 @@ const MACRO_TIP = 'Register the frequently-used skills for a quick access with a
 class KeyConfigNotice extends Win {
   constructor(mgr, n, done) {
     const W = mgr.W.KeyConfig, bg = W.notice[n];
-    super(mgr, bg, (800 - (bg?._w || 266)) >> 1, (600 - (bg?._h || 85)) >> 1);
+    super(mgr, bg, (VIEW_W - (bg?._w || 266)) >> 1, (VIEW_H - (bg?._h || 85)) >> 1);
     this.buttons = []; this.modal = true; this.done = done; this.closeSound = null;
     this.button(W.BtOK, 160, 55, () => this.finish(true));
     this.button(W.BtCancel, 210, 55, () => this.finish(false));
@@ -1630,7 +1631,7 @@ class KeyConfigNotice extends Win {
 class KeyConfigWin extends Win {
   constructor(mgr) {
     const W = mgr.W.KeyConfig;
-    super(mgr, W.backgrnd, 400 - 314, 300 - 186);
+    super(mgr, W.backgrnd, (VIEW_W >> 1) - 314, (VIEW_H >> 1) - 186);
     this.buttons = [];
     this.W = W; this.draft = {}; this.picked = null; this.bindsKeys = true;
     // Keyboard / Controller / Touch tabs on the button strip; the controller and touch layouts stay in this browser
@@ -1792,7 +1793,7 @@ function drawTip(ctx, tip, x, y) {
   ctx.font = '12px Arial, sans-serif';
   const w = Math.ceil(Math.max(tw + 20, ...lines.map((l) => ctx.measureText(l).width + 20), 80));
   const h = 24 + lines.length * 15 + (lines.length ? 4 : 0);
-  x = Math.min(x, 800 - w - 2); y = Math.min(y, 600 - h - 2);
+  x = Math.min(x, VIEW_W - w - 2); y = Math.min(y, VIEW_H - h - 2);
   ctx.fillStyle = 'rgba(0,0,64,0.627)';
   ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
   ctx.fillStyle = '#fff';

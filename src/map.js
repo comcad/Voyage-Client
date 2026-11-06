@@ -1,5 +1,6 @@
 import { pad, isCanvas, frames } from './assets.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
+import { BASE_W, BASE_H } from './view.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -256,32 +257,70 @@ export class GameMap {
     for (const e of this.life) e.update(dt);
   }
 
+  /**
+   * Layers that share a scale are drawn together at 1x into a canvas of their own, which is then scaled onto the view
+   * as one picture. Scaled one by one, pieces meant to meet inside a scaled image (Ellinia's light beams) would meet
+   * on fractional pixels and leave a 1px line where they overlap or part.
+   */
   drawBacks(ctx, cam, front) {
-    for (const b of this.backs) if (!!b.front === front) this.drawBack(ctx, cam, b);
+    const list = this.backs.filter((b) => !!b.front === front);
+    const t = ctx.getTransform(), plain = t.a === 1 && t.d === 1 && !t.b && !t.c;
+    for (let i = 0; i < list.length;) {
+      const m = this.backScale(cam, list[i]);
+      let j = i + 1;
+      while (j < list.length && this.backScale(cam, list[j]) === m) j++;
+      if (j - i > 1 && (m !== 1 || !plain)) this.drawBackRun(ctx, cam, list.slice(i, j), m);
+      else for (let n = i; n < j; n++) this.drawBack(ctx, cam, list[n], m);
+      i = j;
+    }
+  }
+  drawBackRun(ctx, cam, run, m) {
+    const W = Math.ceil(cam.w / m), H = Math.ceil(cam.h / m), c = (this.backCanvas ??= document.createElement('canvas'));
+    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    const o = c.getContext('2d');
+    o.clearRect(0, 0, W, H); o.imageSmoothingEnabled = false;
+    for (const b of run) this.drawBack(o, cam, b, m, true);
+    ctx.drawImage(c, 0, 0, W, H, 0, 0, W * m, H * m);
   }
 
-  drawBack(ctx, cam, b) {
+  /**
+   * Backgrounds are made for an 800x600 view. On a bigger one each is scaled up by as much as it holds still on
+   * screen (an axis it tiles along counts as still): one fixed to the screen fills the view as it would fill 800x600,
+   * one that moves with the map keeps its size and place in it. Only its placement grows with it, not how fast it
+   * scrolls, and every piece of one back is scaled alike so pieces that meet still meet.
+   */
+  backScale(cam, b) {
+    const k = Math.max(cam.w / BASE_W, cam.h / BASE_H);
+    if (k <= 1) return 1;
+    const still = (tiled, r) => (tiled ? 1 : Math.max(0, Math.min(1, 1 + r / 100)));
+    return 1 + (k - 1) * Math.min(still(HTILE.has(b.type), b.rx), still(VTILE.has(b.type), b.ry));
+  }
+  /** unit: drawn at 1x into a canvas the view is 1/m of (see drawBacks). */
+  drawBack(ctx, cam, b, m = this.backScale(cam, b), unit = false) {
     const node = b.anim.node;
     const img = this.assets.image(node);
     if (!img) return;
     const o = node.origin || [0, 0];
-    const W = cam.w, H = cam.h;
-    let x, y;
+    let W = cam.w, H = cam.h, x, y;
     if (HSCROLL.has(b.type)) x = b.x + this.scroll * b.rx * 5 - cam.x;
     else x = b.x + (cam.x + W / 2) * (100 + b.rx) / 100 - cam.x;
     if (VSCROLL.has(b.type)) y = b.y + this.scroll * b.ry * 5 - cam.y;
     else y = b.y + (cam.y + H / 2) * (100 + b.ry) / 100 - cam.y;
-    x -= o[0]; y -= o[1];
-    if (b.f) x -= img.width - 2 * o[0];
+    x += (m - 1) * b.x; y += (m - 1) * b.y;
+    let z = m;
+    if (unit) { x /= m; y /= m; W /= m; H /= m; z = 1; }
+    const w = img.width * z, h = img.height * z;
+    x -= o[0] * z; y -= o[1] * z;
+    if (b.f) x -= (img.width - 2 * o[0]) * z;
 
-    const cx = b.cx || img.width, cy = b.cy || img.height;
+    const cx = (b.cx || img.width) * z, cy = (b.cy || img.height) * z;
     let xs = [x], ys = [y];
     if (HTILE.has(b.type) && cx > 0) { xs = []; for (let s = ((x % cx) + cx) % cx - cx; s < W; s += cx) xs.push(s); }
     if (VTILE.has(b.type) && cy > 0) { ys = []; for (let s = ((y % cy) + cy) % cy - cy; s < H; s += cy) ys.push(s); }
 
     ctx.save();
     ctx.globalAlpha = ((b.a ?? 255) / 255) * b.anim.alpha;
-    for (const dy of ys) for (const dx of xs) drawImg(ctx, img, dx, dy, b.f);
+    for (const dy of ys) for (const dx of xs) drawImg(ctx, img, dx, dy, b.f, w, h);
     ctx.restore();
   }
 
@@ -355,13 +394,18 @@ export class GameMap {
   }
 }
 
-function drawImg(ctx, img, x, y, flip) {
-  x = Math.round(x); y = Math.round(y);
-  if (!flip) { ctx.drawImage(img, x, y); return; }
+// rounds a hair up, so edges that are equal but for float error (x.4999.. and x.5) land on the same pixel
+const snap = (v) => Math.round(v + 1e-6);
+/** w, h: a scaled size; its edges are rounded rather than its size, so scaled pieces that meet stay touching. */
+function drawImg(ctx, img, x, y, flip, w = img.width, h = img.height) {
+  if (w !== img.width || h !== img.height) { w = snap(x + w) - snap(x); h = snap(y + h) - snap(y); }
+  x = snap(x); y = snap(y);
+  const sized = w !== img.width || h !== img.height;
+  if (!flip) { if (sized) ctx.drawImage(img, x, y, w, h); else ctx.drawImage(img, x, y); return; }
   ctx.save();
-  ctx.translate(x + img.width, y);
+  ctx.translate(x + w, y);
   ctx.scale(-1, 1);
-  ctx.drawImage(img, 0, 0);
+  if (sized) ctx.drawImage(img, 0, 0, w, h); else ctx.drawImage(img, 0, 0);
   ctx.restore();
 }
 

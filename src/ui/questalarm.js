@@ -1,6 +1,7 @@
 import { sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
 import { isPartyQuest, TITLE_AREA } from '../quests.js';
+import { VIEW_W, VIEW_H } from '../view.js';
 
 /**
  * The Quest Helper (UIWindow.img/QuestAlarm, 223 wide): "Quest Helper (n/5)" at (25, 2) over backgrndmax (25),
@@ -15,7 +16,7 @@ const progressColor = (have, need) => { const p = (have * 100) / (need || 1); re
 
 export class QuestAlarmWin extends Win {
   constructor(mgr) {
-    super(mgr, null, 600, 35);
+    super(mgr, null, VIEW_W - 200, 35);
     this.w = W; this.h = 20;
     this.Q = mgr.W.QuestAlarm;
     this.closePinned = true; this.closeBtn.x = 203; this.closeBtn.y = 4;

@@ -4,9 +4,10 @@
  *   hpAlert / mpAlert  0..1  the gauge flashes below this share (0 = never)
  *   shake     shake the screen with skills that do
  *   mobInfo   0 nothing / 1 HP bar / 2 name and HP bar, over monsters you hit
+ *   resolution  the game's screen size, 'WxH'
  */
 const KEY = 'maple.sysopt';
-export const DEFAULTS = { quality: 1, hpAlert: 0.2, mpAlert: 0.2, shake: true, mobInfo: 2 };
+export const DEFAULTS = { quality: 1, hpAlert: 0.2, mpAlert: 0.2, shake: true, mobInfo: 2, resolution: '800x600' };
 export const MOB_INFO = ['Do not mark', 'Mark HP only', 'Mark name and HP'];
 
 export const settings = { ...DEFAULTS };

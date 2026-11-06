@@ -52,8 +52,9 @@ const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
 export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
 // quick slot keys: Shift Ins Home PgUp / Ctrl Del End PgDn (scancodes), labelled by StatusBar.img/key/0-7
 const QUICK_KEYS = [42, 82, 71, 73, 29, 83, 79, 81];
-// the panel sits 2px in from the right edge on top of the bar; each slot's 32x32 icon box, from the panel's corner
-const QUICK_X = 153, QUICK_ICONS = [[7, 8], [42, 8], [77, 8], [112, 8], [7, 41], [42, 41], [77, 41], [112, 41]];
+// the panel sits 2px in from the right edge on top of the bar (beside it, on a screen wide enough); each slot's 32x32
+// icon box, from the panel's corner
+const BAR_W = 800, QUICK_W = 151, QUICK_X = 153, QUICK_ICONS = [[7, 8], [42, 8], [77, 8], [112, 8], [7, 41], [42, 41], [77, 41], [112, 41]];
 // shown unless the player closed it, remembered between sessions
 const QUICK_KEY = 'maple.quickslot';
 const MENU_ITEMS = {
@@ -64,7 +65,7 @@ const MENU_ITEMS = {
 export class StatusBar {
   constructor(game, layer) {
     this.game = game; this.assets = game.assets; this.layer = layer;
-    this.y = 0; this.lines = []; this.menu = null; this.chatTarget = 'all'; this.targetMenu = false;
+    this.y = 0; this.ox = 0; this.side = false; this.lines = []; this.menu = null; this.chatTarget = 'all'; this.targetMenu = false;
     this.mouse = { x: -1, y: -1 }; this.hovered = null; this.quick = [];
     this.quickOpen = (() => { try { return localStorage.getItem(QUICK_KEY) !== '0'; } catch { return true; } })();
     // chat: 1 minimized, 2 minimized while typing, 3 open (chatH tall); the view's first line, when you last scrolled
@@ -127,13 +128,20 @@ export class StatusBar {
     return list.filter(Boolean);
   }
 
+  /**
+   * Wider than the bar, it is centred along the bottom (ox: its left edge) and the quick slots sit beside it on the
+   * right, kept 2px in from the edge. Everything else here is in the bar's own space, x 0 at its left edge.
+   */
   layout(viewW, viewH) {
     this.y = viewH - BAR_H; this.w = viewW;
-    this.chat?.rect && (this.chat.rect.y = this.y + CHAT.y);
+    this.side = viewW >= BAR_W + 2 * QUICK_X - QUICK_W;
+    const mid = (viewW - BAR_W) >> 1;
+    this.ox = this.side ? Math.min(mid, viewW - BAR_W - 2 * QUICK_X + QUICK_W) : mid;
+    if (this.chat?.rect) { this.chat.rect.x = this.ox + CHAT.x; this.chat.rect.y = this.y + CHAT.y; }
   }
 
   /** Lay the chat field over the canvas: box = the canvas' on-screen rect relative to the UI layer. */
-  place(box, scale) { this.chat.rect.y = this.y + CHAT.y; this.chat.layout(box, scale); }
+  place(box, scale) { this.chat.rect.x = this.ox + CHAT.x; this.chat.rect.y = this.y + CHAT.y; this.chat.layout(box, scale); }
 
   /** Opens the input: minimized, the log's line moves up a row for it (state 2). */
   focusChat(prefix = '') {
@@ -343,6 +351,7 @@ export class StatusBar {
   }
   /** The mouse wheel over the log: one line a notch. */
   wheel(x, y, dy) {
+    x -= this.ox;
     const b = this.logBox();
     if (this.hidden || this.inMenu(x, y) || x >= CHAT_W || y < b.top || y >= b.top + b.h || !dy) return false;
     this.scrollBy(Math.sign(dy));
@@ -397,6 +406,7 @@ export class StatusBar {
 
   /** The tooltip for the quick slot under the mouse: the item's, or the skill's. */
   quickTip(x, y) {
+    x -= this.ox;
     // an Item Megaphone line in the log: its item
     const line = (this.itemHits || []).find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
     if (line) return { item: line.item };
@@ -415,11 +425,12 @@ export class StatusBar {
     if (open) this.render();
   }
 
-  /** The open panel's top-left corner, right above the bar. */
-  quickPos() { return { x: this.w - QUICK_X, y: this.y - 80 }; }
+  /** The open panel's top-left corner: right above the bar's right end, or beside the bar on the bottom edge. */
+  quickPos() { return this.side ? { x: BAR_W + QUICK_X - QUICK_W, y: this.y + BAR_H - 80 } : { x: BAR_W - QUICK_X, y: this.y - 80 }; }
 
   /** A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. */
   dropOnQuickSlot(x, y, c) {
+    x -= this.ox;
     if (!this.quickOpen || this.inMenu(x, y)) return;
     const p = this.quickPos();
     const i = QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
@@ -443,7 +454,7 @@ export class StatusBar {
     const i = this.quickAt(x, y), sc = QUICK_KEYS[i], k = i >= 0 ? this.game.keymap?.[sc] : null, node = this.quick[i]?.node;
     if (!k || !node || this.game.windows.carry) return false;
     const bar = this;
-    this.game.windows.startCarry({ kind: 'bind', b: { ...k }, fromQuick: sc, x, y, at: performance.now(),
+    this.game.windows.startCarry({ kind: 'bind', b: { ...k }, fromQuick: sc, x: x + this.ox, y, at: performance.now(),
       source: { dropOutside: () => bar.game.unbindKey?.(sc) } }, node);
     return true;
   }
@@ -451,6 +462,7 @@ export class StatusBar {
   // ------------------------------------------------------------------ input
   /** Canvas-space pointer events from Game. Returns true when the UI took the event. */
   pointer(type, x, y) {
+    x -= this.ox;
     this.mouse = { x, y };
     // an open pop-up menu sits on top: what's under it doesn't take the mouse
     const onMenu = this.inMenu(x, y);
@@ -478,7 +490,7 @@ export class StatusBar {
       for (const b of buttons) b.down = false;
       target?.onClick();
     }
-    const inside = this.contains(x, y);
+    const inside = this.hit(x, y);
     if (type === 'down' && this.menu && !inside) this.menu = null;   // clicking elsewhere closes a menu
     return inside;
   }
@@ -526,13 +538,15 @@ export class StatusBar {
     return !!m && x >= m.x && x < m.x + m.bg._w && y >= m.y && y < m.y + m.bg._h;
   }
 
-  contains(x, y) {
-    if (y >= this.y) return true;
+  contains(x, y) { return this.hit(x - this.ox, y); }
+  hit(x, y) {
+    if (y >= this.y && x >= 0 && x < BAR_W) return true;
     // the open log (and the line over the bar while typing) takes clicks; above it they reach the map
     if (this.chatState !== 1 && !this.hidden && x >= 80 && x < CHAT_W && y >= this.logBox().top) return true;
     if (this.targetMenu && x < TMENU.x + TMENU.w + 1 && y >= this.targetMenuTop() - 1) return true;
     if (this.menu && x >= this.menu.x && x < this.menu.x + this.menu.bg._w && y >= this.menu.y) return true;
-    if (this.quickOpen && x >= this.quickPos().x && y >= this.quickPos().y) return true;
+    const q = this.quickPos();
+    if (this.quickOpen && x >= q.x && (!this.side || x < q.x + QUICK_W) && y >= q.y) return true;
     return false;
   }
 
@@ -551,6 +565,7 @@ export class StatusBar {
     const img = (n) => this.assets.image(n);
     const y = this.y;
     this.restoreChat();
+    ctx.save(); ctx.translate(this.ox, 0);
     if (this.chatState !== 1) this.drawChatLog(ctx);
     const bg = img(S.base.backgrnd), bg2 = img(S.base.backgrnd2);
     if (bg) ctx.drawImage(bg, 0, y);
@@ -608,6 +623,7 @@ export class StatusBar {
       if (mbg) ctx.drawImage(mbg, m.x, m.y);
       for (const b of m.buttons) b.draw(ctx, this.assets);
     }
+    ctx.restore();
     this.syncCursor();
   }
 
@@ -711,7 +727,7 @@ export class StatusBar {
    */
   syncCursor() {
     let want = this.chatDrag || this.edgeHover ? 7 : this.hovered ? 1 : 0;
-    if (!want) want = this.game.fieldCursor?.(this.mouse.x, this.mouse.y) || 0;
+    if (!want) want = this.game.fieldCursor?.(this.mouse.x + this.ox, this.mouse.y) || 0;
     const now = performance.now();
     if (want !== this.cursorState) { this.cursorState = want; this.cursorFrame = 0; this.cursorAt = now; this.cursorShown = null; }
     const node = this.B.Cursor[want] || this.B.Cursor[0];

@@ -4,6 +4,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
+import { VIEW_W, VIEW_H } from '../view.js';
 
 /**
  * A player's personal shop (UIWindow.img/PersonalShop/backgrnd, 525 wide; its lower-left fee table hangs
@@ -27,7 +28,7 @@ const ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 3: 'Someth
 export class PlayerShopWin extends Win {
   constructor(mgr, d) {
     const P = mgr.W.PersonalShop;
-    super(mgr, null, Math.round((800 - 525) / 2), 20);
+    super(mgr, null, Math.round((VIEW_W - 525) / 2), 20);
     this.buttons = []; this.closeBtn = null;
     this.P = P; this.slot = d.slot; this.title = d.title; this.items = d.items; this.sold = d.sold;
     this.people = Object.fromEntries(d.people.map((p) => [p.slot, p]));
@@ -154,7 +155,7 @@ export class PlayerShopWin extends Win {
     if (this.buyBtn) this.buyBtn.enabled = this.sel >= 0 && this.items[this.sel]?.bundles > 0;
     super.draw(ctx);
     this.chat.rect.x = this.x + 242; this.chat.rect.y = this.y + 333;
-    this.chat.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / 800);
+    this.chat.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / VIEW_W);
   }
   body(ctx) {
     const m = this.mgr, im = (n) => m.image(n), g = this.g;

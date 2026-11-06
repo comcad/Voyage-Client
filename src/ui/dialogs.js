@@ -6,6 +6,7 @@ import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases, drawTabStrip } from './windows.js';
 import { Anim } from '../map.js';
 import { richText, drawRich, optionAt, LIGHT_COLORS, QUEST_STATES } from './richtext.js';
+import { VIEW_W, VIEW_H } from '../view.js';
 
 /**
  * Stage 3 of the v83 in-game UI, drawn on the canvas through the WindowManager:
@@ -43,7 +44,7 @@ function overlayField(mgr, w, opts) {
 }
 function placeField(mgr, f, x, y) {
   f.rect.x = x; f.rect.y = y;
-  f.layout({ left: 0, top: 0 }, mgr.game.canvas.clientWidth / 800);
+  f.layout({ left: 0, top: 0 }, mgr.game.canvas.clientWidth / VIEW_W);
 }
 
 // ==================================================================== NPC chat
@@ -62,7 +63,7 @@ function placeField(mgr, f, x, y) {
 const NPC_COLORS = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c' };
 const NPC_TEXT = { size: 12, lineH: 18, bullet: 18, colors: NPC_COLORS, imgPad: 2, boldE: false };
 const DLG = { w: 529, wrap: 341, margin: 8, minBody: 120, maxBody: 240, typeMs: 30, admin: 9010000 };
-const dlgCentre = { x: 400, y: 300 };
+const dlgCentre = { x: null, y: null };
 export class NpcDialog extends Win {
   constructor(mgr, d, done) {
     const U = mgr.W.UtilDlgEx;
@@ -83,8 +84,8 @@ export class NpcDialog extends Win {
     this.relayout();
     this.typed = this.field ? Infinity : 0; this.t0 = performance.now();
     this.w = DLG.w;
-    this.x = Math.max(0, Math.min(800 - this.w, Math.round(dlgCentre.x - this.w / 2)));
-    this.y = Math.max(0, Math.min(600 - this.h, Math.round(dlgCentre.y - this.h / 2)));
+    this.x = Math.max(0, Math.min(VIEW_W - this.w, Math.round((dlgCentre.x ?? VIEW_W / 2) - this.w / 2)));
+    this.y = Math.max(0, Math.min(VIEW_H - this.h, Math.round((dlgCentre.y ?? VIEW_H / 2) - this.h / 2)));
     // buttons: replies follow the old DOM dialog (action 1 next/yes/ok, 0 back/no, -1 end)
     const W = DLG.w, end = this.menu || input ? 0 : -1, low = () => this.h - 26, mid = () => this.h - 77;
     const shift = this.mirror ? 130 : 0;
@@ -120,7 +121,7 @@ export class NpcDialog extends Win {
     this.h = this.bodyH + 86;
     this.textY = this.scrolls ? 22 : 28 + Math.trunc((this.bodyH - textH - 6) / 2);
     this.dragH = this.textY;
-    if (had) { this.x = Math.round(cx - this.w / 2); this.y = Math.max(0, Math.min(600 - this.h, Math.round(cy - this.h / 2))); }
+    if (had) { this.x = Math.round(cx - this.w / 2); this.y = Math.max(0, Math.min(VIEW_H - this.h, Math.round(cy - this.h / 2))); }
   }
   /** info/default, else the stand animation - or its first own action when it has more than two; you when you speak. */
   async portrait() {
@@ -316,7 +317,7 @@ export async function npcMenu(mgr, npcId, text, options) {
 export class PetSelectDialog extends Win {
   constructor(mgr, text, pets, done) {
     const A = mgr.W.UtilDlgEx_Avatar, B = mgr.B;
-    super(mgr, mgr.W.UtilDlgEx_Pet.backgrnd, 400 - 209, 300 - 148);
+    super(mgr, mgr.W.UtilDlgEx_Pet.backgrnd, (VIEW_W >> 1) - 209, (VIEW_H >> 1) - 148);
     this.buttons = [];
     this.A = A; this.pets = pets; this.done = done; this.modal = true; this.sel = 0; this.t0 = performance.now();
     this.layout = richText(scratch(), text, 280, textRef(mgr), NPC_TEXT);
@@ -354,7 +355,7 @@ export class PetSelectDialog extends Win {
  */
 export class DeathNotice extends Win {
   constructor(mgr, kind, done) {
-    super(mgr, mgr.W.Notice[kind === 'wheel' ? 2 : 0], 257, 97);
+    super(mgr, mgr.W.Notice[kind === 'wheel' ? 2 : 0], 257 + ((VIEW_W - 800) >> 1), 97 + ((VIEW_H - 600) >> 1));
     this.modal = true; this.done = done;
     this.closeBtn.visible = false;
     if (kind === 'wheel') {
@@ -388,7 +389,7 @@ export class UtilBox extends Win {
     this.textH = this.centred ? this.lines.reduce((t, l) => t + (l.h || 14), 0) : n * 14;
     this.tiles = Math.max(2, Math.floor(this.textH / 20) + 1);
     this.w = 266; this.h = field ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
-    this.x = 267; this.y = (600 - this.h) >> 1;
+    this.x = (VIEW_W - this.w) >> 1; this.y = (VIEW_H - this.h) >> 1;
     // 'ok': a notice with OK alone, where Cancel would be
     this.button(mgr.B.BtOK2, kind === 'ok' ? 205 : 155, this.h - 30, () => this.finish(true));
     if (kind !== 'ok') this.button(mgr.B.BtCancel2, 205, this.h - 30, () => this.finish(false));
@@ -514,7 +515,7 @@ function rowName(ctx, s) {
 export class ShopWin extends Win {
   constructor(mgr, shop) {
     const S = mgr.W.Shop;
-    super(mgr, null, (800 - SHOP_W) >> 1, (600 - SHOP_H) >> 1);
+    super(mgr, null, (VIEW_W - SHOP_W) >> 1, (VIEW_H - SHOP_H) >> 1);
     this.w = SHOP_W; this.h = SHOP_H; this.keepOnEscape = true;
     this.buttons = [];
     this.S = S; this.shop = shop; this.tab = 1; this.buyTab = 0; this.buyFirst = [0, 0];
@@ -996,7 +997,7 @@ function tipSale(ctx, it, x, y, W) {
   tipPair(ctx, 'Discount Price :', TIP_FONT.body, '#fff', `${pct}%`, TIP_FONT.body, TIP_SALE, x, y + 16, W);
 }
 // my may be { bottom }: the tip ends there (over the quick slots, so it doesn't cover them)
-const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, 799 - W)), Math.max(0, Math.min(typeof my === 'object' ? my.bottom - H : my, 599 - H))];
+const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, VIEW_W - 1 - W)), Math.max(0, Math.min(typeof my === 'object' ? my.bottom - H : my, VIEW_H - 1 - H))];
 
 export function drawItemTip(ctx, mgr, it, mx, my) {
   const info = mgr.info(it.id) || {};

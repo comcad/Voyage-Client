@@ -55,6 +55,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings } from './settings.js';
+import { VIEW_W, VIEW_H, applyResolution } from './view.js';
 import { DirectionScene } from './direction.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
@@ -92,7 +93,6 @@ const FIELD_NO_MOVEMENT_SKILLS = 0x2;
 
 const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST_GREY = '#bbbbbb';
 
-export const VIEW_W = 800, VIEW_H = 600;
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2', 'stabT2'];
 /** An Aran's basic attacks with a polearm. */
@@ -724,7 +724,7 @@ export class Game {
       const dy = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
       if (wm.pointer('wheel', ...at(e), dy) || sb.wheel(...at(e), dy)) e.preventDefault();
     }, { passive: false });
-    const place = () => sb.place({ left: 0, top: 0 }, c.clientWidth / VIEW_W);
+    const place = this.placeUi = () => sb.place({ left: 0, top: 0 }, c.clientWidth / VIEW_W);
     new ResizeObserver(place).observe(c);
     place();
   }
@@ -2413,18 +2413,19 @@ export class Game {
     const T = this.windows.W.Quest?.TimeQuest, im = (n) => this.windows.image(n), now = performance.now();
     if (!T) return;
     let y = 50;
+    const x = VIEW_W - 100;
     for (const t of this.questTimers.values()) {
       const bg = im(T.TimeBar?.backgrnd), g = T.TimeBar?.TimeGage || {};
-      if (bg) ctx.drawImage(bg, 700, y);
+      if (bg) ctx.drawImage(bg, x, y);
       const step = Math.min(48, Math.ceil((Math.max(0, t.end - now) / t.total) * 48));
       const left = im(g[0]), mid = im(g[2]), right = im(g[1]);
       if (step > 0 && mid) {
-        if (left) ctx.drawImage(left, 702, y + 2);
-        ctx.drawImage(mid, 704, y + 2, step - 1, mid.height);
-        if (right) ctx.drawImage(right, 703 + step, y + 2);
+        if (left) ctx.drawImage(left, x + 2, y + 2);
+        ctx.drawImage(mid, x + 4, y + 2, step - 1, mid.height);
+        if (right) ctx.drawImage(right, x + 3 + step, y + 2);
       }
       const clock = im(T.AlarmClock?.default?.[0]?.[0]);
-      if (clock) ctx.drawImage(clock, 752, y - 6);
+      if (clock) ctx.drawImage(clock, x + 52, y - 6);
       y += 50;
     }
   }
@@ -7050,6 +7051,19 @@ export class Game {
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
     this.ctx.setTransform(w / VIEW_W, 0, 0, h / VIEW_H, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
+  }
+
+  /** System Option SCREEN SIZE: the view, the bar and the open windows follow the new size. */
+  setResolution() {
+    applyResolution();
+    this.cam.w = VIEW_W; this.cam.h = VIEW_H;
+    this.statusBar?.layout(VIEW_W, VIEW_H);
+    this.placeUi?.();
+    for (const w of this.windows?.order || []) {
+      if (w === this.csWin) { w.x = (VIEW_W - w.w) >> 1; w.y = (VIEW_H - w.h) >> 1; continue; }
+      w.x = Math.max(-w.w + 40, Math.min(VIEW_W - 40, w.x)); w.y = Math.max(0, Math.min(VIEW_H - 40, w.y));
+    }
+    if (this.map && this.camF) this.placeCamera();
   }
 
   render() {

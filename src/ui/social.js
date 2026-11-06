@@ -3,6 +3,7 @@ import { pad, frames } from '../assets.js';
 import { nameTag } from '../map.js';
 import { drawParts } from '../character.js';
 import { Win, allCanvases } from './windows.js';
+import { VIEW_W, VIEW_H } from '../view.js';
 
 // ==================================================================== guild emblems
 const MARK_KIND = { 2: 'Animal', 3: 'Plant', 4: 'Pattern', 5: 'Letter', 9: 'Etc' };
@@ -63,7 +64,7 @@ export class PlayerMenu extends Win {
       [this.M.BtTrade, () => g.requestTrade(target)],
     ];
     this.w = 100; this.h = 23 + items.length * 15 + 7;
-    this.x = Math.min(x, 800 - this.w - 2); this.y = Math.min(y, 529 - this.h);
+    this.x = Math.min(x, VIEW_W - this.w - 2); this.y = Math.min(y, VIEW_H - 71 - this.h);
     items.forEach(([node, fn, on = true], i) => {
       const b = this.button(node, 6, 23 + i * 15, () => { this.mgr.close(this); fn(); });
       b.enabled = on;

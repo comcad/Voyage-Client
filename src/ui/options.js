@@ -1,6 +1,7 @@
 import { music, sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
 import { settings, saveSettings, MOB_INFO } from '../settings.js';
+import { RESOLUTIONS, VIEW_W, VIEW_H, resolutionName, resolutionIndex } from '../view.js';
 
 /**
  * Game Menu windows from UI/UIWindow.img: Change Channel, Game Option, System Option.
@@ -32,7 +33,7 @@ export class ChannelWin extends Win {
     // the middle piece (10px) repeats down to the last row's bottom; two rows make the original's 143px window
     this.tiles = Math.max(2, Math.ceil((CELL_Y + rows * CELL_DY - 2 - 67) / 10));
     this.w = 436; this.h = 67 + this.tiles * 10 + 36;
-    this.x = Math.round((800 - this.w) / 2); this.y = Math.round((529 - this.h) / 2);
+    this.x = Math.round((VIEW_W - this.w) / 2); this.y = Math.round((VIEW_H - 71 - this.h) / 2);
     const by = this.h - 36 + 9;
     this.cancel.x = 436 - 16 - 47; this.cancel.y = by;
     this.change.x = this.cancel.x - 6 - 91; this.change.y = by;
@@ -114,7 +115,10 @@ export class GameOptWin extends Win {
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
  *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
- * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342).
+ * An eleventh row, SCREEN SIZE (the game's resolution, a combo box), is added under them: the art's MONSTER INFO row
+ * with a new label, the OK / CANCEL band moved down under it.
+ * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
+ * the art, 30px lower with the added row.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
  */
 const ROW_Y = (i) => 46 + i * 30;
@@ -124,12 +128,21 @@ const SLIDERS = {
 };
 const MUTE_X = 246, COMBO = { x: 66, w: 172 }, CHECK_X = 64, VIEW_X = 61;   // WINDOW / FULL SCREEN start further left
 const SHOT_PLACES = ['Downloads Folder'];
+const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, WIN_H = ART_H + 30;
+// the labels' 5x7 letters, drawn white on a dark outline
+const GLYPHS = {
+  S: ['.###.', '#...#', '#....', '.###.', '....#', '#...#', '.###.'], C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
+  R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'], E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
+  N: ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'], I: ['#', '#', '#', '#', '#', '#', '#'],
+  Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
+};
 export class SysOptWin extends Win {
   constructor(mgr) {
     super(mgr, mgr.W.SysOpt.backgrnd, 250, 60);
+    this.h = WIN_H;
     this.drag = null; this.open = null; this.hover = -1;
-    this.button(mgr.B.BtOK2, 194, 342, () => mgr.close(this));
-    this.button(mgr.B.BtCancel2, 244, 342, () => { this.revert(); mgr.close(this); });
+    this.button(mgr.B.BtOK2, 194, WIN_H - 24, () => mgr.close(this));
+    this.button(mgr.B.BtCancel2, 244, WIN_H - 24, () => { this.revert(); mgr.close(this); });
     // ScrLk (as the art says) or PrtSc saves a picture of the game
     addEventListener('keyup', (e) => { if (e.code === 'ScrollLock' || e.code === 'PrintScreen') screenshot(this.g); });
   }
@@ -144,8 +157,10 @@ export class SysOptWin extends Win {
   revert() {
     const b = this.before;
     if (!b) return;
+    const size = settings.resolution;
     for (const k of Object.keys(settings)) settings[k] = b[k];
     saveSettings();
+    if (settings.resolution !== size) this.g.setResolution?.();
     music.setVolume(b.bgm); sfx.setVolume(b.sound);
     if (music.muted !== b.bgmMute) music.setMuted(b.bgmMute);
     if (sfx.muted !== b.soundMute) sfx.setMuted(b.soundMute);
@@ -167,11 +182,41 @@ export class SysOptWin extends Win {
   muted(k) { return k === 'bgm' ? music.muted : k === 'sound' ? sfx.muted : false; }
   combos() {
     return [{ row: 3, items: SHOT_PLACES, value: 0, set: () => {} },
-      { row: 8, items: MOB_INFO, value: settings.mobInfo, set: (i) => { settings.mobInfo = i; saveSettings(); } }];
+      { row: 8, items: MOB_INFO, value: settings.mobInfo, set: (i) => { settings.mobInfo = i; saveSettings(); } },
+      { row: SIZE_ROW, items: RESOLUTIONS.map(resolutionName), value: resolutionIndex(), set: (i) => this.setResolution(i) }];
+  }
+  setResolution(i) {
+    const [w, h] = RESOLUTIONS[i];
+    if (settings.resolution === `${w}x${h}`) return;
+    settings.resolution = `${w}x${h}`; saveSettings();
+    this.g.setResolution?.();
   }
 
   // ---------------------------------------------------------------- frame
+  /** The SCREEN SIZE row: a copy of the MONSTER INFO row with its label cleared and lettered, then the button band. */
+  extraRow(ctx) {
+    const bg = this.mgr.image(this.bg);
+    if (!bg) return;
+    const src = ROW_Y(EXTRA_ROW) - 14, top = ROWS_END;
+    ctx.drawImage(bg, 0, src, 299, 30, 0, top, 299, 30);
+    ctx.drawImage(bg, 0, ROWS_END, 299, ART_H - ROWS_END, 0, top + 30, 299, ART_H - ROWS_END);
+    ctx.drawImage(bg, 10, ROW_Y(1) - 12, 12, 24, 10, top + 2, 44, 24);   // a plain stretch of a label's fill
+    this.label(ctx, 'SCREEN', 32, top + 6); this.label(ctx, 'SIZE', 32, top + 16);
+  }
+  label(ctx, text, cx, y) {
+    const rows = [...text].map((ch) => GLYPHS[ch]), w = rows.reduce((n, g) => n + g[0].length + 1, -1);
+    const put = (color, grow) => {
+      ctx.fillStyle = color;
+      let x = Math.round(cx - w / 2);
+      for (const g of rows) {
+        g.forEach((line, gy) => [...line].forEach((c, gx) => { if (c === '#') ctx.fillRect(x + gx - grow, y + gy - grow, 1 + 2 * grow, 1 + 2 * grow); }));
+        x += g[0].length + 1;
+      }
+    };
+    put('#993366', 1); put('#ffffff', 0);
+  }
   body(ctx) {
+    this.extraRow(ctx);
     const B = this.mgr.B, im = (n) => this.mgr.image(n), S = B.Slider;
     const l = im(S.left), mid = im(S.mid), r = im(S.right);
     for (const [k, d] of Object.entries(SLIDERS)) {
@@ -194,7 +239,7 @@ export class SysOptWin extends Win {
   /** Where the open list starts: under its box, or above it when it would run into the OK / CANCEL band. */
   listTop(c) {
     const h = c.items.length * 17 + 2, below = ROW_Y(c.row) + 9;
-    return below + h > 342 ? ROW_Y(c.row) - 9 - h : below;
+    return below + h > this.h - 24 ? ROW_Y(c.row) - 9 - h : below;
   }
   list(ctx) {
     const c = this.open, y0 = this.listTop(c);

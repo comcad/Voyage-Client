@@ -5,6 +5,7 @@ const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' };
 import { mapPath } from '../map.js';
 import { uiText } from './wzui.js';
 import { CHAT_COLOR, CHAT_BAR } from './statusbar.js';
+import { VIEW_W, VIEW_H } from '../view.js';
 
 const GAIN_LIFE = 5, GAIN_FADE = 1, GAIN_MAX = 7, GAIN_LINE = 16, BANNER_SPEED = 70;
 
@@ -43,9 +44,9 @@ export class Hud {
     if (this.slide) {
       ctx.save();
       ctx.font = '12px Arial, sans-serif';
-      const w = ctx.measureText(this.slide.text).width, run = 800 + w + 40;
-      const x = 800 - (((now - this.slide.t) / 1000) * BANNER_SPEED) % run;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, 800, 18);
+      const w = ctx.measureText(this.slide.text).width, run = VIEW_W + w + 40;
+      const x = VIEW_W - (((now - this.slide.t) / 1000) * BANNER_SPEED) % run;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, VIEW_W, 18);
       uiText(ctx, this.slide.text, x, 3, { color: '#ffff7e', size: 12 });
       ctx.restore();
     }
@@ -54,12 +55,12 @@ export class Hud {
     const now = performance.now(), bar = this.game.statusBar;
     if (this.gains?.length) {
       this.gains = this.gains.filter((g) => now - g.t < (GAIN_LIFE + GAIN_FADE) * 1000);
-      const base = (bar?.y ?? 528) - 34;
+      const base = (bar?.y ?? VIEW_H - 72) - 34;
       ctx.save();
       this.gains.forEach((g, i) => {
         const age = (now - g.t) / 1000, k = this.gains.length - 1 - i;
         ctx.globalAlpha = age < GAIN_LIFE ? 1 : Math.max(0, 1 - (age - GAIN_LIFE) / GAIN_FADE);
-        uiText(ctx, g.text, 792, base - k * GAIN_LINE, { color: g.color, size: 12, align: 'right', outline: 'rgba(0,0,0,0.85)' });
+        uiText(ctx, g.text, VIEW_W - 8, base - k * GAIN_LINE, { color: g.color, size: 12, align: 'right', outline: 'rgba(0,0,0,0.85)' });
       });
       ctx.restore();
     }

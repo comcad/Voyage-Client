@@ -8,9 +8,9 @@ input.bad { border-color: #e33; }
 .hint { color: #9aa3b5; font-size: 12px; }
 .row { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
 
-/* Renders at 800x600 like the v83 client, scaled up/down to fit the window at 4:3. */
-:root { --view-w: min(100vw, calc(100vh * 4 / 3)); }
-#game-container { position: absolute; inset: 0; margin: auto; width: var(--view-w); height: calc(var(--view-w) * 3 / 4); overflow: hidden; }
+/* Renders at the chosen resolution (800x600 like the v83 client by default), scaled to fit the window at its shape. */
+:root { --view-ar: 4 / 3; --view-w: min(100vw, calc(100vh * var(--view-ar))); --login-w: min(100vw, calc(100vh * 4 / 3)); }
+#game-container { position: absolute; inset: 0; margin: auto; width: var(--view-w); height: calc(var(--view-w) / (var(--view-ar))); overflow: hidden; }
 #game-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
 #ui-root { position: absolute; inset: 0; pointer-events: none; }
 #ui-root > * { pointer-events: auto; }
@@ -162,7 +162,7 @@ body.at-login #login-root { display: block; }
 /* v83 login scene (canvas 800x600, letterboxed) */
 #login-root { background: #000; }
 .login-canvas { position: absolute; inset: 0; margin: auto; display: block;
-  width: var(--view-w); height: calc(var(--view-w) * 3 / 4); image-rendering: pixelated; }
+  width: var(--login-w); height: calc(var(--login-w) * 3 / 4); image-rendering: pixelated; }
 .login-layer { position: absolute; inset: 0; pointer-events: none; }
 .login-layer > * { pointer-events: auto; }
 .login-layer > input { font-family: Arial, sans-serif; }
