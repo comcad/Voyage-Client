@@ -1420,6 +1420,11 @@ export class ChannelSession {
   /** ITEM_SORT (gather: stacks merged, gaps closed) / ITEM_SORT2 (sort by item id): tick, the inventory. */
   itemGather(inv) { this.send(new PacketWriter(C.ITEM_SORT).int(Date.now() | 0).byte(inv)); }
   itemSort(inv) { this.send(new PacketWriter(C.ITEM_SORT2).int(Date.now() | 0).byte(inv)); }
+  /** USE_SUMMON_BAG / USE_MOUNT_FOOD / SCRIPTED_ITEM: tick, slot, item; USE_ITEM_REWARD: slot, item (no tick). */
+  useSummonBag(slot, itemId) { this.send(new PacketWriter(C.USE_SUMMON_BAG).int(Date.now() | 0).short(slot).int(itemId)); }
+  useMountFood(slot, itemId) { this.send(new PacketWriter(C.USE_MOUNT_FOOD).int(Date.now() | 0).short(slot).int(itemId)); }
+  useScriptedItem(slot, itemId) { this.send(new PacketWriter(C.SCRIPTED_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
+  useItemReward(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM_REWARD).short(slot).int(itemId)); }
   useSkillBook(slot, itemId) { this.send(new PacketWriter(C.USE_SKILL_BOOK).int(Date.now() | 0).short(slot).int(itemId)); }
   useItem(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
   /** MONSTER_BOOK_COVER: a card you own as the book's cover (0 releases it). */

@@ -100,6 +100,14 @@ export async function itemInfo(assets, id) {
   return (n.key ? img?.[n.key] : img)?.info || null;
 }
 
+/** A consumable's reward list (the boxes that open into items), or null. */
+export async function itemReward(assets, id) {
+  const n = itemNode(id);
+  if (!n?.path) return null;
+  const img = await assets.json(n.path);
+  return (n.key ? img?.[n.key] : img)?.reward || null;
+}
+
 /** A consumable's spec node (hp, mp, hpR...). */
 export async function itemSpec(assets, id) {
   const n = itemNode(id);
