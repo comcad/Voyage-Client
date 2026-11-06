@@ -104,7 +104,7 @@ export class StatusBar {
     this.chat.el.classList.add('chatinput');
     this.chat.show(false);
     this.chat.el.addEventListener('keydown', (e) => this.chatKey(e));
-    a.preload([...stateFrames(this.B.VScr5), this.B.Cursor?.[7]?.[0]].filter(Boolean));
+    a.preload([...stateFrames(this.B.VScr5), ...[1, 2, 7].flatMap((s) => Object.values(this.B.Cursor?.[s] || {}).filter((f) => f?._canvas))].filter(Boolean));
 
     const menuFrames = Object.entries(MENU_ITEMS).flatMap(([w, list]) => [this.W[w].backgrnd, ...list.flatMap((b) => stateFrames(this.W[w][b]))]);
     await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
@@ -702,12 +702,24 @@ export class StatusBar {
     });
   }
 
-  /** The client's own cursor (Basic.img/Cursor): 0 normally, 1 over something clickable. */
+  /**
+   * The client's own cursor (Basic.img/Cursor), animated through its frames by their delays: 7 dragging the chat,
+   * 1 over a button; otherwise what is under it on the field (1 an NPC, 2 another player, as v83's field picks it).
+   */
   syncCursor() {
-    const want = this.chatDrag || this.edgeHover ? 7 : this.hovered ? 1 : 0;
-    if (want === this.cursorState) return;
-    this.cursorState = want;
-    const n = this.B.Cursor[want]?.[0] || this.B.Cursor[0][0];
+    let want = this.chatDrag || this.edgeHover ? 7 : this.hovered ? 1 : 0;
+    if (!want) want = this.game.fieldCursor?.(this.mouse.x, this.mouse.y) || 0;
+    const now = performance.now();
+    if (want !== this.cursorState) { this.cursorState = want; this.cursorFrame = 0; this.cursorAt = now; this.cursorShown = null; }
+    const node = this.B.Cursor[want] || this.B.Cursor[0];
+    const frames = Object.keys(node).filter((k) => /^\d+$/.test(k)).map(Number).sort((a, b) => a - b);
+    if (frames.length > 1) {
+      const delay = Number(node[frames[this.cursorFrame]]?.delay) || 100;
+      if (now - this.cursorAt >= delay) { this.cursorFrame = (this.cursorFrame + 1) % frames.length; this.cursorAt = now; }
+    }
+    const n = node[frames[this.cursorFrame] ?? 0] || this.B.Cursor[0][0];
+    if (n === this.cursorShown) return;
+    this.cursorShown = n;
     const o = n.origin || [0, 0];
     this.game.canvas.style.cursor = `url(${this.assets.base}/${n._canvas}) ${o[0]} ${o[1]}, auto`;
   }

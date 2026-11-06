@@ -749,6 +749,21 @@ export class Game {
   }
 
   /** The other player under a canvas point. */
+  /**
+   * The field's cursor under the mouse, as v83 picks it each frame when no window is there: 1 over an NPC, 2 over
+   * another player (who wins over an NPC), else 0.
+   */
+  fieldCursor(x, y) {
+    if (x < 0 || !this.map || this.windows?.top(x, y) || this.statusBar?.contains?.(x, y)) return 0;
+    if (this.playerAt(x, y)) return 2;
+    const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    for (const e of this.map.life) {
+      if (e.kind !== 'Npc' || e.oid === null) continue;
+      const b = e.box();
+      if (wx >= b.left && wx <= b.right && wy >= b.top && wy <= b.bottom) return 1;
+    }
+    return 0;
+  }
   playerAt(x, y) { for (const rp of this.others.values()) if (this.hitsChar(rp, x, y)) return rp; return null; }
   hitsChar(ent, x, y) {
     const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
