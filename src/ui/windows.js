@@ -388,10 +388,10 @@ class InventoryWin extends Win {
     this.W = W; this.tab = 2; this.first = 0;
     this.button(W.BtCoin, 9, 266, () => this.dropMesos());
     // each tab shows Gather until it has been gathered, then Sort until it has been sorted; v83 puts it at
-    // (width - 15, 6), but that is the close button's corner here, so it sits one button to the left
+    // (width - 15, 6), but that is the close button's corner here, so it sits one button to the left, level with it
     this.sortModes = [0, 0, 0, 0, 0, 0];
-    this.gatherBtn = this.button(W.BtGather, this.w - 30, 6, () => this.g.gatherItems(this.tab));
-    this.sortBtn = this.button(W.BtSort, this.w - 30, 6, () => this.g.sortItems(this.tab));
+    this.gatherBtn = this.button(W.BtGather, this.w - 30, 12, () => this.g.gatherItems(this.tab));
+    this.sortBtn = this.button(W.BtSort, this.w - 30, 12, () => this.g.sortItems(this.tab));
     this.showSortButton();
   }
   /** GATHER_ITEM_RESULT (mode 1: Sort next) / SORT_ITEM_RESULT (mode 0: Gather next) for an inventory. */
