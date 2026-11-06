@@ -32,10 +32,10 @@ export function defaultPad() {
   };
 }
 
-/** Touch layout: positions are fractions of the 800x600 view (the button's centre). */
+/** Touch layout: positions are fractions of the 800x600 view (the button's centre). Hidden until turned on in Key Setting. */
 export function defaultTouch() {
   return {
-    show: 'auto', size: 1, opacity: 0.75,
+    show: 'off', size: 1, opacity: 0.75,
     stick: { x: 0.12, y: 0.74 },
     buttons: [
       // above the quick slots in the bottom-right corner
