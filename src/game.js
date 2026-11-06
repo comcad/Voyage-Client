@@ -1,7 +1,7 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
-import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
+import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
@@ -83,6 +83,8 @@ const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'Y
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 /** Teleport can be used again this long after it lands (ms), and this long after Meteor Shower, Blizzard or Genesis. */
 const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
+/** The cash item the death notice offers to revive you on the spot. */
+const WHEEL_OF_DESTINY = 5510000;
 /** fieldLimit bit: no movement skills (Teleport, Monster Magnet...) on this map. */
 const FIELD_NO_MOVEMENT_SKILLS = 0x2;
 
@@ -395,6 +397,8 @@ const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 122101
  */
 const SHOUT = 1111008;
 const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
+/** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
+const MORPH = 0x2n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /**
  * The timed stats whose running out the client reports (CANCEL_DEBUFF): in the low mask Stun, Poison, Seal,
@@ -665,7 +669,8 @@ export class Game {
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const p = at(e), b = this.vfx?.buffAt(...p);
-      if (b) { if (b.source > 0) this.net?.cancelBuff(b.source); return; }
+      // right-click a buff icon to end it: a skill's (not Dragon Roar's) or an item's
+      if (b) { if (b.source < 0) this.cancelItemEffect(-b.source); else if (b.source > 0 && b.source !== DRAGON_ROAR) this.net?.cancelBuff(b.source); return; }
       const tw = wm.top(...p);
       if (tw?.rclick) { tw.rclick(p[0] - tw.x, p[1] - tw.y); return; }
       // right-click another player: Personal Info / Whisper / Party Invite / Trade
@@ -2179,6 +2184,7 @@ export class Game {
       scriptProgress: (t) => this.questMsg.script(t),
       npcScripts: (list) => { this.npcScripts = new Map(list.map((e) => [e.id, e.name])); },
       questClearEffect: () => { this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); },
+      wheelsLeft: (n) => this.hud.message(`You have used 1 Wheel of Destiny in order to revive at the current map. (${n} left)`, CHAT_COLOR.grey),
       avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
@@ -2439,6 +2445,9 @@ export class Game {
   /**
    * HP 0: the character turns into its ghost over a tombstone, and a little over 2.2s later the death notice asks.
    * fresh is false when you come back to a map already dead (the stone is lying there, no sound).
+   * With a Wheel of Destiny on a map that allows it, the notice offers it: the item is announced as the notice
+   * opens (the stone glows, Effect/BasicEff.img/TombUpgrade), and Yes revives you here. Left open 10 minutes, the
+   * notice sends you to the town.
    */
   async die(fresh = true) {
     this.dead = true;
@@ -2450,13 +2459,28 @@ export class Game {
     if (fresh) sfx.play('Game/Tombstone');
     await new Promise((r) => setTimeout(r, 2200));
     if (this.death !== death) return;   // brought back meanwhile
-    const ok = await new Promise((done) => {   // UIWindow.img/Notice/0
-      const w = death.notice = new DeathNotice(this.windows, () => done(true));
-      death.cancel = () => done(false);
-      this.assets.preload(w.frames()).then(() => { if (this.death === death) this.windows.show(w); });
-      setTimeout(() => { if (this.death === death) w.finish(); }, 600000);   // left open 10 minutes, it answers itself
+    const wheel = this.wheelRevivable();
+    const answer = await new Promise((done) => {
+      const w = death.notice = new DeathNotice(this.windows, wheel ? 'wheel' : 'ok', (yes) => done({ yes }));
+      death.cancel = () => done(null);
+      this.assets.preload(w.frames()).then(() => {
+        if (this.death !== death) return;
+        this.windows.show(w);
+        if (wheel) { this.net.useDeathItem(WHEEL_OF_DESTINY, at.x, at.y); this.vfx?.play('TombUpgrade', { x: at.x, y: at.y }); }
+      });
+      setTimeout(() => { if (this.death === death) w.finish(false); }, 600000);
     });
-    if (ok && this.death === death) this.net.respawn();
+    if (answer && this.death === death) this.net.respawn(answer.yes);
+  }
+  /**
+   * Whether the death notice offers a Wheel of Destiny: you hold one, and the map isn't an event field (field types
+   * 1, 3-5, 7, 10, 11, 15), a 9xxxxxxxx map, the ship rides (200090xxx) or 390xxxxxx.
+   */
+  wheelRevivable() {
+    const type = Number(this.map?.info?.fieldType) || 0, id = this.map?.id || 0;
+    if ([1, 3, 4, 5, 7, 10, 11, 15].includes(type)) return false;
+    if (Math.floor(id / 100000000) === 9 || Math.floor(id / 1000) === 200090 || Math.floor(id / 1000000) === 390) return false;
+    return this.itemCount(WHEEL_OF_DESTINY) >= 1;
   }
   /**
    * HP back while dead (Resurrection): the notice closes unanswered, the stone and ghost go, and you stand on the floor
@@ -3331,6 +3355,23 @@ export class Game {
     return !x.busy && (ignoreHp || (this.stats?.hp ?? 0) > 0) && performance.now() - x.at >= ms;
   }
   lockExclusive() { this.excl = { busy: true, at: performance.now() }; }
+  /**
+   * End an item's buff early (right-click its icon). Like the other requests it waits for an answer pending (200ms
+   * apart, alive), but takes no lock. While transformed, a morph potion (221) marked noCancelMouse refuses.
+   */
+  async cancelItemEffect(itemId) {
+    if (!this.canExclusive(200)) return;
+    if (Math.floor(itemId / 10000) === 221 && this.morphed() && Number((await itemInfo(this.assets, itemId))?.noCancelMouse)) {
+      this.hud.message('You may not cancel the transformation.', CHAT_COLOR.error);
+      return;
+    }
+    this.net?.cancelItemEffect(itemId);
+  }
+  /** Transformed: a buff with the Morph stat is on. */
+  morphed() {
+    const now = Date.now();
+    return (this.buffs || []).some((b) => b.until > now && (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & MORPH) !== 0n);
+  }
   releaseExclusive() { this.excl = { busy: false, at: performance.now() }; }
 
   /** Map id prefix (map / 10,000,000) -> area, from Map/Map/AreaCode.img. */

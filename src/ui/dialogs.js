@@ -347,19 +347,22 @@ export class PetSelectDialog extends Win {
 
 // ==================================================================== notices
 /**
- * The death notice (UIWindow.img/Notice/0, 286x146, at (257, 97)): the tombstone and "PRESS OK TO BE REVIVED. Once
- * you have revived, you will be sent to a safe town nearby." are in the art, with Basic BtOK2 at (124, 115).
- * Enter answers it too.
+ * The death notice at (257, 97), its words in the art. 'ok' (UIWindow.img/Notice/0): "PRESS OK TO BE REVIVED. Once
+ * you have revived, you will be sent to a safe town nearby." with Basic BtOK2 at (124, 115). 'wheel' (Notice/2): "The
+ * power from the Wheel of Destiny can revive you in your current map." with BtYes2 at (92, 115) and BtNo2 at
+ * (148, 115). done(wheel): Yes is true (revive here), OK and No false (the town). It takes no keys: the mouse answers.
  */
 export class DeathNotice extends Win {
-  constructor(mgr, done) {
-    super(mgr, mgr.W.Notice[0], 257, 97);
+  constructor(mgr, kind, done) {
+    super(mgr, mgr.W.Notice[kind === 'wheel' ? 2 : 0], 257, 97);
     this.modal = true; this.done = done;
     this.closeBtn.visible = false;
-    this.button(mgr.B.BtOK2, 124, 115, () => this.finish());
+    if (kind === 'wheel') {
+      this.button(mgr.B.BtYes2, 92, 115, () => this.finish(true));
+      this.button(mgr.B.BtNo2, 148, 115, () => this.finish(false));
+    } else this.button(mgr.B.BtOK2, 124, 115, () => this.finish(false));
   }
-  finish() { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(); }
-  key(e) { if (e.key === 'Enter' || e.key === ' ') this.finish(); }
+  finish(wheel = false) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(wheel); }
 }
 
 /**
