@@ -1250,6 +1250,8 @@ export class Game {
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
     else if (slot && t === 5 && Math.floor(id / 10000) === 524) this.useCashPetFood(Number(slot), id);
+    else if (slot && t === 2 && Math.floor(id / 10000) === 203) this.useReturnScroll(Number(slot), id);
+    else if (slot && t === 2 && (Math.floor(id / 10000) === 228 || Math.floor(id / 10000) === 229)) this.useSkillBook(Number(slot), id);
     else if (slot && t === 2) { this.net.useItem(Number(slot), id); sfx.play(`Item/${pad(id, 8)}/Use`); }
     else if (slot && t === 3 && Math.floor(id / 10000) === 301) this.sitChair(id);
   }
@@ -1793,6 +1795,8 @@ export class Game {
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
+      exclusiveAnswered: () => this.releaseExclusive(),
+      skillBookResult: (d) => this.onSkillBookResult(d),
       avatarMega: (a) => { this.hud.megaphone([`${a.name} : ${a.lines.join('')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
       avatarMegaClear: () => this.avatarBanner.clear(),
       tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show(d); },
@@ -2839,6 +2843,8 @@ export class Game {
       this.hud.message('Click the equipped item to use the scroll on.', '#fff');
       return;
     }
+    if (tab === 2 && Math.floor(it.id / 10000) === 203) { this.useReturnScroll(slot, it.id); return; }
+    if (tab === 2 && (Math.floor(it.id / 10000) === 228 || Math.floor(it.id / 10000) === 229)) { this.useSkillBook(slot, it.id); return; }
     if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
     else if (tab === 1) {
       if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
@@ -3237,6 +3243,83 @@ export class Game {
     this.lastTipAt = now;
     this.hud.message(`[MapleTip] ${list[Math.floor(Math.random() * list.length)]}`, CHAT_COLOR.yellow);
   }
+  // ------------------------------------------------------------------ exclusive requests
+  /**
+   * Requests the server answers before another may go (return scrolls, skill books...): nothing may be waiting
+   * for an answer, you must be alive (unless ignoreHp), and at least `ms` must have passed since the last one was
+   * sent or answered. A stat change or inventory operation flagged as the answer, or the request's own result,
+   * frees it again.
+   */
+  canExclusive(ms, ignoreHp = false) {
+    const x = this.excl ??= { busy: false, at: -Infinity };
+    return !x.busy && (ignoreHp || (this.stats?.hp ?? 0) > 0) && performance.now() - x.at >= ms;
+  }
+  lockExclusive() { this.excl = { busy: true, at: performance.now() }; }
+  releaseExclusive() { this.excl = { busy: false, at: performance.now() }; }
+
+  /** Map id prefix (map / 10,000,000) -> area, from Map/Map/AreaCode.img. */
+  async areaCodes() {
+    if (!this._areaCodes) {
+      const n = await this.assets.json('Map/Map/AreaCode.img');
+      this._areaCodes = new Map(Object.entries(n || {}).filter(([k]) => !k.startsWith('_')).map(([k, v]) => [Number(k), Number(v)]));
+    }
+    return this._areaCodes;
+  }
+  /**
+   * Whether a return scroll may take you from one map to another: never to or from the 9xxxxxxx-style event maps
+   * ((id / 1,000,000) % 100 === 9) or 20009xxxx, and only within the same area of AreaCode.img.
+   */
+  async sameArea(from, to) {
+    if (Math.floor(from / 1000000) % 100 === 9 || Math.floor(to / 1000000) % 100 === 9) return false;
+    if (Math.floor(from / 10000) === 20009 || Math.floor(to / 10000) === 20009) return false;
+    const codes = await this.areaCodes(), a = codes.get(Math.floor(from / 10000000)), b = codes.get(Math.floor(to / 10000000));
+    return a !== undefined && b !== undefined && a === b;
+  }
+
+  /**
+   * A return scroll (203xxxx): spec/moveTo (999999999: the nearest town) and spec/ignoreContinent. A map whose
+   * fieldLimit has 0x20 refuses all of them, and 0x100 those with a set destination; a set destination elsewhere
+   * in the world needs ignoreContinent. Then USE_RETURN_SCROLL, as an exclusive request (500ms apart).
+   */
+  async useReturnScroll(slot, id) {
+    if (!this.canExclusive(500)) return;
+    const spec = await itemSpec(this.assets, id) || {};
+    const moveTo = Number(spec.moveTo ?? 999999999), ignoreContinent = Number(spec.ignoreContinent) || 0;
+    const limit = this.map?.info?.fieldLimit || 0;
+    if (limit & 0x20 || (moveTo !== 999999999 && limit & 0x100)) { this.windows.notice("You can't use it here in this map."); return; }
+    if (moveTo !== 999999999 && !ignoreContinent && !(await this.sameArea(this.map?.id ?? 0, moveTo))) { this.windows.notice('You cannot go to that place.'); return; }
+    if (!this.canExclusive(500)) return;
+    this.net.useReturnScroll(slot, id);
+    this.lockExclusive();
+    sfx.play(`Item/${pad(id, 8)}/Use`);
+  }
+
+  /** A skill book (228xxxx) or mastery book (229xxxx): USE_SKILL_BOOK, as an exclusive request (200ms apart). */
+  useSkillBook(slot, id) {
+    if (!this.canExclusive(200)) return;
+    this.net.useSkillBook(slot, id);
+    this.lockExclusive();
+  }
+
+  /**
+   * SKILL_LEARN_ITEM_RESULT: a book that could be used shows SkillBook/Success or Failure (layers 0 and 1) on whoever
+   * read it. Your own frees the exclusive request, plays Game/EnchantSuccess or EnchantFailure and says how it went.
+   */
+  onSkillBookResult({ id, mastery, canUse, success }) {
+    const me = id === this.player.id, ent = me ? this.player : this.others.get(id);
+    if (!ent) return;
+    if (canUse) for (const layer of [0, 1]) this.vfx?.playPath(`Effect/BasicEff.img/SkillBook/${success ? 'Success' : 'Failure'}/${layer}`, ent);
+    if (!me) return;
+    this.releaseExclusive();
+    sfx.play(`Game/${success ? 'EnchantSuccess' : 'EnchantFailure'}`);
+    const book = mastery ? 'Mastery Book' : 'Skill Book';
+    const text = !canUse ? `You cannot use ${book}.`
+      : !success ? `Despite using ${book}, the effect was nowhere to be found.`
+      : mastery ? 'The Book of Mastery glows brightly, and the current skills have gone through an upgrade.'
+      : 'The Skill Book glows brightly, and new skills have now been added.';
+    this.hud.message(text, CHAT_COLOR.error);
+  }
+
   /** FAME_RESPONSE lines, all light red. */
   onFame(f) {
     const me = this.player.name, say = (t) => this.hud.message(t, CHAT_COLOR.error);

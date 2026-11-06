@@ -238,6 +238,7 @@ export class ChannelSession {
     on(S.MINIMAP_ON_OFF, (r) => this.emit('minimap', r.ubyte()));
     on(S.STAT_CHANGED, (r) => {
       const enable = r.bool();
+      if (enable) this.emit('exclusiveAnswered');   // the server's answer to an exclusive request
       const mask = r.uint();
       const stats = {};
       for (let bit = 1; bit <= 0x200000; bit *= 2) {
@@ -371,6 +372,12 @@ export class ChannelSession {
     });
 
     on(S.CHATTEXT, (r) => this.emit('chat', { id: r.int(), gm: r.bool(), text: r.string(), show: r.ubyte() }));
+    // SKILL_LEARN_ITEM_RESULT: whose book it was, skill (0) or mastery (1) book, the skill and its new max level,
+    // whether it could be used, whether it worked
+    on(S.SKILL_LEARN_ITEM_RESULT, (r) => {
+      const id = r.int(), mastery = r.bool(), skill = r.int(), maxLevel = r.int(), canUse = r.bool(), success = r.bool();
+      this.emit('skillBookResult', { id, mastery, skill, maxLevel, canUse, success });
+    });
     // FAME_RESPONSE (On_FAME_RESPONSE): 0 you raised (1) / dropped someone's fame, then their new fame as an int the
     // window keeps as a short; 5 someone raised / dropped yours; 1-4 errors; anything else "unexpected error"
     on(S.FAME_RESPONSE, (r) => {
@@ -979,6 +986,7 @@ export class ChannelSession {
 
     on(S.INVENTORY_OPERATION, (r) => {
       const tick = r.bool(); const n = r.ubyte(); const ops = [];
+      if (tick) this.emit('exclusiveAnswered');
       for (let i = 0; i < n; i++) {
         const mode = r.ubyte(), inv = r.ubyte(), pos = r.short();
         const op = { mode, inv, pos };
@@ -1403,6 +1411,9 @@ export class ChannelSession {
   autoDistributeAp(pairs) { const w = new PacketWriter(C.AUTO_DISTRIBUTE_AP).int(Date.now() | 0).int(pairs.length); for (const [m, n] of pairs) w.int(m).int(n); this.send(w); }
   distributeAp(stat) { this.send(new PacketWriter(C.DISTRIBUTE_AP).int(Date.now() | 0).int(stat)); }
   distributeSp(skillId) { this.send(new PacketWriter(C.DISTRIBUTE_SP).int(Date.now() | 0).int(skillId)); }
+  /** USE_RETURN_SCROLL / USE_SKILL_BOOK: tick, the item's slot, its id. */
+  useReturnScroll(slot, itemId) { this.send(new PacketWriter(C.USE_RETURN_SCROLL).int(Date.now() | 0).short(slot).int(itemId)); }
+  useSkillBook(slot, itemId) { this.send(new PacketWriter(C.USE_SKILL_BOOK).int(Date.now() | 0).short(slot).int(itemId)); }
   useItem(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
   /** MONSTER_BOOK_COVER: a card you own as the book's cover (0 releases it). */
   bookCover(cardId) { this.send(new PacketWriter(C.MONSTER_BOOK_COVER).int(cardId)); }
