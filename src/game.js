@@ -2094,7 +2094,22 @@ export class Game {
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
       }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
-      catchMob: (item, ok) => { if (item === 2270002) sfx.play(ok ? 'Game/CatchSuccess' : 'Game/CatchFaild'); },   // Element Rock
+      catchMob: (item, ok, oid) => {
+        // Effect/ItemEff.img/<item> on the monster, or its fail child (if it has one) when the catch failed
+        const m = this.lifeByOid.get(oid);
+        if (m) this.vfx?.playPath(`Effect/ItemEff.img/${item}${ok ? '' : '/fail'}`, { x: m.x, y: m.y - 2 });
+        if (item === 2270002) sfx.play(ok ? 'Game/CatchSuccess' : 'Game/CatchFaild');   // Element Rock
+      },
+      magnetCatch: (oid, ok) => {
+        const m = this.lifeByOid.get(oid);
+        if (m) this.vfx?.playPath(`Effect/BasicEff.img/Catch/${ok ? 'Success' : 'Fail'}`, { x: m.x, y: m.y - 15 });
+      },
+      catchFail: async (type, item) => {
+        if (type === 0) { this.hud.message('Unable to capture the monster; the monster is too strong.', CHAT_COLOR.error); return; }
+        if (type !== 1) return;
+        const msg = item ? (await itemInfo(this.assets, item))?.delayMsg : '';
+        this.hud.message(msg || 'Element Rock cannot be used right after usage.', CHAT_COLOR.error);
+      },
       // damage the server deals by itself (poison, Ninja Ambush) or a heal: its number over the monster; one other
       // monsters can hurt also has its red bar follow the HP the server sends
       mobDamaged: later((oid, dmg, hp, maxHp) => {
@@ -3436,7 +3451,56 @@ export class Game {
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
     if (type === 243) { this.useScriptedItem(slot, id); return; }
+    if (type === 227) { this.useCatchItem(slot, id); return; }
     this.net.useItem(slot, id); sfx.play(`Item/${pad(id, 8)}/Use`);   // Sound/Item.img: a potion's gulp...
+  }
+
+  /**
+   * A catch item (227xxxx: jars, Element Rock, nets...): not while riding a tamed monster. The item's info names
+   * the monster (mob), what it turns into (create) and a box around you (left/top/right/bottom). There must be room
+   * for create (a free slot, or a stack of it under its slotMax, 100 if unset); then the first living monster of
+   * that kind whose body touches the box is the target. With none, bridleMsgType picks the message: 0 no tamable
+   * monster here, 1 the ghost is too far, 2 the monster is too far, 3 the item's nomobMsg. Then USE_CATCH_ITEM, as
+   * an exclusive request (200ms apart).
+   */
+  async useCatchItem(slot, id) {
+    if (Math.floor((this.riding?.item || 0) / 10000) === 190) return;
+    if (!this.canExclusive(200)) return;
+    const info = await itemInfo(this.assets, id);
+    if (!info) return;
+    const create = Number(info.create) || 0, t = invType(create), inv = this.inventory?.[t] || {};
+    const limit = this.inventory?.limits?.[t] || 24;
+    let room = false;
+    if (t === 1) {
+      for (let s = 1; s <= limit && !room; s++) room = !inv[s];
+      if (!room) { this.hud.message('You do not have enough slots in your item inventory.', CHAT_COLOR.error); return; }
+    } else {
+      const max = Number((await itemInfo(this.assets, create))?.slotMax) || 100;
+      for (let s = 1; s <= limit && !room; s++) room = !inv[s] || (inv[s].id === create && (inv[s].quantity ?? 1) < max);
+      if (!room) {
+        this.hud.message(`${{ 2: 'Use', 3: 'Setup', 4: 'Etc' }[t] || ''} item inventory is full.`, CHAT_COLOR.error);
+        return;
+      }
+    }
+    const p = this.player, n = (k) => Number(info[k]) || 0;
+    const area = { left: p.x + n('left'), top: p.y + n('top'), right: p.x + n('right'), bottom: p.y + n('bottom') };
+    const mobId = n('mob');
+    const target = this.map.life.find((m) => {
+      if (m.kind !== 'Mob' || !m.alive || m.dying || Number(m.spawn?.id) !== mobId) return false;
+      const b = m.hitBox();
+      return b.left < area.right && area.left < b.right && b.top < area.bottom && area.top < b.bottom;
+    });
+    if (!target) {
+      const type = n('bridleMsgType');
+      const msg = type === 0 ? 'Unable to find a tamable monster in this area.'
+        : type === 1 ? 'Unable to capture the monster; the ghost is too far.'
+          : type === 2 ? 'Unable to capture the monster; the monster is too far.'
+            : type === 3 ? info.nomobMsg : '';
+      if (msg) this.hud.message(msg, CHAT_COLOR.error);
+      return;
+    }
+    this.net.useCatchItem(slot, id, target.oid);
+    this.lockExclusive();
   }
 
   /** A reward box: USE_ITEM_REWARD (slot, item), as an exclusive request (200ms apart). */
