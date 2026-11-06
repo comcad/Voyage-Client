@@ -374,6 +374,10 @@ export class ChannelSession {
     on(S.CHATTEXT, (r) => this.emit('chat', { id: r.int(), gm: r.bool(), text: r.string(), show: r.ubyte() }));
     // SKILL_LEARN_ITEM_RESULT: whose book it was, skill (0) or mastery (1) book, the skill and its new max level,
     // whether it could be used, whether it worked
+    // INVENTORY_GROW: an inventory's new slot count; GATHER_ITEM_RESULT / SORT_ITEM_RESULT: which inventory is done
+    on(S.INVENTORY_GROW, (r) => { const type = r.ubyte(); this.emit('inventoryGrow', type, r.ubyte()); });
+    on(S.GATHER_ITEM_RESULT, (r) => { r.ubyte(); this.emit('sortResult', r.ubyte(), 1); });
+    on(S.SORT_ITEM_RESULT, (r) => { r.ubyte(); this.emit('sortResult', r.ubyte(), 0); });
     on(S.SKILL_LEARN_ITEM_RESULT, (r) => {
       const id = r.int(), mastery = r.bool(), skill = r.int(), maxLevel = r.int(), canUse = r.bool(), success = r.bool();
       this.emit('skillBookResult', { id, mastery, skill, maxLevel, canUse, success });
@@ -1413,6 +1417,14 @@ export class ChannelSession {
   distributeSp(skillId) { this.send(new PacketWriter(C.DISTRIBUTE_SP).int(Date.now() | 0).int(skillId)); }
   /** USE_RETURN_SCROLL / USE_SKILL_BOOK: tick, the item's slot, its id. */
   useReturnScroll(slot, itemId) { this.send(new PacketWriter(C.USE_RETURN_SCROLL).int(Date.now() | 0).short(slot).int(itemId)); }
+  /** ITEM_SORT (gather: stacks merged, gaps closed) / ITEM_SORT2 (sort by item id): tick, the inventory. */
+  itemGather(inv) { this.send(new PacketWriter(C.ITEM_SORT).int(Date.now() | 0).byte(inv)); }
+  itemSort(inv) { this.send(new PacketWriter(C.ITEM_SORT2).int(Date.now() | 0).byte(inv)); }
+  /** USE_SUMMON_BAG / USE_MOUNT_FOOD / SCRIPTED_ITEM: tick, slot, item; USE_ITEM_REWARD: slot, item (no tick). */
+  useSummonBag(slot, itemId) { this.send(new PacketWriter(C.USE_SUMMON_BAG).int(Date.now() | 0).short(slot).int(itemId)); }
+  useMountFood(slot, itemId) { this.send(new PacketWriter(C.USE_MOUNT_FOOD).int(Date.now() | 0).short(slot).int(itemId)); }
+  useScriptedItem(slot, itemId) { this.send(new PacketWriter(C.SCRIPTED_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
+  useItemReward(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM_REWARD).short(slot).int(itemId)); }
   useSkillBook(slot, itemId) { this.send(new PacketWriter(C.USE_SKILL_BOOK).int(Date.now() | 0).short(slot).int(itemId)); }
   useItem(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
   /** MONSTER_BOOK_COVER: a card you own as the book's cover (0 releases it). */

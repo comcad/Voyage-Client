@@ -1,7 +1,7 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
-import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
+import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
@@ -1250,9 +1250,7 @@ export class Game {
     const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
     if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
     else if (slot && t === 5 && Math.floor(id / 10000) === 524) this.useCashPetFood(Number(slot), id);
-    else if (slot && t === 2 && Math.floor(id / 10000) === 203) this.useReturnScroll(Number(slot), id);
-    else if (slot && t === 2 && (Math.floor(id / 10000) === 228 || Math.floor(id / 10000) === 229)) this.useSkillBook(Number(slot), id);
-    else if (slot && t === 2) { this.net.useItem(Number(slot), id); sfx.play(`Item/${pad(id, 8)}/Use`); }
+    else if (slot && t === 2) this.useConsume(Number(slot), id);
     else if (slot && t === 3 && Math.floor(id / 10000) === 301) this.sitChair(id);
   }
 
@@ -1797,6 +1795,8 @@ export class Game {
       fame: (f) => this.onFame(f),
       exclusiveAnswered: () => this.releaseExclusive(),
       skillBookResult: (d) => this.onSkillBookResult(d),
+      inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
+      sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
       avatarMega: (a) => { this.hud.megaphone([`${a.name} : ${a.lines.join('')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
       avatarMegaClear: () => this.avatarBanner.clear(),
       tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show(d); },
@@ -2843,9 +2843,7 @@ export class Game {
       this.hud.message('Click the equipped item to use the scroll on.', '#fff');
       return;
     }
-    if (tab === 2 && Math.floor(it.id / 10000) === 203) { this.useReturnScroll(slot, it.id); return; }
-    if (tab === 2 && (Math.floor(it.id / 10000) === 228 || Math.floor(it.id / 10000) === 229)) { this.useSkillBook(slot, it.id); return; }
-    if (tab === 2) { this.net.useItem(slot, it.id); sfx.play(`Item/${pad(it.id, 8)}/Use`); }   // Sound/Item.img: a potion's gulp...
+    if (tab === 2) { this.useConsume(slot, it.id); return; }
     else if (tab === 1) {
       if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
       if (isPetEquip(it.id)) { this.equipPet(slot, it); return; }
@@ -3292,6 +3290,84 @@ export class Game {
     this.net.useReturnScroll(slot, id);
     this.lockExclusive();
     sfx.play(`Item/${pad(id, 8)}/Use`);
+  }
+
+  /**
+   * The inventory's Gather (ITEM_SORT) and Sort (ITEM_SORT2) buttons, for tabs 1-5: not while dead or under a
+   * dialog, as an exclusive request (500ms apart).
+   */
+  gatherItems(tab) { this.sortRequest(tab, () => this.net.itemGather(tab)); }
+  sortItems(tab) { this.sortRequest(tab, () => this.net.itemSort(tab)); }
+  sortRequest(tab, send) {
+    if (tab < 1 || tab > 5 || this.dead || this.windows?.modal || !this.canExclusive(500)) return;
+    send();
+    this.lockExclusive();
+  }
+
+  /**
+   * A Use item, routed as the v83 client does: a reward box (an item with a reward list) opens with
+   * USE_ITEM_REWARD; then by type 203 return scroll, 210 summoning sack, 226 mount food, 228/229 skill book,
+   * 243 scripted item; anything else goes as USE_ITEM.
+   */
+  async useConsume(slot, id) {
+    const type = Math.floor(id / 10000);
+    if (await itemReward(this.assets, id)) { this.useItemReward(slot, id); return; }
+    if (type === 203) { this.useReturnScroll(slot, id); return; }
+    if (type === 210) { this.useSummonBag(slot, id); return; }
+    if (type === 226) { this.useMountFood(slot, id); return; }
+    if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
+    if (type === 243) { this.useScriptedItem(slot, id); return; }
+    this.net.useItem(slot, id); sfx.play(`Item/${pad(id, 8)}/Use`);   // Sound/Item.img: a potion's gulp...
+  }
+
+  /** A reward box: USE_ITEM_REWARD (slot, item), as an exclusive request (200ms apart). */
+  useItemReward(slot, id) {
+    if (!this.canExclusive(200)) return;
+    this.net.useItemReward(slot, id);
+    this.lockExclusive();
+  }
+
+  /**
+   * Whether you are riding (a 190xxxx monster or a 193xxxx vehicle), saying so in chat as the client does: such
+   * items can't be used then.
+   */
+  ridingRefusal() {
+    const type = Math.floor((this.riding?.item || 0) / 10000);
+    if (type === 190) { this.hud.message('Not available while riding on the tamed monster.', CHAT_COLOR.error); return true; }
+    if (type === 193) { this.hud.message('Not available during the ride.', CHAT_COLOR.error); return true; }
+    return false;
+  }
+
+  /**
+   * A summoning sack (210xxxx): not while riding. Unless you are a GM: on a map whose fieldLimit has 0x4 it must be
+   * in the map's info/allowedItem ("You can't use it here in this map."), and anything but the 2109xxx sacks and
+   * 2100067 asks first whether to summon. Then USE_SUMMON_BAG, as an exclusive request (500ms, then 200ms apart).
+   */
+  async useSummonBag(slot, id) {
+    if (!this.canExclusive(500) || this.ridingRefusal()) return;
+    if (!this.gm) {
+      const allowed = Object.values(this.map?.info?.allowedItem || {}).map(Number);
+      if ((this.map?.info?.fieldLimit || 0) & 0x4 && !allowed.includes(id)) { this.windows.notice("You can't use it here in this map."); return; }
+      if (Math.floor(id / 1000) !== 2109 && id !== 2100067
+        && !(await this.windows.confirm('Too much interest can hinder your process of leveling up.\r\n\r\nwill you really summon the monster?'))) return;
+    }
+    if (!this.canExclusive(200)) return;
+    this.net.useSummonBag(slot, id);
+    this.lockExclusive();
+  }
+
+  /** Mount food (226xxxx): only while riding a 190xxxx monster; USE_MOUNT_FOOD, as an exclusive request (200ms apart). */
+  useMountFood(slot, id) {
+    if (Math.floor((this.riding?.item || 0) / 10000) !== 190 || !this.canExclusive(200)) return;
+    this.net.useMountFood(slot, id);
+    this.lockExclusive();
+  }
+
+  /** A scripted item (243xxxx): SCRIPTED_ITEM, as an exclusive request (500ms apart). */
+  useScriptedItem(slot, id) {
+    if (!this.canExclusive(500)) return;
+    this.net.useScriptedItem(slot, id);
+    this.lockExclusive();
   }
 
   /** A skill book (228xxxx) or mastery book (229xxxx): USE_SKILL_BOOK, as an exclusive request (200ms apart). */

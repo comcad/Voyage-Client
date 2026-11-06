@@ -387,6 +387,18 @@ class InventoryWin extends Win {
     super(mgr, W.backgrnd, 600, 90);
     this.W = W; this.tab = 2; this.first = 0;
     this.button(W.BtCoin, 9, 266, () => this.dropMesos());
+    // each tab shows Gather until it has been gathered, then Sort until it has been sorted; v83 puts it at
+    // (width - 15, 6), but that is the close button's corner here, so it sits one button to the left, level with it
+    this.sortModes = [0, 0, 0, 0, 0, 0];
+    this.gatherBtn = this.button(W.BtGather, this.w - 30, 12, () => this.g.gatherItems(this.tab));
+    this.sortBtn = this.button(W.BtSort, this.w - 30, 12, () => this.g.sortItems(this.tab));
+    this.showSortButton();
+  }
+  /** GATHER_ITEM_RESULT (mode 1: Sort next) / SORT_ITEM_RESULT (mode 0: Gather next) for an inventory. */
+  setSortMode(inv, mode) { this.sortModes[inv] = mode; this.showSortButton(); }
+  showSortButton() {
+    const sort = this.sortModes[this.tab] === 1;
+    this.gatherBtn.visible = !sort; this.sortBtn.visible = sort;
   }
   /** The coin button: drop 10 ~ 50,000 mesos on the ground (Cosmic's MesoDropHandler range). */
   async dropMesos() {
@@ -398,7 +410,7 @@ class InventoryWin extends Win {
   }
   frames() { return [...super.frames(), ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled)]; }
   wantsArg(tab) { return tab !== undefined && tab !== this.tab; }
-  setArg(tab) { if (tab !== undefined && tab !== this.tab) { this.tab = tab; this.first = 0; } }
+  setArg(tab) { if (tab !== undefined && tab !== this.tab) { this.tab = tab; this.first = 0; this.showSortButton(); } }
   get limit() { return this.g.inventory?.limits?.[this.tab] || 24; }
   get rows() { return Math.ceil(this.limit / 4); }
   slotAt(lx, ly) {
@@ -427,7 +439,7 @@ class InventoryWin extends Win {
   }
   down(lx, ly) {
     const hit = tabAt(this.tabRects, lx, ly);
-    if (hit >= 0) { if (this.tab !== hit + 1) { this.tab = hit + 1; this.first = 0; sfx.play('UI/Tab'); } return; }
+    if (hit >= 0) { if (this.tab !== hit + 1) { this.tab = hit + 1; this.first = 0; this.showSortButton(); sfx.play('UI/Tab'); } return; }
     const s = this.scrollClick(lx, ly, 156, 51, 201, this.first, this.rows, 6);
     if (s !== null) { this.first = s; return; }
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
