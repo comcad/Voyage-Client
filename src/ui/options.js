@@ -114,7 +114,7 @@ export class GameOptWin extends Win {
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
  *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
- * Controls are Basic.img Slider / CheckBox / ComboBox; OK and CANCEL sit in the band under the rows.
+ * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342).
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
  */
 const ROW_Y = (i) => 46 + i * 30;
@@ -128,9 +128,8 @@ export class SysOptWin extends Win {
   constructor(mgr) {
     super(mgr, mgr.W.SysOpt.backgrnd, 250, 60);
     this.drag = null; this.open = null; this.hover = -1;
-    const K = mgr.W.KeyConfig;
-    this.button(K.BtOK, 299 - 112, 366 - 30, () => mgr.close(this));
-    this.button(K.BtCancel, 299 - 60, 366 - 30, () => { this.revert(); mgr.close(this); });
+    this.button(mgr.B.BtOK2, 194, 342, () => mgr.close(this));
+    this.button(mgr.B.BtCancel2, 244, 342, () => { this.revert(); mgr.close(this); });
     // ScrLk (as the art says) or PrtSc saves a picture of the game
     addEventListener('keyup', (e) => { if (e.code === 'ScrollLock' || e.code === 'PrintScreen') screenshot(this.g); });
   }
@@ -195,7 +194,7 @@ export class SysOptWin extends Win {
   /** Where the open list starts: under its box, or above it when it would run into the OK / CANCEL band. */
   listTop(c) {
     const h = c.items.length * 17 + 2, below = ROW_Y(c.row) + 9;
-    return below + h > 366 - 32 ? ROW_Y(c.row) - 9 - h : below;
+    return below + h > 342 ? ROW_Y(c.row) - 9 - h : below;
   }
   list(ctx) {
     const c = this.open, y0 = this.listTop(c);
