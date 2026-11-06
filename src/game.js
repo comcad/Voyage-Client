@@ -3449,15 +3449,32 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ loop
+  /**
+   * A hidden browser tab gets no frames, but MOVE_PLAYER / MOVE_PET / MOVE_SUMMON / MOVE_MONSTER keep arriving and
+   * queue. The v83 client keeps running in the background and times a path against the current time
+   * (FUN_0068b371), so what came in meanwhile has already played when you look. Play the missed time through
+   * every queued path at once, in 50ms steps, until it is used up or nothing is left to play.
+   */
+  catchUpPaths(sec) {
+    const STEP = 0.05;
+    for (let t = 0; t < sec; t += STEP) {
+      let any = false;
+      for (const rp of this.others.values()) if (rp.path) { rp.update(STEP); any = true; }
+      for (const pet of this.pets.values()) if (!pet.mine && pet.path) { pet.replay(STEP); any = true; }
+      for (const sm of this.summons.values()) if (sm.path) { sm.replay(STEP); any = true; }
+      for (const m of this.map?.life || []) if (m.path && m.online && !m.controlled && m._replay) { m._replay(STEP); any = true; }
+      if (!any) break;
+    }
+  }
   start() {
     let last = performance.now();
     const loop = (t) => {
       // the next frame is booked first: an error in one frame must never stop the game for good
       requestAnimationFrame(loop);
-      const dt = Math.min((t - last) / 1000, 0.05);
+      const gap = (t - last) / 1000, dt = Math.min(gap, 0.05);
       last = t;
       if (this.map && !this.loading) {
-        try { this.update(dt); this.render(); } catch (e) {
+        try { if (gap > 0.25) this.catchUpPaths(gap - dt); this.update(dt); this.render(); } catch (e) {
           const key = String(e?.message);
           if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
           for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open
