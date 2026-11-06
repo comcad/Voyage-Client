@@ -1,7 +1,7 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
-import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
+import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
@@ -397,6 +397,8 @@ const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 122101
  */
 const SHOUT = 1111008;
 const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
+/** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
+const MORPH = 0x2n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
@@ -658,7 +660,8 @@ export class Game {
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       const p = at(e), b = this.vfx?.buffAt(...p);
-      if (b) { if (b.source > 0) this.net?.cancelBuff(b.source); return; }
+      // right-click a buff icon to end it: a skill's (not Dragon Roar's) or an item's
+      if (b) { if (b.source < 0) this.cancelItemEffect(-b.source); else if (b.source > 0 && b.source !== DRAGON_ROAR) this.net?.cancelBuff(b.source); return; }
       const tw = wm.top(...p);
       if (tw?.rclick) { tw.rclick(p[0] - tw.x, p[1] - tw.y); return; }
       // right-click another player: Personal Info / Whisper / Party Invite / Trade
@@ -3343,6 +3346,23 @@ export class Game {
     return !x.busy && (ignoreHp || (this.stats?.hp ?? 0) > 0) && performance.now() - x.at >= ms;
   }
   lockExclusive() { this.excl = { busy: true, at: performance.now() }; }
+  /**
+   * End an item's buff early (right-click its icon). Like the other requests it waits for an answer pending (200ms
+   * apart, alive), but takes no lock. While transformed, a morph potion (221) marked noCancelMouse refuses.
+   */
+  async cancelItemEffect(itemId) {
+    if (!this.canExclusive(200)) return;
+    if (Math.floor(itemId / 10000) === 221 && this.morphed() && Number((await itemInfo(this.assets, itemId))?.noCancelMouse)) {
+      this.hud.message('You may not cancel the transformation.', CHAT_COLOR.error);
+      return;
+    }
+    this.net?.cancelItemEffect(itemId);
+  }
+  /** Transformed: a buff with the Morph stat is on. */
+  morphed() {
+    const now = Date.now();
+    return (this.buffs || []).some((b) => b.until > now && (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & MORPH) !== 0n);
+  }
   releaseExclusive() { this.excl = { busy: false, at: performance.now() }; }
 
   /** Map id prefix (map / 10,000,000) -> area, from Map/Map/AreaCode.img. */
