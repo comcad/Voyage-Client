@@ -84,12 +84,17 @@ function firstFrames(node) {
 }
 
 export class TextField {
-  constructor(layer, x, y, w, h, { password = false, max = 12, color = '#000', font = '12px Arial' } = {}) {
+  /**
+   * autocomplete: what the browser may fill in. Only the login screen's ID box is a 'username'; every other text box
+   * (chat, whispers, shop and trade chat, dialogs...) is 'off', so the browser's saved logins don't pop up over it.
+   */
+  constructor(layer, x, y, w, h, { password = false, max = 12, color = '#000', font = '12px Arial', autocomplete = null } = {}) {
     this.rect = { x, y, w, h };
     this.el = document.createElement('input');
     this.el.type = password ? 'password' : 'text';
     this.el.maxLength = max;
-    this.el.autocomplete = password ? 'current-password' : 'username';
+    this.el.autocomplete = autocomplete || (password ? 'current-password' : 'off');
+    this.el.autocapitalize = 'off'; this.el.autocorrect = 'off';
     this.el.spellcheck = false;
     Object.assign(this.el.style, {
       position: 'absolute', background: 'transparent', border: 'none', outline: 'none', padding: '0 3px',

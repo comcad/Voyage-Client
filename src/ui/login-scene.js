@@ -636,7 +636,7 @@ export class LoginScene {
     const sx = 325, sy = 211;
     return new Promise((resolve) => {
       this.clearFields();
-      const id = this.field(sx + 116, sy + 24, 145, 22, { max: 12, color: '#fff' });
+      const id = this.field(sx + 116, sy + 24, 145, 22, { max: 12, color: '#fff', autocomplete: 'username' });
       const pw = this.field(sx + 116, sy + 53, 145, 22, { password: true, max: 12, color: '#fff' });
       let saveId = store.get('maple.saveid') !== '0';
       if (saveId) id.value = store.get('maple.user') || '';
