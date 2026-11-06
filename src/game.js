@@ -1797,6 +1797,8 @@ export class Game {
       fame: (f) => this.onFame(f),
       exclusiveAnswered: () => this.releaseExclusive(),
       skillBookResult: (d) => this.onSkillBookResult(d),
+      inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
+      sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
       avatarMega: (a) => { this.hud.megaphone([`${a.name} : ${a.lines.join('')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
       avatarMegaClear: () => this.avatarBanner.clear(),
       tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show(d); },
@@ -3292,6 +3294,18 @@ export class Game {
     this.net.useReturnScroll(slot, id);
     this.lockExclusive();
     sfx.play(`Item/${pad(id, 8)}/Use`);
+  }
+
+  /**
+   * The inventory's Gather (ITEM_SORT) and Sort (ITEM_SORT2) buttons, for tabs 1-5: not while dead or under a
+   * dialog, as an exclusive request (500ms apart).
+   */
+  gatherItems(tab) { this.sortRequest(tab, () => this.net.itemGather(tab)); }
+  sortItems(tab) { this.sortRequest(tab, () => this.net.itemSort(tab)); }
+  sortRequest(tab, send) {
+    if (tab < 1 || tab > 5 || this.dead || this.windows?.modal || !this.canExclusive(500)) return;
+    send();
+    this.lockExclusive();
   }
 
   /** A skill book (228xxxx) or mastery book (229xxxx): USE_SKILL_BOOK, as an exclusive request (200ms apart). */
