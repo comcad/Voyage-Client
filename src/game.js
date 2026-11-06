@@ -755,6 +755,20 @@ export class Game {
     return wx >= ent.x - 18 && wx <= ent.x + 18 && wy >= ent.y - 64 && wy <= ent.y;
   }
   requestCharInfo(id) { this.net?.charInfo(id); }
+  /**
+   * Raise (1) or drop (0) a character's fame from the info window, as Send_GIVE_FAME does: the character must be
+   * on this map ("Unable to find the character."), and a request goes at most once every 5 minutes (300000 ms;
+   * sooner is "Please try it again later."). Both lines are chat type 0xC.
+   */
+  giveFame(name, mode) {
+    const rp = [...this.others.values()].find((o) => o.name === name);
+    const say = (t) => this.hud.message(t, CHAT_COLOR.error);
+    if (!rp) return say('Unable to find the character.');
+    const now = performance.now();
+    if (now - (this.lastFameAt ?? -Infinity) <= 299999) return say('Please try it again later.');
+    this.lastFameAt = now;
+    this.net?.giveFame(rp.id, mode);
+  }
   /** A drawable look from packet look data (loads in the background; draws once ready). */
   lookFrom(d) {
     if (!d) return null;
@@ -3225,10 +3239,15 @@ export class Game {
   /** FAME_RESPONSE lines, all light red. */
   onFame(f) {
     const me = this.player.name, say = (t) => this.hud.message(t, CHAT_COLOR.error);
-    if (f.mode === 0) say(f.up ? `You have raised '${f.name}''s level of fame.` : `You have dropped '${f.name}''s level of fame.`);
+    if (f.mode === 0) {
+      say(f.up ? `You have raised '${f.name}''s level of fame.` : `You have dropped '${f.name}''s level of fame.`);
+      // the open info window takes the new fame (On_FAME_RESPONSE__sub sets its +0x670)
+      if (this.infoWin) this.infoWin.setFame(f.fame);
+    }
     else if (f.mode === 5) say(f.up ? `'${f.name}' have raised '${me}''s level of fame.` : `'${f.name}' have dropped '${me}''s level of fame.`);
     else say({ 1: 'The user name is incorrectly entered.', 2: 'Users under level 15 are unable to toggle with fame.',
-      3: "You can't raise or drop a level of fame anymore for today.", 4: "You can't raise or drop a level of fame of that character anymore for this month." }[f.mode] || 'The user name is incorrectly entered.');
+      3: "You can't raise or drop a level of fame anymore for today.", 4: "You can't raise or drop a level of fame of that character anymore for this month." }[f.mode]
+      || 'The level of fame has neither been raised or dropped due to an unexpected error.');
   }
   /** Every hour after logging in, how long you have played (from the third, with a suggestion to rest). */
   playTimeNote() {

@@ -121,6 +121,11 @@ export class CharInfoWin extends Win {
     this.button(U.BtTrade, 148, 42, () => { if (rp) g.requestTrade(rp); }).enabled = other && !!rp;
     this.button(U.BtItem, 208, 21, () => this.toggleSide('item'));
     this.button(U.BtWish, 208, 42, () => this.toggleSide('wish'));
+    // fame up / down (FUN_008ffe3b: UI/Basic.img BtUP 0x7d4 at (237, 114), BtDown 0x7d5 at (252, 114)); both are
+    // disabled under level 15 and on your own window (On_CHAR_INFO__sub_903b86), and send by name (vfunc_08)
+    this.fameUp = this.button(mgr.B.BtUP, 237, 114, () => g.giveFame(this.name(), 1));
+    this.fameDown = this.button(mgr.B.BtDown, 252, 114, () => g.giveFame(this.name(), 0));
+    this.fameUp.enabled = this.fameDown.enabled = other && (g.stats?.level ?? 0) >= 15;
     // the bottom band: each opens its panel (its Hide twin, drawn while open, closes it)
     this.bandBtns = [];
     const band = (show, hide, x, panel) => {
@@ -159,6 +164,8 @@ export class CharInfoWin extends Win {
     return [...super.frames(), U.backgrnd, U.backgrnd2, U.backgrnd3, U.backgrnd4, U.backgrnd5, U.backgrnd7, U.ReqLv, U.bossPetCrown, ...allCanvases(U.Marry)];
   }
   name() { return this.info.id === this.g.player.id ? this.g.player.name : this.g.others.get(this.info.id)?.name || ''; }
+  /** Apply the target's new fame value (from FAME_RESPONSE) to the open window. */
+  setFame(v) { this.info.fame = v; }
   key(e) { if (e.key === 'Escape') this.mgr.close(this); }
   setPanel(p) { this.panel = this.panel === p ? 'none' : p; this.layout(); }
   toggleSide(s) { this.side = this.side === s ? null : s; this.sideFirst = 0; this.layout(); }

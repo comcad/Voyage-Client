@@ -1,6 +1,7 @@
 # --- Generated / runtime ---
 assets/
 test/
+notes/
 public/Voyage.js
 **/node_modules/
 **/*.pid
