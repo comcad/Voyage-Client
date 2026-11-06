@@ -371,10 +371,11 @@ export class ChannelSession {
     });
 
     on(S.CHATTEXT, (r) => this.emit('chat', { id: r.int(), gm: r.bool(), text: r.string(), show: r.ubyte() }));
-    // FAME_RESPONSE: 0 you raised (1) / dropped someone's fame, 5 someone raised / dropped yours, else an error code
+    // FAME_RESPONSE (On_FAME_RESPONSE): 0 you raised (1) / dropped someone's fame, then their new fame as an int the
+    // window keeps as a short; 5 someone raised / dropped yours; 1-4 errors; anything else "unexpected error"
     on(S.FAME_RESPONSE, (r) => {
       const mode = r.ubyte();
-      if (mode === 0) { const name = r.string(); this.emit('fame', { mode, name, up: r.ubyte() === 1 }); }
+      if (mode === 0) { const name = r.string(); const up = r.ubyte() === 1; const fame = (r.int() << 16) >> 16; this.emit('fame', { mode, name, up, fame }); }
       else if (mode === 5) { const name = r.string(); this.emit('fame', { mode, name, up: r.ubyte() === 1 }); }
       else this.emit('fame', { mode });
     });
@@ -1321,6 +1322,8 @@ export class ChannelSession {
   tradeChat(text) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(6).string(text)); }
   tradeExit() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
   charInfo(cid) { this.send(new PacketWriter(C.CHAR_INFO_REQUEST).int(Date.now() | 0).int(cid)); }
+  /** GIVE_FAME: target char id + direction (0 drop, 1 raise). */
+  giveFame(cid, mode) { this.send(new PacketWriter(C.GIVE_FAME).int(cid).byte(mode)); }
   /** GUILD_OPERATION: 2 create, 5 invite, 6 join, 7 leave, 8 expel, 0xD rank titles, 0xE rank, 0xF emblem, 0x10 notice, 0x1E agree */
   guildOp(op, ...args) {
     const w = new PacketWriter(C.GUILD_OPERATION).byte(op);
