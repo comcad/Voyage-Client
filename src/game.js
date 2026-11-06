@@ -11,6 +11,9 @@ import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU } from './keymap.js';
+import { loadControls } from './controls.js';
+import { PadInput } from './gamepad.js';
+import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
@@ -98,6 +101,7 @@ const TOUCH_PORTALS = new Set([12, 13, 14]);
 class Input {
   constructor(canvas) {
     this.down = new Set(); this.pressed = new Set(); this.repeats = new Set(); this.clicks = [];
+    this.sources = new Map();   // controller / touch: source -> codes it holds
     const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
     const map = (e) => ARROWS[e.code] || (CODE_TO_SC[e.code] ? e.code : null);
     addEventListener('keydown', (e) => {
@@ -122,7 +126,26 @@ class Input {
       this.clicks.push({ x: ((e.clientX - r.left) / r.width) * VIEW_W, y: ((e.clientY - r.top) / r.height) * VIEW_H, single: true });
     });
   }
-  is(k) { return this.down.has(k); }
+  /**
+   * Another source of held codes (the controller, the touch controls): what it holds now. A code it starts to hold
+   * counts as pressed this frame unless the keyboard already holds it; letting go of it leaves the keyboard's alone.
+   */
+  setHeld(source, codes) {
+    const before = this.sources.get(source) || new Set();
+    for (const c of codes) if (!before.has(c) && !this.is(c)) this.pressed.add(c);
+    this.sources.set(source, new Set(codes));
+  }
+  /** Every code held by the keyboard or any other source. */
+  held() {
+    const all = new Set(this.down);
+    for (const s of this.sources.values()) for (const c of s) all.add(c);
+    return all;
+  }
+  is(k) {
+    if (this.down.has(k)) return true;
+    for (const s of this.sources.values()) if (s.has(k)) return true;
+    return false;
+  }
   hit(k) { return this.pressed.has(k); }
   repeated(k) { return this.repeats.has(k); }
   endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; }
@@ -594,6 +617,8 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
+    this.controls = loadControls();          // controller and touch layouts, kept in this browser
+    this.padInput = new PadInput(this.input, () => this.controls?.padMove || 'ls');
     this.cam = { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
     this.player = {
       name: 'Player', x: 0, y: 0, vx: 0, vy: 0, fh: null, ladder: null, facingRight: false,
@@ -800,7 +825,24 @@ export class Game {
   keysFor(type, action) {
     const out = [];
     for (const [code, sc] of Object.entries(CODE_TO_SC)) { const k = this.keymap[sc]; if (k && k.type === type && k.action === action) out.push(code); }
+    for (const [i, k] of Object.entries(this.controls?.pad || {})) if (k && k.type === type && k.action === action) out.push(`pad:${i}`);
+    for (const t of this.controls?.touch.buttons || []) if (t.b && t.b.type === type && t.b.action === action) out.push(`touch:${t.id}`);
     return out;
+  }
+  /** What a held code is bound to: a key through the server key map, `pad:<n>` / `touch:<id>` through their layouts. */
+  bindingOf(code) {
+    if (code.startsWith('pad:')) return this.controls?.pad[code.slice(4)] || null;
+    if (code.startsWith('touch:')) return this.controls?.touch.buttons.find((t) => `touch:${t.id}` === code)?.b || null;
+    return this.keymap[CODE_TO_SC[code]] || null;
+  }
+  /** The picture for a binding: function icon, skill icon (loading it if need be), macro or item icon. */
+  bindingIcon(b) {
+    const wm = this.windows;
+    if (!b || !wm) return null;
+    if (b.type === 1) { const n = this.skills?.icon(b.action); if (!n) this.skills?.ensure?.(b.action); return n || null; }
+    if (b.type === 2 || b.type === 3 || b.type === 7) return wm.icon(b.action);
+    if (b.type === 8) return wm.W.SkillMacro?.Macroicon?.[b.action]?.icon || null;
+    return wm.W.KeyConfig?.icon?.[b.action] || null;
   }
   hitAction(a) { return this.keysFor(5, a).some((c) => this.input.hit(c)); }
   /** The pickup key: a press, or its key repeat while held (so holding it keeps picking up); Numpad 0 always works. */
@@ -839,7 +881,7 @@ export class Game {
   /** Window / skill / item keys pressed this frame (type 4, 1, 2). Basic actions are polled in updatePlayer. */
   handleHotkeys() {
     for (const code of this.input.pressed) {
-      const k = this.keymap[CODE_TO_SC[code]];
+      const k = this.bindingOf(code);
       if (!k) continue;
       if (k.type === 4) this.toggleMenu(k.action);
       else if (k.type === 6) this.emote(k.action - 99);
@@ -1224,8 +1266,8 @@ export class Game {
 
   /** Skill keys held down (repeat like the real client while held). */
   heldSkill() {
-    for (const code of new Set([...this.input.down, ...this.input.pressed])) {
-      const k = this.keymap[CODE_TO_SC[code]];
+    for (const code of new Set([...this.input.held(), ...this.input.pressed])) {
+      const k = this.bindingOf(code);
       if (k?.type === 1) { this.skillKeyPressed = this.input.hit(code); return k.action; }
     }
     return 0;
@@ -1726,6 +1768,7 @@ export class Game {
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.statusBar = new StatusBar(this, uiRoot);
+    this.touch = new TouchControls(this, uiRoot);
     this.statusBar.layout(VIEW_W, VIEW_H);
     await this.statusBar.load();
     this.windows = new WindowManager(this, this.statusBar);
@@ -3674,6 +3717,7 @@ export class Game {
   }
 
   update(dt) {
+    this.padInput?.poll();
     if (this.inCashShop) { this.windows?.update(dt); return; }   // the shop screen is all there is
     if (this.uiLocked || this.uiDisabled) { const i = this.input; i.down.clear(); i.pressed.clear(); i.repeats.clear(); i.clicks.length = 0; }
     if (this.direction) { this.direction.update(dt); if (this.direction.done) this.direction = null; }

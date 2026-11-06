@@ -1,4 +1,6 @@
 import { isCanvas } from '../assets.js';
+import { ControlTabs } from './keyconfig-tabs.js';
+import { cloneControls, saveControls } from '../controls.js';
 import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText, wrapText } from './wzui.js';
@@ -1631,23 +1633,37 @@ class KeyConfigWin extends Win {
     super(mgr, W.backgrnd, 400 - 314, 300 - 186);
     this.buttons = [];
     this.W = W; this.draft = {}; this.picked = null; this.bindsKeys = true;
+    // Keyboard / Controller / Touch tabs on the button strip; the controller and touch layouts stay in this browser
+    this.tab = 'keyboard'; this.tabs = new ControlTabs(this); this.ctlDraft = cloneControls(mgr.game.controls);
     this.button(W.BtClose, 606, 7, () => mgr.close(this));
     this.button(W.BtOK, 8, 236, () => this.save());
     this.button(mgr.B.BtCancel2, 58, 236, () => this.discard());
     this.button(W.BtDefault, 112, 236, async () => {
-      if (await this.ask(0)) { this.draft = (await import('../keymap.js')).defaultKeymap(); this.picked = null; }
+      if (!(await this.ask(0))) return;
+      if (this.tab !== 'keyboard') { this.tabs.reset(this.tab); return; }
+      this.draft = (await import('../keymap.js')).defaultKeymap(); this.picked = null;
     });
-    this.button(W.BtDelete, 177, 236, async () => { if (await this.ask(1)) { this.draft = {}; this.picked = null; } }); // the art reads CLEAR ALL
+    this.button(W.BtDelete, 177, 236, async () => {   // the art reads CLEAR ALL
+      if (!(await this.ask(1))) return;
+      if (this.tab !== 'keyboard') { this.tabs.clear(this.tab); return; }
+      this.draft = {}; this.picked = null;
+    });
     this.button(W.BtQuickSlot, 260, 236, () => mgr.bar.setQuickOpen(!mgr.bar.quickOpen));
   }
   frames() { return [...super.frames(), ...allCanvases(this.W.icon), ...allCanvases(this.W.key)]; }
-  onOpen() { this.draft = Object.fromEntries(Object.entries(this.g.keymap || {}).map(([k, v]) => [k, { ...v }])); this.picked = null; }
+  onOpen() {
+    this.draft = Object.fromEntries(Object.entries(this.g.keymap || {}).map(([k, v]) => [k, { ...v }])); this.picked = null;
+    this.ctlDraft = cloneControls(this.g.controls); this.tabs.picked = null;
+    this.g.touch?.suspend(true);
+  }
+  onClose() { this.g.touch?.suspend(false); }
 
   /** KeyConfig/notice/<n> (0 reset, 1 delete all, 2 save changes) with OK / Cancel: true for OK. */
   ask(n) { return new Promise((r) => this.mgr.show(new KeyConfigNotice(this.mgr, n, r))); }
   changed() {
     const before = this.g.keymap || {}, same = (a, b) => a?.type === b?.type && a?.action === b?.action;
-    return [...new Set([...Object.keys(before), ...Object.keys(this.draft)])].some((sc) => !same(before[sc], this.draft[sc]));
+    return [...new Set([...Object.keys(before), ...Object.keys(this.draft)])].some((sc) => !same(before[sc], this.draft[sc]))
+      || JSON.stringify(this.ctlDraft) !== JSON.stringify(this.g.controls);
   }
   /** Closed another way than OK / Cancel with changes made: "Save changes?" (OK saves); it closes either way. */
   async confirmClose() { if (this.changed() && await this.ask(2)) this.apply(); }
@@ -1663,21 +1679,19 @@ class KeyConfigWin extends Win {
     if (changes.length) g.net?.changeKeymap(changes);
     g.keymap = { ...this.draft };
     this.mgr.bar.render();
+    g.controls = cloneControls(this.ctlDraft);
+    saveControls(g.controls);
+    g.touch?.render();
   }
 
   /** The picture for a binding: function icon, skill icon or item icon. */
-  iconFor(b) {
-    if (!b) return null;
-    if (b.type === 1) return this.g.skills?.icon(b.action) || null;
-    if (b.type === 2 || b.type === 3 || b.type === 7) return this.mgr.icon(b.action);
-    if (b.type === 8) return this.mgr.W.SkillMacro?.Macroicon?.[b.action]?.icon || null;
-    return this.W.icon[b.action] || null;
-  }
+  iconFor(b) { return this.g.bindingIcon(b); }
   /** The palette cell's function, or null when the cell is empty or that function is on a key. */
   paletteFn(i) {
     const f = FUNCTIONS[i];
     if (!f || !this.W.icon[f[1]]) return null;
-    return Object.values(this.draft).some((b) => b.type === f[0] && b.action === f[1]) ? null : f;
+    const used = this.tab === 'keyboard' ? Object.values(this.draft) : this.tabs.bound(this.tab);
+    return used.some((b) => b.type === f[0] && b.action === f[1]) ? null : f;
   }
   capAt(lx, ly) {
     for (const [sc, [x, y]] of Object.entries(KEYCAPS)) if (lx >= x && lx < x + 32 && ly >= y && ly < y + 32) return keyOf(Number(sc));
@@ -1690,6 +1704,8 @@ class KeyConfigWin extends Win {
   }
   body(ctx) {
     const m = this.mgr;
+    this.tabs.drawTabs(ctx, this.tab);
+    if (this.tab !== 'keyboard') { this.tabs.draw(ctx, this.tab); this.drawPalette(ctx); return; }
     for (const [s, [x, y]] of Object.entries(KEYCAPS)) {
       const sc = keyOf(Number(s)), b = this.draft[sc];
       if (b && m.carry?.fromSc !== sc) {
@@ -1702,12 +1718,26 @@ class KeyConfigWin extends Win {
       if (label) ctx.drawImage(label, x + (sc === 42 ? 2 : sc === 57 ? 0 : 4), y + 4);
       if (this.picked === sc) { ctx.strokeStyle = '#ff0'; ctx.strokeRect(x + 0.5, y + 0.5, 31, 31); }
     }
+    this.drawPalette(ctx);
+  }
+  drawPalette(ctx) {
+    const m = this.mgr;
     FUNCTIONS.forEach((_, i) => {
       const f = this.paletteFn(i);
       if (f) m.drawIcon(ctx, this.W.icon[f[1]], PALETTE.x + (i % PALETTE.cols) * PALETTE.step, PALETTE.y + Math.floor(i / PALETTE.cols) * PALETTE.step);
     });
   }
+  move(lx, ly) { if (this.tab === 'touch') this.tabs.move(lx, ly); }
+  up() { this.tabs.up(); }
   down(lx, ly) {
+    const tab = this.tabs.tabAt(lx, ly);
+    if (tab) { if (tab !== this.tab) { this.tab = tab; this.picked = null; this.tabs.picked = null; sfx.play('UI/Tab'); } return; }
+    if (this.tab !== 'keyboard') {
+      if (this.tabs.down(lx, ly, this.tab)) return;
+      const f = this.paletteFn(this.paletteAt(lx, ly));
+      if (f) this.mgr.startCarry({ kind: 'bind', b: { type: f[0], action: f[1] } }, this.W.icon[f[1]]);
+      return;
+    }
     const sc = this.capAt(lx, ly);
     if (sc !== null) {
       this.picked = sc;
@@ -1722,6 +1752,7 @@ class KeyConfigWin extends Win {
     const sc = this.capAt(lx, ly);
     const it = c.kind === 'item' && itemKeyType(c.tab, c.id);
     const b = c.kind === 'bind' ? c.b : c.kind === 'skill' ? { type: 1, action: c.id } : it ? { type: it, action: c.id } : null;
+    if (this.tab !== 'keyboard') { this.tabs.drop(lx, ly, b, c, this.tab); return; }
     if (!b) return;
     if (sc === null) { if (c.fromSc !== undefined) delete this.draft[c.fromSc]; return; } // dropped off the keys: unbind
     if (c.fromSc !== undefined && c.fromSc !== sc) delete this.draft[c.fromSc];
@@ -1730,9 +1761,11 @@ class KeyConfigWin extends Win {
     this.draft[sc] = { ...b };
     this.picked = sc;
   }
-  dropOutside(c) { if (c.kind === 'bind' && c.fromSc !== undefined) delete this.draft[c.fromSc]; }
+  dropOutside(c) { if (c.kind === 'bind' && c.fromSc !== undefined) delete this.draft[c.fromSc]; this.tabs.dropOutside(c); }
   tooltip(lx, ly) {
-    const sc = this.capAt(lx, ly), b = sc !== null ? this.draft[sc] : null, g = this.g;
+    const g = this.g;
+    const sc = this.tab === 'keyboard' ? this.capAt(lx, ly) : null;
+    const b = this.tab === 'keyboard' ? (sc !== null ? this.draft[sc] : null) : this.tabs.bindingAt(lx, ly, this.tab);
     if (!b) return null;
     if (b.type === 2 || b.type === 7) {
       for (const tab of [2, 3, 4, 5]) for (const it of Object.values(g.inventory?.[tab] || {})) if (it?.id === b.action) return { item: it };
