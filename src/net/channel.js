@@ -157,11 +157,7 @@ export class ChannelSession {
     on(S.SET_FIELD, (r) => this._setField(r));
     // ---- the Cash Shop: SET_CASH_SHOP (character info, then the shop's own data), its results, the NX balance
     on(S.SET_CASH_SHOP, (r) => {
-      const info = readCharacterInfo(r);
-      for (let n = r.short(); n > 0; n--) {                       // new year cards
-        r.int(); r.int(); r.string(); r.bool(); r.long(); r.int(); r.string(); r.bool(); r.bool(); r.long(); r.string();
-      }
-      for (let n = r.short(); n > 0; n--) { r.short(); r.string(); }   // area info
+      const info = readCharacterInfo(r);   // through the new-year cards and area info
       r.short();
       const available = r.ubyte(), d = { info, available, account: available ? r.string() : '', removed: [], mods: [], discounts: [], best: [], stock: new Map(), level: 0 };
       try {
