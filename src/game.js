@@ -400,6 +400,8 @@ const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 2001
 /** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
 const MORPH = 0x2n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
+/** Body Pressure (Aran): the monster your body touches takes its damage. */
+const BODY_PRESSURE = 21101003;
 /** Use types (id / 10000) used with a plain USE_ITEM: potions, food, elixirs, cures, morph potions, cards... */
 const PLAIN_USE = new Set([200, 201, 202, 205, 221, 236, 238, 245]);
 /** Use types with a request of their own (catch items, Solomon's writs, the Use-tab teleport rock, scripted items...). */
@@ -6299,9 +6301,28 @@ export class Game {
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
       // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
       const knock = p.ladder && dy < 0 ? 0 : m.x - (m.prevX ?? m.x) - dx < 0 ? -1 : 1;
+      this.touchAttack(m);
       this.hurtBy(m, m.src.info?.PADamage || 1, false, -1, knock);
       return;
     }
+  }
+  /**
+   * Body Pressure on: the monster your body touches takes one line of the skill's physical damage, at most once a
+   * second, sent as TOUCH_MONSTER_ATTACK. Not for an admin account (the login's admin byte has 0x80): "Not
+   * available with an Admin account."
+   */
+  touchAttack(m) {
+    const now = Date.now(), lv = this.skills?.levels?.[BODY_PRESSURE]?.level || 0;
+    if (!lv || !this.buffs?.some((b) => b.source === BODY_PRESSURE && b.until > now)) return;
+    if (this.admin & 0x80) { this.hud.message('Not available with an Admin account.', CHAT_COLOR.error); return; }
+    const t = performance.now();
+    if (t < (this.touchAttackAt ?? 0)) return;
+    this.touchAttackAt = t + 1000;
+    const p = this.player, ld = this.skills.levelData(BODY_PRESSURE, lv), wcat = Math.floor(this.weaponId() / 10000);
+    const h = this.physicalHit(m, wcat % 100, BODY_PRESSURE, ld, false, null, 0, critical(this, wcat, false));
+    this.net?.touchAttack({ skill: BODY_PRESSURE, mob: m, dmg: h.d, facingLeft: !p.facingRight, speed: this.attackSpeed(BODY_PRESSURE), pos: p });
+    m.hit(h.d, !p.facingRight, false);
+    this.damageNumbers(m, [h.d], true, BODY_PRESSURE, [h.c]);
   }
   /**
    * The damage a monster's blow does you, or 0 for a MISS.
