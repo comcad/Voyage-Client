@@ -1311,6 +1311,8 @@ export class ChannelSession {
   useChalkboard(slot, itemId, text) { this.useCashItem(slot, itemId, (w) => w.string(text)); }
   closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
   /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
+  /** The Use-tab Teleport Rock (232xxxx): its slot, the item, 0 and the map picked, then the time. */
+  useTeleportRock(slot, itemId, mapId) { this.send(new PacketWriter(C.USE_TELEPORT_ROCK).short(slot).int(itemId).byte(0).int(mapId).int(Date.now() | 0)); }
   rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
   rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
   /** USE_CASH_ITEM for a Teleport Rock (504xxxx): 0 then a map, or 1 then a character to chase (VIP rocks only) */

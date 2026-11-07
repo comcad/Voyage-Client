@@ -1031,6 +1031,16 @@ export class Game {
     await this.assets.preload(win.frames());
     this.windows.show(win);
   }
+  /**
+   * The Use-tab Teleport Rock (232xxxx), once a map is picked in its window: USE_TELEPORT_ROCK as an exclusive
+   * request (200ms apart), with the Game/UseShopItem sound.
+   */
+  useTeleportRock(slot, itemId, mapId) {
+    if (!this.canExclusive(200)) return;
+    this.net.useTeleportRock(slot, itemId, mapId);
+    this.lockExclusive();
+    sfx.play('Game/UseShopItem');
+  }
   /** A Chalkboard: write a note (up to 40 characters) and hold it up; not where stores open; click it to put it away. */
   async openChalkboard(slot, itemId) {
     if (!this.cashGate()) return;
@@ -3449,6 +3459,7 @@ export class Game {
     if (type === 237) { this.useSolomonItem(slot, id); return; }
     if (type === 203) { this.useReturnScroll(slot, id); return; }
     if (type === 210) { this.useSummonBag(slot, id); return; }
+    if (type === 232) { if (this.canExclusive(200)) this.openRock(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
     if (type === 243) { this.useScriptedItem(slot, id); return; }
