@@ -9,6 +9,7 @@ import { Win } from './windows.js';
  * list's scrollbar at (155, 80), 98 high; the name box (VIP only) at (34, 250); BtDelete (56, 285) and BtMove
  * (120, 285), each only with something to act on; BtRegister by the MAP LIST header; Basic/BtClose (156, 6).
  * Clicking under the list with a row picked drops it and goes to the name box. The rock is used up on a move.
+ * The Use-tab Teleport Rock (232xxxx) opens the regular list too and moves with USE_TELEPORT_ROCK instead.
  */
 const ROW_Y = 84, ROW_H = 18, ROWS = 5, EMPTY = 999999999;
 
@@ -58,6 +59,7 @@ export class TeleportWin extends Win {
       if (id === this.g.map?.id) { this.mgr.notice("It's the map you're currently on."); return; }
       if (!(await this.mgr.confirm(`Will you teleport to this map?\r\n[${this.mapName(id)}]`))) return;
     }
+    if (Math.floor(this.itemId / 10000) === 232) { this.close(); this.g.useTeleportRock(this.slot, this.itemId, id); return; }
     this.g.rockTarget = name;
     this.g.cashSend(() => this.g.net?.useRock(this.slot, this.itemId, name ? { name } : { mapId: id }));
     this.close();
