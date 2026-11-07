@@ -48,10 +48,14 @@ export class WindowManager {
     if (!this.order.includes(w)) { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; w.onOpen?.(); this.fit(w); const s = w.openSound || sound; if (s) sfx.play(s); } else this.raise(w);
     return w;
   }
-  /** Keeps a window where it can be seen and dragged, as a drag does (a smaller screen size can leave it outside). */
+  /**
+   * Brings a window into view as it opens or the screen size changes: wholly, when it fits; one too big for the
+   * view keeps its corner on screen.
+   */
   fit(w) {
     if (!w) return;
-    w.x = Math.round(Math.max(-w.w + 40, Math.min(UI_W - 40, w.x))); w.y = Math.round(Math.max(0, Math.min(UI_H - 40, w.y)));
+    const into = (v, size, view) => Math.round(size <= view ? Math.max(0, Math.min(view - size, v)) : Math.max(0, Math.min(view - 40, v)));
+    w.x = into(w.x, w.w, UI_W); w.y = into(w.y, w.h, UI_H);
   }
   close(w) {
     // a window may ask first (Key Setting's "Save changes?"); it closes once that is answered

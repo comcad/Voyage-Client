@@ -134,7 +134,7 @@ export class StatusBar {
    * right, kept 2px in from the edge. Everything else here is in the bar's own space, x 0 at its left edge.
    */
   layout(viewW, viewH) {
-    this.y = viewH - BAR_H;
+    this.y = Math.ceil(viewH) - BAR_H;   // on a whole pixel; a fractional screen height runs off the bottom
     this.side = viewW >= BAR_W + 2 * QUICK_X - QUICK_W;
     const mid = (viewW - BAR_W) >> 1;
     this.ox = Math.floor(this.side ? Math.min(mid, viewW - BAR_W - 2 * QUICK_X + QUICK_W) : mid);

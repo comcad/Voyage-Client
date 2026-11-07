@@ -276,7 +276,8 @@ export class GameMap {
   }
   drawBackRun(ctx, cam, run, m) {
     const W = Math.ceil(cam.w / m), H = Math.ceil(cam.h / m), c = (this.backCanvas ??= document.createElement('canvas'));
-    if (c.width !== W || c.height !== H) { c.width = W; c.height = H; }
+    // it only ever grows (each run uses its top-left W x H), so runs of other scales don't reallocate it every frame
+    if (c.width < W || c.height < H) { c.width = Math.max(c.width, W); c.height = Math.max(c.height, H); }
     const o = c.getContext('2d');
     o.clearRect(0, 0, W, H); o.imageSmoothingEnabled = false;
     for (const b of run) this.drawBack(o, cam, b, m, true);
