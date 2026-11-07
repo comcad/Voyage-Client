@@ -3903,6 +3903,7 @@ export class Game {
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
+    if (this.net) this.autoAggro();
     if (this.net) this.touchReactors();
     if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
     if (this.fade?.dir !== 'out') { if (this.dead) this.updateDeadBody(dt); else this.updatePlayer(dt); }   // you stand still while the old map goes dark
@@ -6304,6 +6305,22 @@ export class Game {
       this.touchAttack(m);
       this.hurtBy(m, m.src.info?.PADamage || 1, false, -1, knock);
       return;
+    }
+  }
+  /**
+   * Monsters whose info has firstAttack or pickUp come after you on their own: each tells the server at most once a
+   * second, with how far you are (|dx| / 10 + |dy| / 3, plus 100 while you are dead), as AUTO_AGGRO.
+   */
+  autoAggro() {
+    const now = performance.now(), p = this.player;
+    for (const m of this.map.life) {
+      if (m.kind !== 'Mob' || m.oid == null) continue;
+      const info = m.src?.info || {};
+      if (!Number(info.firstAttack) && !Number(info.pickUp)) continue;
+      if (now - (m.aggroAt ?? -Infinity) < 1000) continue;
+      m.aggroAt = now;
+      const far = Math.trunc(Math.abs(Math.round(p.x) - Math.round(m.x)) / 10) + Math.trunc(Math.abs(Math.round(p.y) - Math.round(m.y)) / 3);
+      this.net.autoAggro(m.oid, far + (this.dead ? 100 : 0));
     }
   }
   /**

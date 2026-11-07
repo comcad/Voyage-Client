@@ -1139,6 +1139,8 @@ export class ChannelSession {
     this.send(w);
   }
   closeRangeAttack(o) { this.attack('melee', o); }
+  /** A monster that seeks you out (firstAttack / pickUp): its object id and how far you are from it. */
+  autoAggro(oid, distance) { this.send(new PacketWriter(C.AUTO_AGGRO).int(oid).int(distance)); }
   /**
    * A skill that strikes the monster your body touches (Body Pressure): one monster, one line; 8 bytes where the
    * skill's checks go, no action (only the facing bit), the attack speed, the time; per monster its position twice,
