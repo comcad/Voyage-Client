@@ -214,3 +214,15 @@ class Sfx {
 }
 
 export const sfx = new Sfx();
+
+/** A track's length in ms (0 when it can't be loaded), e.g. "Jukebox/Congratulation". */
+export function songLength(bgm) {
+  const [img, ...name] = String(bgm || '').split('/');
+  return new Promise((done) => {
+    const el = new Audio();
+    el.preload = 'metadata';
+    el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? Math.round(el.duration * 1000) : 0);
+    el.onerror = () => done(0);
+    el.src = `/assets/Sound/${img}.img/${name.join('/')}.mp3`;
+  });
+}

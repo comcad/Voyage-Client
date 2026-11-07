@@ -19,6 +19,7 @@ const KINDS = {
   trade: { ...WIDE, icon: 2, lines: (n) => [['Trade request', 25, 5], [`from '${n}'`, 25, 18]] },
   party: { ...WIDE, icon: 5, lines: (n) => [['Party invite', 27, 7], [`from '${n}'`, 27, 20]] },
   guild: { ...WIDE, icon: 5, lines: (n) => [[`from '${n}'`, 27, 7], ['Guild invite', 27, 20]] },
+  newYearCard: { art: 'backgrnd2', ok: [136, 7], x: [136, 20], icon: 7, lines: (n) => [['New year card arrived', 27, 7], [`from '${n}'`, 27, 20]] },
   family: { ...WIDE, icon: 8, lines: (n) => [[`from '${n}'`, 27, 7], ["It's a Family Invitation.", 27, 20]] },
   // shown as balloons here too, though they are other windows in v83
   partySearch: { ...WIDE, icon: 1, lines: (n) => [['Party Search invitation', 25, 5], [`from '${n}'`, 25, 18]] },

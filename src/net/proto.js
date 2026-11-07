@@ -165,6 +165,18 @@ function readQuests(r) {
 }
 
 /** addCharacterInfo */
+/** A marriage record: id, groom, bride, status (1 engaged, 3 married), the two rings, the two names. */
+export function readMarriage(r) {
+  const id = r.int(), husbandId = r.int(), wifeId = r.int(), status = r.short(), item = r.int(), wifeRing = r.int();
+  return { id, husbandId, wifeId, status, item, wifeRing, husband: r.paddedString(13), wife: r.paddedString(13) };
+}
+/** A New Year card: id, sender, received flags, times, receiver, message. */
+export function readNewYearCard(r) {
+  const id = r.int(), senderId = r.int(), sender = r.string(); r.bool(); const sent = r.long();
+  const receiverId = r.int(), receiver = r.string(); r.bool(); const received = r.bool(); r.long();
+  return { id, senderId, sender, sent, receiverId, receiver, received, message: r.string() };
+}
+
 export function readCharacterInfo(r) {
   r.long(); r.ubyte();
   const stats = readCharStats(r);
@@ -181,8 +193,7 @@ export function readCharacterInfo(r) {
   for (let n = r.short(); n > 0; n--) { const partnerId = r.int(), partner = r.paddedString(13), ring = r.long(); rings.couple.push({ ring, partner, partnerId, partnerRing: r.long() }); }
   for (let n = r.short(); n > 0; n--) { const partnerId = r.int(), partner = r.paddedString(13), ring = r.long(), partnerRing = r.long(); rings.friend.push({ ring, partner, partnerId, partnerRing, item: r.int() }); }
   if (r.short() === 1) {
-    r.int(); const husbandId = r.int(), wifeId = r.int(); r.short(); const item = r.int(); r.int();
-    rings.marriage = { husbandId, wifeId, item, husband: r.paddedString(13), wife: r.paddedString(13) };
+    rings.marriage = readMarriage(r);
   }
   const rocks = []; for (let i = 0; i < 15; i++) rocks.push(r.int());
   // monster book: the cover card, then each card (item id % 10000) with its count 1-5
@@ -191,14 +202,12 @@ export function readCharacterInfo(r) {
   for (let n = r.short(); n > 0; n--) { const id = 2380000 + r.short(); book.cards[id] = r.ubyte(); }
   // new-year cards (Cosmic's encodeNewYearCard), then each quest's ex record (quest id, then its "key=value;..."
   // string), which #j in quest text reads
-  const questEx = {};
+  const questEx = {}, cards = [];
   try {
-    for (let n = r.short(); n > 0; n--) {
-      r.int(); r.int(); r.string(); r.bool(); r.long(); r.int(); r.string(); r.bool(); r.bool(); r.long(); r.string();
-    }
+    for (let n = r.short(); n > 0; n--) cards.push(readNewYearCard(r));
     for (let n = r.short(); n > 0; n--) { const id = r.ushort(); questEx[id] = r.string(); }
   } catch { /* an older server that stops after the monster book */ }
-  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book, rings, questEx };
+  return { stats, buddyCapacity, linked, meso, inventory, skills, cooldowns, quests, rocks, book, rings, questEx, cards };
 }
 
 /** Movement fragments (AbstractMovementPacketHandler.parseMovement). */

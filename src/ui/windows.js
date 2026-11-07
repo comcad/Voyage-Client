@@ -211,7 +211,7 @@ export class WindowManager {
     if (type === 'wheel') this.tipHeld = true;
     else if (type === 'move' && (x !== this.tipAt?.x || y !== this.tipAt?.y)) this.tipHeld = false;
     this.tipAt = { x, y };
-    this.tip = this.carry || this.tipHeld ? null : w ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : this.bar?.quickTip?.(x, y) ?? null;
+    this.tip = this.carry || this.tipHeld ? null : w ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : this.bar?.quickTip?.(x, y) ?? this.game?.kiteTip?.(x, y) ?? null;
     if (w) w.move?.(x - w.x, y - w.y);
 
     if (type === 'down') {
@@ -594,6 +594,7 @@ class EquipWin extends Win {
     const slot = this.slotAt(lx, ly);
     if ((slot === 'hp' || slot === 'mp') && c.tab === 2) { this.g.setPetPotion(slot, c.id); return; }
     if (c.tab === 2 && isScroll(c.id)) { if (typeof slot === 'number' && slot) this.g.useScroll(c.slot, slot); return; }   // a scroll onto what you wear
+    if (c.tab === 5 && Math.floor(c.id / 10000) === 550) { if (typeof slot === 'number' && slot < 0) this.g.useSandglass(c.slot, c.id, slot); return; }   // a Magical Sandglass onto what you wear
     if (c.tab === 5 && c.id === 5060000) { if (typeof slot === 'number' && slot < 0) this.g.useItemTag(c.slot, slot); return; }   // an Item Tag onto what you wear
     if (c.tab !== 1) return;
     const it = this.g.inventory[1][c.slot], cat = Math.floor((it?.id || 0) / 10000);

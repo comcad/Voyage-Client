@@ -1,7 +1,7 @@
 import { Connection } from './connection.js';
 import { PacketWriter } from './packet.js';
 import { C, S, S_NAMES } from './opcodes.js';
-import { readCharacterInfo, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
+import { readCharacterInfo, readMarriage, readNewYearCard, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
 
 /** CashShop item records (addCashItemInformation): cash id, account, item, SN, count, gift sender, expiry. */
 function readCashItem(r) {
@@ -198,7 +198,10 @@ export class ChannelSession {
     });
     // MEMO_RESULT 3: notes waiting for you (gift notices and the like): id, sender, text, time, fame
     on(S.MEMO_RESULT, (r) => {
-      if (r.ubyte() !== 3) return;
+      const mode = r.ubyte();
+      if (mode === 4) { this.emit('memoSent'); return; }
+      if (mode === 5) { this.emit('exclusiveAnswered'); this.emit('memoFailed', r.ubyte()); return; }
+      if (mode !== 3) return;
       const notes = [];
       for (let n = r.ubyte(); n > 0; n--) notes.push({ id: r.int(), from: r.string().trim(), text: r.string(), time: r.long(), fame: r.ubyte() });
       this.emit('notes', notes);
@@ -355,9 +358,63 @@ export class ChannelSession {
       } else if (op === 0x17 && r.available >= 5) this.emit('duey', { op: 'gone', id: r.int() });
       else if (op === 0x19) this.emit('duey', { op: 'arrived', from: r.string(), quick: r.bool() });
       else if (op === 0x1B) this.emit('duey', { op: 'arrived', quick: r.bool() });
+      else if (op === 0x1A) this.emit('duey', { op: 'quick' });   // a Quick Delivery Ticket: Duey opens to send at once
       else this.emit('duey', { op: 'result', code: op });
     });
     // CHALKBOARD: someone holds up a chalkboard (1, its text) or puts it away (0)
+    // Vicious' Hammer: 0x3D / 0x3E closing (code), otherwise a result (code, hammers used) to show first
+    on(S.VICIOUS_HAMMER, (r) => {
+      const mode = r.ubyte(), e = { mode, code: r.int() };
+      if (mode !== 0x3D && mode !== 0x3E) e.count = r.int();
+      this.emit('hammer', e);
+    });
+    on(S.VEGA_SCROLL, (r) => this.emit('vega', r.ubyte()));
+    // Maple Life: the name check (name, 0 free / above 0 taken / below 0 an error), then the creation (result, code)
+    on(S.MAPLELIFE_RESULT, (r) => { r.string(); this.emit('mapleLifeName', r.byte()); });
+    on(S.MAPLELIFE_ERROR, (r) => { const result = r.ubyte(); this.emit('mapleLifeCreated', result, r.int()); });
+    // what hatched from a Pigmy Egg (item, count; no item: the inventory was full); a Gold / Silver box opened
+    on(S.INCUBATOR_RESULT, (r) => { const id = r.int(); this.emit('incubated', id, r.short()); });
+    on(S.SUCCESS_IN_USE_GACHAPON_BOX, (r) => this.emit('treasureBoxOpened', r.int()));
+    // your account's gender (only 0 may propose)
+    on(S.SET_GENDER, (r) => this.emit('accountGender', r.ubyte()));
+    // a proposal to you (0: who, their id); 9 the wedding wish list
+    on(S.MARRIAGE_REQUEST, (r) => { if (r.ubyte() === 0) { const name = r.string(); this.emit('proposal', name, r.int()); } });
+    // MARRIAGE_RESULT: 0x0b / 0x0c the record (engaged / married), 0x0f an invitation (groom, bride, type), 0x24 a message
+    on(S.MARRIAGE_RESULT, (r) => {
+      const mode = r.ubyte(), e = { mode };
+      if (mode === 0x0b || mode === 0x0c) e.record = readMarriage(r);
+      else if (mode === 0x0f) { e.groom = r.string(); e.bride = r.string(); e.type = r.short(); }
+      else if (mode === 0x24 && r.ubyte()) e.text = r.string();
+      this.emit('marriageResult', e);
+    });
+    // NEW_YEAR_CARD_RES: 4 sent / 6 received (the card), 5/7/9/0xb refused (reason), 8 deleted, 0xa / 0xc cards
+    // waiting (id, sender), 0xd someone here holds a card, 0xe a card is gone; every answer frees the request
+    on(S.NEW_YEAR_CARD_RES, (r) => {
+      this.emit('exclusiveAnswered');
+      const mode = r.ubyte(), e = { mode };
+      if (mode === 4 || mode === 6) e.card = readNewYearCard(r);
+      else if ([5, 7, 9, 0xb].includes(mode)) e.reason = r.ubyte();
+      else if (mode === 8 || mode === 0xe) e.id = r.int();
+      else if (mode === 0xa) {
+        e.cards = [];
+        const n = r.int();
+        if (n > 0 && n < 100) for (let i = 0; i < n; i++) { const id = r.int(); r.int(); e.cards.push({ id, sender: r.string() }); }
+      } else if (mode === 0xc) { const id = r.int(); e.cards = [{ id, sender: r.string() }]; }
+      else if (mode === 0xd) { e.id = r.int(); e.charId = r.int(); }
+      this.emit('newYearCard', e);
+    });
+    // kites and banners: id, item, message, owner, x, y; removed (0 fading, else at once); refused
+    on(S.SPAWN_KITE, (r) => this.emit('kite', { id: r.int(), itemId: r.int(), message: r.string(), owner: r.string(), x: r.short(), y: r.short() }));
+    on(S.REMOVE_KITE, (r) => { const type = r.ubyte(); this.emit('kiteRemove', type, r.int()); });
+    on(S.CANNOT_SPAWN_KITE, () => this.emit('kiteRefused'));
+    // a jukebox song: the item, then for a jukebox (510) who played it; -1 ends it
+    on(S.PLAY_JUKEBOX, (r) => { const id = r.int(); this.emit('jukebox', id, Math.floor(id / 10000) === 510 ? r.string() : null); });
+    on(S.MESO_BAG_SUCCESS, (r) => this.emit('mesoBag', r.int()));
+    on(S.MESO_BAG_FAIL, () => this.emit('mesoBag', null));
+    // cancelling a name change (0 done, else B 0 unknown / a reason) or a world transfer (0 done, 1 failed, else as before)
+    on(S.CANCEL_NAME_CHANGE_RESULT, (r) => { const v = r.ubyte(); this.emit('cancelResult', 1, v, v ? (r.available && r.ubyte() ? r.string() : '') : null); });
+    on(S.CANCEL_TRANSFER_WORLD_RESULT, (r) => { const v = r.ubyte(); this.emit('cancelResult', 2, v, v > 1 ? (r.available && r.ubyte() ? r.string() : '') : null); });
+    on(S.CANCEL_NAME_CHANGE_BY_OTHER, () => { this.emit('exclusiveAnswered'); this.emit('cancelNotRequested'); });
     on(S.CHALKBOARD, (r) => { const id = r.int(); this.emit('chalkboard', id, r.ubyte() ? r.string() : null); });
     // MAP_TRANSFER_RESULT: your Teleport Rock list after saving (3) or deleting (2) a map - VIP (10 maps) or not (5)
     on(S.MAP_TRANSFER_RESULT, (r) => {
@@ -552,7 +609,16 @@ export class ChannelSession {
       else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
     });
     // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
-    on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => this.emit('merchantCheck', r.ubyte(), r.available ? r.ubyte() : 0));
+    on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => {
+      const mode = r.ubyte(), e = { mode };
+      if (mode === 8) { e.room = r.int(); e.channel = r.ubyte(); }
+      else if (mode === 13) e.value = r.int();
+      else if (mode === 14) e.ok = r.ubyte() !== 0;
+      else if (mode === 16) { r.int(); e.channel = r.ubyte(); }
+      else if (mode === 17) { e.a = r.int(); e.b = r.short(); e.c = r.bytes(8); }
+      else if (mode === 18) { e.show = r.ubyte(); if (e.show) e.text = r.string(); }
+      this.emit('merchantCheck', e);
+    });
     on(S.UPDATE_CHAR_BOX, (r) => { const id = r.int(); this.emit('charBox', id, readBox(r)); });
     // ---- trading and player shops (PLAYER_INTERACTION): the room type the last ROOM opened decides
     // what the shared VISIT / EXIT / CHAT ops mean (3 trade, 4 player shop)
@@ -1284,6 +1350,21 @@ export class ChannelSession {
   find(name) { this.send(new PacketWriter(C.WHISPER).byte(0x05).string(name)); }
   /** Where a buddy is, for the Buddy tab's location line (answered with flag 0x48). */
   findBuddy(name) { this.send(new PacketWriter(C.WHISPER).byte(0x44).string(name)); }
+  /** A flowerpot's window: CLOSE_ITEMUI (item, 1 opened / 0 closed), OPEN_ITEMUI (its quest), USE_ITEMUI (an item dropped on it) */
+  closeItemUi(itemId, open) { this.send(new PacketWriter(C.CLOSE_ITEMUI).int(itemId).byte(open)); }
+  openItemUi(questId) { this.send(new PacketWriter(C.OPEN_ITEMUI).short(questId)); }
+  useItemUi(tab, slot, itemId) { this.send(new PacketWriter(C.USE_ITEMUI).byte(tab).short(slot).int(itemId)); }
+  /** A Gold / Silver box: its slot and item */
+  useTreasureBox(slot, itemId) { this.send(new PacketWriter(C.USE_TREASURE_BOX).short(slot).int(itemId)); }
+  /** RING_ACTION: 0 propose (partner, ring box), 1 withdraw, 2 answer (accepted, proposer, their id), 5 invite a guest (name, marriage, slot), 6 open an invitation (slot, item) */
+  propose(name, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(0).string(name).int(itemId)); }
+  withdrawProposal() { this.send(new PacketWriter(C.RING_ACTION).byte(1)); }
+  answerProposal(ok, name, id) { this.send(new PacketWriter(C.RING_ACTION).byte(2).byte(ok ? 1 : 0).string(name).int(id)); }
+  inviteGuest(name, marriageId, slot) { this.send(new PacketWriter(C.RING_ACTION).byte(5).string(name).int(marriageId).int(slot)); }
+  openInvitation(slot, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(6).int(slot).int(itemId)); }
+  /** NEW_YEAR_CARD_REQUEST: 0 send (slot, item, to, message), 1 accept a card */
+  sendNewYearCard(slot, itemId, to, text) { this.send(new PacketWriter(C.NEW_YEAR_CARD_REQUEST).byte(0).short(slot).int(itemId).string(to).string(text)); }
+  acceptNewYearCard(id) { this.send(new PacketWriter(C.NEW_YEAR_CARD_REQUEST).byte(1).int(id)); }
   /** USE_CASH_ITEM: the slot, the item, what that kind of item adds (add(writer)), then the tick. */
   useCashItem(slot, itemId, add = null) {
     const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId);
@@ -1405,6 +1486,16 @@ export class ChannelSession {
   messengerDecline(from) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from)); }
   messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
   merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
+  /** The Store Remote Controller: its slot */
+  remoteStore(slot) { this.send(new PacketWriter(C.REMOTE_STORE).short(slot)); }
+  /** Managing your store from afar: the birthday code, then what the server gave */
+  manageStore(birthday, a, b, c) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(4).byte(5).int(birthday).int(a).byte(1).short(b).bytes(c)); }
+  /** The Remote Gachapon ticket: the town (0-9) */
+  useRemote(itemId, index) { this.send(new PacketWriter(C.USE_REMOTE).int(itemId).int(index)); }
+  /** Maple Life: a name to check */
+  useMapleLife(name) { this.send(new PacketWriter(C.USE_MAPLELIFE).string(name)); }
+  /** Vicious' Hammer: the result shown, sent back */
+  useHammer(mode, code) { this.send(new PacketWriter(C.USE_HAMMER).int(mode).int(code)); }
   merchantTakeBack(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x26).short(index)); }
   merchantOrganize() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x28)); }
   merchantClose() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x29)); }
