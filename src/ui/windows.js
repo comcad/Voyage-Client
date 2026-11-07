@@ -1323,7 +1323,7 @@ class QuestWin extends Win {
       const ft = book.completed[e.ended || e.id];
       try {
         const d = new Date(Number(BigInt(ft) / 10000n - 11644473600000n));
-        if (!Number.isNaN(d.getTime())) return `Ended at ${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()} at ${String(d.getHours()).padStart(2, '0')}:00`;
+        if (!Number.isNaN(d.getTime())) return `Ended at ${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()} at ${String(d.getUTCHours()).padStart(2, '0')}:00`;
       } catch { /* no time */ }
       return '';
     }

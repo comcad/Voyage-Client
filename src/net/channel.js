@@ -141,6 +141,13 @@ function readMobStats(r, has) {
   return out;
 }
 
+/** SET_FIELD's last 8 bytes, the server's clock, whatever was left unread before them; undefined when too short. */
+function tailTime(r) {
+  if (r.available < 8) return undefined;
+  r.pos = r.b.length - 8;
+  return r.long();
+}
+
 export class ChannelSession {
   constructor(transport, handler = {}) {
     this.conn = new Connection(transport);
@@ -184,14 +191,14 @@ export class ChannelSession {
       const info = readCharacterInfo(r);
       this.job = info.stats.job;
       const out = { channel, charData: true, info, mapId: info.stats.mapId, portal: info.stats.spawnPoint, hp: info.stats.hp };
-      if (r.available >= 8) out.serverTime = r.long();   // the server's clock (a FILETIME)
+      out.serverTime = tailTime(r);   // the server's clock (a FILETIME), the packet's last 8 bytes
       if (!first) this.emit('setField', out);
       return out;
     }
     r.skip(3);
     const out = { channel, charData: false, mapId: r.int(), portal: r.ubyte(), hp: r.short() };
     if (r.bool()) out.pos = { x: r.int(), y: r.int() };
-    if (r.available >= 8) out.serverTime = r.long();
+    out.serverTime = tailTime(r);
     this.emit('setField', out);
     return out;
   }

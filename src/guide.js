@@ -19,7 +19,8 @@ const STEP_MS = 30, SPEED = 7, KEEP_X = 70;
 const BALLOON = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c', k: '#000' };
 
 export class Guide {
-  constructor(game, skill) {
+  /** prev: the guide of the last map, whose loaded art is kept. */
+  constructor(game, skill, prev = null) {
     Object.assign(this, { g: game, skill });
     const p = game.player;
     this.x = Math.round(p.x); this.y = Math.round(p.y);
@@ -30,7 +31,9 @@ export class Guide {
     this.vState = 0; this.vCount = 0;
     this.prevBox = null;
     this.talk = null;              // { balloon: { layout, w, h, canvas } | picture: Anim, until }
-    this.node = null; this.B = null;
+    this.node = prev?.skill === skill ? prev.node : null; this.B = prev?.B || null;
+    this.talkSeq = 0;
+    if (this.node && this.B) return;
     game.assets.json('UI/ChatBalloon.img').then((c) => { this.B = c?.tutorial || null; if (this.B) game.assets.preload(Object.values(this.B).filter((n) => n?._canvas)); });
     game.skills?.ensure(skill).then(async (n) => {
       const s = n?.summon;
@@ -88,7 +91,7 @@ export class Guide {
 
   /** TALK_GUIDE mode 0: text wrapped at w px for ms; nothing but clearing for empty text. */
   say(text, w, ms) {
-    this.talk = null;
+    this.talk = null; this.talkSeq++;
     if (!text) return;
     const ctx = document.createElement('canvas').getContext('2d');
     const layout = richText(ctx, text, Math.max(1, w), textRef(this.g.windows), { base: '#000', size: 12, colors: BALLOON, lineH: 18, boldE: true });
@@ -98,11 +101,13 @@ export class Guide {
   /** TALK_GUIDE mode 1: UI/tutorial.img/<n> for ms; `say` too, except for an Aran. */
   async show(n, ms) {
     this.talk = null;
+    const seq = ++this.talkSeq;
     const t = await this.g.assets.json('UI/tutorial.img');
     const node = t?.[n];
-    if (!node) return;
+    if (!node || seq !== this.talkSeq) return;
     const picture = new Anim(node, true);
     await this.g.assets.preload(picture.frames);
+    if (seq !== this.talkSeq) return;   // something newer was said or shown meanwhile
     this.talk = { picture, until: performance.now() + ms };
     if (Math.floor((this.g.stats?.job || 0) / 1000) !== 2) this.play('say');
   }

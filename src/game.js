@@ -2892,13 +2892,13 @@ export class Game {
       avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
-      objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
+      objectStates: later((list) => { for (const { name, state } of list) this.setObjectState(name, state); }),
       energyCharge: (v) => { this.energy = v; },
       aranCombo: (n) => this.setAranCombo(n),
       sessionValue: (k, v) => this.sessionValue(k, v),
       pyramidGauge: (n) => (this.pyramid ??= new PyramidWindow(this)).gauge(n),
       pyramidScore: (rank, exp) => (this.pyramid ??= new PyramidWindow(this)).score(rank, exp),
-      objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
+      objectStatesReset: later(() => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); }),
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
       hint: (text, width, seconds, at) => { this.vfx?.hint(text, width, seconds, at || this.player); },
@@ -3319,7 +3319,7 @@ export class Game {
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
-      if (this.guideSkill) this.guide = new Guide(this, this.guideSkill);   // the guide comes along to every map
+      if (this.guideSkill) this.guide = new Guide(this, this.guideSkill, this.guide);   // the guide comes along to every map
       this.snapCamera();
       if (!this.net) history.replaceState(null, '', `?map=${id}`);
       this.hooks.onMap?.(map);
