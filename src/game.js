@@ -15,6 +15,7 @@ import { loadControls } from './controls.js';
 import { PadInput } from './gamepad.js';
 import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
+import { KeyCommands } from './commands.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
@@ -93,6 +94,10 @@ const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST
 export const VIEW_W = 800, VIEW_H = 600;
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2', 'stabT2'];
+/** An Aran's basic attacks with a polearm. */
+const POLEARM_SWINGS = ['swingT2PoleArm', 'swingP1PoleArm', 'swingP2PoleArm'];
+/** The arrows' scancodes, for the key commands. */
+const COMMAND_SC = { left: 0x4b, right: 0x4d, up: 0x48, down: 0x50 };
 // portal types that fire on touch instead of the Up key (types 3 and 9 have their own checks, also off the floor)
 const TOUCH_PORTALS = new Set([12, 13, 14]);
 
@@ -103,6 +108,7 @@ const TOUCH_PORTALS = new Set([12, 13, 14]);
 class Input {
   constructor(canvas) {
     this.down = new Set(); this.pressed = new Set(); this.repeats = new Set(); this.clicks = [];
+    this.events = [];   // every press (the system's repeats too) and release, in order, for the key commands
     this.sources = new Map();   // controller / touch: source -> codes it holds
     const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
     const map = (e) => ARROWS[e.code] || (CODE_TO_SC[e.code] ? e.code : null);
@@ -114,8 +120,9 @@ class Input {
       if (!this.down.has(k)) this.pressed.add(k);
       if (e.repeat) this.repeats.add(k);   // the system's key repeat: only the last key pressed repeats
       this.down.add(k);
+      this.events.push({ k, down: 1 });
     });
-    addEventListener('keyup', (e) => { const k = map(e); if (k) this.down.delete(k); });
+    addEventListener('keyup', (e) => { const k = map(e); if (k) { this.down.delete(k); this.events.push({ k, down: 0 }); } });
     addEventListener('blur', () => this.down.clear());
     // NPCs open on a double-click, as in the client
     canvas.addEventListener('dblclick', (e) => {
@@ -134,8 +141,9 @@ class Input {
    */
   setHeld(source, codes) {
     const before = this.sources.get(source) || new Set();
-    for (const c of codes) if (!before.has(c) && !this.is(c)) this.pressed.add(c);
+    for (const c of codes) if (!before.has(c) && !this.is(c)) { this.pressed.add(c); this.events.push({ k: c, down: 1 }); }
     this.sources.set(source, new Set(codes));
+    for (const c of before) if (!this.is(c)) this.events.push({ k: c, down: 0 });
   }
   /** Every code held by the keyboard or any other source. */
   held() {
@@ -150,7 +158,7 @@ class Input {
   }
   hit(k) { return this.pressed.has(k); }
   repeated(k) { return this.repeats.has(k); }
-  endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; }
+  endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; this.events.length = 0; }
 }
 
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
@@ -4046,6 +4054,12 @@ export class Game {
   updatePlayer(dt) {
     this.clickedSkill = this.pendingSkill || 0; this.pendingSkill = 0;
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
+    // key commands see every press and release; one that takes a press keeps it from doing anything else
+    this.commands ??= new KeyCommands(this);
+    for (const e of inp.events.splice(0)) {
+      const sc = COMMAND_SC[e.k] ?? CODE_TO_SC[e.k];
+      if (sc !== undefined && this.commands.key(sc, e.down) && e.down) inp.pressed.delete(e.k);
+    }
     let dir = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
     if (this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
@@ -4140,6 +4154,8 @@ export class Game {
 
     // wait out an attack cut short by a hit
     if (performance.now() >= (this.attackLock || 0)) {
+      // a key command's queued skill, once the pose before it is over
+      if (this.commands.run()) return;
       // a macro's next skill, once the last one's animation is over
       if (this.macroQueue?.length && !p.attack) {
         const id = this.macroQueue.shift();
@@ -4933,6 +4949,11 @@ export class Game {
   }
 
   defaultAttackAction(kind) {
+    // an Aran (or a Legend) with a polearm swings one of its three polearm swings, which its attack chain follows
+    const job = this.stats?.job || 0;
+    if ((Math.floor(job / 100) === 21 || job === 2000) && Math.floor(this.weaponId() / 10000) % 100 === 44) {
+      return POLEARM_SWINGS[Math.floor(Math.random() * POLEARM_SWINGS.length)];
+    }
     return (kind === 'ranged' && this.look.shootAction()) || this.look.attackAction();
   }
 
