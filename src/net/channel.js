@@ -1081,6 +1081,14 @@ export class ChannelSession {
       for (let n = r.ubyte(); n > 0 && r.available >= 3; n--) list.push({ tag: r.string(), on: r.ubyte() !== 0 });
       this.emit('mapObjectVisible', list);
     });
+    // a named map object (a trap) switched to one of its states; or a list of them; or all back to their first
+    on(S.FIELD_OBSTACLE_ONOFF, (r) => { const name = r.string(); this.emit('objectStates', [{ name, state: r.int() }]); });
+    on(S.FIELD_OBSTACLE_ONOFF_LIST, (r) => {
+      const list = [];
+      for (let n = r.int(); n > 0 && r.available >= 6; n--) { const name = r.string(); list.push({ name, state: r.int() }); }
+      this.emit('objectStates', list);
+    });
+    on(S.FIELD_OBSTACLE_ALL_RESET, () => this.emit('objectStatesReset'));
     on(S.LOCK_UI, (r) => this.emit('lockUi', r.bool()));
     on(S.DISABLE_UI, (r) => this.emit('disableUi', r.bool()));
     on(S.CHANGE_CHANNEL, (r) => { r.ubyte(); const ip = Array.from(r.bytes(4)).join('.'); this.emit('changeChannel', { ip, port: r.ushort() }); });
@@ -1143,6 +1151,8 @@ export class ChannelSession {
   /** A monster ran into the escorted (friendly) one: the attacker, your character id and the friendly one. */
   mobDamageMobFriendly(attacker, charId, friendly) { this.send(new PacketWriter(C.MOB_DAMAGE_MOB_FRIENDLY).int(attacker).int(charId).int(friendly)); }
   autoAggro(oid, distance) { this.send(new PacketWriter(C.AUTO_AGGRO).int(oid).int(distance)); }
+  /** A map obstacle struck a monster: its object id and the damage. */
+  fieldDamageMob(oid, damage) { this.send(new PacketWriter(C.FIELD_DAMAGE_MOB).int(oid).int(damage)); }
   /**
    * A skill that strikes the monster your body touches (Body Pressure): one monster, one line; 8 bytes where the
    * skill's checks go, no action (only the facing bit), the attack speed, the time; per monster its position twice,
