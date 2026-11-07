@@ -400,6 +400,10 @@ const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 2001
 /** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
 const MORPH = 0x2n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
+/** Use types (id / 10000) used with a plain USE_ITEM: potions, food, elixirs, cures, morph potions, cards... */
+const PLAIN_USE = new Set([200, 201, 202, 205, 221, 236, 238, 245]);
+/** Use types with a request of their own (catch items, Solomon's writs, the Use-tab teleport rock, scripted items...). */
+const USE_ROUTED = new Set([227, 232, 237, 243]);
 /**
  * The timed stats whose running out the client reports (CANCEL_DEBUFF): in the low mask Stun, Poison, Seal,
  * Darkness, Weakness and Curse; in the high mask Slow, Reverse (0x80000) and the stats at 0x100, 0x8000 and
@@ -3462,6 +3466,11 @@ export class Game {
     if (type === 232) { if (this.canExclusive(200)) this.openRock(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
+    // only these Use types are used with a plain USE_ITEM, once nothing is waiting (200ms apart); the Maplemas Party
+    // Potion (221x2xxx) opens its own window, not built yet; other types without a route of their own do nothing
+    if (!USE_ROUTED.has(type)) {
+      if (!PLAIN_USE.has(type) || (type === 221 && Math.floor((id % 10000) / 1000) === 2) || !this.canExclusive(200)) return;
+    }
     if (type === 243) { this.useScriptedItem(slot, id); return; }
     if (type === 227) { this.useCatchItem(slot, id); return; }
     this.net.useItem(slot, id); sfx.play(`Item/${pad(id, 8)}/Use`);   // Sound/Item.img: a potion's gulp...
