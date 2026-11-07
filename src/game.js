@@ -2223,7 +2223,7 @@ export class Game {
       lockUi: (on) => this.setUiLock(on),
       objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
       energyCharge: (v) => { this.energy = v; },
-      aranCombo: (n) => { this.aranCombo = n; },
+      aranCombo: (n) => this.setAranCombo(n),
       objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
@@ -3911,6 +3911,7 @@ export class Game {
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
+    this.updateAranCombo(dt);
     if (this.net) this.autoAggro();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.touchReactors();
@@ -6413,6 +6414,64 @@ export class Game {
     }
   }
   /**
+   * SHOW_COMBO: the Aran combo count, drawn at the top right from Effect/BasicEff.img/Combo/<tier> (tier 0 under 30,
+   * 1 from 30, 2 from 100, 3 from 200): its digits right to left from x 750, 23px apart, at y 169 and 165 by turns
+   * (the last digit at 169), and its Combo label at (750, 180). They fade out over 3s; below tier 3 they hop as the
+   * count changes (the digits above the lowest non-zero one 4px, the rest 10px, down by 50ms and back by 300ms).
+   * At exactly 30, 100 and 200 the ComboCommand/<tier> keys of the combo skills you have (Smash / Drain, Fenrir /
+   * Drain, Tempest / Barrier) appear at (800, 215), the second 35px lower, until the combo ends.
+   */
+  setAranCombo(n) {
+    const now = performance.now();
+    this.aranCombo = n; this.aranComboAt = now;
+    const C = this.vfx?.E?.Combo, cmd = this.vfx?.E?.ComboCommand;
+    if (n < 1 || !C) { this.comboArt = null; return; }
+    const tier = n >= 200 ? 3 : n >= 100 ? 2 : n >= 30 ? 1 : 0, art = C[tier];
+    const digits = [];
+    let first = -1;
+    for (let v = n, i = 0; i < 5; i++) { const d = v % 10; digits.push(d); if (first < 0 && d > 0) first = i; v = Math.trunc(v / 10); if (!v) break; }
+    const parts = digits.map((d, i) => ({ anim: new Anim(art?.[d]), x: 750 - 23 * i, y: i % 2 !== digits.length % 2 ? 165 : 169, hop: i > first ? 4 : 10 }));
+    parts.push({ anim: new Anim(art?.Combo), x: 750, y: 180, hop: 0 });
+    this.comboArt = { parts, t0: now, hops: tier < 3 };
+    this.assets.preload(parts.flatMap((p) => p.anim.frames));
+    const pair = { 30: [21100004, 21100005], 100: [21110004, 21100005], 200: [21120006, 21120007] }[n];
+    if (pair && cmd?.[tier]) {
+      const has = (id) => (this.skills?.levels?.[id]?.level || 0) > 0;
+      this.comboCommands = [];
+      if (has(pair[0])) this.comboCommands.push({ anim: new Anim(cmd[tier][0]), x: 800, y: 215 });
+      if (has(pair[1])) this.comboCommands.push({ anim: new Anim(cmd[tier][1]), x: 800, y: 215 + (this.comboCommands.length ? 35 : 0) });
+      this.assets.preload(this.comboCommands.flatMap((p) => p.anim.frames));
+    }
+  }
+  /** 3s after the last count, an Aran's combo ends: back to 0 and CANCEL_BUFF for Combo Ability (the tutorial's at 2000). */
+  updateAranCombo(dt) {
+    for (const p of [...(this.comboArt?.parts || []), ...(this.comboCommands || [])]) p.anim.update(dt * 1000);
+    if (!(this.aranCombo > 0) || performance.now() - (this.aranComboAt ?? 0) <= 3000) return;
+    const skill = (this.stats?.job || 0) === 2000 ? 20000017 : 21000000;
+    if (!((this.skills?.levels?.[skill]?.level || 0) > 0)) return;
+    this.aranCombo = 0; this.comboArt = null; this.comboCommands = [];
+    this.net?.cancelBuff(skill);
+  }
+  drawAranCombo(ctx) {
+    const art = this.comboArt, now = performance.now();
+    const draw = (p, alpha, dy) => {
+      const n = p.anim.node, img = n && this.assets.image(n);
+      if (!img || alpha <= 0) return;
+      const o = n.origin || [0, 0];
+      ctx.save(); ctx.globalAlpha = alpha * p.anim.alpha;
+      ctx.drawImage(img, Math.round(p.x - o[0]), Math.round(p.y - o[1] + dy));
+      ctx.restore();
+    };
+    if (art) {
+      const t = now - art.t0, alpha = Math.max(0, 1 - t / 3000);
+      for (const p of art.parts) {
+        const h = art.hops && p.hop ? (t < 50 ? (p.hop * t) / 50 : t < 300 ? p.hop * (1 - (t - 50) / 250) : 0) : 0;
+        draw(p, alpha, h);
+      }
+    }
+    for (const p of this.comboCommands || []) draw(p, 1, 0);
+  }
+  /**
    * An Aran's hit that did damage, with a polearm (weapon type 44) and Combo Ability learned (the tutorial's combo
    * skill for a job 2000 beginner), counts toward the combo: ARAN_COMBO_COUNTER.
    */
@@ -6955,6 +7014,7 @@ export class Game {
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
     if (ui) {
       this.vfx?.drawHud(ctx);
+      this.drawAranCombo(ctx);
       this.weather.drawNotice(ctx);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);

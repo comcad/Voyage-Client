@@ -67,7 +67,7 @@ export class WorldFx {
       a.json('Effect/BasicEff.img'), a.json('Effect/Tomb.img'), a.json('UI/ChatBalloon.img'), a.json('UI/UIWindow.img')]);
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
     this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
-    await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
+    await a.preload([...sets, ...deepCanvases(this.E.Combo), ...deepCanvases(this.E.ComboCommand), this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
       ...deep(this.W.MobGage, 3), ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
   }
 
@@ -422,6 +422,8 @@ function drawAt(ctx, im, node, x, y, alpha) {
   ctx.drawImage(i, Math.round(x - o[0]), Math.round(y - o[1]));
   ctx.restore();
 }
+/** Every canvas under a node, however deep (the Aran combo counter's tiers, digits and frames). */
+function deepCanvases(node) { return !node || typeof node !== 'object' ? [] : isCanvas(node) ? [node] : Object.values(node).flatMap(deepCanvases); }
 function canvases(node) { return node ? frames(node).filter(isCanvas).concat(Object.values(node).filter(isCanvas)) : []; }
 function deep(node, depth) {
   if (!node || typeof node !== 'object') return [];
