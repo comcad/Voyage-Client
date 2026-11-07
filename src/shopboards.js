@@ -82,6 +82,33 @@ export class ShopBoards {
     ent.signRect = { x: x + cam.x, y: y + cam.y, w: bi.width, h: bi.height };
   }
 
+  /**
+   * An Omok / Match Card room's balloon (UI/ChatBalloon.img/miniroom/backgrnd, 112x63, placed as PSSkin/0): the game's
+   * icon (Omok, or MemoryGame/<size>) at (7, 40), Lock / Unlock at (30, 39), then cNum/<players> at (70, 42) and
+   * mNum/<max> at (90, 42) - or Progress at (60, 39) while a game runs; the title on two lines of 100px at (8, 8).
+   */
+  drawGameBoard(ctx, cam, ent, sx, sy) {
+    const M = this.M, b = ent.box, im = (n) => this.g.assets.image(n);
+    if (!M) return;
+    const bg = im(M.backgrnd);
+    if (!bg) { this.g.assets.preload([M.backgrnd, M.Omok, M.Lock, M.Unlock, M.Progress, ...Object.values(M.MemoryGame || {}), ...Object.values(M.cNum || {}), ...Object.values(M.mNum || {})].filter(Boolean)); return; }
+    const x = Math.round(sx - 56), y = Math.round(sy - 140), put = (n, px, py) => { const i = im(n); if (i) ctx.drawImage(i, x + px, y + py); };
+    ctx.drawImage(bg, x, y);
+    put(b.type === 1 ? M.Omok : M.MemoryGame?.[b.piece || 0], 7, 40);
+    put(b.locked ? M.Lock : M.Unlock, 30, 39);
+    if (b.playing) put(M.Progress, 60, 39);
+    else { put(M.cNum?.[b.players], 70, 42); put(M.mNum?.[b.max], 90, 42); }
+    ctx.save(); ctx.font = '12px Arial, sans-serif';
+    let first = '', t = String(b.title || '');
+    for (const ch of t) { if (ctx.measureText(first + ch).width > 100) break; first += ch; }
+    let rest = t.slice(first.length);
+    if (ctx.measureText(rest).width > 100) { while (rest && ctx.measureText(`${rest}..`).width > 100) rest = rest.slice(0, -1); rest += '..'; }
+    ctx.restore();
+    uiText(ctx, first, x + 8, y + 8, { color: '#000', size: 12 });
+    if (rest) uiText(ctx, rest, x + 8, y + 22, { color: '#000', size: 12 });
+    ent.signRect = { x: x + cam.x, y: y + cam.y, w: bg.width, h: bg.height };
+  }
+
   boardText(ctx, text, x, y, width) {
     ctx.save();
     ctx.font = '12px Arial, sans-serif';

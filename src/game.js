@@ -38,7 +38,7 @@ import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
+import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
 import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
@@ -49,12 +49,15 @@ import { PlayerShopWin } from './ui/playershop.js';
 import { uiText, TextField } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
 import { Kites } from './kites.js';
+import { morphTemplate, morphTemplateNow, MorphView, isSuperman, isNormalMorph, isHideMorph, supermanPlainAttackOk, SUPERMAN_BLOCKED } from './morph.js';
 import { ProposalWaitWin, InvitationWin } from './ui/wedding.js';
 import { NewYearCardWin, NewYearCardViewWin } from './ui/newyear.js';
 import { RaiseWin, IncubatorWin, TreasureBoxWin } from './ui/etcwins.js';
 import { RemoteGachaponWin, KarmaWin, HammerWin, VegaWin } from './ui/cashwins2.js';
 import { permanent } from './ui/itemguard.js';
 import { MapleLifeWin } from './ui/maplelife.js';
+import { OwlWin, OwlResultWin } from './ui/owl.js';
+import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
@@ -115,7 +118,7 @@ const NEW_YEAR_CARD_ERRORS = { 0x0f: 'You cannot send a card to yourself !', 0x1
   0x11: 'You have no card to send.', 0x12: 'Wrong inventory information !', 0x13: 'Cannot find such character !',
   0x14: 'Incoherent Data !', 0x15: 'An error occured during DB operation.', 0x16: 'An unknown error occured !' };
 // windows of which only one may be open, and none with a shop-type window
-const SINGLE_WINS = [ProposalWaitWin, NewYearCardWin, NewYearCardViewWin, IncubatorWin, RemoteGachaponWin, KarmaWin, HammerWin, VegaWin, MapleLifeWin];
+const SINGLE_WINS = [DueyWin, ProposalWaitWin, NewYearCardWin, NewYearCardViewWin, IncubatorWin, RemoteGachaponWin, KarmaWin, HammerWin, VegaWin, MapleLifeWin, OwlResultWin, MinigameRoomWin];
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 /** Teleport can be used again this long after it lands (ms), and this long after Meteor Shower, Blizzard or Genesis. */
 const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
@@ -749,6 +752,8 @@ export class Game {
       // the QuestAlert bulb: its list of quests
       if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
       // a shop sign takes you into the shop
+      const game = this.gameSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
+      if (game) { this.visitGame(game); return; }
       const signed = this.shopSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
       if (signed && signed !== this.player) { this.net.pshopVisit(signed.box.oid); return; }
       const kite = this.kites.at(wx, wy);
@@ -804,7 +809,7 @@ export class Game {
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
-    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; }
+    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
     this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
     this.raiseKept = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);   // back up on the next map
     for (const id of this.raiseKept) this.closeRaise(id);
@@ -839,7 +844,7 @@ export class Game {
       this.net = net;
       this.channel = entered.channel;
       const info = entered.info;
-      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; }
+      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
@@ -880,7 +885,58 @@ export class Game {
   playerAt(x, y) { for (const rp of this.others.values()) if (this.hitsChar(rp, x, y)) return rp; return null; }
   hitsChar(ent, x, y) {
     const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    const box = ent.morphView?.box(ent.x, ent.y, drawnRight(ent));   // morphed: the frame's lt / rb
+    if (box) return wx >= box.left && wx <= box.right && wy >= box.top && wy <= box.bottom;
     return wx >= ent.x - 18 && wx <= ent.x + 18 && wy >= ent.y - 64 && wy <= ent.y;
+  }
+  // ------------------------------------------------------------------ morphs
+  /** A character's morph template (null when not morphed or not loaded). */
+  morphTpl(ent = this.player) { return ent?.morph ? morphTemplateNow(ent.morph) : null; }
+  /**
+   * A morph comes or goes. An unknown morph changes nothing; a jump-only morph is refused in water and a fly-only one
+   * out of it; morphing stands the character up. The Oak Barrel (1002) goes in after 240ms and out after 600ms, with
+   * its skill's effect / affected art. Otherwise the change plays Transform (or TransformOnLadder - the client picks
+   * them the other way round from their names) with the Transform sound (not for 1000 / 1001). `init` (spawning,
+   * entering a map) plays nothing. A morph whose morphEffect is on shows item 5010999's character effect.
+   */
+  async setMorph(ent, id, init = false) {
+    const local = ent === this.player;
+    let tpl = null;
+    if (id) {
+      tpl = await morphTemplate(this.assets, id);
+      if (!tpl) return;
+      const water = !!this.map?.swimming(ent.x, ent.y);
+      if ((tpl.type === 0 && water) || (tpl.type === 1 && !water)) return;
+      if (local) { if (this.player.seat) this.standUp(false); } else ent.chair = 0;
+    }
+    const prev = ent.morph || 0;
+    if (prev === id && !ent.morphView?.dropped) return;
+    const onRope = local ? !!this.player.ladder : ent.action === 'ladder' || ent.action === 'rope';
+    const apply = async () => {
+      ent.morph = id;
+      ent.morphView = tpl ? new MorphView(tpl) : null;
+      if (ent.morphView) await this.assets.preload(ent.morphView.frames());
+      if (tpl?.morphEffect) { if (ent.fxBeforeMorph === undefined) ent.fxBeforeMorph = ent.itemFxId || 0; this.setItemEffect(ent, 5010999); }
+      else if (ent.fxBeforeMorph !== undefined) { const own = ent.fxBeforeMorph; delete ent.fxBeforeMorph; this.setItemEffect(ent, own); }
+    };
+    if (id === 1002 || (prev === 1002 && !id)) {
+      if (!onRope && !init) {
+        this.playSkillEffect(5101007, ent, false, id ? 'effect' : 'affected');
+        clearTimeout(ent.barrelTimer);
+        ent.barrelTimer = setTimeout(apply, id ? 240 : 600);
+        if (local) this.barrelUntil = performance.now() + (id ? 240 : 840);
+        return;
+      }
+      await apply();
+      if (!init) this.transformFx(ent, onRope, true);
+      return;
+    }
+    await apply();
+    if (!init) this.transformFx(ent, onRope, id !== 1000 && id !== 1001);
+  }
+  transformFx(ent, onRope, sound) {
+    this.vfx?.play(onRope ? 'Transform' : 'TransformOnLadder', ent);
+    if (sound) sfx.play('Game/Transform');
   }
   requestCharInfo(id) { this.net?.charInfo(id); }
   /**
@@ -992,6 +1048,7 @@ export class Game {
 
   /** A Shop Permit: name the shop, then the server opens its room (only in the Free Market rooms). */
   async openShop(permit) {
+    if (this.player.morph) { this.transformRefusal(); return; }   // not while morphed
     if (this.playerShop || this.tradeWin) return;
     const title = await this.windows.askText('Enter the title of your shop.', `${this.player.name}'s shop`, { max: 25, width: 200 });
     if (title?.trim()) this.net?.pshopCreate(title.trim(), permit);
@@ -1087,19 +1144,14 @@ export class Game {
   async onDuey(e) {
     const win = this.dueyWin && this.windows.order.includes(this.dueyWin) ? this.dueyWin : null;
     if (e.op === 'open') {
-      if (win) { win.setList(e.list); return; }
-      const w = new DueyWin(this.windows, e.list);
+      if (this.tradeOpen()) return;   // only one single window at a time
+      const w = new DueyWin(this.windows, e.list, e.mode, e.expired);
       await this.assets.preload(w.frames());
       this.dueyWin = this.windows.show(w, null);
-    } else if (e.op === 'gone') win?.gone(e.id);
-    else if (e.op === 'arrived') this.hud.message(e.from ? `A parcel from ${e.from} is waiting for you. Visit Duey to collect it.` : 'A parcel is waiting for you. Visit Duey to collect it.', '#ffe08a');
-    else if (e.op === 'result') { const t = dueyResult(e.code); if (t) this.windows.notice(t); }
-    else if (e.op === 'quick' && !this.tradeOpen()) {
-      const w = new DueyWin(this.windows, []);
-      w.quick = true; w.tab = 1;
-      await this.assets.preload(w.frames());
-      this.dueyWin = this.windows.show(w, null);
-    }
+    } else if (e.op === 'gone') win?.gone(e.id, e.result);
+    else if (e.op === 'added') win?.added(e.parcel);
+    else if (e.op === 'arrived') { if (!win && (await notifyParcel(this.windows, e.from, e.quick))) this.net?.dueyOpen(); }
+    else if (e.op === 'result') win?.result(e.code);
   }
 
   // ------------------------------------------------------------------ rings, invitations and New Year cards
@@ -1146,6 +1198,7 @@ export class Game {
       else this.net.openInvitation(Number(slot), id);
       return true;
     }
+    if (type === 408) { if (this.canExclusive(500)) this.createGame(it.id); return true; }
     if (Math.floor(id / 1000) === 4220) { this.openRaise(id); return true; }
     if (type === 428) { this.useTreasureBox(Number(slot), id); return true; }
     if (type === 417) {
@@ -1165,6 +1218,56 @@ export class Game {
       return true;
     }
     return false;
+  }
+  /**
+   * An Omok set or Match Cards: not riding, transformed or with a single window open; standing on the ground; not
+   * where the map forbids games. The create dialog, a curse check on the title, then the room is asked for.
+   */
+  async createGame(id) {
+    const ride = Math.floor((this.riding?.item || 0) / 10000);
+    if (ride === 190) { this.hud.message('Not available while riding on the tamed monster.', CHAT_COLOR.error); return; }
+    if (ride === 193) { this.hud.message('Not available during the ride.', CHAT_COLOR.error); return; }
+    if (this.player.morph) { this.transformRefusal(); return; }
+    if (this.tradeOpen() || this.playerShop || this.tradeWin) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    const p = this.player;
+    if (!p.fh || p.ladder || Math.abs(p.vx || 0) > 0 || Math.abs(p.vy || 0) > 0) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x80) { this.windows.notice("You can't start the game here."); return; }
+    const kind = Math.floor(id / 100) % 10;
+    if (kind !== 0 && kind !== 1) return;
+    const r = await this.openStep(MinigameCreateWin, kind === 1);
+    if (!r) return;
+    if (await this.cursed(r.title)) { this.windows.notice('Cursing is not allowed.'); return; }
+    this.net?.gameCreate(kind === 1 ? 2 : 1, r.title, r.hasPw, r.pw, kind === 1 ? r.piece : id % 100);
+  }
+  /** A game room opened: each player's look is built for the window. */
+  async openGameRoom(room) {
+    for (const u of room.users) if (u) u.look = this.lookFrom(u.look);
+    const w = new MinigameRoomWin(this.windows, room);
+    await this.assets.preload(w.frames());
+    this.gameRoom = this.windows.show(w, null);
+  }
+  onGameOp(e) {
+    const w = this.gameRoom && this.windows.order.includes(this.gameRoom) ? this.gameRoom : null;
+    if (!w) return;
+    if (e.op === 4) w.visit(e.slot, { name: e.name, look: this.lookFrom(e.look) }, e.record);
+    else if (e.op === 6) { if (e.system !== undefined) w.system(e.system, e.name); else w.say(e.text, 0); }
+    else if (e.op === 9) { if (w.users[e.slot]) w.users[e.slot].look = this.lookFrom(e.look); }
+    else if (e.op === 0x0A) w.left(e.slot, e.reason);
+    else w.op(e.op, e);
+  }
+  sendRoomChat(text) { this.net?.roomOp(6, (w) => w.string(text)); }
+  /** A game room's balloon over another player's head: double-click visits (asking the password when it has one). */
+  gameSignAt(x, y) {
+    for (const ent of this.others.values()) {
+      const r = ent.signRect;
+      if ((ent.box?.type === 1 || ent.box?.type === 2) && r && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return ent;
+    }
+    return null;
+  }
+  async visitGame(ent) {
+    let pw = null;
+    if (ent.box.locked) { pw = await this.windows.askText('Please enter the password.', '', { max: 30 }); if (pw == null) return; }
+    this.net?.gameVisit(ent.box.oid, pw);
   }
   /** Morphed: why not (an item morph that can't be cancelled by a click says only that). */
   async transformRefusal() {
@@ -1217,6 +1320,37 @@ export class Game {
     this.net.inviteGuest(name, m.id, slot);
     this.lockExclusive();
   }
+  /**
+   * Two characters on the map holding the same New Year card: Effect/ItemEff.img/4300000 loops at their midpoint,
+   * 20px up, while they are within 250px of each other (not while either is transformed).
+   */
+  drawCardPairs(ctx, cam) {
+    const holders = [{ ent: this.player, cards: this.myCards || [], morph: this.morphed() }];
+    for (const rp of this.others.values()) if (rp.cards?.length) holders.push({ ent: rp, cards: rp.cards, morph: !!rp.morph });
+    const live = new Set();
+    if (holders[0].cards.length || holders.length > 1) {
+      for (let i = 0; i < holders.length; i++) for (let j = i + 1; j < holders.length; j++) {
+        const a = holders[i], b = holders[j];
+        if (a.morph || b.morph || Math.abs(a.ent.x - b.ent.x) >= 250 || Math.abs(a.ent.y - b.ent.y) >= 250) continue;
+        for (const id of a.cards) if (b.cards.includes(id)) live.add(`${id}:${a.ent.id}:${b.ent.id}|${i}|${j}`);
+      }
+    }
+    if (!live.size) { this.cardPairs = null; return; }
+    if (!this.cardPairArt) { this.cardPairArt = 'loading'; this.assets.json('Effect/ItemEff.img').then(async (e) => { const n = e?.[4300000]; if (n) { const a = new Anim(n, true); await this.assets.preload(a.frames); this.cardPairArt = n; } }); }
+    if (typeof this.cardPairArt !== 'object') return;
+    const now = performance.now(), anims = (this.cardPairs ??= new Map());
+    for (const k of [...anims.keys()]) if (!live.has(k)) anims.delete(k);
+    for (const k of live) {
+      const [, i, j] = k.split('|').map(Number), a = holders[i].ent, b = holders[j].ent;
+      let p = anims.get(k);
+      if (!p) anims.set(k, (p = { anim: new Anim(this.cardPairArt, true), t: now }));
+      p.anim.update(now - p.t); p.t = now;
+      const n = p.anim.node, img = n && this.assets.image(n);
+      if (!img) continue;
+      const o = n.origin || [0, 0];
+      ctx.drawImage(img, Math.round((a.x + b.x) / 2 - cam.x - o[0]), Math.round((a.y + b.y) / 2 - 20 - cam.y - o[1]));
+    }
+  }
   /** A New Year card to send: a free Etc slot, then its window. */
   openNewYearCard(slot, id) {
     if (this.freeSlots(4) < 1) { this.windows.notice('Your ETC slot is full.\r\nPlease remove some items.'); return; }
@@ -1226,12 +1360,16 @@ export class Game {
   onNewYearCard(e) {
     const cards = (this.newYearCards ??= []);
     if (e.mode === 4 || e.mode === 6) {
-      cards.push(e.card);
+      cards.push(e.card); (this.myCards ??= []).push(e.card.id);
       this.windows.notice(e.mode === 4 ? `Successfully sent a New Year Card\r\n to ${e.card.receiver}.` : 'Successfully received a New Year Card.');
     } else if (e.reason !== undefined) this.windows.notice(NEW_YEAR_CARD_ERRORS[e.reason] || 'The request is denied for an unknown reason.');
-    else if (e.mode === 8) this.newYearCards = cards.filter((c) => c.id !== e.id);
+    else if (e.mode === 8 || e.mode === 0xe) {
+      if (e.mode === 8) this.newYearCards = cards.filter((c) => c.id !== e.id);
+      this.myCards = (this.myCards || []).filter((c) => c !== e.id);
+      for (const rp of this.others.values()) if (rp.cards) rp.cards = rp.cards.filter((c) => c !== e.id);
+    } else if (e.mode === 0xd) { const rp = this.others.get(e.charId); if (rp && !rp.cards?.includes(e.id)) (rp.cards ??= []).push(e.id); }
     else if (e.cards) for (const c of e.cards) notify(this.windows, 'newYearCard', c.sender).then((ok) => { if (ok) this.net?.acceptNewYearCard(c.id); });
-    else if (![0xd, 0xe].includes(e.mode)) this.windows.notice('The request is denied for an unknown reason.');
+    else this.windows.notice('The request is denied for an unknown reason.');
   }
 
   // ------------------------------------------------------------------ Cash tab items with their own window or check
@@ -1243,6 +1381,7 @@ export class Game {
       || (Math.floor(id / 1000) === 5451 ? this.openRemoteGachapon : null)
       || (id === 5431000 || id === 5432000 ? this.openMapleLife : null)
       || (id === 5470000 ? this.useStoreRemote : null)
+      || (type === 523 ? this.useOwlCash : null)
       || ({ 550: this.useSandglass, 552: this.openKarma, 557: this.openHammer, 561: this.openVega }[type] ?? null);
     if (!run) return false;
     if (this.cashFree()) run.call(this, Number(slot), id);
@@ -1262,6 +1401,29 @@ export class Game {
     const [mci, str] = await Promise.all([this.assets.json('Etc/MakeCharInfo.img'), this.assets.json('String/GLcloneC.img')]);
     const S = { ...(str?.Class || {}) };
     this.mapleLife = await this.showSingle(new MapleLifeWin(this.windows, slot, id, mci, S));
+  }
+  /** The cash Owl of Minerva: the request gate says so when busy, then the shared one. */
+  useOwlCash(slot, id) {
+    if (!this.canExclusive(500)) { this.windows.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
+    this.openOwl({ kind: 'cash', slot, id });
+  }
+  /** The Owl of Minerva: not with a single window open, and only in the Free Market rooms (910000000-910000022). */
+  async openOwl(use) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    if (!this.map) return;
+    const m = this.map.id;
+    if (m < 910000000 || m > 910000022) { this.hud.message('This can only be used inside the Free Market.', CHAT_COLOR.error); return; }
+    if (this.owlWin && this.windows.order.includes(this.owlWin)) { this.owlWin.use = use; return; }
+    const w = new OwlWin(this.windows, use);
+    await this.assets.preload(w.frames());
+    this.owlWin = this.windows.show(w);
+  }
+  /** SHOP_SCANNER_RESULT 6: the stores selling it, after any single window closes; nothing found says so. */
+  async onOwlResults(d) {
+    for (const w of this.windows.order.filter((o) => SINGLE_WINS.some((W) => o instanceof W))) this.windows.close(w);
+    if (!d.rows.length && d.npcPrice <= 0) { this.releaseExclusive(); this.windows.notice('Unable to find the item\r\nyou have entered.'); return; }
+    if (!d.rows.length) this.releaseExclusive();
+    this.owlResult = await this.showSingle(new OwlResultWin(this.windows, d));
   }
   async openRemoteGachapon(slot, id) { await this.showSingle(new RemoteGachaponWin(this.windows, id)); }
   useStoreRemote(slot) { if (!this.tradeOpen()) this.net.remoteStore(slot); }
@@ -1504,6 +1666,7 @@ export class Game {
   /** A Hired Merchant: ask the server whether one may open here; merchantCheck carries on. */
   openMerchant(itemId) {
     if (this.playerShop || this.tradeWin) return;
+    if (this.player.morph) { this.transformRefusal(); return; }   // not while morphed
     this.merchantItem = itemId;
     this.net?.merchantRequest();
   }
@@ -1556,7 +1719,7 @@ export class Game {
     // above the head - and above the quest bulb when the NPC wears one
     const q = this.quests?.npcQuests(Number(k.ent.spawn?.id), this.textCtx());
     const bulb = q && (q.start.length || q.complete.length || q.progress.length) ? 38 : 0;
-    const top = (k.ent.box ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
+    const top = (typeof k.ent.box === 'function' ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
     const sx = k.ent.x - cam.x, sy = top - cam.y;
     // the arrow points down at (0, 8) from its own origin; turned for the edge pointer
     const arrow = (x, y, angle) => {
@@ -1585,6 +1748,7 @@ export class Game {
   /** A face expression from its key (F1-F7 = 1 hit .. 7 stunned): shown here and sent to the map. */
   emote(n) {
     if (!EMOTES[n - 1]) return;   // a ghost can make faces too
+    if (this.player.morph) return;   // no faces while morphed
     const now = performance.now();
     if (now - (this.lastEmote || 0) < 2000) return;   // one every 2s
     this.lastEmote = now;
@@ -1606,6 +1770,7 @@ export class Game {
    */
   useItemEffect(id) {
     if (!this.itemCount(id)) return;
+    if (this.player.morph) { this.transformRefusal(); return; }
     const now = performance.now();
     if (now - (this.itemEffectT || 0) < 2000) return;
     if (this.player.itemFxId === id) id = 0; else this.itemEffectT = now;
@@ -2175,6 +2340,12 @@ export class Game {
    * (Haste, Nimble Feet, a speed potion...), held to 80-140 and 80-123 as the client does (openms, docs/skills.md).
    */
   moveStats() {
+    // a normal or hide morph: its own speed and jump, nothing from equipment or buffs
+    const mt = this.morphTpl();
+    if (mt && !mt.superman && !this.player.morphView?.dropped) {
+      const water = !!this.map?.swimming(this.player.x, this.player.y);
+      if (!((mt.type === 0 && water) || (mt.type === 1 && !water))) return { speed: Math.min(Math.max(80, mt.speed), 140) / 100, jump: Math.min(123, Math.max(80, mt.jump)) / 100, morphSwim: mt.swim };
+    }
     const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
     // the last speed buff given sets it, a slowing one too (Dark Sight's -30); jump takes the strongest
     const buff = (k) => (k === 'speed' ? active.findLast((b) => b.speed)?.speed || 0 : Math.max(0, ...active.filter((b) => b[k]).map((b) => b[k])));
@@ -2199,7 +2370,7 @@ export class Game {
   /** Hook a ChannelSession's events to this game. `entered` is the result of session.enter(). */
   async goOnline(entered, uiRoot) {
     const info = entered.info;
-    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.linked = info.linked;
+    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.linked = info.linked;
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.quickKeys2 = loadQuickKeys2(info.stats.name);
@@ -2366,6 +2537,12 @@ export class Game {
       accountGender: (g) => { this.accountGender = g; },
       incubated: later((id, count) => this.onIncubated(id, count)),
       hammer: (e) => { if (this.hammerWin && this.windows.order.includes(this.hammerWin)) this.hammerWin.onResult(e); else this.releaseExclusive(); },
+      gameRoom: later((room) => this.openGameRoom(room)),
+      gameOp: (e) => this.onGameOp(e),
+      owlPopular: (ids) => this.owlWin?.setPopular(ids),
+      owlResults: later((d) => this.onOwlResults(d)),
+      owlLink: (code) => { if (this.owlResult && this.windows.order.includes(this.owlResult)) this.owlResult.onLink(code); },
+      csSurprise: (e) => this.csWin?.surprise(e),
       mapleLifeName: (code) => this.mapleLife?.onName(code),
       mapleLifeCreated: (result, code) => this.mapleLife?.onCreated(result, code),
       vega: (v) => { if (this.vegaWin && this.windows.order.includes(this.vegaWin)) this.vegaWin.onResult(v); },
@@ -2513,12 +2690,14 @@ export class Game {
       disease: later((d) => this.onDisease(d)),
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
       foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
+      foreignMorph: later((id, morph) => this.onOther(id, (rp) => this.setMorph(rp, morph))),
       foreignCancel: later((id, m1, m2) => this.onOther(id, (rp) => {
         if (rp.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
         if (BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
         if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) rp.mount = 0;
         if (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK) rp.hidden = false;
         if (BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
+        if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(rp, 0);
       })),
       // a mount's level / exp / tiredness; levelling up plays the pet level-up effect on its rider (the client's)
       mountInfo: later(async (id, level, exp, tired, up) => {
@@ -2615,18 +2794,22 @@ export class Game {
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
       cooldown: (id, sec) => {
-        if (id === 5221999) { this.battleshipHp = sec || 0; return; }   // the Battleship's HP, not a cooldown
+        if (id === 5221999) { this.battleshipHp = sec; return; }   // the Battleship's HP, not a cooldown (0 takes its icon away)
         if (sec) { this.skills.cooldowns[id] = Date.now() + sec * 1000; (this.skills.cooldownTotal ??= {})[id] = sec * 1000; }
         else delete this.skills.cooldowns[id];
       },
       buff: (b) => {
-        if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); }
+        // the Battleship (1932000) given while on a ladder or rope: the client turns it down itself
+        if (b.mount && Math.floor(b.mount / 10000) === 193 && !isSkillVehicle(b.mount) && this.player.ladder) { this.net?.cancelBuff(5221006); return; }
+        if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); if (b.source === 5221006) this.battleshipHp = undefined; }
+        if (b.morph) { this.morphReason = b.morphSource; this.setMorph(this.player, b.morph); }
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
           watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
         if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) this.riding = null;
+        if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(this.player, 0);
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
         this.diseases = (this.diseases || []).filter((d) => !((d.m1 & m1) || (d.m2 & m2)));
       },
@@ -3030,6 +3213,7 @@ export class Game {
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
+      if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
@@ -3201,7 +3385,7 @@ export class Game {
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look;
-    rp.box = d.box; rp.rings = d.rings; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
     if (rp.chair) this.chairArt(rp.chair);
@@ -3999,6 +4183,7 @@ export class Game {
     if (type === 221 && Math.floor((id % 10000) / 1000) === 2) { if (this.canExclusive(200)) this.openTransform(slot, id); return; }
     if (type === 232) { if (this.canExclusive(200)) this.openRock(slot, id); return; }
     if (type === 224) { if (this.canExclusive(200)) this.useRingBox(slot, id); return; }
+    if (type === 231) { if (this.canExclusive(200)) this.openOwl({ kind: 'use', slot, id }); return; }
     if (type === 216) { if (this.canExclusive(200)) this.openNewYearCard(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
@@ -4451,6 +4636,9 @@ export class Game {
     this.vfx?.update(dt);
     this.weather.update(dt);
     this.kites.update(dt);
+    const p = this.player;
+    if (p.morphView) p.morphView.update(p, p.action, !!p.attack, dt, p.attack ? p.attackScale || 1 : 1);
+    for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
     this.questAlert?.update(dt * 1000); this.questAlert?.tick();
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
@@ -4810,7 +4998,7 @@ export class Game {
   swimShoe(ms = this.moveStats()) {
     const ride = this.riding && this.mountData(this.riding.item)?.stats;
     const shoes = !ride && this.windows?.info?.(this.inventory?.equipped?.[-7]?.id);
-    const pct = Number((ride || shoes)?.swim ?? 100);
+    const pct = ms.morphSwim ?? Number((ride || shoes)?.swim ?? 100);
     return { acc: 1, speed: ms.speed * pct / 100, v: ms.speed };
   }
   /** Off the ground: in water you swim (no gravity; left / right and up / down steer it), else you fall. */
@@ -5017,6 +5205,10 @@ export class Game {
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
     if (this.hasDisease(SEAL) && !HEROS_WILLS.has(id)) return false;   // sealed by a monster: only Hero's Will
+    // morphed: a potion morph or the Oak Barrel (going in or out too) uses no skill; a transformation not these
+    const mt = this.morphTpl();
+    if ((mt && !mt.superman) || performance.now() < (this.barrelUntil || 0)) return false;
+    if (mt?.superman && SUPERMAN_BLOCKED.has(id)) return false;
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
@@ -5082,6 +5274,17 @@ export class Game {
   attack(skillId = 0, kind = null, opts = {}) {
     const { charge = 0, heal = false } = opts;
     const p = this.player, sb = this.skills, weapon = this.weaponId();
+    // morphed: a potion morph can't attack, the Oak Barrel's attack ends it; a transformation attacks plainly only
+    // with knuckles (or a bow from Eagle Eye) - in melee it says so
+    const mt = this.morphTpl();
+    if (mt && !p.morphView?.dropped) {
+      if (mt.hide) { this.net?.cancelBuff(5101007); return false; }
+      if (!mt.superman) return false;
+      if (!skillId && !supermanPlainAttackOk(weapon, this.morphReason)) {
+        if (!RANGED_WEAPONS.has(weapon ? Math.floor(weapon / 10000) : 0)) this.hud.message('This skill cannot be used with the equipped item.', CHAT_COLOR.error);
+        return false;
+      }
+    }
     const wcat = weapon ? Math.floor(weapon / 10000) : 0;
     // lying down, a plain attack is the prone stab: a short melee jab with any weapon
     const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
@@ -5917,7 +6120,8 @@ export class Game {
   // ------------------------------------------------------------------ sitting
   /** Sitting needs you standing still on the ground (the client's check), and 200ms since the last try. */
   canSit() {
-    const p = this.player;
+    const p = this.player, mt = this.morphTpl();
+    if (mt && !mt.superman) return false;   // not as a potion morph or the Oak Barrel
     if (!p.fh || p.ladder || p.attack || p.seat || this.dead || Math.abs(p.vx || 0) > 1) return false;
     if (performance.now() - (this.lastSit || 0) < 200) return false;
     this.lastSit = performance.now();
@@ -7645,6 +7849,7 @@ export class Game {
       if (l === playerLayer) {
         for (const m of this.boards.merchants.values()) this.boards.drawMerchant(ctx, cam, m);   // Hired Merchants, behind people
         this.kites.draw(ctx, cam);
+        this.drawCardPairs(ctx, cam);
         for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
         if (inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.questAlert?.draw(ctx, cam); }
       }
@@ -7776,6 +7981,20 @@ export class Game {
     // while protected after a hit, alternate gray and normal every 60ms, as the original does (never a ghost)
     const blink = local && !dead && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
+    // morphed: only the morph's frame (no body, equipment or their effects); its character effect stays
+    const morphed = !mount && ent.morphView?.node();
+    if (morphed) {
+      this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
+      if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }
+      ent.morphView.draw(ctx, this.assets, sx, sy, drawnRight(ent), (local ? this.hidden() || this.gmHidden : ent.hidden) ? 0.5 : 1);
+      if (blink) ctx.restore();
+      this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
+      if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
+      else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
+      if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
+      this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
+      return;
+    }
     this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
@@ -7789,6 +8008,7 @@ export class Game {
     this.drawRingFx(ctx, cam, ent);
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
+    else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
     this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);

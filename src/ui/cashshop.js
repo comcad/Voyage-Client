@@ -1,3 +1,4 @@
+import { CashGachaponWin } from './owl.js';
 import { invType, itemName, itemIcon, itemInfo } from '../data.js';
 import { CharacterLook, drawParts, lookCanvases } from '../character.js';
 import { sfx } from '../audio.js';
@@ -248,6 +249,20 @@ export class CashShopWin extends Win {
       const sn = this.wishAfterBuy; this.wishAfterBuy = null;
       if (this.wish.includes(sn)) this.sendWish(this.wish.filter((s) => s !== sn), true);
     }
+  }
+  async openSurprise(box) {
+    if (this.gachapon) return;
+    const w = (this.gachapon = new CashGachaponWin(this.mgr, this, box));
+    await this.mgr.assets.preload(w.frames());
+    this.mgr.show(w);
+  }
+  /** CASHSHOP_CASH_ITEM_GACHAPON_RESULT: the box's count, the item into the locker, then the window shows it. */
+  surprise(e) {
+    if (e.failed) { this.alert('Please check and see if you have exceeded\r\nthe number of cash items you can have.'); return; }
+    const box = this.inv.find((c) => c.cashId === e.box);
+    if (box) { box.quantity = e.left; if (e.left <= 0) this.inv = this.inv.filter((c) => c !== box); }
+    this.inv.push(e.item);
+    if (this.gachapon && e.won) this.gachapon.won(e.won.itemId, e.won.count, e.won.jackpot);
   }
   setInventory(items, storageSlots) { this.inv = items; if (storageSlots != null) this.storageSlots = storageSlots; }
   setWish(sns, reply) {
@@ -1198,6 +1213,7 @@ export class CashShopWin extends Win {
   dblclick(lx, ly) {
     const h = this.ready && this.hit(lx, ly);
     if (!h) return;
+    if (h.cash && h.cash.itemId === 5222000) { this.openSurprise(h.cash); return; }   // Cash Shop Surprise opens, it isn't taken out
     if (h.cash) this.takeOut(h.cash);
     else if (h.inv) this.putIn(h.inv);
     else if (h.item && h.icon) this.tryOn(h.item);

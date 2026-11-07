@@ -92,6 +92,31 @@ class Invite extends Balloon {
   }
 }
 
+/**
+ * A parcel at Duey (backgrnd4, Basic icon/delivery): 6s for a normal one, until answered for a quick one, which
+ * alone gets O (at (136, 7)) - O asks Duey to open from here. X at (136, 20).
+ */
+class ParcelNote extends Balloon {
+  constructor(mgr, sender, quick, done) {
+    super(mgr, 'parcel', 'backgrnd4', done, quick ? 0x7FFFFFFF : LOGIN_HOLD);
+    Object.assign(this, { sender, quick });
+    if (quick) this.button(this.F.BtOK, 136, 7, () => this.press(true));
+    this.button(this.F.BtCancel, 136, 20, () => this.press(false));
+  }
+  frames() { return [...super.frames(), this.mgr.B.icon?.delivery].filter(Boolean); }
+  body(ctx) {
+    this.icon(ctx, this.mgr.B.icon?.delivery);
+    const w = { color: '#fff', size: 12 }, s = this.sender;
+    if (!s && !this.quick) { uiText(ctx, 'Package\r\nReceived.', 27, 14, w); return; }
+    const [a, b] = !s ? ['\tQuick delivey/Package', '\tArrived!'] : [this.quick ? 'The Quick Delivery has arrived!' : 'Package\r\nReceived.', `[${s}]`];
+    uiText(ctx, a, 27, 7, w); uiText(ctx, b, 27, 20, w);
+  }
+}
+/** A parcel came (sender, or '' at login): resolves true when a quick one's O is pressed. */
+export function notifyParcel(mgr, sender, quick) {
+  return new Promise((resolve) => add(mgr, new ParcelNote(mgr, sender, quick, resolve), () => true));
+}
+
 /** A buddy, guild or family member logging in (pink backgrnd2, icon3), or a buddy on your channel now (icon4): X only, 6s. */
 class LoginNote extends Balloon {
   constructor(mgr, name, sameChannel) {
