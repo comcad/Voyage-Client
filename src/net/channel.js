@@ -971,10 +971,11 @@ export class ChannelSession {
     on(S.SPAWN_NPC, (r) => this.emit('spawnNpc', readNpc(r)));
     on(S.SPAWN_NPC_REQUEST_CONTROLLER, (r) => {
       if (r.ubyte() === 0) { this.emit('removeNpc', r.int()); return; }
-      this.emit('spawnNpc', readNpc(r));
+      this.emit('spawnNpc', readNpc(r), true);   // one we control: it asks the server before it acts
     });
     on(S.REMOVE_NPC, (r) => this.emit('removeNpc', r.int()));
-    on(S.NPC_ACTION, () => {});
+    // what an NPC we control does, as the server sends it back: an action (from 2) or -1, and a line (-1: none)
+    on(S.NPC_ACTION, (r) => { const oid = r.int(); this.emit('npcAction', oid, r.byte(), r.byte()); });
 
     on(S.DROP_ITEM_FROM_MAPOBJECT, (r) => {
       const mode = r.ubyte(), oid = r.int(), meso = r.bool(), id = r.int(), owner = r.int(), type = r.ubyte();
@@ -1367,6 +1368,8 @@ export class ChannelSession {
   closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
   /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
   /** The Use-tab Teleport Rock (232xxxx): its slot, the item, 0 and the map picked, then the time. */
+  /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
+  npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
   useTeleportRock(slot, itemId, mapId) { this.send(new PacketWriter(C.USE_TELEPORT_ROCK).short(slot).int(itemId).byte(0).int(mapId).int(Date.now() | 0)); }
   rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
   rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
