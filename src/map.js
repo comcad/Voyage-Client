@@ -20,6 +20,7 @@ export class Anim {
   constructor(node, loop = true) {
     this.frames = isCanvas(node) ? [node] : frames(node).filter(isCanvas);
     this.loop = loop; this.i = 0; this.t = 0; this.done = false;
+    this.repeat = 0; this.loops = 0;   // repeat > 0: a looping animation plays that many times, then holds its last frame
     this.defaultDelay = 100;   // for frames without a delay (an NPC's is 180, set by Life)
     this.blend = !!node?.blend; // additive ("lighter") blending, used by some UI effects
     const last = this.frames[this.frames.length - 1];
@@ -51,11 +52,18 @@ export class Anim {
       if (this.holdLast && this.i === this.frames.length - 1) { this.t = 0; return; }
       this.t -= this.node.delay || this.defaultDelay;
       if (this.i + 1 < this.frames.length) this.i++;
-      else if (this.loop) this.i = 0;
+      else if (this.loop && !(this.repeat > 0 && ++this.loops >= this.repeat)) this.i = 0;
       else { this.done = true; return; }
     }
   }
-  reset() { this.i = 0; this.t = 0; this.done = false; }
+  reset() { this.i = 0; this.t = 0; this.done = false; this.loops = 0; }
+}
+
+/** A map object's animation: looping, or played `repeat` times when its node sets one. */
+function objAnim(node) {
+  const a = new Anim(node);
+  if (a.frames.length > 1) a.repeat = Math.max(0, Number(node?.repeat) || 0);
+  return a;
 }
 
 export class GameMap {
@@ -139,11 +147,13 @@ export class GameMap {
         const node = set?.[o.l0]?.[o.l1]?.[o.l2];
         if (!node) continue;
         // `hide` starts it hidden; its `tags` (comma-separated) let the server show or hide it (SET_MAP_OBJECT_VISIBLE)
-        const obj = { ...o, anim: new Anim(node), visible: !Number(o.hide), tags: String(o.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean) };
-        // its states: the node itself, then s1, s2...; a named one is switched by the server (FIELD_OBSTACLE_ONOFF)
+        const obj = { ...o, anim: objAnim(node), visible: !Number(o.hide), tags: String(o.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean) };
+        // its states: the node itself, then s1, s2...; a named one is switched by the server (FIELD_OBSTACLE_ONOFF,
+        // FIELD_EFFECT 2) and shows nothing until then, unless its first state has autoActive
         obj.states = [node];
         for (let s = 1; node[`s${s}`] && typeof node[`s${s}`] === 'object'; s++) obj.states.push(node[`s${s}`]);
         obj.state = 0;
+        obj.active = !o.name || !!Number(node.autoActive);
         if (o.name) this.namedObjs.set(String(o.name), obj);
         objs.push(obj);
         for (const t of obj.tags) { if (!this.objTags.has(t)) this.objTags.set(t, []); this.objTags.get(t).push(obj); }
@@ -392,7 +402,8 @@ export class GameMap {
     if (o && state === -1) state = o.state;
     if (!o || state < 0 || state >= o.states.length) return null;
     o.state = state;
-    o.anim = new Anim(o.states[state]);
+    o.active = true;
+    o.anim = objAnim(o.states[state]);
     return o.states[state];
   }
   /**
@@ -405,7 +416,7 @@ export class GameMap {
     for (const l of this.layers) {
       for (const o of l.objs) {
         const info = o.states?.[o.state];
-        if (!o.visible || !info || !Number(info.obstacle)) continue;
+        if (!o.visible || !o.active || !info || !Number(info.obstacle)) continue;
         const f = o.anim.node, lt = f?.lt, rb = f?.rb;
         if (!lt || !rb || o.anim.alpha * 255 <= 125) continue;
         if (rb[0] - lt[0] < 5 && rb[1] - lt[1] < 5) continue;
@@ -421,7 +432,7 @@ export class GameMap {
     const layer = this.layers[l];
     if (!layer) return;
     for (const o of layer.objs) {
-      if (!o.visible) continue;
+      if (!o.visible || !o.active) continue;
       const node = o.anim.node;
       const img = this.assets.image(node);
       if (!img) continue;
