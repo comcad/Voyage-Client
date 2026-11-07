@@ -73,15 +73,16 @@ export class StatusBar {
     // chat: 1 minimized, 2 minimized while typing, 3 open (chatH tall); the view's first line, when you last scrolled
     this.chatState = 1; this.chatH = CHAT_H.def; this.scrollPos = 0; this.scrolledAt = -Infinity;
     this.history = []; this.historyAt = 0; this.chatDrag = null; this.edgeHover = false; this.scrollHold = null; this.thumbDrag = null;
+    // under the HP / MP alert, each drop plays one flash; flashes from quick hits overlap
+    this.flashes = { hp: [], mp: [] }; this.alertMark = { hp: -1, mp: -1 };
+    // HP / MP: the grey part slides to each new width over 700 ms (EXP jumps); clock in ms
+    this.slides = {}; this.grayW = {}; this.clock = 0;
   }
 
   async load() {
     const a = this.assets;
     [this.S, this.B, this.W] = await Promise.all([a.json('UI/StatusBar.img'), a.json('UI/Basic.img'), a.json('UI/UIWindow.img')]);
     const S = this.S, g = this.game;
-    // the low HP / MP warning flashes once each time the gauge drops under 20%, not on a loop
-    this.hpFlash = new Anim(S.gauge.hpFlash, false); this.mpFlash = new Anim(S.gauge.mpFlash, false);
-    this.hpFlash.done = this.mpFlash.done = true;
     const y = () => this.y;
     // Cash Shop / Trade / Menu / Shortcut (the client's order), centred in backgrnd's grey band right of backgrnd2 (x 570-800, rows 35-70)
     const big = (node, i, fn) => this.btn(node, 577 + i * 54, () => y() + 36, fn);
@@ -112,7 +113,7 @@ export class StatusBar {
     const menuFrames = Object.entries(MENU_ITEMS).flatMap(([w, list]) => [this.W[w].backgrnd, ...list.flatMap((b) => stateFrames(this.W[w][b]))]);
     await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
       S.gauge.bar, S.gauge.graduation, S.gauge.gray, ...canvases(S.number), ...canvases(this.W.KeyConfig?.quickslotConfig?.key), ...canvases(this.B.LevelNo),
-      ...this.hpFlash.frames, ...this.mpFlash.frames, ...this.allButtons().flatMap((b) => b.frames()), ...this.chatMaxBtn.frames(), ...menuFrames]);
+      ...new Anim(S.gauge.hpFlash).frames, ...new Anim(S.gauge.mpFlash).frames, ...this.allButtons().flatMap((b) => b.frames()), ...this.chatMaxBtn.frames(), ...menuFrames]);
     this.render();
   }
 
@@ -573,7 +574,13 @@ export class StatusBar {
 
   // ------------------------------------------------------------------ frame
   update(dt) {
-    this.hpFlash.update(dt * 1000); this.mpFlash.update(dt * 1000);
+    this.clock += dt * 1000;
+    this.trackGauges();
+    for (const k of ['hp', 'mp']) {
+      if (!this.flashes[k].length) continue;
+      for (const a of this.flashes[k]) a.update(dt * 1000);
+      this.flashes[k] = this.flashes[k].filter((a) => !a.done);
+    }
     if (this.scrollHold && (this.scrollHold.t -= dt) <= 0) { this.scrollBy(this.scrollHold.n); this.scrollHold.t = 0.06; }
     for (const b of this.allButtons()) { b.y = b.yAt ? b.yAt() : b.y; b.update(dt * 1000); }
   }
@@ -615,19 +622,14 @@ export class StatusBar {
     if (bar) ctx.drawImage(bar, gx, gy);
     const need = EXP[s.level] || 1;
     const maxHp = this.game.maxHpShown(), maxMp = this.game.maxMpShown();
-    const part = { hp: ratio(s.hp, maxHp), mp: ratio(s.mp, maxMp), exp: ratio(s.exp, need) };
+    const grayW = { hp: this.grayW.hp ?? 0, mp: this.grayW.mp ?? 0, exp: FILLS.exp.w - Math.round(FILLS.exp.w * ratio(s.exp, need)) };
     for (const [k, f] of Object.entries(FILLS)) {
-      const full = Math.round(f.w * part[k]);
-      if (gray && full < f.w) ctx.drawImage(gray, gx + f.x + full, gy + FILL_Y, f.w - full, FILL_H);
+      const w = Math.max(0, Math.min(f.w, grayW[k]));
+      if (gray && w > 0) ctx.drawImage(gray, gx + f.x + f.w - w, gy + FILL_Y, w, FILL_H);
     }
     // the low-HP / low-MP warning flash covers the whole gauge
-    // System Option HP / MP ALERT: flash below the chosen share (0 = never)
-    const lowHp = part.hp < settings.hpAlert, lowMp = part.mp < settings.mpAlert;
-    if (lowHp && !this.lowHp) this.hpFlash.reset();
-    if (lowMp && !this.lowMp) this.mpFlash.reset();
-    this.lowHp = lowHp; this.lowMp = lowMp;
-    if (!this.hpFlash.done) this.flash(ctx, this.hpFlash, gx, gy + 13);
-    if (!this.mpFlash.done) this.flash(ctx, this.mpFlash, gx + 108, gy + 13);
+    for (const a of this.flashes.hp) this.flash(ctx, a, gx, gy + 13);
+    for (const a of this.flashes.mp) this.flash(ctx, a, gx + 108, gy + 13);
     if (grad) ctx.drawImage(grad, gx, gy);
     // [cur/max] sits in the label row beside "HP" / "MP", left-aligned, as the client draws it
     this.number(ctx, `[${s.hp}/${maxHp}]`, gx + 21, gy + 4, 'left');
@@ -759,6 +761,40 @@ export class StatusBar {
     this.cursorShown = n;
     const o = n.origin || [0, 0];
     this.game.canvas.style.cursor = `url(${this.assets.base}/${n._canvas}) ${o[0]} ${o[1]}, auto`;
+  }
+
+  /** HP / MP gauge slides and alert flashes follow the stats every frame, even while a scene hides the bar. */
+  trackGauges() {
+    const s = this.game.stats;
+    if (!s || !this.S) return;
+    for (const [k, m] of [['hp', this.game.maxHpShown()], ['mp', this.game.maxMpShown()]]) {
+      const cur = s[k] || 0, max = Math.max(1, m || 1);
+      this.grayW[k] = this.slide(k, FILLS[k].w - Math.floor((FILLS[k].w * cur) / max));
+      this.checkAlert(k, cur, max);
+    }
+  }
+
+  /**
+   * The grey width shown for a gauge sliding to `to`: a new target stops the old slide where it is (whole pixels)
+   * and slides from there over 700 ms. The first value is shown at once.
+   */
+  slide(k, to) {
+    let sl = this.slides[k];
+    const at = (o) => o.from + ((o.to - o.from) * Math.min(1, (this.clock - o.t0) / 700));
+    if (!sl) sl = this.slides[k] = { from: to, to, t0: this.clock };
+    else if (sl.to !== to) this.slides[k] = sl = { from: Math.trunc(at(sl)), to, t0: this.clock };
+    return Math.trunc(at(sl));
+  }
+
+  /**
+   * System Option HP / MP ALERT (0 = never): under the alert, every drop below the last value seen plays a flash.
+   * The mark starts at -1, so being low already when the bar first sees the stats doesn't flash.
+   */
+  checkAlert(k, cur, max) {
+    const alert = Math.round((settings[`${k}Alert`] || 0) * 100);
+    if (!alert || alert <= Math.floor((cur * 100) / max)) { this.alertMark[k] = Math.floor((alert * max) / 100); return; }
+    if (cur < this.alertMark[k]) this.flashes[k].push(new Anim(this.S.gauge[`${k}Flash`], false));
+    this.alertMark[k] = cur;
   }
 
   flash(ctx, anim, x, y) {
