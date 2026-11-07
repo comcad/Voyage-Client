@@ -2185,6 +2185,7 @@ export class Game {
       portalSound: () => sfx.play('Game/Portal'),
       spawnNpc: later((n) => this.spawnLife('Npc', n, false)),
       removeNpc: later((oid) => this.killLife(oid, 0)),
+      imitatedNpcs: later((list) => this.imitateNpcs(list)),
       drop: later((d) => this.spawnDrop(d)),
       removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
       inventory: (ops, unlock) => { if (unlock) this.cashBusy = false; this.onInventory(ops); },
@@ -2620,7 +2621,7 @@ export class Game {
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
-      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.pyramid?.mapChanged();
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
@@ -2680,8 +2681,37 @@ export class Game {
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
     if (kind === 'Npc' && this.vfx) this.vfx.questT = 0;   // its quest icon at once
+    if (kind === 'Npc') this.imitate(e);
     // a monster others can hurt (info/damagedByMob: the Watch Hog, Moon Bunny, Tylus...) is the field's friendly one
     if (kind === 'Mob' && Number(e.src?.info?.damagedByMob)) { this.friendlyMob = e; this.friendlyHitAt = performance.now(); }
+  }
+
+  /**
+   * IMITATED_NPC_DATA: every NPC of each id on the map takes that name and is drawn as a character with that look,
+   * standing (a ranking statue). Kept for the map, so one that is still loading takes it as it appears.
+   */
+  async imitateNpcs(list) {
+    this.imitated ??= new Map();
+    for (const d of list) {
+      const l = d.look, look = new CharacterLook(this.assets, { skin: l.skin, face: l.face, hair: l.hair, gender: l.gender, equips: lookEquipIds(l) });
+      await look.load();
+      await this.assets.preload(lookCanvases(look, [look.standAction()]));
+      this.imitated.set(d.id, { name: d.name, look });
+      for (const e of this.map?.life || []) if (e.kind === 'Npc') this.imitate(e);
+    }
+  }
+  /** An NPC whose id has an imitated look: its name, and its character drawn in place of its art. */
+  imitate(e) {
+    const d = this.imitated?.get(Number(e.spawn?.id));
+    if (!d) return;
+    e.name = d.name;
+    e.avatar = { look: d.look, frame: 0, t: 0, at: performance.now() };
+    e.drawAvatar = (ctx, sx, sy) => {
+      const a = e.avatar, look = a.look, action = look.standAction(), now = performance.now();
+      a.t += now - a.at; a.at = now;
+      while (a.t >= look.delay(action, a.frame)) { a.t -= look.delay(action, a.frame); a.frame = look.nextFrame(action, a.frame, false).frame; }
+      drawParts(ctx, this.assets, look.compose(action, a.frame), sx, sy, e.facingRight);
+    };
   }
 
   killLife(oid, anim) {

@@ -966,6 +966,13 @@ export class ChannelSession {
       this.emit('mobSkillOffer', oid, skill, level);
     });
 
+    // NPCs drawn as a character (ranking statues): per NPC id, the name and look they take
+    on(S.IMITATED_NPC_DATA, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0; n--) list.push({ id: r.int(), name: r.string(), look: readCharLook(r) });
+      this.emit('imitatedNpcs', list);
+    });
+
     // Cosmic sends f != 1 in the direction byte; the client mirrors the art only when it is 0
     const readNpc = (r) => ({ oid: r.int(), id: r.int(), x: r.short(), y: r.short(), facingRight: !r.bool(), fh: r.short(), rx0: r.short(), rx1: r.short() });
     on(S.SPAWN_NPC, (r) => this.emit('spawnNpc', readNpc(r)));
