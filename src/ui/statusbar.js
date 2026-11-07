@@ -92,8 +92,8 @@ export class StatusBar {
     this.tradeBtn = big(S.BtNPT, 1, () => g.notice('The Maple Trading System is not available on this server.'));
     // hotkey tabs centred on the white band above (rows 3-29)
     const small = [
-      [S.EquipKey, () => g.windows.toggle('equip')], [S.InvenKey, () => g.windows.toggle('inventory')],
-      [S.StatKey, () => g.windows.toggle('stat')], [S.SkillKey, () => g.windows.toggle('skill')],
+      [S.EquipKey, () => { this.blinks?.delete(0); g.windows.toggle('equip'); }], [S.InvenKey, () => { this.blinks?.delete(1); g.windows.toggle('inventory'); }],
+      [S.StatKey, () => { this.blinks?.delete(2); g.windows.toggle('stat'); }], [S.SkillKey, () => { this.blinks?.delete(3); g.windows.toggle('skill'); }],
       [S.KeySet, () => g.windows.toggle('keyconfig')],
     ];
     // the hotkey tabs from x 614, every 30px (the client's own spacing), after the notice box
@@ -114,9 +114,27 @@ export class StatusBar {
     await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
       S.gauge.bar, S.gauge.graduation, S.gauge.gray, ...canvases(S.number), ...canvases(this.W.KeyConfig?.quickslotConfig?.key), ...canvases(this.B.LevelNo),
       ...new Anim(S.gauge.hpFlash).frames, ...new Anim(S.gauge.mpFlash).frames, ...this.allButtons().flatMap((b) => b.frames()), ...this.chatMaxBtn.frames(), ...menuFrames]);
+    a.preload(['EquipKey', 'InvenKey', 'StatKey', 'SkillKey'].flatMap((k) => canvases(S[k]?.ani)));
     this.render();
   }
 
+  /**
+   * A hotkey tab blinking (its ani over it) for 90s or until it is clicked: the Stat tab on a level-up below 11. One
+   * already blinking carries on.
+   */
+  blinkTab(i) { this.blinks ??= new Map(); if (!this.blinks.has(i)) this.blinks.set(i, performance.now()); }
+  drawBlinks(ctx) {
+    const now = performance.now(), keys = ['EquipKey', 'InvenKey', 'StatKey', 'SkillKey'];
+    for (const [i, at] of this.blinks || []) {
+      if (now - at >= 90000) { this.blinks.delete(i); continue; }
+      const ani = this.S?.[keys[i]]?.ani, frames = Object.keys(ani || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b);
+      if (!frames.length) continue;
+      let t = (now - at) % frames.reduce((n, k) => n + (Number(ani[k].delay) || 100), 0), f = frames[0];
+      for (const k of frames) { f = k; t -= Number(ani[k].delay) || 100; if (t < 0) break; }
+      const im = this.assets.image(ani[f]), r = this.tabs[i]?.rect();
+      if (im && r) ctx.drawImage(im, r.x, r.y);
+    }
+  }
   /** A button whose y follows the bar (the bar moves if the view is resized). */
   btn(node, x, y, onClick) {
     const b = new WzButton(node, x, 0, () => { sfx.play('UI/BtMouseClick'); onClick(); });
@@ -637,6 +655,7 @@ export class StatusBar {
     this.number(ctx, `${s.exp}[${((s.exp / need) * 100).toFixed(2)}%]`, gx + 250, gy + 4, 'left');
 
     for (const b of this.allButtons()) if (!this.menu?.buttons.includes(b)) b.draw(ctx, this.assets);
+    this.drawBlinks(ctx);
     if (this.quickOpen) this.drawQuickSlots(ctx);
     if (this.targetMenu) this.drawTargetMenu(ctx);
     if (this.menu) {

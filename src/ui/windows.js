@@ -266,7 +266,7 @@ export class WindowManager {
     return !!w || !!modal;
   }
 
-  update(dt) { for (const w of this.order) for (const b of w.buttons) b.update(dt * 1000); }
+  update(dt) { for (const w of this.order) { for (const b of w.buttons) b.update(dt * 1000); w.tick?.(dt * 1000); } }
 
   draw(ctx) {
     for (const w of this.order) {
@@ -389,22 +389,56 @@ const scrollSizes = (V) => ({ w: V?.enabled?.prev0?._w || 12, a: V?.enabled?.pre
 
 // ==================================================================== Item inventory
 /**
- * Item.img backgrnd 175x289: tab strip y 22-40 (labels Tab/enabled|disabled, Equip..Cash),
- * slot grid 4 x 6 (columns every 36px from x 7, rows at y 51/85/118/152/186/219),
- * mesos box x 25-137 y 267-280 with BtCoin at its left.
+ * Item.img backgrnd 175x289 (small) or FullBackgrnd 603x289 (full, every slot at once): tab strip at y 23, slots 32x32
+ * every 36px across from x 8 and every 34px down from y 50 (full: four blocks of 4 x 6, each 149px on), mesos box
+ * with BtCoin at its left. BtFull / BtSmall switch between them; the choice is kept per character.
  */
-const INV_ROWS = [51, 85, 118, 152, 186, 219];
+const FULL_W = 603, SMALL_W = 175;
+/** BtCashshop's Cash Shop item, by tab: the slot expansion for Equip, Use and Etc. */
+const SLOT_ITEM_SN = { 1: 50200093, 2: 50200094, 4: 50200095 };
 class InventoryWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Item;
     super(mgr, W.backgrnd, 600, 90);
-    this.W = W; this.tab = 2; this.first = 0;
-    this.button(W.BtCoin, 9, 266, () => this.dropMesos());
-    // each tab shows Gather until it has been gathered, then Sort until it has been sorted; v83 puts it at
-    // (width - 15, 6), but that is the close button's corner here, so it sits one button to the left, level with it
+    this.W = W; this.tab = 2; this.first = 0; this.full = false;
+    this.button(W.BtCoin, 7, 266, () => this.dropMesos());
+    // buttons sit by their top-left corner; each tab shows Gather until it has been gathered, then Sort until sorted
+    const at = (n, x, y) => [x + (n?.normal?.[0]?.origin?.[0] || 0), y + (n?.normal?.[0]?.origin?.[1] || 0)];
+    this.place = (b, n, x, y) => { [b.x, b.y] = at(n, x, y); };
     this.sortModes = [0, 0, 0, 0, 0, 0];
-    this.gatherBtn = this.button(W.BtGather, this.w - 30, 12, () => this.g.gatherItems(this.tab));
-    this.sortBtn = this.button(W.BtSort, this.w - 30, 12, () => this.g.sortItems(this.tab));
+    this.gatherBtn = this.button(W.BtGather, 0, 0, () => this.g.gatherItems(this.tab));
+    this.sortBtn = this.button(W.BtSort, 0, 0, () => this.g.sortItems(this.tab));
+    this.fullBtn = this.button(W.BtFull, 0, 0, () => this.setFull(true));
+    this.smallBtn = this.button(W.BtSmall, 0, 0, () => this.setFull(false));
+    this.shopBtn = this.button(W.BtCashshop, 0, 0, () => this.toCashShop());
+    this.gatherBtn.tip = () => lineTip('Slot Merger'); this.sortBtn.tip = () => lineTip('Item Sort');
+    this.fullBtn.tip = () => lineTip('Expand Inventory'); this.smallBtn.tip = () => lineTip('Collapse Inventory');
+    this.shopBtn.tip = () => lineTip('You can expand the Inventory slot with cash items.');
+    this.newT = 0;
+    this.layout();
+  }
+  onOpen() {
+    let full = false;
+    try { full = localStorage.getItem(`inventoryExpanded:${this.g.stats?.name}`) === '1'; } catch { /* storage blocked */ }
+    if (full !== this.full) { this.full = full; this.layout(); }
+  }
+  tick(ms) { this.newT += ms; }
+  /** The window shuts: the new-item mark goes with it. */
+  onClose() { this.g.newItem = null; }
+  setFull(full) {
+    this.full = full;
+    try { localStorage.setItem(`inventoryExpanded:${this.g.stats?.name}`, full ? '1' : '0'); } catch { /* storage blocked */ }
+    this.layout();
+    this.mgr.fit(this);
+  }
+  layout() {
+    const W = this.W, full = this.full, right = full ? 583 : 155;
+    this.bg = full ? W.FullBackgrnd : W.backgrnd; this.w = full ? FULL_W : SMALL_W; this.h = 289;
+    if (full) this.first = 0;
+    this.place(this.fullBtn, W.BtFull, right - 30, 6); this.place(this.smallBtn, W.BtSmall, right - 30, 6);
+    this.place(this.gatherBtn, W.BtGather, right - 15, 6); this.place(this.sortBtn, W.BtSort, right - 15, 6);
+    this.place(this.shopBtn, W.BtCashshop, 495, 266);
+    this.fullBtn.visible = !full; this.smallBtn.visible = full; this.shopBtn.visible = full;
     this.showSortButton();
   }
   /** GATHER_ITEM_RESULT (mode 1: Sort next) / SORT_ITEM_RESULT (mode 0: Gather next) for an inventory. */
@@ -412,6 +446,11 @@ class InventoryWin extends Win {
   showSortButton() {
     const sort = this.sortModes[this.tab] === 1;
     this.gatherBtn.visible = !sort; this.sortBtn.visible = sort;
+  }
+  /** BtCashshop: off for Set-up and Cash, and once a tab has its 96 slots; takes you to the tab's slot expansion. */
+  toCashShop() {
+    this.g.csPreselect = SLOT_ITEM_SN[this.tab] || 0;
+    this.g.enterCashShop();
   }
   /** The coin button: drop 10 ~ 50,000 mesos on the ground (Cosmic's MesoDropHandler range). */
   async dropMesos() {
@@ -421,39 +460,77 @@ class InventoryWin extends Win {
     const v = await this.mgr.askNumber(`How many mesos will you drop?\n(10 ~ ${max.toLocaleString('en-US')})`, 10, 10, max);
     if (v) this.g.net?.dropMeso(v);
   }
-  frames() { return [...super.frames(), ...allCanvases(this.W.Tab.enabled), ...allCanvases(this.W.Tab.disabled)]; }
+  frames() {
+    const W = this.W;
+    return [...super.frames(), W.FullBackgrnd, W.activeIcon, W.disabled, ...allCanvases(W.Tab.enabled), ...allCanvases(W.Tab.disabled), ...allCanvases(W.New)].filter(isCanvas);
+  }
   wantsArg(tab) { return tab !== undefined && tab !== this.tab; }
-  setArg(tab) { if (tab !== undefined && tab !== this.tab) { this.tab = tab; this.first = 0; this.showSortButton(); } }
+  setArg(tab) { if (tab !== undefined && tab !== this.tab) this.setTab(tab); }
+  setTab(tab) { this.tab = tab; this.first = 0; this.showSortButton(); }
   get limit() { return this.g.inventory?.limits?.[this.tab] || 24; }
   get rows() { return Math.ceil(this.limit / 4); }
+  /** A slot's 32x32 cell (top-left), or null when it isn't on show. */
+  cell(slot) {
+    let i = slot - 1 - this.first * 4;
+    if (i < 0 || (!this.full && (i >= 24 || slot > this.limit)) || (this.full && i >= 96)) return null;
+    let row = Math.floor(i / 4), col = i % 4, x = 0;
+    if (this.full && row > 5) { const b = Math.floor(row / 6); row %= 6; col += 4 * b; x = 5 * b; }
+    return { x: x + 36 * col + 8, y: 50 + 34 * row };
+  }
+  /** The slot under (lx, ly); in the full view also the locked cells past the tab's size (empty). */
   slotAt(lx, ly) {
-    const c = Math.floor((lx - 7) / 36), r = INV_ROWS.findIndex((y) => ly >= y && ly < y + 33);
-    if (c < 0 || c > 3 || r < 0) return 0;
-    const slot = (this.first + r) * 4 + c + 1;
-    return slot <= this.limit ? slot : 0;
+    const last = this.full ? 96 : Math.min(this.first * 4 + 24, this.limit);
+    for (let s = this.first * 4 + 1; s <= last; s++) {
+      const c = this.cell(s);
+      if (c && lx >= c.x && lx < c.x + 32 && ly >= c.y && ly < c.y + 32) return s;
+    }
+    return 0;
   }
   body(ctx) {
     const g = this.g, inv = g.inventory, m = this.mgr;
+    this.shopBtn.enabled = [1, 2, 4].includes(this.tab) && this.limit < 96;
     this.tabRects = drawTabStrip(ctx, m, this.W.Tab, 5, this.tab - 1, 170);
     const items = inv?.[this.tab] || {};
-    for (let r = 0; r < 6; r++) for (let c = 0; c < 4; c++) {
-      const slot = (this.first + r) * 4 + c + 1;
-      const x = 9 + c * 36, y = INV_ROWS[r] + 1;
-      if (slot > this.limit) { const d = m.image(this.W.disabled); if (d) ctx.drawImage(d, x, y); continue; }
+    for (let slot = 1; slot <= (this.full ? 96 : this.limit); slot++) {
+      const c = this.cell(slot);
+      if (!c) continue;
+      if (slot > this.limit) { const d = m.image(this.W.disabled); if (d) ctx.drawImage(d, c.x, c.y); continue; }
       const it = items[slot];
       if (!it || (m.carry?.slot === slot && m.carry.tab === this.tab)) continue;
-      m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
-      m.drawLockMark(ctx, it, x, y);
+      m.drawIcon(ctx, m.icon(it.id), c.x, c.y, it.id);
+      m.drawLockMark(ctx, it, c.x, c.y);
       // Use, Set-up and Etc items show their count even at 1; Cash ones only when stacked
-      if (this.tab !== 1 && (it.quantity > 1 || (this.tab !== 5 && it.quantity >= 1))) m.count(ctx, it.quantity, x, y + 21);
+      if (this.tab !== 1 && (it.quantity > 1 || (this.tab !== 5 && it.quantity >= 1))) m.count(ctx, it.quantity, c.x, c.y + 20);
     }
-    this.scrollbar(ctx, 156, 51, 201, this.first, this.rows, 6);
+    // the star, arrow or bullet the next shot throws
+    const ammo = this.tab === 2 && g.ammoSlot?.(), ac = ammo && this.cell(ammo), active = ac && m.image(this.W.activeIcon);
+    if (active) ctx.drawImage(active, ac.x - 2, ac.y - 2);
+    if (!this.full) this.scrollbar(ctx, 156, 51, 201, this.first, this.rows, 6);
     this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 135, 268, { align: 'right' });
+    this.drawNew(ctx);
+  }
+  /**
+   * The item last gained: its tab flashes (New/Tab1 over the open tab, New/Tab0 over another, with the tab's label kept
+   * on top) and its slot blinks (New/inventory) while that tab is open.
+   */
+  drawNew(ctx) {
+    const n = this.g.newItem, m = this.mgr;
+    if (!n) return;
+    const t = Math.floor(n.id / 1000000), selected = t === this.tab, c = selected ? this.cell(n.pos) : null;
+    // the slot it was in no longer holds it
+    if (c && this.g.inventory?.[t]?.[n.pos]?.id !== n.id) { this.g.newItem = null; return; }
+    const frame = (node) => { const fs = Object.keys(node || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b); return fs.length ? node[fs[Math.floor(this.newT / 100) % fs.length]] : null; };
+    const flash = m.image(frame(this.W.New?.[selected ? 'Tab1' : 'Tab0']));
+    if (flash) ctx.drawImage(flash, 34 * t - 31, selected ? 23 : 24);
+    const label = m.image(this.W.Tab.disabled?.[t - 1]);
+    if (label) ctx.drawImage(label, 34 * t - 25, t === 1 || t === 3 ? 27 : 28);
+    const mark = c && frame(this.W.New?.inventory), mi = mark && m.image(mark);
+    if (mi) ctx.drawImage(mi, c.x - 1 - (mark.origin?.[0] || 0), c.y - 1 - (mark.origin?.[1] || 0));
   }
   down(lx, ly) {
     const hit = tabAt(this.tabRects, lx, ly);
-    if (hit >= 0) { if (this.tab !== hit + 1) { this.tab = hit + 1; this.first = 0; this.showSortButton(); sfx.play('UI/Tab'); } return; }
-    const s = this.scrollClick(lx, ly, 156, 51, 201, this.first, this.rows, 6);
+    if (hit >= 0) { if (this.tab !== hit + 1) { this.setTab(hit + 1); sfx.play('UI/Tab'); } return; }
+    const s = this.full ? null : this.scrollClick(lx, ly, 156, 51, 201, this.first, this.rows, 6);
     if (s !== null) { this.first = s; return; }
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
     if (it) this.mgr.startCarry({ kind: 'item', tab: this.tab, slot, id: it.id }, this.mgr.icon(it.id));
@@ -465,7 +542,7 @@ class InventoryWin extends Win {
   drop(lx, ly, c) {
     if (c.kind !== 'item') return;
     if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
-    const to = this.slotAt(lx, ly);
+    const to = this.slotAt(lx, ly) <= this.limit ? this.slotAt(lx, ly) : 0;
     if (c.tab === 2 && isScroll(c.id) && this.tab === 1 && to && this.g.inventory[1][to]) { this.g.useScroll(c.slot, to); return; }
     if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);
     else if (c.tab === 'equip' && this.tab === 1) this.g.unequip(c.slot);
@@ -492,7 +569,7 @@ class InventoryWin extends Win {
     }
     if (this.g.inventory?.[c.tab]?.[c.slot] === it) this.g.net?.moveItem(c.tab, c.slot, 0, qty);
   }
-  wheel(dy) { this.first = Math.max(0, Math.min(this.rows - 6, this.first + Math.sign(dy))); }
+  wheel(dy) { if (!this.full) this.first = Math.max(0, Math.min(this.rows - 6, this.first + Math.sign(dy))); }
   tooltip(lx, ly) {
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
     return it ? { item: it } : null;
@@ -652,21 +729,59 @@ class StatWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Stat;
     super(mgr, W.backgrnd, 10, 90);
-    this.W = W; this.detail = false;
+    this.W = W; this.detail = false; this.panelX = 0;
+    mgr.assets.json('String/ToolTipHelp.img').then((t) => { this.help = t?.Game?.UIWnd; });
     this.ap = Object.entries(AP_ROWS).map(([k, y]) => Object.assign(this.button(W.BtApUp, 153, y, () => this.raise(k)), { stat: k }));
     this.auto = [this.button(W.BtAuto, 97, 197, () => this.autoAssign(1)), this.button(W.BtAuto1, 97, 197, () => this.autoAssign(1)), this.button(W.BtAuto2, 97, 217, () => this.autoAssign(0))];
     this.button(W.BtDetail, 121, 324, () => { this.detail = !this.detail; });
-    this.hideBtn = this.button(mgr.B.BtHide, DETAIL_X + 155, DETAIL_Y + 182, () => { this.detail = false; });
+    this.hideBtn = this.button(mgr.B.BtHide, DETAIL_X + 155, DETAIL_Y + 182, () => { this.detail = !this.detail; });
   }
+  /** The detail panel slides out from behind the window, or back, 1px a ms; reopened, it is where it was left. */
+  tick(ms) {
+    const to = this.detail ? DETAIL_X : 0;
+    this.panelX = to > this.panelX ? Math.min(to, this.panelX + ms) : Math.max(to, this.panelX - ms);
+  }
+  onClose() { this.panelX = this.detail ? DETAIL_X : 0; }
+  get panelShown() { return this.detail || this.panelX > 0; }
   frames() { return [...super.frames(), this.W.backgrnd2, this.W.basicStat, ...allCanvases(this.W.Job), ...allCanvases(this.W.Disabled)]; }
   contains(x, y) {
     const lx = x - this.x, ly = y - this.y;
-    return super.contains(x, y) || (this.detail && lx >= DETAIL_X && lx < DETAIL_X + 177 && ly >= DETAIL_Y && ly < DETAIL_Y + 203);
+    return super.contains(x, y) || (this.panelShown && lx >= this.panelX && lx < this.panelX + 177 && ly >= DETAIL_Y && ly < DETAIL_Y + 203);
   }
   draw(ctx) {
-    const bg2 = this.detail && this.mgr.image(this.W.backgrnd2);   // behind the main panel
-    if (bg2) ctx.drawImage(bg2, this.x + DETAIL_X, this.y + DETAIL_Y);
+    // the detail panel goes behind the main one, its BtHide with it
+    const shown = this.panelShown, hide = this.hideBtn;
+    hide.x = this.panelX + 155;
+    hide.visible = false;
+    if (shown) {
+      ctx.save(); ctx.translate(this.x, this.y);
+      const bg2 = this.mgr.image(this.W.backgrnd2);
+      if (bg2) ctx.drawImage(bg2, this.panelX, DETAIL_Y);
+      if (this.g.stats) this.drawDetail(ctx);
+      hide.visible = true; hide.draw(ctx, this.mgr.assets); hide.visible = false;
+      ctx.restore();
+    }
     super.draw(ctx);
+    // clickable only where the main panel doesn't cover it
+    hide.visible = shown && hide.rect().x >= this.w;
+  }
+  /** ToolTipHelp's Stat (main panel) and StatDetail (detail panel) rects; the EXP row shows its figures. */
+  tooltip(lx, ly) {
+    const s = this.g.stats;
+    if (!s) return null;
+    const pick = (list, x, y, n = Infinity) => {
+      const keys = Object.keys(list || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).slice(0, n);
+      for (const k of keys) {
+        const e = list[k], [l, t] = e.lt || [], [r, b] = e.rb || [];
+        if (x >= l && x < r && y >= t && y < b) return e.Title || e.Desc ? helpTip(e.Title || '', e.Desc || '') : null;
+      }
+      return null;
+    };
+    if (super.contains(this.x + lx, this.y + ly)) {
+      if (lx > 61 && lx < 172 && ly > 140 && ly < 155) return lineTip(`EXP : ${s.exp} / ${EXP[s.level] || 0}`, 6, 2);
+      return pick(this.help?.Stat, lx, ly, isStarter(s.job) && s.level <= 10 ? 8 : Infinity);
+    }
+    return this.panelShown ? pick(this.help?.StatDetail, lx - this.panelX, ly - DETAIL_Y) : null;
   }
   /** Arial 12 with its font cell's top at y. */
   t(ctx, text, x, y, o = {}) { this.text(ctx, text, x, y + 11, { size: 12, base: 'alphabetic', ...o }); }
@@ -676,7 +791,6 @@ class StatWin extends Win {
     const starter = isStarter(s.job) && s.level <= 10, gm = Math.floor((s.job % 1000) / 100) === 9;
     for (const b of this.ap) { b.visible = !starter; b.enabled = s.ap > 0 && (s.level >= 20 || (b.stat !== 'hp' && b.stat !== 'mp')); }
     this.auto.forEach((b, i) => { b.visible = !starter && !gm && (s.job === 500 ? i > 0 : i === 0); b.enabled = s.ap > 0; });
-    this.hideBtn.visible = this.detail;
     const need = EXP[s.level] || 0;
     this.t(ctx, s.name, 61, 33);
     this.drawJob(ctx, s.job);
@@ -694,7 +808,6 @@ class StatWin extends Win {
         this.t(ctx, d ? `${total} (${s[k]}${d > 0 ? '+' : ''}${d})` : total, 61, 244 + 18 * i);
       });
     }
-    if (this.detail) this.drawDetail(ctx);
   }
   /** The job: the branch in caps over [JOB] (art), one line of text for Aran / Evan, "GM / gamemaster" for GMs. */
   drawJob(ctx, job) {
@@ -708,7 +821,7 @@ class StatWin extends Win {
     small('[', 62, 63); ctx.drawImage(sub, 65, 65); small(']', 62 + 4 + sub.width, 63);
   }
   drawDetail(ctx) {
-    const g = this.g, d = g.statWindow(), x = DETAIL_X + 77, y = (i) => DETAIL_Y + 8 + 18 * i;
+    const g = this.g, d = g.statWindow(), x = this.panelX + 77, y = (i) => DETAIL_Y + 8 + 18 * i;
     const buffed = ([v, b]) => (b ? [`${v + b} (${v}${b > 0 ? '+' : ''}${b})`, b > 0 ? '#ff2020' : '#2000ff'] : [v, '#000']);
     const rows = [
       [d.attack ? `${d.attack[0]} ~ ${d.attack[1]}` : 0, g.buffValue('watk') ? '#ff2020' : '#000'],
@@ -719,13 +832,13 @@ class StatWin extends Win {
   }
   async raise(k) {
     const g = this.g, s = g.stats;
-    if (!s?.ap || g.apPending) return;
+    if (!s?.ap || g.apPending || g.forcedRefusal('stats')) return;
     if (k === 'hp' || k === 'mp') { if (s.level < 20 || !(await this.mgr.okCancel(HPMP_ASK))) return; }
     g.sendStatRequest(() => g.net?.distributeAp(AP[k]));
   }
   async autoAssign(flag) {
     const g = this.g, s = g.stats, targets = s && autoTargets(s.job, s.level, flag);
-    if (!targets || !s.ap || g.apPending) return;
+    if (!targets || !s.ap || g.apPending || g.forcedRefusal('stats')) return;
     let left = s.ap;
     const amounts = targets.map(([k, want]) => { const n = Math.min(left, Math.max(0, want - g.totalStat(k))); left -= n; return [k, n]; });
     amounts[1][1] += left;
@@ -1895,6 +2008,49 @@ class KeyConfigWin extends Win {
 
 // ==================================================================== tooltip
 /** A text tooltip in the client's panel: translucent navy with a white ring, the title centred, lines below. */
+/** The tooltip box: dark blue with a white inner edge. */
+function tipFrame(ctx, x, y, w, h) {
+  ctx.fillStyle = 'rgba(0,0,64,0.627)';
+  ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
+  ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
+}
+/** A one-line tooltip (button hints, the EXP figures): text width + 8 by the line + 6, (dx, dy) from where tips go. */
+export function lineTip(text, dx = 0, dy = 0) {
+  return {
+    draw(ctx, x, y) {
+      ctx.save();
+      ctx.font = '12px Arial, sans-serif';
+      const w = Math.ceil(ctx.measureText(text).width) + 8, h = 20;
+      x = Math.max(0, Math.min(x + dx, UI_W - w)); y = Math.max(0, Math.min(y + dy, UI_H - h));
+      tipFrame(ctx, x, y, w, h);
+      uiText(ctx, text, x + 4, y + 3, { color: '#fff', size: 12 });
+      ctx.restore();
+    },
+  };
+}
+/**
+ * A ToolTipHelp entry (Title, Desc with "\n" breaks) under the cursor: at least 270 wide, the title centred 8 down,
+ * the description wrapped from x 10, kept on screen.
+ */
+export function helpTip(title, desc) {
+  return {
+    draw(ctx, mx, my) {
+      ctx.save();
+      ctx.font = 'bold 12px Arial, sans-serif';
+      const w = Math.max(270, Math.ceil(ctx.measureText(title).width) + 16);
+      ctx.font = '12px Arial, sans-serif';
+      const lines = String(desc || '').split(/\\n|\n/).flatMap((l) => (l ? wrapText(ctx, l, w - 15, 12) : ['']));
+      const h = 14 + 8 + 15 + (desc ? lines.length * 15 : -4);
+      const x = Math.max(0, Math.min(mx - 14, UI_W - 1 - w)), y = Math.max(0, Math.min(my + 2, UI_H - 1 - h));
+      tipFrame(ctx, x, y, w, h);
+      uiText(ctx, title, x + w / 2, y + 8, { color: '#fff', bold: true, size: 12, align: 'center' });
+      if (desc) lines.forEach((l, i) => uiText(ctx, l, x + 10, y + 10 + 15 + 8 + i * 15, { color: '#fff', size: 12 }));
+      ctx.restore();
+    },
+  };
+}
 function drawTip(ctx, tip, x, y) {
   ctx.save();
   ctx.font = '12px Arial, sans-serif';
@@ -1905,11 +2061,7 @@ function drawTip(ctx, tip, x, y) {
   const w = Math.ceil(Math.max(tw + 20, ...lines.map((l) => ctx.measureText(l).width + 20), 80));
   const h = 24 + lines.length * 15 + (lines.length ? 4 : 0);
   x = Math.min(x, UI_W - w - 2); y = Math.min(y, UI_H - h - 2);
-  ctx.fillStyle = 'rgba(0,0,64,0.627)';
-  ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
-  ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
+  tipFrame(ctx, x, y, w, h);
   uiText(ctx, tip.title, x + w / 2, y + 6, { color: '#fff', bold: true, size: 12, align: 'center' });
   lines.forEach((l, i) => uiText(ctx, l, x + 10, y + 24 + i * 15, { color: '#fff', size: 12 }));
   ctx.restore();

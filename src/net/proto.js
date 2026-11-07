@@ -251,6 +251,7 @@ export function writeMovement(w, moves) {
         w.short(m.x).short(m.y).short(m.fh || 0).byte(m.stance).short(m.duration || 0); break;
       case 15:
         w.short(m.x).short(m.y).short(m.vx).short(m.vy).short(m.fh).short(m.ofh).byte(m.stance).short(m.duration); break;
+      case 10: w.byte(m.equip); break;
       default: break;
     }
   }

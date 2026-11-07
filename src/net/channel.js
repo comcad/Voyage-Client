@@ -39,6 +39,13 @@ export const STAT = {
   HP: 0x400, MAXHP: 0x800, MP: 0x1000, MAXMP: 0x2000, AP: 0x4000, SP: 0x8000, EXP: 0x10000, FAME: 0x20000,
   MESO: 0x40000, PET: 0x180008, GACHAEXP: 0x200000,
 };
+/** Buffs that change how you move (speed, jump, stun, weaken, slow, morph, Maple Warrior, seduce, ghost, Dash, riding). */
+const MOVE_BUFFS_2 = 0x8000000000n | 0x10000000000n | 0x2000000000000n | 0x4000000000000000n | 0x1n | 0x2n | 0x8n | 0x80n | 0x20000n;
+const MOVE_BUFFS_1 = 0x8000000000000n | 0x10000000000000n | 0x20000000000000n;
+const TWO_STATE = 0x1fc000000000000n;
+const movesBuff = (m1, m2) => !!(BigInt.asUintN(64, m1) & MOVE_BUFFS_1 || BigInt.asUintN(64, m2) & MOVE_BUFFS_2);
+/** FORCED_STAT_SET's fields, bit 0 up: shorts, then bytes from speed on. */
+const FORCED_STATS = ['str', 'dex', 'int', 'luk', 'watk', 'wdef', 'matk', 'mdef', 'acc', 'avoid', 'speed', 'jump', 'speedMax'];
 const STAT_KEYS = {
   0x1: 'skin', 0x2: 'face', 0x4: 'hair', 0x10: 'level', 0x20: 'job', 0x40: 'str', 0x80: 'dex', 0x100: 'int', 0x200: 'luk',
   0x400: 'hp', 0x800: 'maxHp', 0x1000: 'mp', 0x2000: 'maxMp', 0x4000: 'ap', 0x8000: 'sp', 0x10000: 'exp', 0x20000: 'fame',
@@ -175,6 +182,7 @@ export class ChannelSession {
     if (charData) {
       r.short(); r.int(); r.int(); r.int();
       const info = readCharacterInfo(r);
+      this.job = info.stats.job;
       const out = { channel, charData: true, info, mapId: info.stats.mapId, portal: info.stats.spawnPoint, hp: info.stats.hp };
       if (!first) this.emit('setField', out);
       return out;
@@ -192,6 +200,7 @@ export class ChannelSession {
     // ---- the Cash Shop: SET_CASH_SHOP (character info, then the shop's own data), its results, the NX balance
     on(S.SET_CASH_SHOP, (r) => {
       const info = readCharacterInfo(r);   // through the new-year cards and area info
+      this.job = info.stats.job;
       r.short();
       const available = r.ubyte(), d = { info, available, account: available ? r.string() : '', removed: [], mods: [], discounts: [], best: [], stock: new Map(), level: 0 };
       try {
@@ -280,12 +289,19 @@ export class ChannelSession {
         if (bit === 0x1) stats.skin = r.ubyte();
         else if (bit <= 0x4) stats[STAT_KEYS[bit]] = r.int();
         else if (bit < 0x20) stats[STAT_KEYS[bit]] = r.ubyte();
-        else if (bit === 0x8000) stats.sp = r.short();
-        else if (bit < 0xffff) stats[STAT_KEYS[bit]] = r.short();
+        else if (bit === 0x8000) {
+          // Evan (22xx, 2001): SP per job level, read by the job as it stands after this packet's own job change
+          if (Math.floor(this.job / 100) === 22 || this.job === 2001) {
+            stats.spTable = []; stats.sp = 0;
+            for (let n = r.ubyte(); n > 0; n--) stats.spTable.push([r.ubyte(), r.ubyte()]);
+          } else stats.sp = r.short();
+        }
+        else if (bit < 0xffff) { stats[STAT_KEYS[bit]] = r.short(); if (bit === 0x20) this.job = stats.job; }
         else if (bit === 0x20000) stats.fame = r.short();
         else stats[STAT_KEYS[bit]] = r.int();
       }
       this.emit('stats', stats, enable);
+      if (mask & 0x180008 && r.available) this.emit('moveElement', r.ubyte());
     });
 
     on(S.SHOW_STATUS_INFO, (r) => {
@@ -588,6 +604,9 @@ export class ChannelSession {
     on(S.UPDATE_PARTYMEMBER_HP, (r) => this.emit('partyHp', r.int(), r.int(), r.int()));
     // NOTIFY_LEVELUP: a guildmate (2) or family member levelled
     on(S.NOTIFY_LEVELUP, (r) => { const type = r.ubyte(), level = r.int(); this.emit('notifyLevel', { type, level, name: r.string() }); });
+    // a guildmate's (0) or family member's (1) job advancement and marriage
+    on(S.NOTIFY_JOB_CHANGE, (r) => { const type = r.ubyte(), job = r.int(); this.emit('notifyJob', { type, job, name: r.string() }); });
+    on(S.NOTIFY_MARRIAGE, (r) => { const type = r.ubyte(); this.emit('notifyMarriage', { type, name: r.string() }); });
     // Hired Merchants on the map (spawnHiredMerchantBox / updateHiredMerchantBox / removeHiredMerchantBox)
     on(S.SPAWN_HIRED_MERCHANT, (r) => {
       const owner = r.int(), itemId = r.int(), x = r.short(), y = r.short(); r.short();
@@ -854,6 +873,7 @@ export class ChannelSession {
       const list = [];
       for (let n = r.short(); n > 0; n--) list.push({ id: r.int(), level: r.int(), master: r.int(), expiration: r.long() });
       this.emit('skills', list);
+      if (r.available) this.emit('moveElement', r.ubyte());
     });
     on(S.COOLDOWN, (r) => this.emit('cooldown', r.int(), r.short()));
     // GIVE_BUFF: two 64-bit masks, then (short value, int source, int duration) per set bit
@@ -867,6 +887,10 @@ export class ChannelSession {
       const m1 = r.long(), m2 = r.long();
       const n = popcount(BigInt.asUintN(64, m1)) + popcount(BigInt.asUintN(64, m2));
       if (!n) return;
+      // after the stats, two bytes and a short delay; then, for a buff that changes how you move, a byte for the next
+      // movement packet (two-state buffs like riding and Dash are laid out differently and skipped here)
+      const tail = r.pos + n * 10 + 4;
+      if (movesBuff(m1, m2) && !(BigInt.asUintN(64, m1) & TWO_STATE) && r.v.byteLength > tail) this.emit('moveElement', r.v.getUint8(tail));
       // Monster Riding (first mask): short 0, then the mount's item id where the source goes and the skill (Monster
       // Rider, Battleship...) where the duration goes; it lasts until cancelled
       // A refresh of a ride already on (another buff ending) comes as a plain buff: the skill, then the time left
@@ -936,13 +960,25 @@ export class ChannelSession {
       }
       // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent
       if (pick === normal && n === 1 && mask === COMBO) { r.pos = start; b.combo = r.short(); }
+      // a morph: its value is the morph's id (values run in stat order: the second mask's high half first)
+      if (pick === normal && mask & 0x2n) {
+        r.pos = start;
+        const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
+        b.morph = values[popcount(mask >> 32n) + popcount(mask & 0x1n)];
+      }
+      // Shadow Stars: its one stat picks the star it throws (the item 2069999 above it)
+      if (pick === normal && n === 1 && mask === 0x100n) { r.pos = start; b.shadowStars = r.short(); }
       // Power Stance / Freeze Standing: its one stat is the % chance not to be knocked back
       if (pick === normal && n === 1 && mask === STANCE) { r.pos = start; b.stance = r.short(); }
       // Sharp Eyes' one stat is (critical rate << 8 | critical damage)
       if (pick === normal && SHARP_EYES.includes(normal.source)) { r.pos = start; const v = r.short(); b.sharpEyes = { rate: v >> 8, dmg: v & 0xff }; }
       this.emit('buff', b);
     });
-    on(S.CANCEL_BUFF, (r) => this.emit('cancelBuff', r.long(), r.long()));
+    on(S.CANCEL_BUFF, (r) => {
+      const m1 = r.long(), m2 = r.long();
+      this.emit('cancelBuff', m1, m2);
+      if (movesBuff(m1, m2) && r.available) this.emit('moveElement', r.ubyte());
+    });
     // monster book: a card gained (not full, card id, its count now) and the cover set
     on(S.MONSTER_BOOK_SET_CARD, (r) => { const fresh = r.bool(); this.emit('bookCard', r.int(), r.int(), fresh); });
     on(S.MONSTER_BOOK_SET_COVER, (r) => this.emit('bookCover', r.int()));
@@ -1116,6 +1152,13 @@ export class ChannelSession {
     on(S.REMOVE_NPC, (r) => this.emit('removeNpc', r.int()));
     // the map dresses you in its own clothes (what in, the map's type decides)
     on(S.FORCED_MAP_EQUIP, () => this.emit('forcedMapEquip'));
+    // stats the map holds you to (0 = your own); a reset puts yours back
+    on(S.FORCED_STAT_SET, (r) => {
+      const mask = r.uint(), f = {};
+      FORCED_STATS.forEach((k, i) => { if (mask & (1 << i)) f[k] = i < 10 ? r.ushort() : r.ubyte(); });
+      this.emit('forcedStats', f);
+    });
+    on(S.FORCED_STAT_RESET, () => this.emit('forcedStats', null));
     // what an NPC we control does, as the server sends it back: an action (from 2) or -1, and a line (-1: none)
     on(S.NPC_ACTION, (r) => { const oid = r.int(); this.emit('npcAction', oid, r.byte(), r.byte()); });
 
@@ -1142,6 +1185,7 @@ export class ChannelSession {
     on(S.INVENTORY_OPERATION, (r) => {
       const tick = r.bool(); const n = r.ubyte(); const ops = [];
       if (tick) this.emit('exclusiveAnswered');
+      let equipMoved = false;
       for (let i = 0; i < n; i++) {
         const mode = r.ubyte(), inv = r.ubyte(), pos = r.short();
         const op = { mode, inv, pos };
@@ -1149,9 +1193,12 @@ export class ChannelSession {
         else if (mode === 1) op.quantity = r.short();
         else if (mode === 2) op.to = r.short();
         else if (mode === 4) op.exp = r.int();
+        if (inv === 1 && ((mode === 2 && (pos < 0 || op.to < 0)) || (mode === 3 && pos < 0))) equipMoved = true;
         ops.push(op);
       }
       this.emit('inventory', ops, tick);
+      // something worn changed: a byte for the next movement packet
+      if (equipMoved && r.available) this.emit('moveElement', r.ubyte());
     });
 
     on(S.NPC_TALK, (r) => {
