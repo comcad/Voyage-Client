@@ -4,6 +4,7 @@ import { Win, allCanvases } from './windows.js';
 import { localTalk } from './dialogs.js';
 import { drawEmblem } from './social.js';
 import { CHAT_COLOR } from './statusbar.js';
+import { UI_W } from '../view.js';
 
 /**
  * The community window (UI/UIWindow.img/UserList, 312x389): Buddy, Party, Guild, Guild Alliance and Blacklist tabs,
@@ -814,7 +815,7 @@ export class PartyHpWin extends Win {
     if (!list.length) return;
     this.w = Math.max(150, Math.ceil(Math.max(...list.map((m) => textW(m.name)))) + 100);
     this.h = list.length * 17 + 10; this.dragH = this.h;
-    this.x = Math.min(this.x, 800 - this.w);
+    this.x = Math.min(this.x, UI_W - this.w);
     super.draw(ctx);
   }
   body(ctx) {

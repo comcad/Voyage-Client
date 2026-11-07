@@ -717,6 +717,11 @@ export class ChannelSession {
       for (let k = 0; k < 90; k++) { const type = r.ubyte(), action = r.int(); if (type) km[k] = { type, action }; }
       this.emit('keymap', km);
     });
+    // the quick slots' eight keys, or none for the defaults
+    on(S.QUICKSLOT_INIT, (r) => {
+      const keys = r.bool() ? Array.from({ length: 8 }, () => r.int()) : null;
+      this.emit('quickslots', keys);
+    });
     on(S.UPDATE_SKILLS, (r) => {
       r.ubyte();
       const list = [];
@@ -1214,6 +1219,13 @@ export class ChannelSession {
   changeKeymap(changes) {
     const w = new PacketWriter(C.CHANGE_KEYMAP).int(0).int(changes.length);
     for (const c of changes) w.int(c.key).byte(c.type).int(c.action);
+    this.send(w);
+  }
+
+  /** The quick slots' eight keys (scancodes). */
+  changeQuickslots(keys) {
+    const w = new PacketWriter(C.CHANGE_QUICKSLOT);
+    for (const k of keys) w.int(k);
     this.send(w);
   }
 

@@ -24,6 +24,21 @@ const DK = [18, 65, 2, 23, 3, 4, 5, 6, 16, 17, 19, 25, 26, 27, 31, 34, 35, 37, 3
 const DT = [4, 6, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 4, 4, 5, 6, 6, 6, 6, 6, 6, 5, 4, 5, 4, 4, 4, 4, 4];
 const DA = [0, 106, 10, 1, 12, 13, 18, 24, 8, 5, 4, 19, 14, 15, 2, 17, 11, 3, 20, 16, 9, 50, 51, 6, 7, 53, 100, 101, 102, 103, 104, 105, 54, 22, 52, 21, 25, 26, 23, 27];
 
+/** The quick slots' keys: Shift Ins Home PgUp / Ctrl Del End PgDn. */
+export const DEFAULT_QUICKSLOTS = [42, 82, 71, 73, 29, 83, 79, 81];
+/** The second quick slot panel's keys (1 2 3 4 / 5 6 7 8), kept in this browser for each character. */
+export const DEFAULT_QUICKSLOTS2 = [2, 3, 4, 5, 6, 7, 8, 9];
+export function loadQuickKeys2(name) {
+  try {
+    const k = JSON.parse(localStorage.getItem(`maple.quickslot2.${name}`) || 'null');
+    if (Array.isArray(k) && k.length === 8 && k.every((v) => Number.isInteger(v))) return k;
+  } catch { /* storage blocked or bad data */ }
+  return [...DEFAULT_QUICKSLOTS2];
+}
+export function saveQuickKeys2(name, keys) {
+  try { localStorage.setItem(`maple.quickslot2.${name}`, JSON.stringify(keys)); } catch { /* storage blocked: this session only */ }
+}
+
 export function defaultKeymap() {
   const km = {};
   DK.forEach((k, i) => { km[k] = { type: DT[i], action: DA[i] }; });

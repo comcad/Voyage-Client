@@ -3,6 +3,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win } from './windows.js';
+import { UI_W } from '../view.js';
 
 /**
  * The trade room (UI/UIWindow.img/TradingRoom, 565x474). Measured from backgrnd:
@@ -24,7 +25,7 @@ const RESULTS = { 1: 'The trade was successful.', 2: 'The trade has been cancell
 export class TradeWin extends Win {
   constructor(mgr) {
     const T = mgr.W.TradingRoom;
-    super(mgr, T.backgrnd, Math.round((800 - 565) / 2), 20);
+    super(mgr, T.backgrnd, Math.round((UI_W - 565) / 2), 20);
     this.buttons = [];
     this.T = T; this.transient = false;
     this.partner = null;                  // { name }
@@ -100,7 +101,7 @@ export class TradeWin extends Win {
     this.coin.enabled = !this.confirmed[0];
     super.draw(ctx);
     this.chat.rect.x = this.x + 297; this.chat.rect.y = this.y + 245;
-    this.chat.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / 800);
+    this.chat.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
   }
   body(ctx) {
     const g = this.g, m = this.mgr;

@@ -2,6 +2,7 @@ import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win } from './windows.js';
 import { CHAT_COLOR } from './statusbar.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * The megaphone windows (UIWindow.img), centred on the screen; the whisper box starts ticked. Window coordinates:
@@ -25,7 +26,7 @@ export class MegaphoneWin extends Win {
   constructor(mgr, slot, itemId) {
     const W = mgr.W, avatar = Math.floor(itemId / 10000) === 539, kind = avatar ? 'avatar' : Math.floor(itemId / 1000) % 10;
     const spec = SPECS[kind], bg = spec.bg(W);
-    super(mgr, bg, Math.round((800 - bg._w) / 2), Math.round((600 - bg._h) / 2));
+    super(mgr, bg, Math.round((UI_W - bg._w) / 2), Math.round((UI_H - bg._h) / 2));
     this.modal = kind !== 6; this.transient = kind !== 6;   // the Item Megaphone stays open while you drag an item to it
     this.slot = slot; this.itemId = itemId; this.spec = spec; this.ear = true; this.item = null; this.kind = kind;
     this.closeBtn.visible = false;
@@ -84,7 +85,7 @@ export class MegaphoneWin extends Win {
 
   draw(ctx) {
     super.draw(ctx);
-    const scale = this.g.canvas.clientWidth / 800;
+    const scale = this.g.canvas.clientWidth / UI_W;
     for (const f of this.fields) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale); }
   }
   body(ctx) {

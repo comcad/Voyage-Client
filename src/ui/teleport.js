@@ -1,6 +1,7 @@
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win } from './windows.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * Teleport Rock (UIWindow.img/Teleport, backgrnd 175x309), centred, opened by a Teleport Rock (5040000, 5 maps) or a
@@ -16,7 +17,7 @@ const ROW_Y = 84, ROW_H = 18, ROWS = 5, EMPTY = 999999999;
 export class TeleportWin extends Win {
   constructor(mgr, slot, itemId) {
     const T = mgr.W.Teleport;
-    super(mgr, T.backgrnd, Math.round((800 - T.backgrnd._w) / 2), Math.round((600 - T.backgrnd._h) / 2));
+    super(mgr, T.backgrnd, Math.round((UI_W - T.backgrnd._w) / 2), Math.round((UI_H - T.backgrnd._h) / 2));
     this.transient = true; this.closeBtn.visible = false;
     this.T = T; this.slot = slot; this.itemId = itemId; this.vip = Math.floor(itemId / 1000) >= 5041;
     this.sel = -1; this.first = 0;
@@ -73,7 +74,7 @@ export class TeleportWin extends Win {
     super.draw(ctx);
     if (this.vip) {
       this.field.rect.x = this.x + 34; this.field.rect.y = this.y + 250;
-      this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / 800);
+      this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
     }
   }
   body(ctx) {
