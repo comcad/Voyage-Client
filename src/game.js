@@ -3431,6 +3431,7 @@ export class Game {
   async useConsume(slot, id) {
     const type = Math.floor(id / 10000);
     if (await itemReward(this.assets, id)) { this.useItemReward(slot, id); return; }
+    if (type === 237) { this.useSolomonItem(slot, id); return; }
     if (type === 203) { this.useReturnScroll(slot, id); return; }
     if (type === 210) { this.useSummonBag(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
@@ -3444,6 +3445,41 @@ export class Game {
     if (!this.canExclusive(200)) return;
     this.net.useItemReward(slot, id);
     this.lockExclusive();
+  }
+
+  /**
+   * A Writ of Solomon (237xxxx) stores EXP to charge later. Not while riding a tamed monster; nothing below the
+   * item's reqLevel; "too high" above its maxLevel; and only once the EXP from the last one is used up. Then
+   * USE_SOLOMON_ITEM, as an exclusive request (500ms apart).
+   */
+  async useSolomonItem(slot, id) {
+    const say = (t) => this.hud.message(t, CHAT_COLOR.error);
+    if (Math.floor((this.riding?.item || 0) / 10000) === 190) { say('Not available while riding on the tamed monster.'); return; }
+    const info = await itemInfo(this.assets, id), level = this.stats?.level || 0;
+    if (level < (Number(info?.reqLevel) || 0)) return;
+    if ((Number(info?.maxLevel) || 0) < level) { say('Your level is too high to use the selected item.'); return; }
+    if (this.stats?.gachaExp) { say("You'll need to use all your remaining EXP in order to use a new Writ of Solomon."); return; }
+    if (!this.canExclusive(500)) return;
+    this.net.useSolomonItem(slot, id);
+    this.lockExclusive();
+  }
+  /**
+   * Clicking the EXP gauge below level 51 with EXP stored from Writs of Solomon asks whether to charge it, then
+   * sends USE_GACHA_EXP (not while riding a tamed monster; an exclusive request, 500ms apart). Returns whether the
+   * click was taken.
+   */
+  chargeGachaExp() {
+    const level = this.stats?.level || 0;
+    if (level >= 51 || !(this.stats?.gachaExp > 0)) return false;
+    this.windows.confirm('Do you wish to charge the EXP \r\nearned from The Writs of Solomon?').then((yes) => {
+      if (!yes) return;
+      if (Math.floor((this.riding?.item || 0) / 10000) === 190) { this.hud.message('Not available while riding on the tamed monster.', CHAT_COLOR.error); return; }
+      if ((this.stats?.level || 0) >= 51) { this.hud.message('Your level is too high to use the selected item.', CHAT_COLOR.error); return; }
+      if (!this.canExclusive(500)) return;
+      this.net.useGachaExp();
+      this.lockExclusive();
+    });
+    return true;
   }
 
   /**

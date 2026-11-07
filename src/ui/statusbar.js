@@ -457,6 +457,8 @@ export class StatusBar {
     if (onMenu && type !== 'up' && !this.chatDrag && !this.thumbDrag) this.edgeHover = false;   // 'up' still ends a drag
     else if (!this.hidden && this.chatPointer(type, x, y)) return true;
     if (type === 'down' && this.pickQuick(x, y)) return true;
+    // the EXP gauge (441, 559)-(556, 574): charges the EXP stored from Writs of Solomon
+    if (type === 'down' && x >= 441 && x < 556 && y >= 559 && y < 574 && this.game.chargeGachaExp?.()) return true;
     const buttons = this.allButtons();
     for (const b of buttons) b.y = b.yAt ? b.yAt() : b.y;
     const over = (onMenu ? this.menu.buttons : buttons).find((b) => b.hit(x, y)) || null;
