@@ -1121,6 +1121,8 @@ export class ChannelSession {
   }
 
   /** activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its id/level). */
+  /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
+  npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
   moveMob(oid, start, moves, activity = -1, skill = 0, level = 0) {
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(this.moveId++ & 0x7fff)
       .byte(0).byte(activity).byte(skill).byte(level).short(0).zero(8).byte(0).int(0).pos(start);
@@ -1368,8 +1370,6 @@ export class ChannelSession {
   closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
   /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
   /** The Use-tab Teleport Rock (232xxxx): its slot, the item, 0 and the map picked, then the time. */
-  /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
-  npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
   useTeleportRock(slot, itemId, mapId) { this.send(new PacketWriter(C.USE_TELEPORT_ROCK).short(slot).int(itemId).byte(0).int(mapId).int(Date.now() | 0)); }
   rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
   rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
