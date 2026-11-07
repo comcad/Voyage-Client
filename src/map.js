@@ -1083,6 +1083,13 @@ export class Life {
 
   draw(ctx, cam, assets) {
     if (this.respawnTimer > 0) return;
+    // an NPC imitating a character: that character instead of its own art, with its name tag
+    if (this.drawAvatar) {
+      const sx = Math.round(this.x - cam.x), sy = Math.round(this.y - cam.y);
+      this.drawAvatar(ctx, sx, sy);
+      if (this.name && !this.hideName) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
+      return;
+    }
     const doomArt = this.doomArt, doom = doomArt?.[this.state === 'move' ? 'move' : 'stand']?.node;
     const node = doom && assets.image(doom) ? doom : this.node;
     const img = assets.image(node);
