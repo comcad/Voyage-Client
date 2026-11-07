@@ -985,6 +985,8 @@ export class ChannelSession {
       this.emit('spawnNpc', readNpc(r), true);   // one we control: it asks the server before it acts
     });
     on(S.REMOVE_NPC, (r) => this.emit('removeNpc', r.int()));
+    // the map dresses you in its own clothes (what in, the map's type decides)
+    on(S.FORCED_MAP_EQUIP, () => this.emit('forcedMapEquip'));
     // what an NPC we control does, as the server sends it back: an action (from 2) or -1, and a line (-1: none)
     on(S.NPC_ACTION, (r) => { const oid = r.int(); this.emit('npcAction', oid, r.byte(), r.byte()); });
 
