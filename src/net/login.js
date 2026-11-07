@@ -26,7 +26,7 @@ function machineIds() {
 function readAuth(r) {
   r.skip(6); // result, regStatus, int 0
   const a = { id: r.int(), gender: r.ubyte(), gm: r.bool() };
-  r.ubyte(); r.ubyte();
+  a.admin = r.ubyte(); r.ubyte();   // the admin byte (0x80: an admin account), then the country code
   a.name = r.string(); r.ubyte(); r.ubyte(); r.long(); r.long(); r.int();
   a.pinMode = r.ubyte(); a.picMode = r.ubyte();
   return a;

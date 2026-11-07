@@ -1139,6 +1139,18 @@ export class ChannelSession {
     this.send(w);
   }
   closeRangeAttack(o) { this.attack('melee', o); }
+  /**
+   * A skill that strikes the monster your body touches (Body Pressure): one monster, one line; 8 bytes where the
+   * skill's checks go, no action (only the facing bit), the attack speed, the time; per monster its position twice,
+   * no delay, the damage and 4 bytes; then where you stand.
+   */
+  touchAttack({ skill, mob, dmg, facingLeft, speed, pos }) {
+    const w = new PacketWriter(C.TOUCH_MONSTER_ATTACK).byte(0).byte((1 << 4) | 1).int(skill).zero(8)
+      .byte(0).short(facingLeft ? 0x8000 : 0).byte(speed).byte(0).int(Date.now() | 0);
+    const at = { x: Math.round(mob.x), y: Math.round(mob.y) };
+    w.int(mob.oid).zero(4).pos(at).pos(at).short(0).int(dmg).int(0);
+    this.send(w.pos({ x: Math.round(pos.x), y: Math.round(pos.y) }));
+  }
 
   /** SPECIAL_MOVE: buffs and other non-attack skills. pos is sent for summons / doors. */
   specialMove(skillId, level, pos) {
