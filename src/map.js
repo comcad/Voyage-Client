@@ -101,7 +101,13 @@ export class GameMap {
     this.info = data.info || {};
     this.fh = new Footholds(data.foothold);
     this.fh.swimming = (x, y) => this.swimming(x, y);
-    if (data.info?.VRTop !== undefined) this.fh.ceiling = Math.max(this.fh.ceiling, Number(data.info.VRTop) + 65);
+    // info/VRLimit keeps you inside the view range: walls at VRLeft + 20 / VRRight - 20, the top at VRTop + 65
+    if (Number(data.info?.VRLimit)) {
+      const vl = Number(data.info.VRLeft) || 0, vr = Number(data.info.VRRight) || 0, vt = Number(data.info.VRTop) || 0;
+      if (vl) this.fh.wallL = Math.max(this.fh.wallL, vl + 20);
+      if (vr) this.fh.wallR = Math.min(this.fh.wallR, vr - 20);
+      if (vt) this.fh.ceiling = Math.max(this.fh.ceiling, vt + 65);
+    }
     this.ladders = Object.entries(data.ladderRope || {}).map(([id, l]) => ({ ...l, id: Number(id) }));   // the id goes in movement
 
     // Bounds: VR* when present, else derived from footholds.
@@ -116,12 +122,12 @@ export class GameMap {
     this.name = findMapName(strMap, this.id);
 
     onStatus?.('Loading backgrounds...');
-    for (const b of Object.values(data.back || {})) {
+    for (const [k, b] of Object.entries(data.back || {})) {
       if (!b.bS) continue;
       const set = await a.json(`Map/Back/${b.bS}.img`);
       const node = set?.[b.ani === 1 ? 'ani' : 'back']?.[b.no];
       if (!node || b.ani === 2) continue;
-      this.backs.push({ ...b, anim: new Anim(node) });
+      this.backs.push({ ...b, idx: Number(k), node, anim: new Anim(node) });
     }
 
     onStatus?.('Loading tiles and objects...');
@@ -156,6 +162,7 @@ export class GameMap {
     }
 
     this.strings = { Mob: strMob, Npc: strNpc };
+    await this.loadToolTips(data.ToolTip);
     if (opts.life !== false) {
       onStatus?.('Loading NPCs and monsters...');
       for (const l of Object.values(data.life || {})) {
@@ -248,7 +255,11 @@ export class GameMap {
   update(dt) {
     const ms = dt * 1000;
     this.scroll += dt;
-    for (const b of this.backs) b.anim.update(ms);
+    for (const b of this.backs) {
+      b.anim.update(ms);
+      const f = b.fade;
+      if (f) { f.t += ms; b.alpha = f.t >= f.ms ? f.to : f.from + (f.to - f.from) * (f.t / f.ms); if (f.t >= f.ms) b.fade = null; }
+    }
     for (const l of this.layers) for (const o of l.objs) o.anim.update(ms);
     for (const p of this.portals) {
       p.anim?.update(ms);
@@ -321,19 +332,64 @@ export class GameMap {
     if (VTILE.has(b.type) && cy > 0) { ys = []; for (let s = ((y % cy) + cy) % cy - cy; s < H; s += cy) ys.push(s); }
 
     ctx.save();
-    ctx.globalAlpha = ((b.a ?? 255) / 255) * b.anim.alpha;
+    ctx.globalAlpha = ((b.alpha ?? b.a ?? 255) / 255) * b.anim.alpha;
     for (const dy of ys) for (const dx of xs) drawImg(ctx, img, dx, dy, b.f, w, h);
     ctx.restore();
   }
 
+  /**
+   * The map's ToolTip node: rects N (x1/y1/x2/y2, map coordinates) and, for some, an Nchar rect. Their Title / Desc
+   * come from String/ToolTipHelp.img/Mapobject/<map id>/N. Hovering rect N shows its tooltip at the cursor; standing
+   * inside Nchar shows it at rect N's (x2, y2).
+   */
+  async loadToolTips(node) {
+    this.tips = []; this.charTips = new Map();
+    if (!node) return;
+    const byKey = new Map();
+    for (const [k, t] of Object.entries(node)) {
+      const rect = { left: Number(t.x1) || 0, top: Number(t.y1) || 0, right: Number(t.x2) || 0, bottom: Number(t.y2) || 0 };
+      if (k.length >= 4 && k.endsWith('char')) this.charTips.set(k.slice(0, -4), rect);
+      else { const tip = { key: k, ...rect, title: '', desc: '' }; this.tips.push(tip); byKey.set(k, tip); }
+    }
+    const help = (await this.assets.json('String/ToolTipHelp.img'))?.Mapobject?.[this.id] || {};
+    for (const [k, h] of Object.entries(help)) {
+      const tip = byKey.get(k);
+      if (tip) { tip.title = String(h?.Title ?? ''); tip.desc = String(h?.Desc ?? ''); }
+    }
+  }
+  /** The first ToolTip rect holding a map point (right and bottom edges excluded), or null. */
+  tipAt(x, y) { return this.tips?.find((t) => x >= t.left && x < t.right && y >= t.top && y < t.bottom) || null; }
+  /** The ToolTip rects whose Nchar rect holds a map point. */
+  charTipsAt(x, y) {
+    const out = [];
+    for (const t of this.tips || []) {
+      const r = this.charTips.get(t.key);
+      if (r && x >= r.left && x < r.right && y >= r.top && y < r.bottom) out.push(t);
+    }
+    return out;
+  }
+
+  /** SET_BACK_EFFECT: background back/<idx> goes from its alpha now to `to` (0-255) over ms. */
+  fadeBack(idx, to, ms) {
+    for (const b of this.backs) {
+      if (b.idx !== idx) continue;
+      const from = b.alpha ?? b.a ?? 255;
+      b.fade = ms > 0 ? { from, to, t: 0, ms } : null;
+      if (!b.fade) b.alpha = to;
+    }
+  }
+  /** CLEAR_BACK_EFFECT: the backgrounds are made again from the map, as they were when it loaded. */
+  resetBacks() { for (const b of this.backs) { b.alpha = undefined; b.fade = null; b.anim = new Anim(b.node); } }
+
   /** Shows or hides every object with this tag. */
   setObjectVisible(tag, on) { for (const o of this.objTags.get(tag) || []) o.visible = on; }
   /**
-   * Switch a named object to one of its states (0: itself, n: its sN), restarting that state's animation and
-   * playing its sfx (Sound/Field.img/...). Returns the state node, or null for an unknown name or state.
+   * Switch a named object to one of its states (0: itself, n: its sN; -1: the one it is in), restarting that state's
+   * animation and playing its sfx (Sound/Field.img/...). Returns the state node, or null for an unknown name or state.
    */
   setObjectState(name, state) {
     const o = this.namedObjs.get(String(name));
+    if (o && state === -1) state = o.state;
     if (!o || state < 0 || state >= o.states.length) return null;
     o.state = state;
     o.anim = new Anim(o.states[state]);

@@ -24,6 +24,9 @@ export class Reactor {
     this.gone = false;       // destroyed: remove once its last hit animation has played
     this.removed = false;
     this.touching = false;
+    // 0 idle, 1 waiting for the hit to show (hitAt), 2 playing the hit animation, 4 destroyed
+    this.phase = 0; this.hitAt = 0; this.removeAt = 0; this.from = this.state;
+    this.blockUntil = performance.now() + 800;   // a new reactor can't be hit for 800 ms
   }
   stateAnim(s) { const n = this.img?.[s]; return n && Object.keys(n).some((k) => /^\d+$/.test(k)) ? new Anim(n, true) : null; }
   /** Every frame it can show, for preloading. */
@@ -37,35 +40,68 @@ export class Reactor {
     return out;
   }
   get event() { return this.img?.[this.state]?.event?.[0] || null; }
-  /** Can an attack set it off now? Not one walked into, nor one that waits for an item or a timer. */
-  get hittable() { const t = Number(this.event?.type ?? -1); return !this.gone && !this.touch && t >= 0 && t < 100 && t !== 9; }
-
-  /** The server moved it on to `state`: the old state's hit animation, then the new state's picture. */
-  setState(state) {
-    const old = this.state;
-    this.state = state;
-    const hit = this.img?.[old]?.hit;
-    this.hitAnim = hit && Object.keys(hit).some((k) => /^\d+$/.test(k)) ? new Anim(hit, false) : null;
-    this.idle = this.stateAnim(state);
-    if (this.hitAnim) sfx.play(`Reactor/${this.id}/${old}/Hit`, { volume: this.volumeAt?.(this.x, this.y) ?? 1 });   // with its hit animation, quieter far off
+  /**
+   * Can an attack set it off now? Not one walked into, nor one that waits for an item or a timer; not while a hit is
+   * still showing, nor before its block time (800 ms after it appears, the hit's tenths of a second after a hit).
+   */
+  get hittable() {
+    const t = Number(this.event?.type ?? -1);
+    return !this.gone && !this.touch && t >= 0 && t < 100 && t !== 9 && this.phase === 0 && performance.now() >= this.blockUntil;
   }
-  /** The server removed it: its last hit animation plays out, then it is gone. */
+
+  /**
+   * REACTOR_HIT: the server moved it on to `state`. After `delay` ms the old state's hit animation plays, then the
+   * new state's picture shows; it can't be hit again for block x 100 ms.
+   */
+  hit(state, delay = 0, block = 0) {
+    const now = performance.now();
+    this.from = this.state;
+    this.state = state;
+    if (this.phase === 0) { this.phase = 1; this.hitAt = now + delay; }
+    this.blockUntil = now + block * 100;
+  }
+  /** The old state's hit animation, with its sound (quieter far off); false when it has none. */
+  playHit() {
+    const hit = this.img?.[this.from]?.hit;
+    this.hitAnim = hit && Object.keys(hit).some((k) => /^\d+$/.test(k)) ? new Anim(hit, false) : null;
+    if (!this.hitAnim?.frames.length) this.hitAnim = null;
+    if (this.hitAnim) sfx.play(`Reactor/${this.id}/${this.from}/Hit`, { volume: this.volumeAt?.(this.x, this.y) ?? 1 });
+    return !!this.hitAnim;
+  }
+  /**
+   * REACTOR_DESTROY: it stops where it is. Destroyed into a state with no events, it waits 400 ms, plays the old
+   * state's hit animation and goes; otherwise it goes at once.
+   */
   destroy(state = this.state) {
-    if (state !== this.state) this.setState(state);
+    this.from = this.state;
+    this.state = state;
+    this.phase = 4;
     this.gone = true;
-    if (!this.hitAnim) this.removed = true;
+    this.hitAnim = null;
+    const ev = this.img?.[state]?.event;
+    this.removeAt = ev && Object.keys(ev).some((k) => /^\d+$/.test(k)) ? 0 : performance.now() + 400;
+    if (!this.removeAt) this.removed = true;
   }
 
   update(dt) {
-    const ms = dt * 1000;
-    if (this.hitAnim) {
-      this.hitAnim.update(ms);
-      if (this.hitAnim.done) { this.hitAnim = null; if (this.gone) this.removed = true; }
+    const ms = dt * 1000, now = performance.now();
+    if (this.phase === 1 && now > this.hitAt) {
+      // no hit animation: the new state shows at once
+      if (this.playHit()) this.phase = 2; else { this.idle = this.stateAnim(this.state); this.phase = 0; }
+    }
+    if (this.phase === 4) {
+      if (this.removeAt && now >= this.removeAt) { this.removeAt = 0; if (!this.playHit()) this.removed = true; }
+      if (!this.removeAt && this.hitAnim) { this.hitAnim.update(ms); if (this.hitAnim.done) this.removed = true; }
+      return;
+    }
+    if (this.phase === 2) {
+      this.hitAnim?.update(ms);
+      if (!this.hitAnim || this.hitAnim.done) { this.hitAnim = null; this.idle = this.stateAnim(this.state); this.phase = 0; }
       return;
     }
     this.idle?.update(ms);
   }
-  get node() { return this.hitAnim?.node || (this.gone ? null : this.idle?.node); }
+  get node() { return this.hitAnim?.node || this.idle?.node; }
   /** The picture's box in the world (what attacks and walking into it test). */
   box() {
     const n = this.node || this.idle?.node;

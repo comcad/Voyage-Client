@@ -11,7 +11,8 @@ const list = (node) => (node ? Object.keys(node).filter((k) => /^\d+$/.test(k)).
 const FT_EPOCH = 11644473600000n;
 /** A completion FILETIME as epoch ms (null when unknown). */
 const ftMs = (ft) => { try { return ft === undefined || ft === true ? null : Number(BigInt(ft) / 10000n - FT_EPOCH); } catch { return null; } };
-const wzDate = (s) => (/^\d{10}$/.test(String(s)) ? new Date(+String(s).slice(0, 4), +String(s).slice(4, 6) - 1, +String(s).slice(6, 8), +String(s).slice(8, 10)).getTime() : null);
+/** A quest's YYYYMMDDHH date as wall-clock ms (UTC fields), like the server's clock and FILETIMEs. */
+const wzDate = (s) => (/^\d{10}$/.test(String(s)) ? Date.UTC(+String(s).slice(0, 4), +String(s).slice(4, 6) - 1, +String(s).slice(6, 8), +String(s).slice(8, 10)) : null);
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 /** Party-quest entries: never offered by NPCs, never completed from here. */
 export const isPartyQuest = (id) => id >= 1200 && id <= 1399;
@@ -87,7 +88,10 @@ export class QuestBook {
     this.started = {};   // id -> progress string
     this.completed = {}; // id -> filetime
     this.ex = {};        // id -> record-ex value (SHOW_STATUS_INFO mode 0x0A)
+    this.now = null;     // the server's wall clock (Game.serverNow), set once in game
   }
+  /** Dates, repeat intervals and dayByDay go by the server's clock; with none, this computer's wall clock. */
+  clock() { return this.now ? this.now() : Date.now() - new Date().getTimezoneOffset() * 60000; }
 
   async load() {
     [this.info, this.check, this.act, this.say] = await Promise.all(
@@ -251,14 +255,14 @@ export class QuestBook {
   hasInfoReq(c) { return list(c.infoex).length > 0 || list(c.info).length > 0; }
 
   /** A completed quest that may be taken again now. */
-  repeatable(id, c, now = Date.now()) {
+  repeatable(id, c, now = this.clock()) {
     const done = ftMs(this.completed[id]);
     const interval = c.interval === undefined ? -1 : Number(c.interval);
     if (interval < 0) {
       if (!Number(c.dayByDay)) return false;
       if (done !== null) {
         const a = new Date(done), b = new Date(now);
-        if (b.getFullYear() * 10000 + b.getMonth() * 100 + b.getDate() <= a.getFullYear() * 10000 + a.getMonth() * 100 + a.getDate()) return false;
+        if (b.getUTCFullYear() * 10000 + b.getUTCMonth() * 100 + b.getUTCDate() <= a.getUTCFullYear() * 10000 + a.getUTCMonth() * 100 + a.getUTCDate()) return false;
       }
     }
     return done === null || done + Math.max(0, interval) * 60000 <= now;
@@ -279,7 +283,7 @@ export class QuestBook {
     if (c.lvmax && s.level > c.lvmax) return false;
     if (c.lvmin && s.level < c.lvmin - (isPartyQuest(id) ? 5 : 0)) return false;
     if (c.pop && (s.fame ?? 0) < c.pop) return false;
-    const now = Date.now(), start = wzDate(c.start), end = wzDate(c.end);
+    const now = this.clock(), start = wzDate(c.start), end = wzDate(c.end);
     if ((start !== null && start > now) || (end !== null && end < now)) return false;
     const jobs = list(c.job);
     if (jobs.length && Math.floor((s.job % 1000) / 100) !== 9 && !jobs.includes(s.job)) return false;

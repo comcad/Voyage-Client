@@ -5,7 +5,8 @@ const NEVER = 0x0217E646BB058000n;   // FILETIME 2079-01-01: no expiry
 const FT_EPOCH = 116444736000000000n;
 export const permanent = (exp) => !exp || BigInt(exp) <= 0n || BigInt(exp) >= NEVER;
 const toDate = (exp) => new Date(Number((BigInt(exp) - FT_EPOCH) / 10000n));
-const fmt = (d) => `${d.getMonth() + 1}-${d.getDate()}-${d.getFullYear()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+// FILETIMEs and the server's clock are wall-clock times: read their UTC fields
+const fmt = (d) => `${d.getUTCMonth() + 1}-${d.getUTCDate()}-${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 
 /**
  * Item Guard (5060001 for good, 5061xxx for its info/protectTime days): UIWindow.img/ItemProtector/backgrnd
@@ -32,7 +33,7 @@ export class ItemGuardWin extends Win {
     let text;
     if (!this.days) text = `${name}\r\nWould you like to seal this item?`;
     else if (it.flag & 1 && !permanent(it.expiration)) text = `${name}\r\n will extend the item seal until ${fmt(new Date(toDate(it.expiration).getTime() + this.days * 864e5))}.\r\n Do you want to proceed?`;
-    else text = `${name}\r\n will be sealed until ${fmt(new Date(Date.now() + this.days * 864e5))}.\r\nDo you want to proceed?`;
+    else text = `${name}\r\n will be sealed until ${fmt(new Date(this.g.serverNow() + this.days * 864e5))}.\r\nDo you want to proceed?`;
     if (await m.confirm(text)) this.finish(this.pick);
   }
   finish(v) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(v); }
