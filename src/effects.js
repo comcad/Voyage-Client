@@ -3,6 +3,7 @@ import { Anim } from './map.js';
 import { itemIcon } from './data.js';
 import { uiText } from './ui/wzui.js';
 import { settings } from './settings.js';
+import { UI_W, VIEW_W, VIEW_H } from './view.js';
 
 /**
  * World-space effects from the original art:
@@ -124,7 +125,7 @@ export class WorldFx {
   untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
-  /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin. */
+  /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin (as on 800x600). */
   async screen(name) {
     this.mapFx ??= await this.assets.json('Map/Effect.img');
     const node = name.split('/').reduce((n, k) => n?.[k], this.mapFx);
@@ -135,7 +136,7 @@ export class WorldFx {
   }
   drawScreen(ctx) {
     const im = (n) => this.assets.image(n);
-    for (const a of this.screens || []) drawAt(ctx, im, a.node, 400, 260, a.alpha);
+    for (const a of this.screens || []) drawAt(ctx, im, a.node, VIEW_W / 2, VIEW_H / 2 - 40, a.alpha);
   }
   /** A canvas shown at a spot on the map, whole for `hold` ms, then fading out over `fade` ms. */
   flash(node, x, y, hold, fade) {
@@ -330,7 +331,7 @@ export class WorldFx {
     ctx.drawImage(frame, 4, 4);
     const icon = im(G.Mob?.[String(mobId)]);
     if (icon) ctx.drawImage(icon, 4 + 5, 4 + 6);
-    const x = 42, y = 12, w = 800 - x - 12;
+    const x = 42, y = 12, w = UI_W - x - 12;
     ctx.drawImage(l, x, y); ctx.drawImage(tile, x + l.width, y, w - l.width - r.width, tile.height); ctx.drawImage(r, x + w - r.width, y);
     const fill = im(G.Gage?.[String(Math.min(7, Math.max(1, d.tag || 1)))]?.[0]);
     const inner = w - l.width - r.width, k = Math.max(0, Math.min(1, d.hp / Math.max(1, d.maxHp)));
@@ -341,7 +342,7 @@ export class WorldFx {
   buffAt(x, y) {
     const list = this.buffList();
     const top = this.buffTop;
-    for (let i = 0; i < list.length; i++) { const bx = 800 - 36 - i * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
+    for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - i * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
     return null;
   }
   buffList() { const now = Date.now(); return this.game.buffs.filter((b) => b.until > now); }
@@ -353,7 +354,7 @@ export class WorldFx {
       if (b.source > 0 && !node) g.skills?.ensure(b.source);
       const img = node && this.assets.image(node);
       if (!img) { if (node) this.assets.preload([node]); return; }
-      const x = 800 - 36 - i * 34, y = this.buffTop, left = b.until - now, total = Math.max(1, b.dur || left);
+      const x = UI_W - 36 - i * 34, y = this.buffTop, left = b.until - now, total = Math.max(1, b.dur || left);
       ctx.save();
       if (left < 10000 && Math.floor(now / 250) % 2 === 0) ctx.globalAlpha = 0.45;   // blinks as it runs out
       // an item's buff: its raw icon centred on UIWindow.img/IconBase/0; a skill's icon is its own box

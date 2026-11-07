@@ -5,8 +5,9 @@
  * work (walk while attacking).
  */
 import { touchShown, bindingLabel } from '../controls.js';
+import { UI_W } from '../view.js';
 
-const BUTTON = 58, STICK = 120, KNOB = 50;   // sizes at 800px wide, before the layout's size setting
+const BUTTON = 58, STICK = 120, KNOB = 50;   // sizes in interface pixels (System Option UI SIZE), before the layout's size setting
 
 export class TouchControls {
   constructor(game, root) {
@@ -23,7 +24,7 @@ export class TouchControls {
   }
 
   get layout() { return this.g.controls.touch; }
-  get scale() { return (this.g.canvas.clientWidth || 800) / 800; }
+  get scale() { return (this.g.canvas.clientWidth || UI_W) / UI_W; }
 
   /** Rebuild every control from the layout. */
   render() {

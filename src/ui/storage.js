@@ -4,6 +4,7 @@ import { drawParts } from '../character.js';
 import { nameTag } from '../map.js';
 import { sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
+import { UI_W } from '../view.js';
 
 /**
  * The storage (UI/UIWindow.img/Trunk, 463x318). Measured from backgrnd:
@@ -23,7 +24,7 @@ const ERRORS = { 0x0A: 'Please check if your inventory is full or not.', 0x0B: '
 export class StorageWin extends Win {
   constructor(mgr, s) {
     const T = mgr.W.Trunk;
-    super(mgr, T.backgrnd, Math.round((800 - 463) / 2), 60);
+    super(mgr, T.backgrnd, Math.round((UI_W - 463) / 2), 60);
     this.buttons = [];
     this.T = T; this.npc = s.npc; this.slots = s.slots; this.meso = s.meso;
     this.tab = 1; this.first = [0, 0]; this.sel = [-1, -1];

@@ -13,6 +13,14 @@ const PRELOAD = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder'
 // Firefox opens its menu bar when Alt is let go, and its File menu when F10 goes down: never, while the game is open
 addEventListener('keyup', (e) => { if (e.key === 'Alt' || e.code === 'F10') e.preventDefault(); }, true);
 addEventListener('keydown', (e) => { if (e.code === 'F10') e.preventDefault(); }, true);
+// Alt + Enter switches between the window and full screen, as System Option's VIEWING MODE says
+addEventListener('keydown', (e) => {
+  if (!e.altKey || (e.code !== 'Enter' && e.code !== 'NumpadEnter')) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (e.repeat) return;
+  if (document.fullscreenElement) document.exitFullscreen?.();
+  else document.documentElement.requestFullscreen?.().catch(() => {});
+}, true);
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);

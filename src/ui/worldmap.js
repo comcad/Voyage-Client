@@ -1,5 +1,6 @@
 import { sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * The world map. UI/UIWindow.img/WorldMap is only a frame: Border 0-7 (corners 7px, a 33px title
@@ -15,7 +16,7 @@ const CUR_FRAME_MS = 150;
 
 export class WorldMapWin extends Win {
   constructor(mgr) {
-    super(mgr, null, Math.round((800 - W) / 2), Math.round((600 - H) / 2));
+    super(mgr, null, Math.round((UI_W - W) / 2), Math.round((UI_H - H) / 2));
     this.w = W; this.h = H;
     this.openSound = 'UI/WorldmapOpen'; this.closeSound = 'UI/WorldmapClose';
     this.closeBtn.x = W - 20; this.closeBtn.y = 10; this.closePinned = true;   // the frame's 33px title bar

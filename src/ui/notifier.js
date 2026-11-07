@@ -1,6 +1,7 @@
 import { sfx } from '../audio.js';
 import { uiText } from './wzui.js';
 import { Win } from './windows.js';
+import { UI_W, UI_H } from '../view.js';
 
 /**
  * Notification balloons (UIWindow.img/FadeYesNo) above the status bar: invitations and quest notices.
@@ -61,7 +62,8 @@ class Balloon extends Win {
   draw(ctx) {
     const now = performance.now();
     this.update(now);
-    const bar = this.g.statusBar?.y ?? 529;
+    const bar = this.g.statusBar?.y ?? UI_H - 71;
+    this.x = (this.g.statusBar?.ox ?? 0) + 464;
     this.y = bar - 21 - 5 * this.n;
     ctx.save(); ctx.globalAlpha = this.alpha;
     super.draw(ctx);
