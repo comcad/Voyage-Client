@@ -1168,6 +1168,8 @@ export class ChannelSession {
   cancelItemEffect(itemId) { this.send(new PacketWriter(C.CANCEL_ITEM_EFFECT).int(-itemId)); }
   /** One of your curses is past its time: asks the server to lift it (no body). */
   cancelDebuff() { this.send(new PacketWriter(C.CANCEL_DEBUFF)); }
+  /** A monster that banishes on touch (info/ban/banType 1) touched you: its id; the server sends you to its banMap. */
+  mobBanishPlayer(mobId) { this.send(new PacketWriter(C.MOB_BANISH_PLAYER).int(mobId)); }
   /** Sit on a chair item (Install 0301xxxx). */
   /** Through a Mystic Door: its owner, and whether you are going from town out to the field. */
   useDoor(owner, fromTown) { this.send(new PacketWriter(C.USE_DOOR).int(owner).byte(fromTown ? 1 : 0)); }
