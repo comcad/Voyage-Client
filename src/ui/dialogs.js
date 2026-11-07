@@ -16,7 +16,7 @@ import { UI_W, UI_H } from '../view.js';
  */
 
 // ==================================================================== text references
-function textRef(mgr) {
+export function textRef(mgr) {
   const g = mgr.game, s = mgr.strings;
   const mapName = (id) => { for (const r of Object.values(s.map || {})) if (r?.[id]) return r[id].mapName; return id; };
   return {
