@@ -31,6 +31,7 @@ export class RaiseWin extends Win {
     this.button(mgr.B.BtClose, this.w - 16, 4, () => this.g.closeRaise(this.itemId));
     this.g.net?.closeItemUi(itemId, 1);
   }
+  frames() { const B = this.R.backgrnd; return [...super.frames(), ...['top', 'center', 'bottom'].flatMap((k) => [B[k]?.left, B[k]?.center, B[k]?.right])].filter(Boolean); }
   get bitmask() { return this.exp < 1; }
   onOpen() { this.g.net?.openItemUi(this.questId); }
   onClose() { this.g.net?.closeItemUi(this.itemId, 0); }

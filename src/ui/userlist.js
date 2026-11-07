@@ -404,7 +404,7 @@ export class UserListWin extends Win {
     if (r?.kind !== 'buddy') return;
     const slot = Object.entries(this.g.inventory?.[5] || {}).find(([, it]) => it?.id === MEMO)?.[0];
     if (slot === undefined) { this.mgr.notice('You can use it after purchasing the Memo.'); return; }
-    if (this.g.cashFree()) this.g.useNote(Number(slot), MEMO, r.item.name);
+    if (this.g.cashGate()) this.g.useNote(Number(slot), MEMO, r.item.name);
   }
   async openBuddy(r) {
     if (r.kind === 'group') { this.editBuddy(); return; }

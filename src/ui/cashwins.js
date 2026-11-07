@@ -8,7 +8,7 @@ const centred = (bg) => [Math.round((UI_W - (bg?._w || 0)) / 2), Math.round((UI_
 class StepWin extends Win {
   constructor(mgr, bg, done) {
     super(mgr, bg, ...centred(bg));
-    this.modal = true; this.transient = true; this.closeBtn.visible = false;
+    this.modal = true; this.closeBtn.visible = false;
     this.done = done; this.fields = []; this.at = [];
   }
   field(x, y, w, h, max) {
@@ -56,7 +56,7 @@ export class KiteMessageWin extends Win {
   constructor(mgr, kite, msg) {
     const bg = mgr.W.MultiLine.backgrnd;
     super(mgr, bg, ...centred(bg));
-    this.transient = true; this.closeBtn.visible = false;
+    this.closeBtn.visible = false;
     this.kite = kite; this.msg = msg || '';
     this.button(mgr.W.MultiLine.BtClose, 385, 10, () => mgr.close(this));
     const parts = String(kite.message || '').split('\n');

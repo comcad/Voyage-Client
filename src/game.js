@@ -805,7 +805,9 @@ export class Game {
     this.inCashShop = true;
     const info = d.info;
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; }
-    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
+    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
+    this.raiseKept = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);   // back up on the next map
+    for (const id of this.raiseKept) this.closeRaise(id);
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
@@ -1183,10 +1185,11 @@ export class Game {
     const rec = this.quests?.started?.[info.questId];
     if (rec !== undefined) w.setValue(parseInt(String(rec).split(':')[0], 10) || 0);
   }
-  /** A map change takes the flowerpot windows down and puts them back up where they were. */
+  /** A map change takes the flowerpot windows down and puts them back up where they were (with any the Cash Shop took down). */
   cycleRaise() {
     const ids = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);
     for (const id of ids) this.closeRaise(id);
+    ids.push(...(this.raiseKept || []).filter((id) => !ids.includes(id))); this.raiseKept = null;
     for (const id of ids) this.openRaise(id);
   }
   closeRaise(id) {
