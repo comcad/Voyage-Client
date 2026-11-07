@@ -39,6 +39,7 @@ import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
 import { notify, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
+import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
 import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
@@ -1059,6 +1060,13 @@ export class Game {
     else if (e.op === 'result') { const t = dueyResult(e.code); if (t) this.windows.notice(t); }
   }
 
+  /** The Transform window for a Maplemas Party Potion, unless one is open already. */
+  async openTransform(slot, itemId) {
+    if (this.windows.order.some((w) => w instanceof TransformWin)) return;
+    const win = new TransformWin(this.windows, Number(slot), itemId);
+    await this.assets.preload(win.frames());
+    this.windows.show(win);
+  }
   async openRock(slot, itemId) {
     if (this.windows.order.some((w) => w instanceof TeleportWin)) return;
     if (this.dead) { this.windows.notice("You can't do it while you're dead."); return; }
@@ -3516,6 +3524,8 @@ export class Game {
     if (type === 237) { this.useSolomonItem(slot, id); return; }
     if (type === 203) { this.useReturnScroll(slot, id); return; }
     if (type === 210) { this.useSummonBag(slot, id); return; }
+    // the Maplemas Party Potion (221x2xxx) opens its Transform window, once nothing is waiting (200ms apart)
+    if (type === 221 && Math.floor((id % 10000) / 1000) === 2) { if (this.canExclusive(200)) this.openTransform(slot, id); return; }
     if (type === 232) { if (this.canExclusive(200)) this.openRock(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }

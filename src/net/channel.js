@@ -1367,6 +1367,8 @@ export class ChannelSession {
   closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
   /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
   /** The Use-tab Teleport Rock (232xxxx): its slot, the item, 0 and the map picked, then the time. */
+  /** The Maplemas Party Potion's Transform window: the time, the slot, the item and the name to look like. */
+  transform(slot, itemId, name) { this.send(new PacketWriter(C.TRANSFORM).int(Date.now() | 0).short(slot).int(itemId).string(name)); }
   useTeleportRock(slot, itemId, mapId) { this.send(new PacketWriter(C.USE_TELEPORT_ROCK).short(slot).int(itemId).byte(0).int(mapId).int(Date.now() | 0)); }
   rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
   rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
