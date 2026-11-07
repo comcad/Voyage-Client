@@ -1,7 +1,7 @@
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * Party Search (UIWindow.img/PartySearch, backgrnd 305x407): title y 8-21, tab strip y 22-42 (Tab 0 Party,

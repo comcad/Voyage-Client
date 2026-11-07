@@ -2,7 +2,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * Maple Messenger (UIWindow.img/Messenger/backgrnd, 295x364): up to three people chatting from anywhere in

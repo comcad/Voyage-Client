@@ -2,7 +2,7 @@ import { pad, frames } from '../assets.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * The Monster Book (UIWindow.img/MonsterBook, 475x349), laid out as openms recovered it.

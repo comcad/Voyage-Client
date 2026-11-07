@@ -1,7 +1,7 @@
 import { sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
 import { isPartyQuest, TITLE_AREA } from '../quests.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * The Quest Helper (UIWindow.img/QuestAlarm, 223 wide): "Quest Helper (n/5)" at (25, 2) over backgrndmax (25),

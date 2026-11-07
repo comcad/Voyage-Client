@@ -4,7 +4,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * A player's personal shop (UIWindow.img/PersonalShop/backgrnd, 525 wide; its lower-left fee table hangs

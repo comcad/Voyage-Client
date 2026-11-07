@@ -4,7 +4,7 @@ import { drawParts } from '../character.js';
 import { nameTag } from '../map.js';
 import { sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * The storage (UI/UIWindow.img/Trunk, 463x318). Measured from backgrnd:

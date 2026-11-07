@@ -1,4 +1,4 @@
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 /**
  * Quest progress lines near the top of the screen ("Blue Snail 3 / 10"): bold yellow #FFC600 with a 1px black
  * outline, centred on x 400. Five slots, the first at y 150 and the others 20px higher each; a line fades out

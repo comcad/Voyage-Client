@@ -689,7 +689,9 @@ export class Game {
     const field = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * VIEW_W / r.width, (e.clientY - r.top) * VIEW_H / r.height]; };
     const wm = this.windows;
     // windows sit above the bar: they see the event first, the bar only gets what they leave
-    const route = (type, e) => this.uiLocked || (wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e)));
+    // in the Cash Shop only its windows take the mouse (the bar is hidden, and the shop may not cover the screen)
+    const route = (type, e) => this.uiLocked || (this.inCashShop ? (wm.pointer(type, ...at(e)), true)
+      : wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e)));
     c.addEventListener('pointermove', (e) => route('move', e));
     c.addEventListener('pointerdown', (e) => { if (route('down', e)) e.stopImmediatePropagation(); }, true);
     addEventListener('pointerup', (e) => route('up', e));
@@ -725,7 +727,7 @@ export class Game {
     c.addEventListener('wheel', (e) => {
       // deltaMode 1 = lines (some mice / Firefox): count each as a pixel step of 40
       const dy = e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? 400 : 1);
-      if (wm.pointer('wheel', ...at(e), dy) || sb.wheel(...at(e), dy)) e.preventDefault();
+      if (wm.pointer('wheel', ...at(e), dy) || (!this.inCashShop && sb.wheel(...at(e), dy))) e.preventDefault();
     }, { passive: false });
     const place = this.placeUi = () => {
       TextField.stretchY = c.clientWidth ? (c.clientHeight / c.clientWidth) * (VIEW_W / VIEW_H) : 1;
@@ -1848,6 +1850,7 @@ export class Game {
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
+    this.windows.fit(this.windows.wins.minimap);
     this.bindUiPointer();
     this.hud = new Hud(uiRoot, this);
     this.hud.update(this.stats);
@@ -7070,7 +7073,7 @@ export class Game {
     this.placeUi?.();
     for (const w of this.windows?.order || []) {
       if (w === this.csWin) { w.x = (UI_W - w.w) >> 1; w.y = (UI_H - w.h) >> 1; continue; }
-      w.x = Math.max(-w.w + 40, Math.min(UI_W - 40, w.x)); w.y = Math.max(0, Math.min(UI_H - 40, w.y));
+      this.windows.fit(w);
     }
     if (this.map && this.camF) this.placeCamera();
   }

@@ -45,8 +45,13 @@ export class WindowManager {
   open(name, sound = null) {
     const w = this.wins[name];
     if (!w) return null;
-    if (!this.order.includes(w)) { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; w.onOpen?.(); const s = w.openSound || sound; if (s) sfx.play(s); } else this.raise(w);
+    if (!this.order.includes(w)) { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; w.onOpen?.(); this.fit(w); const s = w.openSound || sound; if (s) sfx.play(s); } else this.raise(w);
     return w;
+  }
+  /** Keeps a window where it can be seen and dragged, as a drag does (a smaller screen size can leave it outside). */
+  fit(w) {
+    if (!w) return;
+    w.x = Math.round(Math.max(-w.w + 40, Math.min(UI_W - 40, w.x))); w.y = Math.round(Math.max(0, Math.min(UI_H - 40, w.y)));
   }
   close(w) {
     // a window may ask first (Key Setting's "Save changes?"); it closes once that is answered
@@ -80,7 +85,7 @@ export class WindowManager {
     return true;
   }
   /** A transient window (dialog, shop) on top of everything. */
-  show(w, sound = 'UI/DlgNotice') { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; if (sound) sfx.play(sound); return w; }
+  show(w, sound = 'UI/DlgNotice') { this.fit(w); this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; if (sound) sfx.play(sound); return w; }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
     // Escape puts back an item held by a click

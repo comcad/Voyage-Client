@@ -229,10 +229,16 @@ export class SysOptWin extends Win {
       ctx.drawImage(bg, 10, ROW_Y(1) - 12, 12, 24, 10, top + 2, 44, 24);   // a plain stretch of a label's fill
     }
     ctx.drawImage(bg, 0, ROWS_END, 299, ART_H - ROWS_END, 0, ROWS_END + ADDED * 30, 299, ART_H - ROWS_END);
-    this.label(ctx, 'SCREEN', 32, ROWS_END + 6); this.label(ctx, 'SIZE', 32, ROWS_END + 16);
-    this.label(ctx, 'UI SIZE', 32, ROWS_END + 41);
-    this.label(ctx, 'FIT TO', 32, ROWS_END + 66); this.label(ctx, 'SCREEN', 32, ROWS_END + 76);
-    this.label(ctx, 'STRETCH TO FILL THE WINDOW', CHECK_X + 16, ROW_Y(FIT_ROW) - 3, '#224466', null, SMALL, false);
+    // the rows' fixed lettering, drawn once
+    if (!this.letters) {
+      const c = this.letters = document.createElement('canvas'), lc = c.getContext('2d');
+      c.width = 299; c.height = ADDED * 30;
+      this.label(lc, 'SCREEN', 32, 6); this.label(lc, 'SIZE', 32, 16);
+      this.label(lc, 'UI SIZE', 32, 41);
+      this.label(lc, 'FIT TO', 32, 66); this.label(lc, 'SCREEN', 32, 76);
+      this.label(lc, 'STRETCH TO FILL THE WINDOW', CHECK_X + 16, ROW_Y(FIT_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
+    }
+    ctx.drawImage(this.letters, 0, ROWS_END);
     this.label(ctx, `${Math.round((this.pendingScale ?? UI_SCALE) * 100)}%`, 270, ROW_Y(SLIDERS.uiScale.row) - 3, '#224466', null);
   }
   /** Lettering centred on cx (or from it): white on the labels' dark outline, or one colour with no outline. */
@@ -340,7 +346,7 @@ export class SysOptWin extends Win {
   up() {
     if (this.drag) sfx.play('UI/BtMouseClick');
     if (this.drag === 'uiScale' && this.pendingScale !== undefined) {
-      if (this.pendingScale !== UI_SCALE) { settings.uiScale = this.pendingScale; saveSettings(); this.g.setResolution?.(); }
+      if (this.pendingScale !== (Number(settings.uiScale) || 1)) { settings.uiScale = this.pendingScale; saveSettings(); this.g.setResolution?.(); }
       this.pendingScale = undefined;
     }
     this.drag = null;

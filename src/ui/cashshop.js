@@ -1212,7 +1212,7 @@ export class CashShopWin extends Win {
     this.buy(c);
   }
   wheel(dy) {
-    const { x, y } = this.mgr.mouse, d = Math.sign(dy);
+    const x = this.mgr.mouse.x - this.x, y = this.mgr.mouse.y - this.y, d = Math.sign(dy);
     if (x < 256 && y >= 318 && y < 422) this.cfirst = Math.max(0, Math.min(Math.ceil(this.inv.length / LOCKER.cols) - LOCKER.rows, this.cfirst + d));
     else if (x < 256 && y >= 426) {
       const limit = this.g.inventory?.limits?.[this.itab] || 24;

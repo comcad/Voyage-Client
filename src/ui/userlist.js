@@ -4,7 +4,7 @@ import { Win, allCanvases } from './windows.js';
 import { localTalk } from './dialogs.js';
 import { drawEmblem } from './social.js';
 import { CHAT_COLOR } from './statusbar.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * The community window (UI/UIWindow.img/UserList, 312x389): Buddy, Party, Guild, Guild Alliance and Blacklist tabs,

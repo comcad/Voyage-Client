@@ -3,7 +3,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * The trade room (UI/UIWindow.img/TradingRoom, 565x474). Measured from backgrnd:

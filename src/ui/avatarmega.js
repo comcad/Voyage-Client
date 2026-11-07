@@ -4,7 +4,7 @@ import { lookEquipIds } from '../net/proto.js';
 import { EMOTES } from '../game.js';
 import { allCanvases } from './windows.js';
 import { uiText } from './wzui.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 const W = 225, SLIDE = 300, SHOW = 10000;
 

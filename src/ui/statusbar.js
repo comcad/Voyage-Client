@@ -134,7 +134,7 @@ export class StatusBar {
    * right, kept 2px in from the edge. Everything else here is in the bar's own space, x 0 at its left edge.
    */
   layout(viewW, viewH) {
-    this.y = viewH - BAR_H; this.w = viewW;
+    this.y = viewH - BAR_H;
     this.side = viewW >= BAR_W + 2 * QUICK_X - QUICK_W;
     const mid = (viewW - BAR_W) >> 1;
     this.ox = Math.floor(this.side ? Math.min(mid, viewW - BAR_W - 2 * QUICK_X + QUICK_W) : mid);
@@ -550,7 +550,7 @@ export class StatusBar {
     if (this.targetMenu && x < TMENU.x + TMENU.w + 1 && y >= this.targetMenuTop() - 1) return true;
     if (this.menu && x >= this.menu.x && x < this.menu.x + this.menu.bg._w && y >= this.menu.y) return true;
     const q = this.quickPos();
-    if (this.quickOpen && x >= q.x && (!this.side || x < q.x + QUICK_W) && y >= q.y) return true;
+    if (this.quickOpen && x >= q.x && x < (this.side ? q.x + QUICK_W : BAR_W) && y >= q.y) return true;
     return false;
   }
 

@@ -2,7 +2,7 @@ import { invType } from '../data.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, drawTabStrip } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W } from '../view.js';
 
 /**
  * Duey's Maple Home Delivery (UIWindow.img/Delivery, backgrnd 290x350), opened by talking to Duey. Measured:
