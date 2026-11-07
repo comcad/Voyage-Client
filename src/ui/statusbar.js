@@ -4,7 +4,7 @@ import { EXP, jobName, itemIcon, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText } from './wzui.js';
 import { settings } from '../settings.js';
-import { DEFAULT_QUICKSLOTS } from '../keymap.js';
+import { DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2 } from '../keymap.js';
 
 /**
  * The v83 status bar (UI/StatusBar.img), drawn on the game canvas across the bottom 71px,
@@ -56,7 +56,8 @@ export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar,
 // the panel sits 2px in from the right edge on top of the bar (beside it, on a screen wide enough); each slot's 32x32
 // icon box, from the panel's corner
 const BAR_W = 800, QUICK_W = 151, QUICK_X = 153, QUICK_ICONS = [[7, 8], [42, 8], [77, 8], [112, 8], [7, 41], [42, 41], [77, 41], [112, 41]];
-// shown unless the player closed it, remembered between sessions
+// how many quick slot panels show (0 none, 1, 2: a second panel of browser-kept keys stacked on the first),
+// remembered between sessions; the button opens one more each click, and closes both after the second
 const QUICK_KEY = 'maple.quickslot';
 const MENU_ITEMS = {
   GameMenu: ['BtChannel', 'BtGameOpt', 'BtSysOpt', 'BtQuit'],             // "Change Skin" was never enabled
@@ -68,7 +69,7 @@ export class StatusBar {
     this.game = game; this.assets = game.assets; this.layer = layer;
     this.y = 0; this.ox = 0; this.side = false; this.lines = []; this.menu = null; this.chatTarget = 'all'; this.targetMenu = false;
     this.mouse = { x: -1, y: -1 }; this.hovered = null; this.quick = [];
-    this.quickOpen = (() => { try { return localStorage.getItem(QUICK_KEY) !== '0'; } catch { return true; } })();
+    this.quickLevel = (() => { try { const v = localStorage.getItem(QUICK_KEY); return v === '0' ? 0 : v === '2' ? 2 : 1; } catch { return 1; } })();
     // chat: 1 minimized, 2 minimized while typing, 3 open (chatH tall); the view's first line, when you last scrolled
     this.chatState = 1; this.chatH = CHAT_H.def; this.scrollPos = 0; this.scrolledAt = -Infinity;
     this.history = []; this.historyAt = 0; this.chatDrag = null; this.edgeHover = false; this.scrollHold = null; this.thumbDrag = null;
@@ -96,8 +97,8 @@ export class StatusBar {
     ];
     // the hotkey tabs from x 614, every 30px (the client's own spacing), after the notice box
     this.tabs = small.map(([node, fn], i) => this.btn(node, TABS_X + i * 30, () => y() + 6, fn));
-    this.quickBtn = this.btn(S.QuickSlot, TABS_X + 5 * 30, () => y() + 6, () => this.setQuickOpen(true));
-    this.quickBtnD = this.btn(S.QuickSlotD, TABS_X + 5 * 30, () => y() + 6, () => this.setQuickOpen(false));
+    this.quickBtn = this.btn(S.QuickSlot, TABS_X + 5 * 30, () => y() + 6, () => this.setQuickLevel(this.quickLevel + 1));
+    this.quickBtnD = this.btn(S.QuickSlotD, TABS_X + 5 * 30, () => y() + 6, () => this.setQuickLevel(0));
     // "-" minimizes the log to one line, "+" opens it
     this.chatMinBtn = this.btn(this.B.BtMin, 536, () => y() + 12, () => this.setChatState(1));
     this.chatMaxBtn = this.btn(this.B.BtMax, 536, () => y() + 12, () => this.setChatState(3));
@@ -124,7 +125,7 @@ export class StatusBar {
 
   allButtons() {
     const list = [this.shopBtn, this.menuBtn, this.shortBtn, this.tradeBtn, ...this.tabs,
-      this.quickOpen ? this.quickBtnD : this.quickBtn, this.chatState === 3 ? this.chatMinBtn : this.chatMaxBtn];
+      this.quickLevel < 2 ? this.quickBtn : this.quickBtnD, this.chatState === 3 ? this.chatMinBtn : this.chatMaxBtn];
     if (this.menu) list.push(...this.menu.buttons);
     return list.filter(Boolean);
   }
@@ -411,7 +412,7 @@ export class StatusBar {
     // an Item Megaphone line in the log: its item
     const line = (this.itemHits || []).find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
     if (line) return { item: line.item };
-    const i = this.quickAt(x, y), k = i >= 0 ? this.game.keymap?.[this.quickKeys[i]] : null, g = this.game, above = this.quickPos().y - 2;
+    const i = this.quickAt(x, y), k = i >= 0 ? this.game.keymap?.[this.quickKeys[i]] : null, g = this.game, above = this.quickPos(this.quickLevel - 1).y - 2;
     if (!k) return null;
     if ([2, 3, 7].includes(k.type)) {
       for (const tab of [2, 3, 4, 5]) for (const it of Object.values(g.inventory?.[tab] || {})) if (it?.id === k.action) return { item: it, above };
@@ -420,24 +421,39 @@ export class StatusBar {
     return k.type === 1 && g.skills ? { skill: k.action, above } : null;
   }
 
-  setQuickOpen(open) {
-    this.quickOpen = open;
-    try { localStorage.setItem(QUICK_KEY, open ? '1' : '0'); } catch { /* ignore */ }
-    if (open) this.render();
+  setQuickLevel(n) {
+    this.quickLevel = n > 2 ? 0 : n;
+    try { localStorage.setItem(QUICK_KEY, String(this.quickLevel)); } catch { /* ignore */ }
+    if (this.quickLevel) this.render();
+  }
+  get quickOpen() { return this.quickLevel > 0; }
+
+  /** The quick slots' keys, the first panel's then the second's; right Shift's bindings are left Shift's. */
+  get quickKeys() {
+    return [...(this.game.quickKeys || DEFAULT_QUICKSLOTS), ...(this.game.quickKeys2 || DEFAULT_QUICKSLOTS2)].map((sc) => (sc === 54 ? 42 : sc));
   }
 
-  /** The quick slots' keys; right Shift's bindings are left Shift's. */
-  get quickKeys() { return (this.game.quickKeys || DEFAULT_QUICKSLOTS).map((sc) => (sc === 54 ? 42 : sc)); }
-
-  /** The open panel's top-left corner: right above the bar's right end, or beside the bar on the bottom edge. */
-  quickPos() { return this.side ? { x: BAR_W + QUICK_X - QUICK_W, y: this.y + BAR_H - 80 } : { x: BAR_W - QUICK_X, y: this.y - 80 }; }
+  /**
+   * A panel's top-left corner: the first right above the bar's right end, or beside the bar on the bottom edge;
+   * the second stacked on top of it.
+   */
+  quickPos(panel = 0) {
+    const p = this.side ? { x: BAR_W + QUICK_X - QUICK_W, y: this.y + BAR_H - 80 } : { x: BAR_W - QUICK_X, y: this.y - 80 };
+    p.y -= 80 * panel;
+    return p;
+  }
+  /** Slot i's 32x32 icon box (slots 8-15 are the second panel's). */
+  slotBox(i) { const p = this.quickPos(i >> 3), [ix, iy] = QUICK_ICONS[i & 7]; return { x: p.x + ix, y: p.y + iy }; }
+  slotAt(x, y) {
+    for (let i = 0; i < 8 * this.quickLevel; i++) { const b = this.slotBox(i); if (x >= b.x && x < b.x + 32 && y >= b.y && y < b.y + 32) return i; }
+    return -1;
+  }
 
   /** A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. */
   dropOnQuickSlot(x, y, c) {
     x -= this.ox;
     if (!this.quickOpen || this.inMenu(x, y)) return;
-    const p = this.quickPos();
-    const i = QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
+    const i = this.slotAt(x, y);
     if (i < 0) return;
     const sc = this.quickKeys[i];
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
@@ -450,8 +466,7 @@ export class StatusBar {
   /** The slot under (x, y), or -1. */
   quickAt(x, y) {
     if (!this.quickOpen || this.hidden || this.inMenu(x, y)) return -1;
-    const p = this.quickPos();
-    return QUICK_ICONS.findIndex(([ix, iy]) => x >= p.x + ix && x < p.x + ix + 32 && y >= p.y + iy && y < p.y + iy + 32);
+    return this.slotAt(x, y);
   }
   /** Pick a slot's binding up: dropped on another slot it moves there, dropped off the bar it is taken off the key. */
   pickQuick(x, y) {
@@ -549,7 +564,7 @@ export class StatusBar {
     if (this.chatState !== 1 && !this.hidden && x >= 80 && x < CHAT_W && y >= this.logBox().top) return true;
     if (this.targetMenu && x < TMENU.x + TMENU.w + 1 && y >= this.targetMenuTop() - 1) return true;
     if (this.menu && x >= this.menu.x && x < this.menu.x + this.menu.bg._w && y >= this.menu.y) return true;
-    const q = this.quickPos();
+    const q = this.quickPos(this.quickLevel - 1);
     if (this.quickOpen && x >= q.x && x < (this.side ? q.x + QUICK_W : BAR_W) && y >= q.y) return true;
     return false;
   }
@@ -702,14 +717,13 @@ export class StatusBar {
 
   drawQuickSlots(ctx) {
     const S = this.S, base = this.assets.image(S.base.quickSlot);
-    const { x: x0, y: y0 } = this.quickPos();
-    if (base) ctx.drawImage(base, x0, y0);
+    for (let n = 0; n < this.quickLevel; n++) { const p = this.quickPos(n); if (base) ctx.drawImage(base, p.x, p.y); }
     const labels = this.W.KeyConfig?.quickslotConfig?.key;
-    this.quickKeys.forEach((sc, i) => {
-      const q = this.quick[i], icon = q?.node && this.assets.image(q.node);
+    this.quickKeys.slice(0, 8 * this.quickLevel).forEach((sc, i) => {
+      const q = this.quick[i], icon = q?.node && this.assets.image(q.node), { x: ix, y: iy } = this.slotBox(i);
       if (icon) {
         // the icon sits in its 32x32 box by its origin; a Use item's count is at the box's bottom-left, as in the inventory
-        const o = q.node.origin || [0, 32], ix = x0 + QUICK_ICONS[i][0], iy = y0 + QUICK_ICONS[i][1];
+        const o = q.node.origin || [0, 32];
         ctx.drawImage(icon, ix - o[0], iy + 32 - o[1]);
         if (q.item) this.game.windows.count(ctx, this.game.itemCount(q.item), ix, iy + 21);
         // a skill cooling down: UIWindow.img/Skill/CoolTime, 16 steps whose dark cover clears from the top
@@ -721,7 +735,7 @@ export class StatusBar {
         }
       }
       const label = this.assets.image(labels?.[sc]);
-      if (label) ctx.drawImage(label, x0 + QUICK_ICONS[i][0] + 2, y0 + QUICK_ICONS[i][1] + 2);
+      if (label) ctx.drawImage(label, ix + 2, iy + 2);
     });
   }
 

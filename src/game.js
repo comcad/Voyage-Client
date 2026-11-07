@@ -10,7 +10,7 @@ import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
-import { CODE_TO_SC, defaultKeymap, ACTION, MENU, DEFAULT_QUICKSLOTS } from './keymap.js';
+import { CODE_TO_SC, defaultKeymap, ACTION, MENU, DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2, loadQuickKeys2 } from './keymap.js';
 import { loadControls } from './controls.js';
 import { PadInput } from './gamepad.js';
 import { TouchControls } from './ui/touch.js';
@@ -673,6 +673,7 @@ export class Game {
     this.stats = null; this.inventory = null; this.meso = 0;
     this.keymap = defaultKeymap();
     this.quickKeys = [...DEFAULT_QUICKSLOTS];   // the quick slots' keys, from the server
+    this.quickKeys2 = [...DEFAULT_QUICKSLOTS2];  // the second quick slot panel's, kept in this browser
     this.buffs = [];   // {source, until, m1, m2}
     this.fx = [];      // skill effect animations {anim, x, y, flip, follow}
     this.shots = [];   // projectiles {anim, x, y, tx, ty, t, dur, onHit}
@@ -1825,6 +1826,7 @@ export class Game {
     this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.linked = info.linked;
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
+    this.quickKeys2 = loadQuickKeys2(info.stats.name);
     this.statusBar = new StatusBar(this, uiRoot);
     this.touch = new TouchControls(this, uiRoot);
     this.statusBar.layout(UI_W, UI_H);
