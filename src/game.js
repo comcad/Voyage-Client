@@ -688,7 +688,7 @@ export class Game {
     const sb = this.statusBar, c = this.canvas;
     // the interface's point (UI SIZE), and the field's
     const at = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * UI_W / r.width, (e.clientY - r.top) * UI_H / r.height]; };
-    const field = (e) => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * VIEW_W / r.width, (e.clientY - r.top) * VIEW_H / r.height]; };
+    const field = (e) => { const r = c.getBoundingClientRect(); return this.unzoom((e.clientX - r.left) * VIEW_W / r.width, (e.clientY - r.top) * VIEW_H / r.height); };
     const wm = this.windows;
     // windows sit above the bar: they see the event first, the bar only gets what they leave
     // in the Cash Shop only its windows take the mouse (the bar is hidden, and the shop may not cover the screen)
@@ -6927,7 +6927,7 @@ export class Game {
     for (const c of this.input.clicks) {
       // a double-click on a window (or the status bar) is the window's, never the NPC behind it
       if (this.windows?.top(c.x / UI_SCALE, c.y / UI_SCALE) || this.statusBar?.contains?.(c.x / UI_SCALE, c.y / UI_SCALE)) continue;
-      const wx = c.x + Math.round(this.cam.x), wy = c.y + Math.round(this.cam.y);
+      const [zx, zy] = this.unzoom(c.x, c.y), wx = zx + Math.round(this.cam.x), wy = zy + Math.round(this.cam.y);
       // a click on your own chalkboard puts it away
       const cr = this.player.chalk && this.player.chalkRect;
       if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.closeChalkboard('The chalkboard has closed.'); return; }
@@ -7087,6 +7087,37 @@ export class Game {
     if (this.map && this.camF) this.placeCamera();
   }
 
+  /**
+   * System Option ZOOM: the world drawn so far, closed in on your character. The part of the view around the camera's
+   * point (held inside the view, so the map's edges stay put) is stretched over the whole screen, pixel for pixel;
+   * the interface is drawn after it at its own size.
+   */
+  applyZoom() {
+    const z = Math.max(1, Math.min(2, Number(settings.zoom) || 1));
+    this.zoomCrop = null;
+    if (z <= 1 || !this.camF) return;
+    const c = this.canvas, kx = c.width / VIEW_W, ky = c.height / VIEW_H, cw = VIEW_W / z, ch = VIEW_H / z;
+    const fx = this.camF.x - this.cam.x, fy = this.camF.y - this.cam.y;
+    const sx = Math.max(0, Math.min(VIEW_W - cw, fx - cw / 2)), sy = Math.max(0, Math.min(VIEW_H - ch, fy - ch / 2));
+    const buf = (this.zoomBuf ??= document.createElement('canvas'));
+    if (buf.width !== c.width || buf.height !== c.height) { buf.width = c.width; buf.height = c.height; }
+    const b = buf.getContext('2d');
+    b.setTransform(1, 0, 0, 1, 0, 0);
+    b.drawImage(c, 0, 0);
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(buf, sx * kx, sy * ky, cw * kx, ch * ky, 0, 0, c.width, c.height);
+    ctx.restore();
+    this.zoomCrop = { sx, sy, z };
+  }
+  /** A point on the screen as the unzoomed view has it (System Option ZOOM). */
+  unzoom(x, y) {
+    const z = this.zoomCrop;
+    return z ? [z.sx + x / z.z, z.sy + y / z.z] : [x, y];
+  }
+
   render() {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
@@ -7144,6 +7175,7 @@ export class Game {
       ctx.restore();
     }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
+    this.applyZoom();
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
     this.vfx?.drawScreen(ctx);
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
