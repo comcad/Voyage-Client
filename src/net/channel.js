@@ -1100,6 +1100,9 @@ export class ChannelSession {
     on(S.SHOW_COMBO, (r) => this.emit('aranCombo', r.int()));
     // a value the map keeps for you, by name: Mu Lung Dojo energy, the Pyramid's counts
     on(S.SESSION_VALUE, (r) => this.emit('sessionValue', r.string(), r.string()));
+    // the Pyramid: what you have earned back against its gauge; the result (rank 0 S .. 4 D, EXP gained)
+    on(S.PYRAMID_GAUGE, (r) => this.emit('pyramidGauge', r.int()));
+    on(S.PYRAMID_SCORE, (r) => this.emit('pyramidScore', r.byte(), r.int()));
     on(S.LOCK_UI, (r) => this.emit('lockUi', r.bool()));
     on(S.DISABLE_UI, (r) => this.emit('disableUi', r.bool()));
     on(S.CHANGE_CHANNEL, (r) => { r.ubyte(); const ip = Array.from(r.bytes(4)).join('.'); this.emit('changeChannel', { ip, port: r.ushort() }); });

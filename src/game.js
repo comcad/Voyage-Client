@@ -17,6 +17,7 @@ import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { KeyCommands } from './commands.js';
 import { DojoWindow } from './ui/dojo.js';
+import { PyramidWindow } from './ui/pyramid.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
@@ -2019,6 +2020,8 @@ export class Game {
       clock: later((secs) => {
         // a Dojo floor draws its own clock
         if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
+        // a Pyramid stage times itself in its own window
+        if (secs !== null && Number(this.map?.info?.fieldType) === 23) { (this.pyramid ??= new PyramidWindow(this)).clock(secs); return; }
         this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt();
       }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
@@ -2261,6 +2264,8 @@ export class Game {
       energyCharge: (v) => { this.energy = v; },
       aranCombo: (n) => this.setAranCombo(n),
       sessionValue: (k, v) => this.sessionValue(k, v),
+      pyramidGauge: (n) => (this.pyramid ??= new PyramidWindow(this)).gauge(n),
+      pyramidScore: (rank, exp) => (this.pyramid ??= new PyramidWindow(this)).score(rank, exp),
       objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
@@ -2615,7 +2620,7 @@ export class Game {
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
-      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged();
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.pyramid?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
@@ -3951,6 +3956,7 @@ export class Game {
     this.updateDiseases(dt);
     this.updateAranCombo(dt);
     (this.dojo ??= new DojoWindow(this)).update(dt);
+    (this.pyramid ??= new PyramidWindow(this)).update(dt);
     if (this.net) this.autoAggro();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.touchReactors();
@@ -6494,7 +6500,7 @@ export class Game {
   dojoKey(k, down) {
     const sc = CODE_TO_SC[k], mod = sc === 0x1d || sc === 0x38, prev = this.dojoMod;
     this.dojoMod = null;
-    const on = Number(this.map?.info?.fieldType) === 14 && (this.dojoEnergy || 0) >= 10000 && this.player && !this.dead;
+    const on = [14, 23].includes(Number(this.map?.info?.fieldType)) && (this.dojoEnergy || 0) >= 10000 && this.player && !this.dead;
     if (on && down && mod) {
       if (prev && CODE_TO_SC[prev.k] !== sc) return this.dojoSkill();
       this.dojoMod = { k, t: performance.now() };
@@ -7149,6 +7155,7 @@ export class Game {
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
       this.dojo?.draw(ctx);
+      this.pyramid?.draw(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top
       this.drawQuestTimers(ctx);
       this.hud?.draw?.(ctx);            // what you gain, in the lower-right corner
