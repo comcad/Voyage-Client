@@ -14,6 +14,21 @@ export const JOBS = {
   900: 'GM', 910: 'Super GM', 1000: 'Noblesse', 1100: 'Dawn Warrior', 1200: 'Blaze Wizard', 1300: 'Wind Archer',
   1400: 'Night Walker', 1500: 'Thunder Breaker', 2000: 'Legend', 2001: 'Evan', 2100: 'Aran',
 };
+/** Job names in the guild / family job-advancement notice ('' for a job not listed). */
+const ADVANCE_NAMES = {
+  0: 'Beginner', 100: 'Swordman', 110: 'Fighter', 111: 'Crusader', 112: 'Hero', 120: 'Page', 121: 'White Knight', 122: 'Paladin',
+  130: 'Spearman', 131: 'Dragon Knight', 132: 'Dark Knight', 200: 'Magician', 210: 'Wizard (Fire,Poison)', 211: 'Mage(Fire, Poison)',
+  212: 'Arch Mage(Fire,Poison)', 220: 'Wizard(Ice,Lightning)', 221: 'Mage(Ice,Lightning)', 222: 'Arch Mage(Ice,Lightning)', 230: 'Cleric',
+  231: 'Priest', 232: 'Bishop', 300: 'Archer', 310: 'Hunter', 311: 'Ranger', 312: 'Bowmaster', 320: 'Crossbow man', 321: 'Sniper',
+  322: 'Marksman', 400: 'Rogue', 410: 'Assassin', 411: 'Hermit', 412: 'Night Lord', 420: 'Bandit', 421: 'Chief Bandit', 422: 'Shadower',
+  500: 'Pirate', 510: 'Brawler', 511: 'Marauder', 512: 'Buccaneer', 520: 'Gunslinger', 521: 'Outlaw', 522: 'Corsair', 800: '매니저',
+  900: 'GM', 910: 'SuperGM', 920: 'MWLB', 1000: 'Noblesse', 2000: 'Legend', 2001: 'Evan0', 2200: 'Evan1',
+};
+for (const [base, name] of [[1100, 'Dawn Warrior'], [1200, 'Blaze Wizard'], [1300, 'Wind Archer'], [1400, 'Night Walker'], [1500, 'Thunder Breaker'], [2100, 'Aran']]) {
+  for (const j of [0, 10, 11, 12]) ADVANCE_NAMES[base + j] = name;
+}
+for (let i = 2; i <= 10; i++) ADVANCE_NAMES[2208 + i] = `Evan${i}`;
+export const advanceName = (id) => ADVANCE_NAMES[id] ?? '';
 export const jobName = (id) => JOBS[id] || JOBS[Math.floor(id / 10) * 10] || JOBS[Math.floor(id / 100) * 100] || `Job ${id}`;
 
 /**

@@ -65,7 +65,7 @@ class Balloon extends Win {
     this.update(now);
     const bar = this.g.statusBar?.y ?? UI_H - 71;
     this.x = (this.g.statusBar?.ox ?? 0) + 464;
-    this.y = bar - 21 - 5 * this.n;
+    this.y = bar - 21 - (this.lift || 0) - 5 * this.n;
     ctx.save(); ctx.globalAlpha = this.alpha;
     super.draw(ctx);
     ctx.restore();
@@ -154,6 +154,31 @@ export class QuestNotice extends Balloon {
     uiText(ctx, n, 27, 20, { color: '#fff', size: 12 });
   }
 }
+
+/**
+ * A party quest you just reached the level for (backgrnd5, 10px higher than the rest): its mark, "Party Quest" and its
+ * name cut to 80px. O opens it in the Quest window; X or 3 minutes unanswered does nothing.
+ */
+class PartyQuestNotice extends Balloon {
+  constructor(mgr, qid, mark, name, open) {
+    super(mgr, 'pq', 'backgrnd5', (ok) => { if (ok) open(qid); }, INVITE_HOLD);
+    Object.assign(this, { qid, mark, name, lift: 10 });
+    this.button(this.F.BtOK, ...NARROW.ok, () => this.press(true));
+    this.button(this.F.BtCancel, ...NARROW.x, () => this.press(false));
+  }
+  frames() { return [...super.frames(), this.mark].filter(Boolean); }
+  body(ctx) {
+    const i = this.mgr.image(this.mark);
+    if (i) ctx.drawImage(i, 4, 4);
+    uiText(ctx, 'Party Quest', 47, 9, { color: '#fff', size: 12 });
+    ctx.font = '12px Arial, sans-serif';
+    let n = this.name || '';
+    if (ctx.measureText(n).width > 80) { while (n.length > 1 && ctx.measureText(`${n}..`).width > 80) n = n.slice(0, -1); n = `${n}..`; }
+    uiText(ctx, n, 47, 26, { color: '#fff', size: 12 });
+  }
+}
+/** A party-quest invitation; several stack. open(qid) is called on O. */
+export function pqNotice(mgr, qid, mark, name, open) { add(mgr, new PartyQuestNotice(mgr, qid, mark, name, open), () => false); }
 
 const balloonsOf = (mgr) => mgr.order.filter((w) => w instanceof Balloon);
 /** Add a balloon: the first of its kind goes at once (no fade, no decline), unless the kind stacks. */

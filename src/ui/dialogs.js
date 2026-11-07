@@ -999,11 +999,31 @@ function tipSale(ctx, it, x, y, W) {
 // my may be { bottom }: the tip ends there (over the quick slots, so it doesn't cover them)
 const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, UI_W - 1 - W)), Math.max(0, Math.min(typeof my === 'object' ? my.bottom - H : my, UI_H - 1 - H))];
 
+/**
+ * A slot expansion in the Cash Shop list (it.slots: the tab and its slots now): its name centred 8px down, then "Add n
+ * slots for the <tab> inventory..." (the storage's own line) wrapped from x 10, at least 290 wide; on sale, the
+ * original price and discount under it.
+ */
+function slotItemTip(ctx, mgr, it, mx, my) {
+  const { type, delta, current } = it.slots, title = mgr.itemName(it.id) || '';
+  const text = type === 0 ? `Add ${delta} slots for the storage (Current: ${current})\nMaximum of 48 slots available.`
+    : `Add ${delta} slots for the ${['', 'Eqp', 'Use', 'Setup', 'Etc'][type]} inventory. (Current: ${current} slots)\nMaximum of 96 slots available.`;
+  const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 16), titleH = 14;
+  const desc = tipWrap(ctx, text, 275), sale = tipOnSale(it), body = titleH + 22 + tipWrapH(desc);
+  const H = body + (sale ? 51 : 0);
+  const [x, y] = tipPlace(mx, my, W, H);
+  tipFrame(ctx, x, y, W, H);
+  tipCentre(ctx, title, x, y + 8, W, TIP_FONT.title, '#fff');
+  tipDrawWrap(ctx, desc, x + 10, y + titleH + 18);
+  if (sale) tipSale(ctx, it, x, y + body + 8, W);
+}
+
 export function drawItemTip(ctx, mgr, it, mx, my) {
   const info = mgr.info(it.id) || {};
   ctx.save();
   ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  if (invType(it.id) === 1) equipTip(ctx, mgr, it, info, mx, my);
+  if (it.slots) slotItemTip(ctx, mgr, it, mx, my);
+  else if (invType(it.id) === 1) equipTip(ctx, mgr, it, info, mx, my);
   else itemTip(ctx, mgr, it, info, mx, my);
   ctx.restore();
 }

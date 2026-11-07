@@ -147,9 +147,9 @@ export class CashShopWin extends Win {
 
   async init() {
     const a = this.mgr.assets;
-    const [C, com, pkg, cats, special] = await Promise.all([a.json('UI/CashShop.img'), a.json('Etc/Commodity.img'), a.json('Etc/CashPackage.img'),
-      a.json('Etc/Category.img'), a.json('Item/Special/0910.img')]);
-    this.C = C; this.pkg = pkg || {}; this.special = special || {};
+    const [C, com, pkg, cats, special, slotItems] = await Promise.all([a.json('UI/CashShop.img'), a.json('Etc/Commodity.img'), a.json('Etc/CashPackage.img'),
+      a.json('Etc/Category.img'), a.json('Item/Special/0910.img'), a.json('Item/Special/0911.img')]);
+    this.C = C; this.pkg = pkg || {}; this.special = special || {}; this.slotItems = slotItems || {};
     this.buildCatalog(com || {}, cats || {});
     const job = this.stats.job || 0;
     this.bg = Math.floor(job / 1000) === 1 ? C.Base.backgrnd1 : Math.floor(job / 100) === 21 || job === 2000 ? C.Base.backgrnd2 : C.Base.backgrnd;
@@ -195,6 +195,18 @@ export class CashShopWin extends Win {
     });
     this.dress(null);
     this.ready = true;
+    // opened from the inventory's BtCashshop: straight to that slot expansion
+    if (this.g.csPreselect) { this.jumpTo(this.g.csPreselect); this.g.csPreselect = 0; }
+  }
+  /** Shows the page holding an item (by SN) with it selected. */
+  jumpTo(sn) {
+    for (const [k, list] of this.groups) {
+      const i = list.findIndex((c) => c.SN === sn);
+      if (i < 0) continue;
+      const [cat, sub] = k.split(':').map(Number);
+      this.tab = cat; this.sub = sub; this.page = Math.floor(i / PER_PAGE); this.selCell = i % PER_PAGE; this.focusBtn = null;
+      return;
+    }
   }
   frames() { return []; }
 
@@ -331,6 +343,7 @@ export class CashShopWin extends Win {
     this.csel = null;
     const inv = this.g.inventory?.[invType(item.id)];
     if (inv) inv[pos] = it;
+    this.g.newItem = { id: item.id, pos };   // marked new in the inventory
   }
   put(item) {
     this.done();
@@ -1094,7 +1107,7 @@ export class CashShopWin extends Win {
   /** Slot items (inventory / storage / character slots) that can't add any more. */
   slotsFull(c) {
     if (Math.floor(c.ItemId / 10000) !== 911) return false;
-    const type = Math.floor(c.ItemId / 1000) % 10, delta = 8;
+    const type = Math.floor(c.ItemId / 1000) % 10, delta = Number(this.slotItems?.[c.ItemId]?.delta) || 0;
     if (type === 0) return this.storageSlots != null && this.storageSlots + delta > 48;
     return (this.g.inventory?.limits?.[type] || 0) + delta > 96;
   }
@@ -1327,6 +1340,12 @@ export class CashShopWin extends Win {
     const t = { id: c.ItemId, price: c.Price, cs: true };
     if (c.Period > 0) t.period = c.Period;
     if (c.Discount > 0) { t.discount = c.Discount; t.origPrice = c.OrigPrice; }
+    // a slot expansion shows what it adds instead
+    if (Math.floor(c.ItemId / 10000) === 911) {
+      const type = Math.floor(c.ItemId / 1000) % 10;
+      const delta = Number(this.slotItems?.[c.ItemId]?.delta) || 0;   // on the item itself, not under info
+      if (type <= 4) t.slots = { type, delta, current: type ? this.g.inventory?.limits?.[type] || 0 : this.storageSlots ?? 0 };
+    }
     return t;
   }
   slotTip(type) {

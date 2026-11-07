@@ -1,7 +1,7 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
-import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName } from './data.js';
+import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
@@ -38,7 +38,7 @@ import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
+import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice, pqNotice } from './ui/notifier.js';
 import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
@@ -86,6 +86,7 @@ export const PET_SLOTS = [
 ];
 for (const s of PET_SLOTS) s.ability = [s.pouch, s.magnet, s.boots, s.binocular, s.scales, s.ignore];
 export const SHARED_PET_SLOTS = [-124, -125];
+const PET_WEAR_PARTS = [30, 31, 32, 38, 39, 40];
 const PET_FLAGS = ['pickupMeso', 'pickupItem', 'pickupOthers', 'longRange', 'sweepForDrop', 'consumeHP', 'consumeMP', 'ignorePickup'];
 const PET_GONE = { 1: "The pet went back home because it's hungry.", 2: "The pet's magical time has run out, and so it has turned back into a doll.", 3: 'You cannot use pet here.' };
 const PET_DOLL_TIME = 0x0217E646BB058000n;   // a dateDead from 2079 on: a doll
@@ -2334,7 +2335,12 @@ export class Game {
   hidden() { const now = Date.now(); return !!this.buffs?.some((b) => (DARK_SIGHTS.includes(b.source) || b.source === WIND_WALK) && b.until > now); }
   /** What spaces an attacker's damage lines: their weapon and their attack's speed scale. */
   lineTiming(who) { return [this.weaponOf(who), who === this.player ? this.attackScale() : who?.attackScale || 1]; }
-  equipStat(key) { let v = 0; for (const it of Object.values(this.inventory?.equipped || {})) v += it[key] || 0; return v; }
+  /** What your worn equipment adds to a stat; the second and third pets' accessory, label and quote slots don't count. */
+  equipStat(key) {
+    let v = 0;
+    for (const [slot, it] of Object.entries(this.inventory?.equipped || {})) if (!PET_WEAR_PARTS.includes(-slot % 100)) v += it[key] || 0;
+    return v;
+  }
   /**
    * Your Speed and Jump as fractions of the base walk / jump: 100 plus your equipment's plus the strongest buff
    * (Haste, Nimble Feet, a speed potion...), held to 80-140 and 80-123 as the client does (openms, docs/skills.md).
@@ -2361,9 +2367,10 @@ export class Game {
       const jump = inc('incJump') + (skillMount ? buff('jump') : 0) + Math.max(80, Number(ride.jump) || 100);
       return { speed: Math.min(190, speed) / 100, jump: Math.min(123, jump) / 100 };
     }
-    const pct = (k, max) => Math.max(80, Math.min(max, 100 + this.equipStat(k) + buff(k))) / 100;
+    // a map that holds your speed / jump sets them in place of 100 plus your equipment's, and may lower the speed cap
+    const pct = (k, max) => Math.max(80, Math.min(max, (this.forced(k) || 100 + this.equipStat(k)) + buff(k))) / 100, top = this.forced('speedMax') || 140;
     const slow = (this.diseases || []).find((d) => d.skill === SLOW);   // Slow: down to its x%
-    return { speed: slow ? Math.min(pct('speed', 140), (slow.x || 80) / 100) : pct('speed', 140), jump: pct('jump', 123) };
+    return { speed: slow ? Math.min(pct('speed', top), (slow.x || 80) / 100) : pct('speed', top), jump: pct('jump', 123) };
   }
 
   // ------------------------------------------------------------------ online wiring
@@ -2498,6 +2505,9 @@ export class Game {
       // other players' guild tags: held for one still spawning
       guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
       guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
+      // the group name runs into the member's name: "<GuildName has advanced..."
+      notifyJob: (n) => { if (n.type <= 1) this.hud.message(`<${n.type ? 'Family' : 'Guild'}${n.name} has advanced to a(an) ${advanceName(n.job)}.`, CHAT_COLOR.error); },
+      notifyMarriage: (n) => { if (n.type <= 1) this.hud.message(`<${n.type ? 'Family' : 'Guild'}${n.name} is now married. Please congratulate them.`, CHAT_COLOR.error); },
       notifyLevel: (n) => this.hud.message(`<${n.type === 2 ? 'Guild' : 'Family'}> ${n.name} has reached Lv. ${n.level}.`, CHAT_COLOR.error),
       tradeOpen: (t) => {
         if (this.tradeWin) return;
@@ -2765,6 +2775,9 @@ export class Game {
       spawnNpc: later((n, controlled) => this.spawnLife('Npc', n, !!controlled)),
       npcAction: later((oid, action, chat) => this.lifeByOid.get(oid)?.npcActed?.(action, chat)),
       forcedMapEquip: later(() => this.forceMapEquip()),
+      forcedStats: (f) => { this.forcedStats = f; },
+      // a change to what you wear, your buffs or skills: goes out with your next movement
+      moveElement: (b) => { (this.moveBuf ??= []).push({ cmd: 10, equip: b }); },
       removeNpc: later((oid) => this.killLife(oid, 0)),
       imitatedNpcs: later((list) => this.imitateNpcs(list)),
       blocked: (kind, type) => this.blocked(kind, type),
@@ -2977,6 +2990,28 @@ export class Game {
   }
 
   /** Open the quest log on a quest. */
+  /** Party quests 1200-1399 that open at exactly this level (for your job): a balloon each, offering to show it. */
+  async partyQuestInvites(level) {
+    const [check, pq] = await Promise.all([this.assets.json('Quest/Check.img'), this.assets.json('Quest/PQuest.img')]);
+    const job = this.stats?.job || 0, gm = Math.floor((job % 1000) / 100) === 9;
+    for (let q = 1200; q <= 1399; q++) {
+      const req = check?.[q]?.[0];
+      if (!req || Number(req.lvmin) !== level) continue;
+      const jobs = Object.values(req.job || {}).map(Number);
+      if (jobs.length && !gm && !jobs.includes(job)) continue;
+      const path = String(pq?.[q]?.mark || '').split('/'), img = path.length > 2 && (await this.assets.json(`${path[0]}/${path[1]}.img`));
+      const mark = img ? path.slice(2).reduce((n, k) => n?.[k], img) : null;
+      pqNotice(this.windows, q, mark, this.quests?.name(q) || '', (id) => {
+        const open = this.windows.wins.quest;
+        if (this.windows.isOpen('quest')) this.windows.close(open);
+        const w = this.windows.open('quest');
+        if (!w) return;
+        w.tab = 0; w.first = 0;
+        w.folded[0].delete(this.quests.area(id));
+        if (w.rows().some((r) => r.id === id)) { w.select(id); w.scrollTo(id); }
+      });
+    }
+  }
   openQuest(id) {
     const st = this.quests.status(id), w = this.windows.open('quest');
     if (!w) return;
@@ -3095,18 +3130,28 @@ export class Game {
   onStats(s, enable) {
     if (!this.stats) return;
     if (enable) { this.apPending = false; this.scriptPending = 0; this.cashBusy = false; this.pickupAnswered(); }
-    const before = this.stats.level, exp0 = this.stats.exp;
+    const before = this.stats.level, exp0 = this.stats.exp, job0 = this.stats.job;
     Object.assign(this.stats, s);
     if (s.level > before) this.petEvent('e_levelup');
     else if (s.exp > exp0 && s.exp >= (EXP[this.stats.level] || Infinity) * 0.9 && performance.now() - (this.petPreLevelT ?? -Infinity) >= 420000) { this.petPreLevelT = performance.now(); this.petEvent('e_prelevelup'); }
     this.petAutoPot('mp');
     if (s.meso !== undefined) { const was = this.meso; this.meso = s.meso; this.questMesoChanged(was); }
     this.questAlert?.statsChanged();
-    if (s.level > before) { this.levelUpEffect(); sfx.play('Game/LevelUp'); }
+    if (s.level > before) {
+      this.levelUpEffect(); sfx.play('Game/LevelUp');
+      if (s.level < 11) this.statusBar?.blinkTab(2);   // the Stat tab blinks
+      this.partyQuestInvites(s.level);
+    }
     if (s.level === 2 && before === 1) this.skillGuide();
-    if (s.job !== undefined && this.skills && s.job !== this.skills.job) {
+    if (s.job !== undefined) {
       this.vfx?.play('JobChanged', this.player); sfx.play('Game/JobChanged');
-      this.skills.loadJob(s.job).then(() => this.skillWin?.render());
+      if (this.skills && s.job !== this.skills.job) this.skills.loadJob(s.job).then(() => this.skillWin?.render());
+      // the first job advancement opens the Stat window
+      if ([0, 1000, 2000, 2001].includes(job0) && !this.windows.isOpen('stat')) this.windows.open('stat');
+    }
+    // levelling up with AP piled past 199
+    if (s.level > before && this.stats.ap > 199 && Math.floor((this.stats.job % 1000) / 100) !== 9) {
+      this.windows.notice("If you do not use your AP when you level up, \r\nthen you won't be able to receive any additional AP.\r\nPlease use your AP.");
     }
     if (s.sp !== undefined || s.level !== undefined) this.skillWin?.render();
     if (this.stats.hp <= 0 && !this.dead) this.die();
@@ -3550,6 +3595,15 @@ export class Game {
     // counts before the change, for the quest progress lines
     const was = new Map();
     for (const op of ops) for (const id of [op.item?.id, box(op.inv, op.pos)?.[op.pos]?.id]) if (id && !was.has(id)) was.set(id, this.itemCount(id));
+    // where each item an op touched now sits, for the new-item mark (a move only for the marked item)
+    const touched = [];
+    for (const op of ops) {
+      if (op.pos <= 0) continue;
+      const id = op.mode === 0 ? op.item?.id : box(op.inv, op.pos)?.[op.pos]?.id;
+      if (!id) continue;
+      if (op.mode === 0 || op.mode === 1 || op.mode === 3) touched.push([id, op.pos]);
+      else if (op.mode === 2 && this.newItem?.id === id && this.newItem.pos === op.pos) touched.push([id, op.to]);
+    }
     for (const op of ops) {
       if (op.mode === 0) {
         const old = box(op.inv, op.pos)[op.pos];
@@ -3566,9 +3620,21 @@ export class Game {
         if (b) from[op.pos] = b; else delete from[op.pos];
         if (a) to[op.to] = a; else delete to[op.to];
         if (op.pos < 0 || op.to < 0) lookChanged = true;
-      } else if (op.mode === 3) { delete box(op.inv, op.pos)[op.pos]; if (op.pos < 0) lookChanged = true; }
+      } else if (op.mode === 3) {
+        const gone = box(op.inv, op.pos)[op.pos], chair = this.player.seat?.item;
+        // the last chair you sit on taken away: you stand up
+        if (chair && gone?.id === chair && Object.values(inv[op.inv] || {}).filter((it) => it?.id === chair).length === 1) this.standUp();
+        delete box(op.inv, op.pos)[op.pos];
+        if (op.pos < 0) lookChanged = true;
+      }
     }
     if (lookChanged) this.rebuildLook();
+    for (const [id, pos] of touched) {
+      const now = this.itemCount(id), before = was.get(id) ?? now, mark = this.newItem;
+      if (now > before) this.newItem = { id, pos };
+      else if (now < before) { if (mark?.id === id && mark.pos === pos) this.newItem = null; }
+      else if (mark?.id === id && mark.pos !== pos) this.newItem = pos < 0 ? null : { id, pos };
+    }
     this.petFlagCache = null;
     for (const p of this.myPets()) p.lootPauseAt = 0;
     this.hud.renderInventory();
@@ -3642,6 +3708,7 @@ export class Game {
   }
 
   watk() {
+    if (this.forced('watk')) return this.forced('watk');
     let w = 0;
     for (const it of Object.values(this.inventory?.equipped || {})) w += it.watk || 0;
     return w;
@@ -3897,6 +3964,7 @@ export class Game {
   /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
   equipRing(slot, it, cell) {
     if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (this.forcedRefusal('equipment')) return;
     const cash = it.cash || !!this.windows?.info(it.id)?.cash, dst = cash ? cell - 100 : cell, clash = this.ringClash(it.id, dst, true);
     if (clash) { this.windows.notice(clash); return; }
     if (!this.canEquip(it.id)) { this.windows.notice('Your stats are too low to equip this item.'); return; }
@@ -3909,6 +3977,7 @@ export class Game {
    * cash taming mob / saddle needs a real one, and an item that can't be traded once worn asks first.
    */
   async equipChecked(slot, it, dst) {
+    if (this.forcedRefusal('equipment')) return;
     const id = it.id, cat = Math.floor(id / 10000), worn = this.inventory?.equipped || {}, info = this.windows?.info(id) || {};
     const refuse = (t) => { this.windows.notice(t); };
     if (Number(info.onlyEquip) && Object.values(worn).some((w) => w?.id === id)) return refuse('You can only be equipped with 1 Unique Equipped Item.');
@@ -3960,9 +4029,15 @@ export class Game {
     const dst = equipSlotFor(id);
     return dst && cash && dst > -100 ? dst - 100 : dst;
   }
+  /** The most levels a 559xxxx item in the Cash tab lets you equip above your own (its incLEV). */
+  equipLevelBonus() {
+    let n = 0;
+    for (const it of Object.values(this.inventory?.[5] || {})) if (Math.floor(it.id / 10000) === 559) n = Math.max(n, Number(this.windows?.info(it.id)?.incLEV) || 0);
+    return n;
+  }
   /**
-   * Whether you can wear an item: its gender, its level, STR, DEX, INT, LUK and fame requirements (against
-   * equipStats) and its jobs (reqJob: 0 anyone, -1 beginners, else a bit per branch: 1 warrior, 2 magician, 4 bowman,
+   * Whether you can wear an item: its gender, its level (plus equipLevelBonus), STR, DEX, INT, LUK and fame (when not 0)
+   * requirements (against equipStats) and its jobs (reqJob: 0 anyone, -1 beginners, else a bit per branch: 1 warrior, 2 magician, 4 bowman,
    * 8 thief, 16 pirate). A GM (jobs 800 / 900) can wear anything.
    */
   canEquip(id, level) {
@@ -3973,9 +4048,10 @@ export class Game {
     const g = Math.floor(id / 1000) % 10, gender = Math.floor(id / 1000000) === 1 && g < 2 ? g : 2;
     if (s.gender !== 2 && gender !== 2 && gender !== s.gender) return false;
     const have = this.equipStats(id);
-    if (level !== undefined) have.level = level;
-    const reqs = [['reqLevel', 'level'], ['reqSTR', 'str'], ['reqDEX', 'dex'], ['reqINT', 'int'], ['reqLUK', 'luk'], ['reqPOP', 'fame']];
+    have.level = level ?? have.level + this.equipLevelBonus();
+    const reqs = [['reqLevel', 'level'], ['reqSTR', 'str'], ['reqDEX', 'dex'], ['reqINT', 'int'], ['reqLUK', 'luk']];
     if (reqs.some(([k, stat]) => (info[k] || 0) > have[stat])) return false;
+    if (Number(info.reqPOP) && info.reqPOP > have.fame) return false;
     const job = info.reqJob || 0, bit = branch ? 1 << (branch - 1) : 0;
     return job === 0 || (job === -1 && !bit) || (job > 0 && (job & bit) !== 0);
   }
@@ -6298,6 +6374,24 @@ export class Game {
     for (const k of Object.keys(use).map(Number).sort((a, b) => a - b)) if (ok(use[k].id) && use[k].quantity >= count) return use[k].id;
     return 0;
   }
+  /**
+   * The Use slot of the star, arrow or bullet your next shot throws (marked in the inventory), or 0: under Shadow Stars
+   * the star it names; otherwise the first that suits the weapon (Magical Mitten takes arrows), with enough left,
+   * within your level and not a Flamethrower / Ice Splitter capsule.
+   */
+  ammoSlot(count = 1) {
+    const weapon = this.weaponId(), cat = Math.floor(weapon / 10000), use = this.inventory?.[2] || {};
+    if (![145, 146, 147, 149].includes(cat)) return 0;
+    const slots = Object.keys(use).map(Number).sort((a, b) => a - b), now = Date.now();
+    const stars = this.buffs?.find((b) => b.shadowStars >= 1 && b.until > now)?.shadowStars;
+    if (stars) return slots.find((k) => use[k].id === stars + 2069999 && use[k].quantity >= 1) || 0;
+    const ok = cat === 145 || weapon === 1472063 ? (id) => Math.floor(id / 1000) === 2060 : cat === 146 ? (id) => Math.floor(id / 1000) === 2061
+      : cat === 147 ? (id) => Math.floor(id / 10000) === 207 : (id) => Math.floor(id / 10000) === 233;
+    return slots.find((k) => {
+      const id = use[k].id, info = this.windows?.info(id);
+      return ok(id) && use[k].quantity >= count && info && (Number(info.reqLevel) || 0) <= (this.stats?.level || 0) && ![2331, 2332].includes(Math.floor(id / 1000));
+    }) || 0;
+  }
   /** The first cash bullet in the cash inventory that suits the weapon (bow / crossbow 5020, claw 5021, gun 5022). */
   cashBullet() {
     const kind = { 145: 5020, 146: 5020, 147: 5021, 149: 5022 }[Math.floor(this.weaponId() / 10000)];
@@ -6319,7 +6413,15 @@ export class Game {
   totalStat(k) {
     const base = this.stats?.[k] || 0, now = Date.now();
     const mw = Math.max(0, ...(this.buffs || []).filter((b) => b.mapleWarrior && b.until > now).map((b) => b.mapleWarrior));
-    return base + Math.floor((base * mw) / 100) + this.equipStat(k);
+    return (this.forced(k) || base + this.equipStat(k)) + Math.floor((base * mw) / 100);
+  }
+  /** A stat the map holds you to (FORCED_STAT_SET), or 0. */
+  forced(k) { return this.forcedStats?.[k] || 0; }
+  /** While the map holds your stats, AP and equipment can't change: the refusal, shown, or false. */
+  forcedRefusal(what) {
+    if (!this.forcedStats || !Object.values(this.forcedStats).some((v) => v)) return false;
+    this.windows.notice(`You cannot change your ${what} on this map.`);
+    return true;
   }
   /** A learned passive skill's x / y / z, else 0. */
   passive(id, key) { return this.skills?.level(id) ? this.skills.levelData(id)?.[key] || 0 : 0; }
@@ -6341,13 +6443,13 @@ export class Game {
     const ms = masterySkills(Math.floor(this.weaponId() / 10000) % 100, ranged, 0, job);
     const mastery = (ms?.first || []).map((id) => this.passive(id, 'x')).find((v) => v) || 0;
     const passives = [3000000, ...Game.BEGINNER_PASSIVES].reduce((a, id) => a + this.passive(id, 'x'), 0);
-    return base + this.equipStat('acc') + this.passive(this.blessingId(), 'z') + mastery + passives;
+    return this.forced('acc') || base + this.equipStat('acc') + this.passive(this.blessingId(), 'z') + mastery + passives;
   }
   /** Avoid without buffs: LUK / 2 + DEX / 4 (Brawlers DEX x 1.5, Gunslingers DEX / 8), the equipment's, Blessing's z, the beginner passives' y. */
   avoidability() {
     const job = this.stats?.job || 0, dex = this.totalStat('dex'), luk = this.totalStat('luk'), branch = Math.floor(job / 10);
     const base = Math.trunc(luk / 2) + (branch === 51 ? Math.floor(dex * 1.5) : Math.trunc(dex / (branch === 52 ? 8 : 4)));
-    return base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0);
+    return this.forced('avoid') || base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0);
   }
   /** A stat request (AP): one at a time, 500ms apart, while alive; false when it can't go yet. */
   sendStatRequest(send) {
@@ -6368,17 +6470,55 @@ export class Game {
     const shield = this.inventory?.equipped?.[-10], shieldMastery = [1110001, 1210001, 4210000].map((id) => this.passive(id, 'x')).find((v) => v) || 100;
     const wdef = eq('wdef') - (shield?.wdef || 0) + Math.trunc(((shield?.wdef || 0) * shieldMastery) / 100);
     const blessing = (k) => this.passive(this.blessingId(), k), int = this.totalStat('int');
-    const { speed, jump } = this.moveStats(), mv = (v, m) => Math.round(Math.min(m, v * 100));
+    const { speed, jump } = this.statSpeedJump(), f = (k) => this.forced(k);
     return {
       attack: this.statAttack(),
-      wdef: [cap(wdef, 1999), this.buffValue('wdef')],
-      matk: [cap(int + eq('matk') + blessing('y'), 1999), this.buffValue('matk')],
-      mdef: [cap(int + eq('mdef'), 1999), this.buffValue('mdef')],
+      wdef: [cap(f('wdef') || wdef, 1999), this.buffValue('wdef')],
+      matk: [cap(f('matk') || int + eq('matk') + blessing('y'), 1999), this.buffValue('matk')],
+      mdef: [cap(f('mdef') || int + eq('mdef'), 1999), this.buffValue('mdef')],
       acc: [cap(this.accuracy(), 999), this.buffValue('acc')],
       avoid: [cap(this.avoidability(), 999), this.buffValue('avoid')],
       hands: [this.totalStat('dex') + this.totalStat('luk') + int + eq('hands'), this.buffValue('hands')],
-      speed: mv(speed, 140), jump: mv(jump, 123),
+      speed, jump,
     };
+  }
+  /** Morph/<id>.img/info: speed (80-140), jump (up to 123), superman and hide; null until loaded. */
+  morphInfo(id) {
+    this.morphInfos ??= new Map();
+    if (!this.morphInfos.has(id)) {
+      this.morphInfos.set(id, null);
+      this.assets.json(`Morph/${pad(id, 4)}.img`).then((m) => {
+        const i = m?.info || {}, num = (v, d) => (v === undefined ? d : Number(v) || 0);
+        this.morphInfos.set(id, { speed: Math.max(80, Math.min(140, num(i.speed, 100))), jump: Math.min(123, num(i.jump, 100)), superman: !!Number(i.superman), hide: !!Number(i.hide) });
+      });
+    }
+    return this.morphInfos.get(id);
+  }
+  /**
+   * The Stat window's Speed and Jump %. Morphed: the morph's own (speed at least 80, jump 100-123). On a monster mount
+   * (190xxxx / 193xxxx): the mount's (at least 80) plus the saddle's incSpeed / incJump, counted again when a third mount
+   * item is worn, at most 190 / 123. Otherwise 100 plus your equipment's (mount items only while riding) and Thrust's,
+   * or the map's forced values, held to 100 and the speed cap (140, or the map's) / 123, plus the buffs; Slow sets the
+   * speed outright.
+   */
+  statSpeedJump() {
+    const now = Date.now(), live = (this.buffs || []).filter((b) => b.until > now), top = this.forced('speedMax') || 140;
+    const mb = live.find((b) => b.morph), morph = mb && this.morphInfo(mb.morph);
+    if (morph && (!morph.superman || morph.hide)) return { speed: Math.min(Math.max(morph.speed, 80), top), jump: Math.min(Math.max(morph.jump, 100), 123) };
+    const worn = this.inventory?.equipped || {}, info = (s) => this.windows?.info?.(worn[s]?.id) || {};
+    const vehicle = this.riding?.item, tm = vehicle && [190, 193].includes(Math.floor(vehicle / 10000)) && this.mountData(vehicle)?.stats;
+    if (tm) {
+      const twice = worn[-20] ? 2 : 1, inc = (k) => (worn[-19] ? (Number(info(-19)[k]) || 0) * twice : 0);
+      return { speed: Math.min(inc('incSpeed') + Math.max(Number(tm.speed) || 100, 80), 190), jump: Math.min(inc('incJump') + Math.max(Number(tm.jump) || 100, 80), 123) };
+    }
+    const riding = !!this.riding, job = this.stats?.job || 0;
+    const equip = (k) => Object.entries(worn).reduce((t, [slot, it]) => t + ([-18, -19, -20].includes(Number(slot)) && !riding ? 0 : PET_WEAR_PARTS.includes(-slot % 100) ? 0 : it[k] || 0), 0);
+    const thrust = [311, 312].includes(job) ? 3110000 : [321, 322].includes(job) ? 3210000 : job >= 1310 && job <= 1312 ? 13100004 : 0;
+    const baseSpeed = Math.min(Math.max(this.forced('speed') || 100 + equip('speed') + (thrust ? this.passive(thrust, 'speed') : 0), 100), top);
+    const baseJump = Math.max(100, Math.min(123, this.forced('jump') || 100 + equip('jump')));
+    const sb = live.findLast((b) => b.speed)?.speed || 0, jb = Math.max(0, ...live.filter((b) => b.jump).map((b) => b.jump));
+    const slow = (this.diseases || []).find((d) => d.skill === SLOW);
+    return { speed: slow ? Math.min(slow.value || slow.x || 0, top) : Math.min(baseSpeed + sb, top), jump: Math.min(baseJump + jb, 123) };
   }
   /** The Stat window's attack range [min, max], or null without a weapon. */
   statAttack() {
@@ -7715,14 +7855,14 @@ export class Game {
   }
   /** Send everything gathered. */
   flushMovement() {
-    const send = this.moveBuf || [], first = send[0], lastSent = this.lastSent;
-    if (!first || !this.net) return;
+    const send = this.moveBuf || [], lastSent = this.lastSent, placed = send.filter((m) => m.cmd !== 10), first = placed[0];
+    if (!send.length || !this.net) return;
     this.moveBuf = []; this.moveTotal = 0;
     // standing where we last were: nothing to tell
-    if (send.length === 1 && lastSent && first.x === lastSent.x && first.y === lastSent.y && first.stance === lastSent.stance && !first.vx && !first.vy) return;
-    const start = lastSent ? { x: lastSent.x, y: lastSent.y } : { x: first.x, y: first.y };
-    this.net.move(start, send.map((m) => ({ ...m, duration: Math.round(m.duration) })));
-    this.lastSent = send[send.length - 1];
+    if (send.length === 1 && first && lastSent && first.x === lastSent.x && first.y === lastSent.y && first.stance === lastSent.stance && !first.vx && !first.vy) return;
+    const at = lastSent || first || { x: Math.round(this.player.x), y: Math.round(this.player.y) };
+    this.net.move({ x: at.x, y: at.y }, send.map((m) => (m.cmd === 10 ? m : { ...m, duration: Math.round(m.duration) })));
+    if (placed.length) this.lastSent = placed[placed.length - 1];
   }
 
   // ------------------------------------------------------------------ camera / render
