@@ -47,8 +47,9 @@ export const invType = (id) => Math.floor(id / 1000000);
 /** The key type an item dragged from inventory tab `tab` binds as: 2 a Use item (or cash pet food), 3 a facial expression (516), 7 an effect (501, 429). */
 export function itemKeyType(tab, id) {
   const cat = Math.floor(id / 10000);
-  if (tab === 2) return 2;
-  if (tab === 5 && cat === 524) return 2;   // cash pet food goes on a key like a Use item
+  if (tab === 2) return [200, 201, 202, 205, 221, 236, 238, 245, 212, 226, 227].includes(cat) || Math.floor(id / 1000) === 2109 || id === 2100067 ? 2 : null;
+  if (tab === 3) return cat === 301 ? 2 : null;   // a chair
+  if (tab === 5 && (cat === 524 || cat === 530)) return 2;   // cash pet food and morphs go on a key like a Use item
   if (tab === 5 && cat === 516) return 3;
   if ((tab === 5 && cat === 501) || (tab === 4 && cat === 429)) return 7;
   return null;

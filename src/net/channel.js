@@ -1,7 +1,7 @@
 import { Connection } from './connection.js';
 import { PacketWriter } from './packet.js';
 import { C, S, S_NAMES } from './opcodes.js';
-import { readCharacterInfo, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
+import { readCharacterInfo, readMarriage, readNewYearCard, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
 
 /** CashShop item records (addCashItemInformation): cash id, account, item, SN, count, gift sender, expiry. */
 function readCashItem(r) {
@@ -58,8 +58,19 @@ function readBox(r) {
   if (!type) return null;
   const box = { type, oid: r.int(), title: r.string() };
   if (type === 4) { r.ubyte(); box.permit = r.ubyte(); box.players = r.ubyte(); box.max = r.ubyte(); r.ubyte(); }
-  else { box.locked = r.bool(); r.ubyte(); box.players = r.ubyte(); box.max = r.ubyte(); r.ubyte(); }
+  else { box.locked = r.bool(); box.piece = r.ubyte(); box.players = r.ubyte(); box.max = r.ubyte(); box.playing = r.ubyte() !== 0; }
   return box;
+}
+/** A game record: an unused int, wins, ties, losses, points. */
+function readGameRecord(r) { r.int(); return { wins: r.int(), ties: r.int(), losses: r.int(), points: r.int() }; }
+/** ROOM for an Omok / Match Card room: capacity, your slot, the players (look, name), their records, title, piece, tournament. */
+function readGameRoom(r, type) {
+  const room = { type, capacity: r.ubyte(), mySlot: r.ubyte(), users: [null, null], records: [null, null] };
+  for (let slot = r.byte(); slot >= 0; slot = r.byte()) { const look = readCharLook(r); room.users[slot] = { look, name: r.string() }; }
+  for (let slot = r.byte(); slot >= 0; slot = r.byte()) room.records[slot] = readGameRecord(r);
+  room.title = r.string(); room.piece = r.ubyte(); room.tournament = r.ubyte();
+  if (room.tournament && r.available) room.round = r.ubyte();
+  return room;
 }
 /** The stock: per item its bundles left, how many in a bundle, the bundle's price and the item itself. */
 function readShopItems(r) {
@@ -98,6 +109,29 @@ function readShopRoom(r) {
   const title = r.string();
   r.ubyte();
   return { slot, sold, people, title, items: readShopItems(r) };
+}
+
+/** A monster's 128-bit status flag: the last int holds bits 0-31, the one before it bits 32-63. */
+function readMobMask(r) {
+  r.int(); r.int(); const high = r.uint(), low = r.uint();
+  return (b) => ((b < 32 ? low : b < 64 ? high : 0) >>> (b % 32)) & 1;
+}
+// the order the statuses are read in
+const MOB_STAT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 16, 17, 21, 22, 24, 25, 26, 28, 29, 30, 32, 33, 34];
+/** Each status's value, source skill and duration, then the extras of bits 27, 29-31; as { first, second, source, value }. */
+function readMobStats(r, has) {
+  const out = [];
+  for (const b of MOB_STAT_ORDER) {
+    if (!has(b)) continue;
+    const value = r.short(), source = r.int(); r.short();
+    out.push({ first: b >= 32 ? 2 ** (b - 32) : 0, second: b < 32 ? (2 ** b) >>> 0 : 0, source, value });
+  }
+  if (has(27)) for (let n = r.int(); n > 0; n--) r.skip(12);
+  if (has(29)) r.int();
+  if (has(30)) r.int();
+  if (has(29) || has(30)) r.int();
+  if (has(31)) { r.ubyte(); r.ubyte(); }
+  return out;
 }
 
 export class ChannelSession {
@@ -175,7 +209,10 @@ export class ChannelSession {
     });
     // MEMO_RESULT 3: notes waiting for you (gift notices and the like): id, sender, text, time, fame
     on(S.MEMO_RESULT, (r) => {
-      if (r.ubyte() !== 3) return;
+      const mode = r.ubyte();
+      if (mode === 4) { this.emit('memoSent'); return; }
+      if (mode === 5) { this.emit('exclusiveAnswered'); this.emit('memoFailed', r.ubyte()); return; }
+      if (mode !== 3) return;
       const notes = [];
       for (let n = r.ubyte(); n > 0; n--) notes.push({ id: r.int(), from: r.string().trim(), text: r.string(), time: r.long(), fame: r.ubyte() });
       this.emit('notes', notes);
@@ -316,25 +353,107 @@ export class ChannelSession {
     on(S.SPOUSE_CHAT, (r) => { const mode = r.ubyte(); const from = mode === 5 ? r.string() : ''; r.ubyte(); this.emit('spouseChat', from, r.string()); });
     // PARCEL (Duey): 8 the parcels waiting for you (opens Duey), 0x17 one was taken or deleted, 0x19 / 0x1B a parcel
     // arrived for you, anything else a result code (0x12 sent, 0x0A not enough mesos, 0x0C no such character...)
+    // PARCEL: 8 Duey opens (quick byte, the parcels, then the expired ones), 0x17 claimed / deleted (id, 3 deleted),
+    // 0x18 one more parcel, 0x19 / 0x1B one arrived (sender, quick), 0x1A the Quick Delivery Ticket's window,
+    // anything else a result code
+    const parcel = (r) => {
+      const p = { id: r.int(), sender: r.paddedString(13), mesos: r.int(), sent: r.long(), quick: r.int() !== 0, message: r.paddedString(200) };
+      r.ubyte();
+      if (r.ubyte()) p.item = readItem(r, false);
+      return p;
+    };
     on(S.PARCEL, (r) => {
       const op = r.ubyte();
       if (op === 8) {
-        r.ubyte();
-        const list = [];
-        for (let n = r.ubyte(); n > 0; n--) {
-          const p = { id: r.int(), sender: r.paddedString(13), mesos: r.int(), sent: r.long() };
-          const hasMsg = r.int(); const msg = r.paddedString(200); p.message = hasMsg ? msg : '';
-          r.ubyte();
-          if (r.ubyte()) p.item = readItem(r, false);
-          list.push(p);
-        }
-        this.emit('duey', { op: 'open', list });
-      } else if (op === 0x17 && r.available >= 5) this.emit('duey', { op: 'gone', id: r.int() });
+        const quick = r.ubyte() !== 0, list = [], expired = [];
+        for (let n = r.ubyte(); n > 0; n--) list.push(parcel(r));
+        if (r.available) for (let n = r.ubyte(); n > 0; n--) expired.push(parcel(r));
+        this.emit('duey', { op: 'open', mode: quick ? 2 : 0, list, expired });
+      } else if (op === 0x17) { const id = r.int(); this.emit('duey', { op: 'gone', id, result: r.available ? r.ubyte() : 4 }); }
+      else if (op === 0x18) this.emit('duey', { op: 'added', parcel: parcel(r) });
       else if (op === 0x19) this.emit('duey', { op: 'arrived', from: r.string(), quick: r.bool() });
-      else if (op === 0x1B) this.emit('duey', { op: 'arrived', quick: r.bool() });
+      else if (op === 0x1B) this.emit('duey', { op: 'arrived', from: '', quick: r.available ? r.bool() : false });
+      else if (op === 0x1A) this.emit('duey', { op: 'open', mode: 1, list: [], expired: [] });
       else this.emit('duey', { op: 'result', code: op });
     });
     // CHALKBOARD: someone holds up a chalkboard (1, its text) or puts it away (0)
+    // the Owl of Minerva: 7 the most-searched items; 6 the stores selling one (an NPC price, then each store row)
+    on(S.SHOP_SCANNER_RESULT, (r) => {
+      const mode = r.ubyte();
+      if (mode === 7) { const ids = []; for (let n = r.ubyte(); n > 0; n--) ids.push(r.int()); this.emit('owlPopular', ids); return; }
+      if (mode !== 6) return;
+      const npcPrice = r.int(), itemId = r.int(), rows = [];
+      for (let n = r.int(); n > 0; n--) {
+        const row = { owner: r.string(), mapId: r.int(), title: r.string(), bundles: r.int(), perBundle: r.int(), price: r.int(), ownerId: r.int(), channel: r.byte() };
+        if (r.ubyte() === 1) row.item = readItem(r, false);
+        rows.push(row);
+      }
+      this.emit('owlResults', { npcPrice, itemId, rows });
+    });
+    on(S.SHOP_LINK_RESULT, (r) => this.emit('owlLink', r.ubyte()));
+    // Cash Shop Surprise: 0xE5 the box (cash id, how many are left), the item that came out into the locker, then
+    // what it was (item, count, jackpot); 0xE4 too many cash items
+    on(S.CASHSHOP_CASH_ITEM_GACHAPON_RESULT, (r) => {
+      const mode = r.ubyte();
+      if (mode === 0xE4) { this.emit('csSurprise', { failed: true }); return; }
+      if (mode !== 0xE5) return;
+      const box = r.long(), left = r.int(), item = readCashItem(r);
+      const won = r.available >= 6 ? { itemId: r.int(), count: r.ubyte(), jackpot: r.ubyte() !== 0 } : null;
+      this.emit('csSurprise', { box, left, item, won });
+    });
+    // Vicious' Hammer: 0x3D / 0x3E closing (code), otherwise a result (code, hammers used) to show first
+    on(S.VICIOUS_HAMMER, (r) => {
+      const mode = r.ubyte(), e = { mode, code: r.int() };
+      if (mode !== 0x3D && mode !== 0x3E) e.count = r.int();
+      this.emit('hammer', e);
+    });
+    on(S.VEGA_SCROLL, (r) => this.emit('vega', r.ubyte()));
+    // Maple Life: the name check (name, 0 free / above 0 taken / below 0 an error), then the creation (result, code)
+    on(S.MAPLELIFE_RESULT, (r) => { r.string(); this.emit('mapleLifeName', r.byte()); });
+    on(S.MAPLELIFE_ERROR, (r) => { const result = r.ubyte(); this.emit('mapleLifeCreated', result, r.int()); });
+    // what hatched from a Pigmy Egg (item, count; no item: the inventory was full); a Gold / Silver box opened
+    on(S.INCUBATOR_RESULT, (r) => { const id = r.int(); this.emit('incubated', id, r.short()); });
+    on(S.SUCCESS_IN_USE_GACHAPON_BOX, (r) => this.emit('treasureBoxOpened', r.int()));
+    // your account's gender (only 0 may propose)
+    on(S.SET_GENDER, (r) => this.emit('accountGender', r.ubyte()));
+    // a proposal to you (0: who, their id); 9 the wedding wish list
+    on(S.MARRIAGE_REQUEST, (r) => { if (r.ubyte() === 0) { const name = r.string(); this.emit('proposal', name, r.int()); } });
+    // MARRIAGE_RESULT: 0x0b / 0x0c the record (engaged / married), 0x0f an invitation (groom, bride, type), 0x24 a message
+    on(S.MARRIAGE_RESULT, (r) => {
+      const mode = r.ubyte(), e = { mode };
+      if (mode === 0x0b || mode === 0x0c) e.record = readMarriage(r);
+      else if (mode === 0x0f) { e.groom = r.string(); e.bride = r.string(); e.type = r.short(); }
+      else if (mode === 0x24 && r.ubyte()) e.text = r.string();
+      this.emit('marriageResult', e);
+    });
+    // NEW_YEAR_CARD_RES: 4 sent / 6 received (the card), 5/7/9/0xb refused (reason), 8 deleted, 0xa / 0xc cards
+    // waiting (id, sender), 0xd someone here holds a card, 0xe a card is gone; every answer frees the request
+    on(S.NEW_YEAR_CARD_RES, (r) => {
+      this.emit('exclusiveAnswered');
+      const mode = r.ubyte(), e = { mode };
+      if (mode === 4 || mode === 6) e.card = readNewYearCard(r);
+      else if ([5, 7, 9, 0xb].includes(mode)) e.reason = r.ubyte();
+      else if (mode === 8 || mode === 0xe) e.id = r.int();
+      else if (mode === 0xa) {
+        e.cards = [];
+        const n = r.int();
+        if (n > 0 && n < 100) for (let i = 0; i < n; i++) { const id = r.int(); r.int(); e.cards.push({ id, sender: r.string() }); }
+      } else if (mode === 0xc) { const id = r.int(); e.cards = [{ id, sender: r.string() }]; }
+      else if (mode === 0xd) { e.id = r.int(); e.charId = r.int(); }
+      this.emit('newYearCard', e);
+    });
+    // kites and banners: id, item, message, owner, x, y; removed (0 fading, else at once); refused
+    on(S.SPAWN_KITE, (r) => this.emit('kite', { id: r.int(), itemId: r.int(), message: r.string(), owner: r.string(), x: r.short(), y: r.short() }));
+    on(S.REMOVE_KITE, (r) => { const type = r.ubyte(); this.emit('kiteRemove', type, r.int()); });
+    on(S.CANNOT_SPAWN_KITE, () => this.emit('kiteRefused'));
+    // a jukebox song: the item, then for a jukebox (510) who played it; -1 ends it
+    on(S.PLAY_JUKEBOX, (r) => { const id = r.int(); this.emit('jukebox', id, Math.floor(id / 10000) === 510 ? r.string() : null); });
+    on(S.MESO_BAG_SUCCESS, (r) => this.emit('mesoBag', r.int()));
+    on(S.MESO_BAG_FAIL, () => this.emit('mesoBag', null));
+    // cancelling a name change (0 done, else B 0 unknown / a reason) or a world transfer (0 done, 1 failed, else as before)
+    on(S.CANCEL_NAME_CHANGE_RESULT, (r) => { const v = r.ubyte(); this.emit('cancelResult', 1, v, v ? (r.available && r.ubyte() ? r.string() : '') : null); });
+    on(S.CANCEL_TRANSFER_WORLD_RESULT, (r) => { const v = r.ubyte(); this.emit('cancelResult', 2, v, v > 1 ? (r.available && r.ubyte() ? r.string() : '') : null); });
+    on(S.CANCEL_NAME_CHANGE_BY_OTHER, () => { this.emit('exclusiveAnswered'); this.emit('cancelNotRequested'); });
     on(S.CHALKBOARD, (r) => { const id = r.int(); this.emit('chalkboard', id, r.ubyte() ? r.string() : null); });
     // MAP_TRANSFER_RESULT: your Teleport Rock list after saving (3) or deleting (2) a map - VIP (10 maps) or not (5)
     on(S.MAP_TRANSFER_RESULT, (r) => {
@@ -529,22 +648,28 @@ export class ChannelSession {
       else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
     });
     // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
-    on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => this.emit('merchantCheck', r.ubyte(), r.available ? r.ubyte() : 0));
+    on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => {
+      const mode = r.ubyte(), e = { mode };
+      if (mode === 8) { e.room = r.int(); e.channel = r.ubyte(); }
+      else if (mode === 13) e.value = r.int();
+      else if (mode === 14) e.ok = r.ubyte() !== 0;
+      else if (mode === 16) { r.int(); e.channel = r.ubyte(); }
+      else if (mode === 17) { e.a = r.int(); e.b = r.short(); e.c = r.bytes(8); }
+      else if (mode === 18) { e.show = r.ubyte(); if (e.show) e.text = r.string(); }
+      this.emit('merchantCheck', e);
+    });
     on(S.UPDATE_CHAR_BOX, (r) => { const id = r.int(); this.emit('charBox', id, readBox(r)); });
     // ---- trading and player shops (PLAYER_INTERACTION): the room type the last ROOM opened decides
     // what the shared VISIT / EXIT / CHAT ops mean (3 trade, 4 player shop)
     on(S.PLAYER_INTERACTION, (r) => {
       const op = r.ubyte();
       if ((this.roomType === 4 || this.roomType === 5) && this.shopOp(op, r)) return;
+      if ((this.roomType === 1 || this.roomType === 2) && op !== 5 && op !== 3) { this.gameOp(op, r); return; }
       if (op === 5) {                                     // ROOM
         const type = r.ubyte();
-        if (type === 0) {
-          const shop = this.roomType === 4 || this.roomType === 5 || this.shopPending;
-          this.shopPending = false;
-          this.emit(shop ? 'shopError' : 'tradeError', r.ubyte());
-          return;
-        }
-        this.roomType = type; this.shopPending = false;
+        if (type === 0) { this.emit('roomError', r.ubyte()); return; }
+        this.roomType = type;
+        if (type === 1 || type === 2) { this.emit('gameRoom', readGameRoom(r, type)); return; }
         if (type === 4) { this.emit('shopOpen', readShopRoom(r)); return; }
         if (type === 5) { this.emit('shopOpen', readMerchantRoom(r, this.selfName)); return; }
         if (type !== 3) return;
@@ -603,7 +728,8 @@ export class ChannelSession {
       const morph = r.int();
       const hiMask = r.int();
       let combo = 0;
-      if (morph === 2) r.short(); else if (hiMask & 0x200000) combo = r.ubyte(); // morph value / Combo Attack's value (1 + orbs)
+      let morphId = 0;
+      if (morph === 2) morphId = r.short(); else if (hiMask & 0x200000) combo = r.ubyte(); // the morph / Combo Attack's value (1 + orbs)
       r.int(); r.int(); r.short(); r.skip(4); r.int(); r.skip(11); r.short(); r.skip(9); r.int(); r.short(); r.ubyte();
       const mount = r.int(); r.int();   // Monster Riding: the mount's item id (0 on foot), the skill
       r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
@@ -616,6 +742,7 @@ export class ChannelSession {
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
       let chalk = null, rings = null, berserk = false, mountInfo = null;
+      const cards = [];
       if (r.available >= 13) {
         mountInfo = { level: r.int(), exp: r.int(), tired: r.int() };   // the mount's level / exp / tiredness
         box = readBox(r);                                           // then a shop or game sign
@@ -623,11 +750,11 @@ export class ChannelSession {
         if (r.available >= 3) rings = readRingLook(r);
         // New Year cards received, then whether Berserk is on
         try {
-          if (r.available && r.ubyte()) for (let n = r.int(); n > 0; n--) r.int();
+          if (r.available && r.ubyte()) for (let n = r.int(); n > 0; n--) cards.push(r.int());
           berserk = r.available > 0 && r.ubyte() !== 0;
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, itemEffect, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -801,6 +928,12 @@ export class ChannelSession {
       if (pick === pirate && infusion) { r.pos = start + 2; b.infusion = r.int(); }
       // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
       if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
+      // a morph (second mask 0x2): the last stat (the one before last with GHOST_MORPH 0x20000), and its source
+      if (pick === normal && mask & 0x2n) {
+        r.pos = start;
+        const groups = Array.from({ length: n }, () => ({ v: r.short(), src: r.int(), t: r.int() })), g = groups[n - 1 - (mask & 0x20000n ? 1 : 0)];
+        if (g) { b.morph = g.v; b.morphSource = g.src; }
+      }
       // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent
       if (pick === normal && n === 1 && mask === COMBO) { r.pos = start; b.combo = r.short(); }
       // Power Stance / Freeze Standing: its one stat is the % chance not to be knocked back
@@ -886,6 +1019,13 @@ export class ChannelSession {
       const id = r.int(), m1 = r.long(), m2 = r.long();
       // another player gets on a mount (showMonsterRiding): short 0, the mount's item id, the skill
       if (BigInt.asUintN(64, m1) & RIDING && r.available >= 10) { r.short(); this.emit('foreignMount', id, r.int()); return; }
+      // a morph: its id is the last short (the one before last with GHOST_MORPH)
+      if (BigInt.asUintN(64, m2) & 0x2n) {
+        const n = popcount(BigInt.asUintN(64, m1)) + popcount(BigInt.asUintN(64, m2)), v = [];
+        for (let i = 0; i < n && r.available >= 2; i++) v.push(r.short());
+        this.emit('foreignMorph', id, v[n - 1 - (BigInt.asUintN(64, m2) & 0x20000n ? 1 : 0)] || 0);
+        return;
+      }
       // Dark Sight or Wind Walk: drawn see-through
       if (BigInt.asUintN(64, m2) & 0x40000000000n || BigInt.asUintN(64, m1) & 0x400000000n) { this.emit('foreignHidden', id); return; }
       if (BigInt.asUintN(64, m2) & 0x400000000000000n) { this.emit('foreignPartner', id); return; }   // Shadow Partner
@@ -913,20 +1053,12 @@ export class ChannelSession {
 
     const readMob = (r, controlMode) => {
       const oid = r.int(); r.ubyte(); const id = r.int();
-      if (controlMode !== undefined) {
-        // encodeTemporary: 4 mask ints (Cosmic writes each int-sized status into both halves,
-        // so count ints 0 and 2 only), then 8 bytes per active status
-        const masks = [r.uint(), r.uint(), r.uint(), r.uint()];
-        let entries = 0; for (const m of [masks[0], masks[2]]) for (let v = m; v; v &= v - 1) entries++;
-        // each: value (short), its source skill (int), duration (short); keep the statuses it already has
-        const sources = Array.from({ length: entries }, () => { r.short(); const s = r.int(); r.short(); return s; });
-        var statuses = entries ? { first: masks[0], second: masks[2], source: sources[0] } : null;
-      } else r.skip(16);
+      const statuses = readMobStats(r, readMobMask(r));
       const pos = r.pos2(); const stance = r.ubyte(); r.short(); const fh = r.short();
       // the appearance: an optional summon effect (id, 0, short, +1 byte for 15), then -2 a new spawn / -1 already here
       let appear = r.available ? r.byte() : -1;
       if (appear > 0) { r.byte(); r.short(); if (appear === 15) r.byte(); appear = r.available ? r.byte() : -1; }
-      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, statuses: controlMode !== undefined ? statuses : null };
+      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, statuses };
     };
     on(S.SPAWN_MONSTER, (r) => this.emit('spawnMob', readMob(r)));
     on(S.SPAWN_MONSTER_CONTROL, (r) => {
@@ -953,12 +1085,9 @@ export class ChannelSession {
       this.emit('mobDamaged', oid, dmg, r.available >= 8 ? r.int() : null, r.available >= 4 ? r.int() : null);
     });
     // the controller's answer: the monster's MP and the skill it may cast next (0 for none)
-    // a monster's statuses: two masks (first / second, MonsterStatus), then per status its value (short), the skill
-    // behind it (a player skill id, or a monster skill as short id + short level) and a short; all from one skill
     on(S.APPLY_MONSTER_STATUS, (r) => {
-      const oid = r.int(); r.long(); const first = r.uint(), second = r.uint();
-      const value = r.short(), source = r.int();
-      this.emit('mobStatus', oid, { first, second, source, value });
+      const oid = r.int();
+      for (const s of readMobStats(r, readMobMask(r))) this.emit('mobStatus', oid, s);
     });
     on(S.CANCEL_MONSTER_STATUS, (r) => { const oid = r.int(); r.long(); this.emit('mobStatusCancel', oid, r.uint(), r.uint()); });
     on(S.MOVE_MONSTER_RESPONSE, (r) => {
@@ -1277,6 +1406,22 @@ export class ChannelSession {
   find(name) { this.send(new PacketWriter(C.WHISPER).byte(0x05).string(name)); }
   /** Where a buddy is, for the Buddy tab's location line (answered with flag 0x48). */
   findBuddy(name) { this.send(new PacketWriter(C.WHISPER).byte(0x44).string(name)); }
+  /** A flowerpot's window: CLOSE_ITEMUI (item, 1 opened / 0 closed), OPEN_ITEMUI (its quest), USE_ITEMUI (an item dropped on it) */
+  closeItemUi(itemId, open) { this.send(new PacketWriter(C.CLOSE_ITEMUI).int(itemId).byte(open)); }
+  openItemUi(questId) { this.send(new PacketWriter(C.OPEN_ITEMUI).short(questId)); }
+  useItemUi(tab, slot, itemId) { this.send(new PacketWriter(C.USE_ITEMUI).byte(tab).short(slot).int(itemId)); }
+  /** A Gold / Silver box: its slot and item */
+  useTreasureBox(slot, itemId) { this.send(new PacketWriter(C.USE_TREASURE_BOX).short(slot).int(itemId)); }
+  /** RING_ACTION: 0 propose (partner, ring box), 1 withdraw, 2 answer (accepted, proposer, their id), 5 invite a guest (name, marriage, slot), 6 open an invitation (slot, item) */
+  propose(name, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(0).string(name).int(itemId)); }
+  withdrawProposal() { this.send(new PacketWriter(C.RING_ACTION).byte(1)); }
+  breakEngagement(itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(3).int(itemId)); }
+  answerProposal(ok, name, id) { this.send(new PacketWriter(C.RING_ACTION).byte(2).byte(ok ? 1 : 0).string(name).int(id)); }
+  inviteGuest(name, marriageId, slot) { this.send(new PacketWriter(C.RING_ACTION).byte(5).string(name).int(marriageId).int(slot)); }
+  openInvitation(slot, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(6).int(slot).int(itemId)); }
+  /** NEW_YEAR_CARD_REQUEST: 0 send (slot, item, to, message), 1 accept a card */
+  sendNewYearCard(slot, itemId, to, text) { this.send(new PacketWriter(C.NEW_YEAR_CARD_REQUEST).byte(0).short(slot).int(itemId).string(to).string(text)); }
+  acceptNewYearCard(id) { this.send(new PacketWriter(C.NEW_YEAR_CARD_REQUEST).byte(1).int(id)); }
   /** USE_CASH_ITEM: the slot, the item, what that kind of item adds (add(writer)), then the tick. */
   useCashItem(slot, itemId, add = null) {
     const w = new PacketWriter(C.USE_CASH_ITEM).short(slot).int(itemId);
@@ -1315,10 +1460,42 @@ export class ChannelSession {
     }
     return false;
   }
+  /** An Omok / Match Card room's ops while you are in one. */
+  gameOp(op, r) {
+    const e = { op };
+    if (op === 4) { e.slot = r.ubyte(); e.look = readCharLook(r); e.name = r.string(); e.record = r.available >= 20 ? readGameRecord(r) : null; }
+    else if (op === 6) { const kind = r.ubyte(); if (kind === 7) { e.system = r.ubyte(); e.name = r.string(); } else { e.slot = r.ubyte(); e.text = r.string(); } }
+    else if (op === 9) { e.slot = r.ubyte(); e.look = readCharLook(r); }
+    else if (op === 0x0A) { e.slot = r.ubyte(); if (r.available) e.reason = r.ubyte(); }
+    else if (op === 0x37) { e.accepted = r.ubyte() !== 0; if (e.accepted) { e.count = r.ubyte(); e.slot = r.ubyte(); } }
+    else if (op === 0x3D) { e.slot = r.ubyte(); if (this.roomType === 2) { e.cards = []; for (let n = r.ubyte(); n > 0; n--) e.cards.push(r.int()); } }
+    else if (op === 0x3E) { e.type = r.ubyte(); if (e.type !== 1) e.winner = r.ubyte(); e.records = [readGameRecord(r), readGameRecord(r)]; }
+    else if (op === 0x3F) e.slot = r.ubyte();
+    else if (op === 0x40) { e.x = r.int(); e.y = r.int(); e.color = r.ubyte(); }
+    else if (op === 0x41) e.code = r.ubyte();
+    else if (op === 0x44) { e.turn = r.ubyte(); e.index = r.ubyte(); if (e.turn === 0) { e.firstIndex = r.ubyte(); e.result = r.ubyte(); } }
+    if (op === 0x0A && e.slot !== undefined && e.reason !== undefined) this.roomType = 0;
+    this.emit('gameOp', e);
+  }
+  /** PLAYER_INTERACTION ops of a game room (with what `add` writes after the op). */
+  roomOp(op, add = null) { const w = new PacketWriter(C.PLAYER_INTERACTION).byte(op); add?.(w); this.send(w); if (op === 0x0A) this.roomType = 0; }
+  /** CREATE an Omok (1) / Match Card (2) room: title, password (if any), stone set or size */
+  gameCreate(type, title, hasPw, pw, piece) {
+    const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(hasPw ? 1 : 0);
+    if (hasPw) w.string(pw);
+    this.send(w.byte(piece));
+  }
+  /** VISIT a game room from its balloon: its id, then the password when it has one */
+  gameVisit(sn, pw) {
+    const w = new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(sn).byte(pw != null ? 1 : 0);
+    if (pw != null) w.string(pw);
+    this.send(w.byte(0));
+  }
   /** CREATE type 4 (a Shop Permit) or 5 (a Hired Merchant): the title and the item that opens it */
-  pshopCreate(title, itemId, type = 4) { this.shopPending = true; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
-  pshopVisit(oid) { this.shopPending = true; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
+  pshopCreate(title, itemId, type = 4) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
+  pshopVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
   pshopOpenStore() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0B).byte(1)); }
+  pshopOpenCash(type, birthday) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(0x0B).byte(type).int(birthday)); }
   /** ADD_ITEM: inventory tab, slot, how many bundles, how many in each, the price of one bundle */
   pshopPut(tab, slot, bundles, perBundle, price) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x16).byte(tab).short(slot).short(bundles).short(perBundle).int(price)); }
   pshopRemove(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1B).short(index)); }
@@ -1372,9 +1549,14 @@ export class ChannelSession {
   /** SPOUSE_CHAT: to your husband or wife (the server finds them; the first string is ignored) */
   spouseChat(text) { this.send(new PacketWriter(C.SPOUSE_CHAT).string('').string(text)); }
   /** DUEY_ACTION: 2 send (an item and / or mesos to a character), 4 take a parcel, 5 delete one, 7 close Duey */
-  dueySend({ tab = 0, slot = 0, qty = 0, mesos = 0, to }) {
-    this.send(new PacketWriter(C.DUEY_ACTION).byte(2).byte(tab).short(slot).short(qty).int(mesos).string(to).byte(0));
+  /** DUEY_ACTION 2: tab, slot, how many, mesos, to; then 0, or for a quick send 1, its message and the coupon's slot */
+  dueySend({ tab = 0, slot = 0, qty = 0, mesos = 0, to, quick = false, message = '', ticket = 0 }) {
+    const w = new PacketWriter(C.DUEY_ACTION).byte(2).byte(tab).short(slot).short(qty).int(mesos).string(to);
+    if (quick) w.byte(1).string(message).int(ticket); else w.byte(0);
+    this.send(w);
   }
+  /** DUEY_ACTION 0: the arrival balloon's O asks Duey to open */
+  dueyOpen() { this.send(new PacketWriter(C.DUEY_ACTION).byte(0).int(-1).int(2)); }
   dueyTake(id) { this.send(new PacketWriter(C.DUEY_ACTION).byte(4).int(id)); }
   dueyDelete(id) { this.send(new PacketWriter(C.DUEY_ACTION).byte(5).int(id)); }
   dueyClose() { this.send(new PacketWriter(C.DUEY_ACTION).byte(7)); }
@@ -1397,6 +1579,22 @@ export class ChannelSession {
   messengerDecline(from) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from)); }
   messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
   merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
+  /** The Owl of Minerva: OWL_ACTION (5 when its search opens), OWL_WARP (a store's owner and map), the Use-tab owl's search */
+  owlAction(mode) { this.send(new PacketWriter(C.OWL_ACTION).byte(mode)); }
+  owlWarp(ownerId, mapId) { this.send(new PacketWriter(C.OWL_WARP).int(ownerId).int(mapId)); }
+  useOwlItem(slot, itemId, searchId, desc) { this.send(new PacketWriter(C.USE_OWL_ITEM).short(slot).int(itemId).int(searchId).byte(desc ? 1 : 0).int(Date.now() | 0)); }
+  /** Cash Shop Surprise: the box's cash id */
+  cashShopSurprise(cashId) { this.send(new PacketWriter(C.CASHSHOP_SURPRISE).long(cashId)); }
+  /** The Store Remote Controller: its slot */
+  remoteStore(slot) { this.send(new PacketWriter(C.REMOTE_STORE).short(slot)); }
+  /** Managing your store from afar: the birthday code, then what the server gave */
+  manageStore(birthday, a, b, c) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(4).byte(5).int(birthday).int(a).byte(1).short(b).bytes(c)); }
+  /** The Remote Gachapon ticket: the town (0-9) */
+  useRemote(itemId, index) { this.send(new PacketWriter(C.USE_REMOTE).int(itemId).int(index)); }
+  /** Maple Life: a name to check */
+  useMapleLife(name) { this.send(new PacketWriter(C.USE_MAPLELIFE).string(name)); }
+  /** Vicious' Hammer: the result shown, sent back */
+  useHammer(mode, code) { this.send(new PacketWriter(C.USE_HAMMER).int(mode).int(code)); }
   merchantTakeBack(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x26).short(index)); }
   merchantOrganize() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x28)); }
   merchantClose() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x29)); }
@@ -1542,8 +1740,8 @@ export class ChannelSession {
     }
     this.send(w);
   }
-  /** USE_UPGRADE_SCROLL: the scroll's USE slot, the equip's slot (negative = worn), 2 = also use a White Scroll */
-  useScroll(scrollSlot, equipSlot, white) { this.send(new PacketWriter(C.USE_UPGRADE_SCROLL).int(Date.now() | 0).short(scrollSlot).short(equipSlot).short(white ? 2 : 0)); }
+  /** USE_UPGRADE_SCROLL: the scroll's USE slot, the equip's slot (negative = worn), 2 with a White Scroll (else 1), Legendary Spirit */
+  useScroll(scrollSlot, equipSlot, white, legendary) { this.send(new PacketWriter(C.USE_UPGRADE_SCROLL).int(Date.now() | 0).short(scrollSlot).short(equipSlot).short(white ? 2 : 1).byte(legendary ? 1 : 0)); }
   moveItem(inv, from, to, qty = 1) { this.send(new PacketWriter(C.ITEM_MOVE).int(Date.now() | 0).byte(inv).short(from).short(to).short(qty)); }
   healOverTime(hp, mp) { this.send(new PacketWriter(C.HEAL_OVER_TIME).zero(8).short(hp).short(mp).byte(0)); }
   changeChannel(ch) { this.send(new PacketWriter(C.CHANGE_CHANNEL).byte(ch).int(Date.now() | 0)); }

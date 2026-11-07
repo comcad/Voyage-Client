@@ -1,4 +1,4 @@
-import { invType } from '../data.js';
+import { invType, itemInfo } from '../data.js';
 import { pad, frames } from '../assets.js';
 import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
@@ -24,6 +24,11 @@ const ROWS = 5, ROW_Y = 158, ROW_H = 40, SPOTS = [285, 378, 472];
 const ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 3: 'Something went wrong.', 5: 'You have been expelled from the shop.',
   10: 'The shop has closed.', 15: 'You cannot open a shop here. Shops open in the Free Market rooms.', 16: 'You cannot open a shop here.',
   6: 'You need a Shop Permit.', 17: 'You cannot open a shop while another is nearby.' };
+// why a Hired Merchant sent you out; 0x14 (closed by a GM) says nothing
+const MERCHANT_LEAVE = { 6: 'The store cannot be opened as the time limit has passed.',
+  0x11: 'The owner of the store is currently\r\nundergoing store maintenance.\r\nPlease try again in a bit.',
+  0x12: 'It is past the working hours,\r\nso the store will close.',
+  0x13: 'The use of the Remote Control stopped\r\ndue to moving to another map. Please use it later.' };
 
 export class PlayerShopWin extends Win {
   constructor(mgr, d) {
@@ -90,7 +95,8 @@ export class PlayerShopWin extends Win {
     this.chat.remove();
     this.mgr.close(this);
     if (this.g.playerShop === this) this.g.playerShop = null;
-    if (reason && ERRORS[reason]) this.mgr.notice(ERRORS[reason]);
+    const t = (this.merchant ? MERCHANT_LEAVE : ERRORS)[reason];
+    if (reason && t) this.mgr.notice(t);
   }
 
   // ---------------------------------------------------------------- your actions
@@ -108,8 +114,15 @@ export class PlayerShopWin extends Win {
     this.g.net?.merchantClose(); this.end();
   }
   key(e) { if (e.key === 'Escape') this.leave(); }
-  start() {
+  async start() {
     if (!this.items.length) { this.mgr.notice('Put at least one item up for sale first.'); return; }
+    // with a cash item up for sale it opens on your birthday code; the server answers
+    const infos = await Promise.all(this.items.map((it) => itemInfo(this.g.assets, it.item.id)));
+    if (infos.some((i) => Number(i?.cash))) {
+      const b = await this.mgr.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
+      if (/^\d{8}$/.test(b || '')) this.g.net?.pshopOpenCash(this.merchant ? 5 : 4, Number(b));
+      return;
+    }
     this.g.net?.pshopOpenStore(); this.open = true;
     if (this.ownMerchant) {
       // the merchant keeps the shop from here on; you walk away from it

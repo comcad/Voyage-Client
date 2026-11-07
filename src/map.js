@@ -821,7 +821,9 @@ export class Life {
     if (this.state === 'die1') return;   // a status that arrives after it died doesn't take
     this.status.first |= first; this.status.second |= second;
     const e = this.statusArt.get(source) || { first: 0, second: 0 };
-    e.first |= first; e.second |= second; Object.assign(e, art);
+    e.first |= first; e.second |= second;
+    const { value, ...rest } = art; Object.assign(e, rest);
+    if (second & MOB_SPEED) e.speed = value;
     this.statusArt.set(source, e);
   }
   removeStatus(first, second) {
@@ -871,7 +873,7 @@ export class Life {
   swimming() { return this.footholds.swimming(this.x, this.y); }
   get speedMod() {
     let mod = 0;
-    if (this.status.second & MOB_SPEED) for (const e of this.statusArt.values()) if (e.second & MOB_SPEED) mod = e.value || 0;
+    if (this.status.second & MOB_SPEED) for (const e of this.statusArt.values()) if (e.second & MOB_SPEED) mod = e.speed || 0;
     return mod;
   }
   /** Doomed: once the puff has played, it is drawn (and walks) as the Blue Snail. */

@@ -242,7 +242,7 @@ export class WorldFx {
    */
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
-    const top = n.target.box ? n.target.box().top : n.target.y - 60;
+    const top = typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
     n.x = n.target.x; n.y = top - n.lift - LINE_GAP * n.line;
     if (!n.v) {
       const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
@@ -345,7 +345,7 @@ export class WorldFx {
     for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - i * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
     return null;
   }
-  buffList() { const now = Date.now(); return this.game.buffs.filter((b) => b.until > now); }
+  buffList() { const now = Date.now(); return this.game.buffs.filter((b) => b.until > now && !(b.source === 5221006 && this.game.battleshipHp === 0)); }
   get buffTop() { return this.boss ? 46 : 4; }
   drawBuffs(ctx) {
     const g = this.game, now = Date.now();
@@ -354,9 +354,15 @@ export class WorldFx {
       if (b.source > 0 && !node) g.skills?.ensure(b.source);
       const img = node && this.assets.image(node);
       if (!img) { if (node) this.assets.preload([node]); return; }
-      const x = UI_W - 36 - i * 34, y = this.buffTop, left = b.until - now, total = Math.max(1, b.dur || left);
+      const x = UI_W - 36 - i * 34, y = this.buffTop;
+      // the Battleship's icon shows its HP (from COOLDOWN 5221999; full until the first), not time:
+      // its most is (level - 120 + 2 x skill level) x 200
+      const ship = b.source === 5221006;
+      const shipMax = ship ? Math.max(1, ((g.stats?.level || 0) - 120 + 2 * (g.skills?.level(5221006) || 0)) * 200) : 0;
+      const left = ship ? (g.battleshipHp ?? shipMax) : b.until - now, total = ship ? shipMax : Math.max(1, b.dur || left);
+      const low = ship ? left <= Math.floor(total / 16) : left <= 3000;
       ctx.save();
-      if (left < 10000 && Math.floor(now / 250) % 2 === 0) ctx.globalAlpha = 0.45;   // blinks as it runs out
+      if (low) ctx.globalAlpha = Math.floor(now / 500) % 2 ? 64 / 255 : 210 / 255;   // pulses once it runs low
       // an item's buff: its raw icon centred on UIWindow.img/IconBase/0; a skill's icon is its own box
       const base = b.source < 0 && this.assets.image(this.W?.IconBase?.[0]);
       if (b.source < 0) {

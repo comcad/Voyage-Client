@@ -20,7 +20,7 @@ import { DojoWindow } from './ui/dojo.js';
 import { PyramidWindow } from './ui/pyramid.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
-import { music, sfx } from './audio.js';
+import { music, sfx, songLength } from './audio.js';
 import { StatusBar, CHAT_COLOR, CHAT_BAR } from './ui/statusbar.js';
 import { Weather } from './weather.js';
 import { AvatarBanner } from './ui/avatarmega.js';
@@ -38,7 +38,7 @@ import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
+import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice } from './ui/notifier.js';
 import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
@@ -48,6 +48,17 @@ import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
 import { uiText, TextField } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
+import { Kites } from './kites.js';
+import { morphTemplate, morphTemplateNow, MorphView, isSuperman, isNormalMorph, isHideMorph, supermanPlainAttackOk, SUPERMAN_BLOCKED } from './morph.js';
+import { ProposalWaitWin, InvitationWin } from './ui/wedding.js';
+import { NewYearCardWin, NewYearCardViewWin } from './ui/newyear.js';
+import { RaiseWin, IncubatorWin, TreasureBoxWin } from './ui/etcwins.js';
+import { RemoteGachaponWin, KarmaWin, HammerWin, VegaWin } from './ui/cashwins2.js';
+import { permanent } from './ui/itemguard.js';
+import { MapleLifeWin } from './ui/maplelife.js';
+import { OwlWin, OwlResultWin } from './ui/owl.js';
+import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
+import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
 import { Pet, pickReaction, NO_LOOT_MAP } from './pets.js';
@@ -81,10 +92,33 @@ const PET_DOLL_TIME = 0x0217E646BB058000n;   // a dateDead from 2079 on: a doll
 const FOLLOW_THE_LEAD = { 0: 8, 1: 10000018, 2: 20000024 };
 export const MESO_ID = 2147483647;
 const MAGIC_GUARDS = [2001002, 12001001, 22111001], POWER_GUARDS = [1101007, 1201007];
-const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'You cannot do that while dead.', 6: 'You need a Shop Permit to open a shop.',
-  10: 'You cannot open a store this close to a portal.', 13: 'You cannot open a store this close to another one.',
-  15: 'You cannot open a shop here. Shops open in the Free Market rooms.', 16: 'You cannot open a shop here.',
-  17: 'You may not enter this store.', 18: 'The owner is tending to this store. Please try again later.' };
+// a mini room (trade, shop, game) that couldn't be opened or entered; 8 and 0x17 say nothing
+const ROOM_ERRORS = { 1: 'The room is already closed.', 2: "You can't enter the room due to full capacity.",
+  3: 'Other requests are being fulfilled this minute.', 4: "You can't do it while you're dead.",
+  5: "You can't do it in the middle of the event.", 6: 'This character is unable to do it.',
+  7: 'You are not allowed to trade other items at this point.', 9: 'You can only make trade\r\nif you two are in the same map.',
+  10: 'You may not open the store near a portal.', 11: "You can't start the game here.",
+  12: 'You cannot open a store in this channel. Please use a different channel.', 13: "You can't establish a miniroom right here.",
+  14: "You can't start the game here.", 15: 'The personal store can only be built\r\nat the free market available at main towns.',
+  16: 'You may only use it at Room 7~22, located at the 2nd floor and above of the Free Market Entrance.',
+  17: 'You may not enter this store.', 18: 'The owner of the store is currently\r\nundergoing store maintenance.\r\nPlease try again in a bit.',
+  19: 'You are unable to enter the tournament room.', 20: 'You are not allowed to trade other items at this point.',
+  21: "You don't have enough mesos to enter.", 22: 'The password is incorrect.', 24: 'This item has expired.' };
+const MARRIAGE_RESULTS = { 0x0b: 'You are now engaged.', 0x0c: 'You are now married!', 0x0d: 'Your engagement has been broken.',
+  0x0e: 'You are no longer married.', 0x10: 'Congratulations!\r\nYour reservation was successfully made!',
+  0x12: 'You have entered the wrong character name.', 0x13: 'Your partner has to be in the same map.',
+  0x14: 'Your ETC slot is full.\r\nPlease remove some items.', 0x15: "Your partner's ETC slots are full.",
+  0x16: 'You cannot be engaged to the same gender.', 0x17: 'You are already engaged.', 0x18: 'She is already engaged.',
+  0x19: 'You are already married.', 0x1a: 'This person is already married.', 0x1b: "You're already in middle or proposing a person.",
+  0x1c: 'She is currently being asked by another suitor.',
+  0x1d: 'Unfortunately, the man who proposed to you has withdrawn his request for an engagement.',
+  0x1e: 'She has politely declined your engagement request.', 0x1f: 'The reservation has been canceled. Please try again later.',
+  0x20: "You can't break the engagement after making reservations.", 0x22: 'This invitation is not valid.' };
+const NEW_YEAR_CARD_ERRORS = { 0x0f: 'You cannot send a card to yourself !', 0x10: 'You have no free slot to store card.\r\ntry later on please.',
+  0x11: 'You have no card to send.', 0x12: 'Wrong inventory information !', 0x13: 'Cannot find such character !',
+  0x14: 'Incoherent Data !', 0x15: 'An error occured during DB operation.', 0x16: 'An unknown error occured !' };
+// windows of which only one may be open, and none with a shop-type window
+const SINGLE_WINS = [DueyWin, ProposalWaitWin, NewYearCardWin, NewYearCardViewWin, IncubatorWin, RemoteGachaponWin, KarmaWin, HammerWin, VegaWin, MapleLifeWin, OwlResultWin, MinigameRoomWin];
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 /** Teleport can be used again this long after it lands (ms), and this long after Meteor Shower, Blizzard or Genesis. */
 const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
@@ -616,7 +650,6 @@ const GUILD_MESSAGES = {
 };
 const GUILD_ERROR = 'The guild request has not been accepted, due to unknown reason.';
 /** PacketCreator.getMiniRoomError codes for trades */
-const TRADE_ERRORS = { 2: 'The other character is already trading.', 4: 'You cannot trade right now.', 5: 'The other character cannot trade right now.' };
 const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
   14: 'You cannot add a GM to your buddy list.', 15: 'That character is not registered.' };
 
@@ -668,6 +701,7 @@ export class Game {
     this.weather = new Weather(this); this.avatarBanner = new AvatarBanner(this); this.mapleTV = new MapleTVScreen(this);
     this.others = new Map(); this.drops = new Map(); this.pendingDrops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
     this.boards = new ShopBoards(this);
+    this.kites = new Kites(this);
     this.queue = []; this.loading = false;
     this.fps = 0; this._frames = 0; this._fpsT = 0;
     this.moveBuf = []; this.moveTotal = 0;
@@ -718,8 +752,12 @@ export class Game {
       // the QuestAlert bulb: its list of quests
       if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
       // a shop sign takes you into the shop
+      const game = this.gameSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
+      if (game) { this.visitGame(game); return; }
       const signed = this.shopSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
       if (signed && signed !== this.player) { this.net.pshopVisit(signed.box.oid); return; }
+      const kite = this.kites.at(wx, wy);
+      if (kite) { this.openKiteMessage(kite); return; }
       const stall = this.boards.at(p[0] + this.cam.x, p[1] + this.cam.y);
       if (stall?.merchant && stall.merchant.owner !== this.player.id) { this.net.pshopVisit(stall.merchant.oid); return; }
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
@@ -771,8 +809,10 @@ export class Game {
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
-    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
-    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
+    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
+    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
+    this.raiseKept = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);   // back up on the next map
+    for (const id of this.raiseKept) this.closeRaise(id);
     for (const w of [...this.windows.order]) this.windows.close(w);
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
@@ -804,7 +844,7 @@ export class Game {
       this.net = net;
       this.channel = entered.channel;
       const info = entered.info;
-      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; }
+      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
@@ -845,7 +885,58 @@ export class Game {
   playerAt(x, y) { for (const rp of this.others.values()) if (this.hitsChar(rp, x, y)) return rp; return null; }
   hitsChar(ent, x, y) {
     const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    const box = ent.morphView?.box(ent.x, ent.y, drawnRight(ent));   // morphed: the frame's lt / rb
+    if (box) return wx >= box.left && wx <= box.right && wy >= box.top && wy <= box.bottom;
     return wx >= ent.x - 18 && wx <= ent.x + 18 && wy >= ent.y - 64 && wy <= ent.y;
+  }
+  // ------------------------------------------------------------------ morphs
+  /** A character's morph template (null when not morphed or not loaded). */
+  morphTpl(ent = this.player) { return ent?.morph ? morphTemplateNow(ent.morph) : null; }
+  /**
+   * A morph comes or goes. An unknown morph changes nothing; a jump-only morph is refused in water and a fly-only one
+   * out of it; morphing stands the character up. The Oak Barrel (1002) goes in after 240ms and out after 600ms, with
+   * its skill's effect / affected art. Otherwise the change plays Transform (or TransformOnLadder - the client picks
+   * them the other way round from their names) with the Transform sound (not for 1000 / 1001). `init` (spawning,
+   * entering a map) plays nothing. A morph whose morphEffect is on shows item 5010999's character effect.
+   */
+  async setMorph(ent, id, init = false) {
+    const local = ent === this.player;
+    let tpl = null;
+    if (id) {
+      tpl = await morphTemplate(this.assets, id);
+      if (!tpl) return;
+      const water = !!this.map?.swimming(ent.x, ent.y);
+      if ((tpl.type === 0 && water) || (tpl.type === 1 && !water)) return;
+      if (local) { if (this.player.seat) this.standUp(false); } else ent.chair = 0;
+    }
+    const prev = ent.morph || 0;
+    if (prev === id && !ent.morphView?.dropped) return;
+    const onRope = local ? !!this.player.ladder : ent.action === 'ladder' || ent.action === 'rope';
+    const apply = async () => {
+      ent.morph = id;
+      ent.morphView = tpl ? new MorphView(tpl) : null;
+      if (ent.morphView) await this.assets.preload(ent.morphView.frames());
+      if (tpl?.morphEffect) { if (ent.fxBeforeMorph === undefined) ent.fxBeforeMorph = ent.itemFxId || 0; this.setItemEffect(ent, 5010999); }
+      else if (ent.fxBeforeMorph !== undefined) { const own = ent.fxBeforeMorph; delete ent.fxBeforeMorph; this.setItemEffect(ent, own); }
+    };
+    if (id === 1002 || (prev === 1002 && !id)) {
+      if (!onRope && !init) {
+        this.playSkillEffect(5101007, ent, false, id ? 'effect' : 'affected');
+        clearTimeout(ent.barrelTimer);
+        ent.barrelTimer = setTimeout(apply, id ? 240 : 600);
+        if (local) this.barrelUntil = performance.now() + (id ? 240 : 840);
+        return;
+      }
+      await apply();
+      if (!init) this.transformFx(ent, onRope, true);
+      return;
+    }
+    await apply();
+    if (!init) this.transformFx(ent, onRope, id !== 1000 && id !== 1001);
+  }
+  transformFx(ent, onRope, sound) {
+    this.vfx?.play(onRope ? 'Transform' : 'TransformOnLadder', ent);
+    if (sound) sfx.play('Game/Transform');
   }
   requestCharInfo(id) { this.net?.charInfo(id); }
   /**
@@ -957,6 +1048,7 @@ export class Game {
 
   /** A Shop Permit: name the shop, then the server opens its room (only in the Free Market rooms). */
   async openShop(permit) {
+    if (this.player.morph) { this.transformRefusal(); return; }   // not while morphed
     if (this.playerShop || this.tradeWin) return;
     const title = await this.windows.askText('Enter the title of your shop.', `${this.player.name}'s shop`, { max: 25, width: 200 });
     if (title?.trim()) this.net?.pshopCreate(title.trim(), permit);
@@ -1009,7 +1101,7 @@ export class Game {
   async openMegaphone(slot, itemId) {
     const kind = Math.floor(itemId / 1000) % 10, avatar = Math.floor(itemId / 10000) === 539;
     if (!avatar && ![1, 2, 5, 6, 7].includes(kind)) return;
-    if (!this.cashGate()) return;
+    if (!this.cashFree()) return;
     if (kind === 5 && !avatar) {
       if (itemId % 1000 > 5) return;
       const tv = new MapleTVWin(this.windows, Number(slot), itemId);
@@ -1044,20 +1136,413 @@ export class Game {
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
     const open = (w) => w && this.windows.order.includes(w);
-    return open(this.shopWin) || open(this.storageWin) || open(this.dueyWin) || this.windows.order.some((w) => w instanceof MegaphoneWin && w.kind === 6);
+    return open(this.shopWin) || open(this.storageWin) || open(this.dueyWin)
+      || this.windows.order.some((w) => (w instanceof MegaphoneWin && w.kind === 6) || SINGLE_WINS.some((W) => w instanceof W));
   }
 
   /** Duey: talking to him sends the parcels waiting for you, which opens his window; results come back as codes. */
   async onDuey(e) {
     const win = this.dueyWin && this.windows.order.includes(this.dueyWin) ? this.dueyWin : null;
     if (e.op === 'open') {
-      if (win) { win.setList(e.list); return; }
-      const w = new DueyWin(this.windows, e.list);
+      if (this.tradeOpen()) return;   // only one single window at a time
+      const w = new DueyWin(this.windows, e.list, e.mode, e.expired);
       await this.assets.preload(w.frames());
       this.dueyWin = this.windows.show(w, null);
-    } else if (e.op === 'gone') win?.gone(e.id);
-    else if (e.op === 'arrived') this.hud.message(e.from ? `A parcel from ${e.from} is waiting for you. Visit Duey to collect it.` : 'A parcel is waiting for you. Visit Duey to collect it.', '#ffe08a');
-    else if (e.op === 'result') { const t = dueyResult(e.code); if (t) this.windows.notice(t); }
+    } else if (e.op === 'gone') win?.gone(e.id, e.result);
+    else if (e.op === 'added') win?.added(e.parcel);
+    else if (e.op === 'arrived') { if (!win && (await notifyParcel(this.windows, e.from, e.quick))) this.net?.dueyOpen(); }
+    else if (e.op === 'result') win?.result(e.code);
+  }
+
+  // ------------------------------------------------------------------ rings, invitations and New Year cards
+  /** Free slots in an inventory tab. */
+  freeSlots(t) {
+    const inv = this.inventory?.[t] || {}, limit = this.inventory?.limits?.[t] || 24;
+    let n = 0; for (let s = 1; s <= limit; s++) if (!inv[s]) n++;
+    return n;
+  }
+  async showSingle(win) { await this.assets.preload(win.frames()); this.windows.show(win); return win; }
+  /** An engagement ring box: a free Etc slot, a male account, no engagement or marriage yet; then the partner's name. */
+  async useRingBox(slot, id) {
+    if (this.freeSlots(4) < 1) { this.windows.notice('Your ETC slot is full.\r\nPlease remove some items.'); return; }
+    if (this.accountGender) return;
+    const m = this.rings?.marriage;
+    if (m) { this.windows.notice(m.status === 3 ? 'You are already married.' : 'You are already engaged.'); return; }
+    if (this.tradeOpen()) return;
+    const name = (await this.windows.askText("Please enter your partner's name.", '', { max: 12, minLen: 4 }))?.trim();
+    if (!name) return;
+    this.net.propose(name, id);
+    this.showSingle(new ProposalWaitWin(this.windows));
+  }
+  /** Someone proposes: accept or not. */
+  async onProposal(name, id) {
+    const ok = await this.windows.confirm(`${name} has requested engagement.\r\nWill you accept this proposal?`);
+    this.net?.answerProposal(ok, name, id);
+  }
+  /** MARRIAGE_RESULT: any of them closes the proposal's waiting window. */
+  onMarriageResult(e) {
+    for (const w of this.windows.order.filter((o) => o instanceof ProposalWaitWin)) this.windows.close(w);
+    if (e.mode === 0x0b || e.mode === 0x0c) this.rings = { ...(this.rings || {}), marriage: e.record };
+    if (e.mode === 0x0d || e.mode === 0x0e) this.rings = { ...(this.rings || {}), marriage: null };
+    if (e.mode === 0x0f) { this.showSingle(new InvitationWin(this.windows, e.groom, e.bride, e.type)); return; }
+    const t = e.mode === 0x24 ? e.text : MARRIAGE_RESULTS[e.mode];
+    if (t) this.windows.notice(t);
+  }
+  /** The Etc tab's own items; whether it was one. */
+  useEtcItem(slot, it) {
+    const id = it.id, type = Math.floor(id / 10000);
+    if (id === 4031377 || id === 4031395) { if (this.canExclusive(200)) this.inviteGuest(Number(slot)); return true; }
+    if (id === 4031406 || id === 4031407) {
+      if (!this.canExclusive(200)) return true;
+      if ((this.map?.info?.fieldLimit || 0) & 0x2000) this.hud.message("You can't use it here in this map.", CHAT_COLOR.error);
+      else this.net.openInvitation(Number(slot), id);
+      return true;
+    }
+    if (type === 408) { if (this.canExclusive(500)) this.createGame(it.id); return true; }
+    if (Math.floor(id / 1000) === 4220) { this.openRaise(id); return true; }
+    if (type === 428) { this.useTreasureBox(Number(slot), id); return true; }
+    if (type === 417) {
+      if (!this.canExclusive(200)) return true;
+      if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return true; }
+      const inc = Object.entries(this.inventory?.[5] || {}).sort((a, b) => a[0] - b[0]).find(([, x]) => x.id === 5060002);
+      if (!inc) { this.windows.notice('To hatch Pigmy Egg, you need to\r\npurchase the incubator from the Cash Shop.'); return true; }
+      this.showSingle(new IncubatorWin(this.windows, Number(inc[0]), 5060002, { tab: 4, slot: Number(slot), id }));
+      return true;
+    }
+    if (type === 429) { if (this.morphed()) this.transformRefusal(); else this.useItemEffect(id); return true; }
+    if (type === 430) {
+      if (this.canExclusive(200) && !this.tradeOpen()) {
+        const cardId = parseInt(it.owner, 10) || 0;
+        this.showSingle(new NewYearCardViewWin(this.windows, (this.newYearCards || []).find((c) => c.id === cardId)));
+      }
+      return true;
+    }
+    return false;
+  }
+  /**
+   * An Omok set or Match Cards: not riding, transformed or with a single window open; standing on the ground; not
+   * where the map forbids games. The create dialog, a curse check on the title, then the room is asked for.
+   */
+  async createGame(id) {
+    const ride = Math.floor((this.riding?.item || 0) / 10000);
+    if (ride === 190) { this.hud.message('Not available while riding on the tamed monster.', CHAT_COLOR.error); return; }
+    if (ride === 193) { this.hud.message('Not available during the ride.', CHAT_COLOR.error); return; }
+    if (this.player.morph) { this.transformRefusal(); return; }
+    if (this.tradeOpen() || this.playerShop || this.tradeWin) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    const p = this.player;
+    if (!p.fh || p.ladder || Math.abs(p.vx || 0) > 0 || Math.abs(p.vy || 0) > 0) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x80) { this.windows.notice("You can't start the game here."); return; }
+    const kind = Math.floor(id / 100) % 10;
+    if (kind !== 0 && kind !== 1) return;
+    const r = await this.openStep(MinigameCreateWin, kind === 1);
+    if (!r) return;
+    if (await this.cursed(r.title)) { this.windows.notice('Cursing is not allowed.'); return; }
+    this.net?.gameCreate(kind === 1 ? 2 : 1, r.title, r.hasPw, r.pw, kind === 1 ? r.piece : id % 100);
+  }
+  /** A game room opened: each player's look is built for the window. */
+  async openGameRoom(room) {
+    for (const u of room.users) if (u) u.look = this.lookFrom(u.look);
+    const w = new MinigameRoomWin(this.windows, room);
+    await this.assets.preload(w.frames());
+    this.gameRoom = this.windows.show(w, null);
+  }
+  onGameOp(e) {
+    const w = this.gameRoom && this.windows.order.includes(this.gameRoom) ? this.gameRoom : null;
+    if (!w) return;
+    if (e.op === 4) w.visit(e.slot, { name: e.name, look: this.lookFrom(e.look) }, e.record);
+    else if (e.op === 6) { if (e.system !== undefined) w.system(e.system, e.name); else w.say(e.text, 0); }
+    else if (e.op === 9) { if (w.users[e.slot]) w.users[e.slot].look = this.lookFrom(e.look); }
+    else if (e.op === 0x0A) w.left(e.slot, e.reason);
+    else w.op(e.op, e);
+  }
+  sendRoomChat(text) { this.net?.roomOp(6, (w) => w.string(text)); }
+  /** A game room's balloon over another player's head: double-click visits (asking the password when it has one). */
+  gameSignAt(x, y) {
+    for (const ent of this.others.values()) {
+      const r = ent.signRect;
+      if ((ent.box?.type === 1 || ent.box?.type === 2) && r && x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h) return ent;
+    }
+    return null;
+  }
+  async visitGame(ent) {
+    let pw = null;
+    if (ent.box.locked) { pw = await this.windows.askText('Please enter the password.', '', { max: 30 }); if (pw == null) return; }
+    this.net?.gameVisit(ent.box.oid, pw);
+  }
+  /** Morphed: why not (an item morph that can't be cancelled by a click says only that). */
+  async transformRefusal() {
+    const now = Date.now(), m = (this.buffs || []).find((b) => b.until > now && b.source < 0 && (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & MORPH) !== 0n);
+    const fixed = m && Number((await itemInfo(this.assets, -m.source))?.noCancelMouse);
+    this.hud.message(fixed ? 'Unavailable while transforming.'
+      : 'Unavailable while transforming. Please right-click the icon at the top right corner to cancel the transformation.', CHAT_COLOR.error);
+  }
+  /** A flowerpot's window (only those with a quest and a picture set), where it was last left. */
+  async openRaise(id) {
+    if (this.windows.order.some((w) => w instanceof RaiseWin && w.itemId === id)) return;
+    const info = await itemInfo(this.assets, id);
+    if (!Number(info?.questId) || !info.uiData || (Number(info.exp) && !Number(info.grade))) return;
+    const at = (this.raisePos ??= {})[id] || [0, 150];
+    const w = new RaiseWin(this.windows, id, info, ...at);
+    await this.assets.preload(w.frames());
+    this.windows.show(w, null);
+    const rec = this.quests?.started?.[info.questId];
+    if (rec !== undefined) w.setValue(parseInt(String(rec).split(':')[0], 10) || 0);
+  }
+  /** A map change takes the flowerpot windows down and puts them back up where they were (with any the Cash Shop took down). */
+  cycleRaise() {
+    const ids = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);
+    for (const id of ids) this.closeRaise(id);
+    ids.push(...(this.raiseKept || []).filter((id) => !ids.includes(id))); this.raiseKept = null;
+    for (const id of ids) this.openRaise(id);
+  }
+  closeRaise(id) {
+    for (const w of this.windows.order.filter((o) => o instanceof RaiseWin && o.itemId === id)) { (this.raisePos ??= {})[id] = [w.x, w.y]; this.windows.close(w); }
+  }
+  /** A Gold / Silver box: with the Gold Master Key its window asks; without, it says so; OK sends. */
+  async useTreasureBox(slot, id) {
+    const key = Object.values(this.inventory?.[5] || {}).some((x) => x.id === 5490000);
+    if (await this.openStep(TreasureBoxWin, key ? 0 : 2, id === 4280000 || id === 4280002)) this.net.useTreasureBox(slot, id);
+  }
+  /** INCUBATOR_RESULT: what hatched, in the chat log and from Pigmi and Etran. */
+  async onIncubated(id, count) {
+    if (id < 1) { this.windows.notice('Your inventory is full.\r\nPlease try again later.'); return; }
+    const tab = ['', 'Eqp', 'Use', 'Setup', 'Etc', 'Cash'][invType(id)] || '', name = this.windows.itemName(id) || '';
+    this.hud.message(count < 2 ? `You have gained an item in the ${tab} tab (${name})` : `You have gained items in the ${tab} tab (${name} ${count})`, CHAT_COLOR.result);
+    localTalk(this.windows, 9050008, `An item is found inside the Pigmy Egg.#w\r\n\r\n#fUI/UIWindow.img/QuestIcon/4/0#\r\n#v${id}:# #t${id}:# ${count}\r\n\r\n`, ['OK']);
+  }
+  /** A wedding invitation to send: only while engaged; the guest's name (not the couple's). */
+  async inviteGuest(slot) {
+    const m = this.rings?.marriage;
+    if (!m || m.status !== 1) return;
+    const name = (await this.windows.askText('Please enter the guest name.', '', { max: 12, minLen: 4 }))?.trim();
+    if (!name) return;
+    if (name === m.husband || name === m.wife) { this.windows.notice("You may not send the wedding invitation to yourself.\r\nYou're the one getting married!"); return; }
+    this.net.inviteGuest(name, m.id, slot);
+    this.lockExclusive();
+  }
+  /**
+   * Two characters on the map holding the same New Year card: Effect/ItemEff.img/4300000 loops at their midpoint,
+   * 20px up, while they are within 250px of each other (not while either is transformed).
+   */
+  drawCardPairs(ctx, cam) {
+    const holders = [{ ent: this.player, cards: this.myCards || [], morph: this.morphed() }];
+    for (const rp of this.others.values()) if (rp.cards?.length) holders.push({ ent: rp, cards: rp.cards, morph: !!rp.morph });
+    const live = new Set();
+    if (holders[0].cards.length || holders.length > 1) {
+      for (let i = 0; i < holders.length; i++) for (let j = i + 1; j < holders.length; j++) {
+        const a = holders[i], b = holders[j];
+        if (a.morph || b.morph || Math.abs(a.ent.x - b.ent.x) >= 250 || Math.abs(a.ent.y - b.ent.y) >= 250) continue;
+        for (const id of a.cards) if (b.cards.includes(id)) live.add(`${id}:${a.ent.id}:${b.ent.id}|${i}|${j}`);
+      }
+    }
+    if (!live.size) { this.cardPairs = null; return; }
+    if (!this.cardPairArt) { this.cardPairArt = 'loading'; this.assets.json('Effect/ItemEff.img').then(async (e) => { const n = e?.[4300000]; if (n) { const a = new Anim(n, true); await this.assets.preload(a.frames); this.cardPairArt = n; } }); }
+    if (typeof this.cardPairArt !== 'object') return;
+    const now = performance.now(), anims = (this.cardPairs ??= new Map());
+    for (const k of [...anims.keys()]) if (!live.has(k)) anims.delete(k);
+    for (const k of live) {
+      const [, i, j] = k.split('|').map(Number), a = holders[i].ent, b = holders[j].ent;
+      let p = anims.get(k);
+      if (!p) anims.set(k, (p = { anim: new Anim(this.cardPairArt, true), t: now }));
+      p.anim.update(now - p.t); p.t = now;
+      const n = p.anim.node, img = n && this.assets.image(n);
+      if (!img) continue;
+      const o = n.origin || [0, 0];
+      ctx.drawImage(img, Math.round((a.x + b.x) / 2 - cam.x - o[0]), Math.round((a.y + b.y) / 2 - 20 - cam.y - o[1]));
+    }
+  }
+  /** A New Year card to send: a free Etc slot, then its window. */
+  openNewYearCard(slot, id) {
+    if (this.freeSlots(4) < 1) { this.windows.notice('Your ETC slot is full.\r\nPlease remove some items.'); return; }
+    if (!this.tradeOpen()) this.showSingle(new NewYearCardWin(this.windows, Number(slot), id));
+  }
+  /** NEW_YEAR_CARD_RES: sent / received cards are kept; cards waiting come as balloons (O takes it). */
+  onNewYearCard(e) {
+    const cards = (this.newYearCards ??= []);
+    if (e.mode === 4 || e.mode === 6) {
+      cards.push(e.card); (this.myCards ??= []).push(e.card.id);
+      this.windows.notice(e.mode === 4 ? `Successfully sent a New Year Card\r\n to ${e.card.receiver}.` : 'Successfully received a New Year Card.');
+    } else if (e.reason !== undefined) this.windows.notice(NEW_YEAR_CARD_ERRORS[e.reason] || 'The request is denied for an unknown reason.');
+    else if (e.mode === 8 || e.mode === 0xe) {
+      if (e.mode === 8) this.newYearCards = cards.filter((c) => c.id !== e.id);
+      this.myCards = (this.myCards || []).filter((c) => c !== e.id);
+      for (const rp of this.others.values()) if (rp.cards) rp.cards = rp.cards.filter((c) => c !== e.id);
+    } else if (e.mode === 0xd) { const rp = this.others.get(e.charId); if (rp && !rp.cards?.includes(e.id)) (rp.cards ??= []).push(e.id); }
+    else if (e.cards) for (const c of e.cards) notify(this.windows, 'newYearCard', c.sender).then((ok) => { if (ok) this.net?.acceptNewYearCard(c.id); });
+    else this.windows.notice('The request is denied for an unknown reason.');
+  }
+
+  // ------------------------------------------------------------------ Cash tab items with their own window or check
+  /** Kites, the Note, the Jukebox, meso sacks, morphs, the Quick Delivery Ticket and the name change / transfer cancels. */
+  useCashTabItem(slot, id) {
+    const type = Math.floor(id / 10000);
+    const run = { 508: this.useKite, 509: this.useNote, 510: this.useJukebox, 520: this.useMesoSack, 530: this.useMorphItem, 533: this.useQuickDelivery }[type]
+      || (id === 5400000 || id === 5401000 ? this.useCancelRequest : null)
+      || (Math.floor(id / 1000) === 5451 ? this.openRemoteGachapon : null)
+      || (id === 5431000 || id === 5432000 ? this.openMapleLife : null)
+      || (id === 5470000 ? this.useStoreRemote : null)
+      || (type === 523 ? this.useOwlCash : null)
+      || ({ 550: this.useSandglass, 552: this.openKarma, 557: this.openHammer, 561: this.openVega }[type] ?? null);
+    if (!run) return false;
+    if (this.cashFree()) run.call(this, Number(slot), id);
+    return true;
+  }
+  /**
+   * Maple Life: not with a shop-type window open; with no free character slot the A-type says no more can be
+   * made (the B-type adds a slot, up to 15), and at 15 slots none can.
+   */
+  async openMapleLife(slot, id) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    const count = this.charCount ?? 0, slots = this.charSlots ?? 15;
+    if (slots - count < 1) {
+      if (slots >= 15) { this.windows.notice('You cannot create a new character\r\nin this world as all 12 slots are full.'); return; }
+      if (id === 5431000) { this.windows.notice('no more characters can be created.\r\nPlease check again'); return; }
+    }
+    const [mci, str] = await Promise.all([this.assets.json('Etc/MakeCharInfo.img'), this.assets.json('String/GLcloneC.img')]);
+    const S = { ...(str?.Class || {}) };
+    this.mapleLife = await this.showSingle(new MapleLifeWin(this.windows, slot, id, mci, S));
+  }
+  /** The cash Owl of Minerva: the request gate says so when busy, then the shared one. */
+  useOwlCash(slot, id) {
+    if (!this.canExclusive(500)) { this.windows.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
+    this.openOwl({ kind: 'cash', slot, id });
+  }
+  /** The Owl of Minerva: not with a single window open, and only in the Free Market rooms (910000000-910000022). */
+  async openOwl(use) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    if (!this.map) return;
+    const m = this.map.id;
+    if (m < 910000000 || m > 910000022) { this.hud.message('This can only be used inside the Free Market.', CHAT_COLOR.error); return; }
+    if (this.owlWin && this.windows.order.includes(this.owlWin)) { this.owlWin.use = use; return; }
+    const w = new OwlWin(this.windows, use);
+    await this.assets.preload(w.frames());
+    this.owlWin = this.windows.show(w);
+  }
+  /** SHOP_SCANNER_RESULT 6: the stores selling it, after any single window closes; nothing found says so. */
+  async onOwlResults(d) {
+    for (const w of this.windows.order.filter((o) => SINGLE_WINS.some((W) => o instanceof W))) this.windows.close(w);
+    if (!d.rows.length && d.npcPrice <= 0) { this.releaseExclusive(); this.windows.notice('Unable to find the item\r\nyou have entered.'); return; }
+    if (!d.rows.length) this.releaseExclusive();
+    this.owlResult = await this.showSingle(new OwlResultWin(this.windows, d));
+  }
+  async openRemoteGachapon(slot, id) { await this.showSingle(new RemoteGachaponWin(this.windows, id)); }
+  useStoreRemote(slot) { if (!this.tradeOpen()) this.net.remoteStore(slot); }
+  /**
+   * The Magical Sandglass: a double-click sends no target; dropped on a worn timed item (not permanent, cash or
+   * sealed; notExtend refused) it asks with the time it adds, held to the item's maxDays from now.
+   */
+  async useSandglass(slot, id, pos = 0) {
+    if (!pos) { this.sendCashItem(slot, id, (w) => w.short(0)); return; }
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (!this.canExclusive(500)) return;
+    const it = this.inventory?.equipped?.[pos], glass = this.inventory?.[5]?.[slot];
+    if (!it) return;
+    if (glass?.flag & 1) { this.windows.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }
+    if (permanent(it.expiration) || it.cashId || it.flag & 1) return;
+    const info = await itemInfo(this.assets, id);
+    if (!info) return;
+    if (Number((await itemInfo(this.assets, it.id))?.notExtend)) { this.windows.notice('Time limit extension is not possible on this item.'); return; }
+    const add = Number(info.addTime) || 0, maxDays = Number(info.maxDays) || 0;
+    const ends = Number((BigInt(it.expiration) - 116444736000000000n) / 10000n) + add * 1000;
+    if (maxDays > 0 && ends > Date.now() + maxDays * 864e5) { this.windows.notice(`You cannot extend the effective date beyond ${maxDays} days.`); return; }
+    const d = Math.floor(add / 86400), h = Math.floor((add % 86400) / 3600), m = Math.floor((add % 3600) / 60);
+    const dur = `${d > 0 ? `${d} days` : ''}${h > 0 ? `${h} hrs.` : ''}${m > 0 ? `${m} min.` : ''}`;
+    if (!(await this.windows.confirm(`When used on ${this.windows.itemName(it.id) || ''},  the effective date will be extended by ${dur}. Would you like to use it?`))) return;
+    this.sendCashItem(slot, id, (w) => w.short(pos));
+  }
+  async openKarma(slot, id) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    await this.showSingle(new KarmaWin(this.windows, slot, id));
+  }
+  /** Vicious' Hammer / Vega's Spell: an item with info, no shop-type window, and the inventory open. */
+  async cashWindowGate(id) {
+    if (!(await itemInfo(this.assets, id))) return false;
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return false; }
+    return this.windows.isOpen('inventory');
+  }
+  async openHammer(slot, id) { if (await this.cashWindowGate(id)) this.hammerWin = await this.showSingle(new HammerWin(this.windows, slot, id)); }
+  async openVega(slot, id) {
+    if (!(await this.cashWindowGate(id))) return;
+    const list = Object.values((await this.assets.json('Etc/VegaSpell.img')) || {}).map((n) => Number(n?.item)).filter(Boolean);
+    this.vegaWin = await this.showSingle(new VegaWin(this.windows, slot, id, list));
+  }
+  async cashString(id, key) { return (await this.assets.json('String/Cash.img'))?.[id]?.[key] ?? ''; }
+  /** A kite or banner: not with a shop-type window open, nor in the Free Market; its three lines, curse-checked. */
+  async useKite(slot, id) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    if (!(await itemInfo(this.assets, id))) return;
+    if (Math.floor((this.map?.id || 0) / 10000000) === 91) { this.hud.message('Not available in the Free Market.', CHAT_COLOR.error); return; }
+    const text = await this.openStep(KiteInputWin, await this.cashString(id, 'msgIn'));
+    if (text == null) return;
+    if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return; }
+    this.sendCashItem(slot, id, (w) => w.string(text));
+  }
+  /** Over a kite: its owner's name and the item's msg. */
+  kiteTip(ux, uy) {
+    if (!this.kites?.kites.size) return null;
+    const [x, y] = this.unzoom(ux * VIEW_W / UI_W, uy * VIEW_H / UI_H), k = this.kites.at(x + this.cam.x, y + this.cam.y);
+    if (!k) return null;
+    if (k.tip === undefined) { k.tip = null; this.cashString(k.itemId, 'msg').then((m) => { k.tip = `${k.owner}${m}`; }); }
+    return k.tip ? { title: k.tip, lines: [] } : null;
+  }
+  async openKiteMessage(kite) {
+    const w = new KiteMessageWin(this.windows, kite, await this.cashString(kite.itemId, 'msg'));
+    await this.assets.preload(w.frames());
+    this.windows.show(w);
+  }
+  /** The Memo send window (To filled in from the buddy list); OK sends the note. */
+  async useNote(slot, id, to = '') {
+    const r = await this.openStep(MemoSendWin, to);
+    if (r) this.sendCashItem(slot, id, (w) => w.string(r.to).string(r.text));
+  }
+  /** The Jukebox: not while a song or weather plays; asks, then sends how long its song lasts (ms). */
+  async useJukebox(slot, id) {
+    if (this.jukebox || this.weather.active) { this.windows.notice('The effect is taking place right now.\r\nPlease try it later.'); return; }
+    const info = await itemInfo(this.assets, id);
+    if (!info) return;
+    if (!(await this.windows.confirm(`Will you play <${await this.cashString(id, 'title')}> on the jukebox?`))) return;
+    const len = await songLength(String(info.path || '').replace(/^Sound\//, '').replace('.img', ''));
+    this.sendCashItem(slot, id, (w) => w.int(len));
+  }
+  /** PLAY_JUKEBOX: the item's msg in the chat log, the music fades out and the song starts 2.5s later; -1 ends it. */
+  async onJukebox(id, name) {
+    clearTimeout(this.jukeboxTimer);
+    if (Math.floor(id / 10000) !== 510) { this.jukebox = null; this.restoreFieldMusic(); return; }
+    this.hud.message((await this.cashString(id, 'msg')).replace('%s', name || ''), CHAT_COLOR.result);
+    music.stop(1500);
+    const path = String((await itemInfo(this.assets, id))?.path || '').replace(/^Sound\//, '').replace('.img', '');
+    this.jukeboxTimer = setTimeout(() => { this.jukebox = id; music.play(path, { fadeOut: 1000, fadeIn: 1000, force: true }); }, 2500);
+  }
+  /** A meso sack: above level 15, asks with the item's mesos, then sends. */
+  async useMesoSack(slot, id) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    if ((this.stats?.level || 0) <= 15) { this.windows.notice('Users under level 15 users\r\ncannot use the meso bags.'); return; }
+    const info = await itemInfo(this.assets, id);
+    if (!info) return;
+    if (await this.windows.confirm(`Will you use the meso bag\r\nto receive ${Number(info.meso) || 0} mesos?`)) this.sendCashItem(slot, id);
+  }
+  /** A morph item: not on a map seat nor riding a tamed monster (silently); its Use sound, then sent. */
+  useMorphItem(slot, id) {
+    const p = this.player;
+    if ((p.seat && !p.seat.item) || Math.floor((this.riding?.item || 0) / 10000) === 190) return;
+    sfx.play(`Item/${pad(id, 8)}/Use`);
+    this.sendCashItem(slot, id);
+  }
+  /** The Quick Delivery Ticket: the server opens Duey to send at once. */
+  useQuickDelivery(slot, id) {
+    if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
+    this.sendCashItem(slot, id);
+  }
+  /** Name Change / Character Transfer from the inventory cancel the request made in the Cash Shop: asked twice. */
+  async useCancelRequest(slot, id) {
+    if (!(await this.openStep(CancelRequestWin, id === 5400000 ? 1 : 2))) return;
+    if (!(await this.openStep(CancelRequestWin, 0))) return;
+    this.sendCashItem(slot, id, (w) => w.byte(1));
+  }
+  /** A cancel's answer: 0 done; a transfer's 1 failed; otherwise the server's reason or "unknown error". */
+  onCancelResult(kind, v, reason) {
+    if (v === 0 || (kind === 2 && v === 1)) { this.openStep(CancelResultWin, kind, v === 0); return; }
+    this.windows.notice(reason || 'An unknown error has occured.');
   }
 
   /** The Transform window for a Maplemas Party Potion, unless one is open already. */
@@ -1087,7 +1572,7 @@ export class Game {
   }
   /** A Chalkboard: write a note (up to 40 characters) and hold it up; not where stores open; click it to put it away. */
   async openChalkboard(slot, itemId) {
-    if (!this.cashGate()) return;
+    if (!this.cashFree()) return;
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
     if (Number(this.map?.info?.personalShop)) { this.windows.notice("You can't use it here in this map."); return; }
     const text = (await this.windows.askText('Enter a note.', '', { max: 40 }))?.trim();
@@ -1098,8 +1583,8 @@ export class Game {
   closeChalkboard(say) { this.net?.closeChalkboard(); this.player.chalk = null; if (say) this.hud.message(say, CHAT_COLOR.error); }
   /** A weather item: not while weather is falling here or where the map forbids it; a message of up to 35 characters. */
   async useWeather(slot, id) {
-    if (!this.cashGate()) return;
-    if (this.weather.active || (this.map?.info?.fieldLimit || 0) & 0x4000) { this.windows.notice('The effect is taking place right now.\r\nPlease try it later.'); return; }
+    if (!this.cashFree()) return;
+    if (this.weather.active || this.jukebox || (this.map?.info?.fieldLimit || 0) & 0x4000) { this.windows.notice('The effect is taking place right now.\r\nPlease try it later.'); return; }
     if (!(await this.assets.json('Item/Cash/0512.img'))?.[pad(id, 8)]) return;
     const text = (await this.windows.askText('Please enter the attached message', '', { max: 35 }))?.trim();
     if (!text) return;
@@ -1108,7 +1593,7 @@ export class Game {
   }
   /** AP Reset: pick a stat to take a point from, one to give it to, confirm; not with a shop-type window open. */
   async useApReset(slot, id) {
-    if (!this.cashGate()) return;
+    if (!this.cashFree()) return;
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
     if (branchOf(this.stats?.job || 0) > 8) return;
     const from = await this.openStep(ApResetWin, false, null);
@@ -1119,7 +1604,7 @@ export class Game {
   }
   /** SP Reset: a skill of the item's advancement to take a point from, one to give it to, confirm (not as a beginner, or before that advancement). */
   async useSpReset(slot, id) {
-    if (!this.cashGate()) return;
+    if (!this.cashFree()) return;
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
     const job = this.stats?.job || 0, b = branchOf(job);
     if (b === 0 || b >= 9 || id % 10 > advancement(job)) return;
@@ -1134,7 +1619,7 @@ export class Game {
   }
   /** Item Guard: seal an item dragged onto its window (for good, or for the guard's info/protectTime days). */
   async useItemGuard(slot, id) {
-    if (!this.cashGate()) return;
+    if (!this.cashFree()) return;
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
     const node = (await this.assets.json('Item/Cash/0506.img'))?.[pad(id, 8)];
     if (!node) return;
@@ -1151,7 +1636,7 @@ export class Game {
   }
   /** Miu Miu the Traveling Merchant: the server opens her shop (not on maps that forbid it, or with a shop-type window open). */
   useMiuMiu(slot, id) {
-    if (!this.cashGate()) return;
+    if (!this.cashFree()) return;
     if ((this.map?.info?.fieldLimit || 0) & 0x40000) { this.hud.message("You can't use it here in this map.", CHAT_COLOR.error); return; }
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
     this.sendCashItem(slot, id);
@@ -1181,17 +1666,45 @@ export class Game {
   /** A Hired Merchant: ask the server whether one may open here; merchantCheck carries on. */
   openMerchant(itemId) {
     if (this.playerShop || this.tradeWin) return;
+    if (this.player.morph) { this.transformRefusal(); return; }   // not while morphed
     this.merchantItem = itemId;
     this.net?.merchantRequest();
   }
-  async onMerchantCheck(code) {
-    if (code === 7) {
-      const title = await this.windows.askText('Enter the title of your store.', `${this.player.name}'s store`, { max: 25, width: 200 });
-      if (title?.trim()) this.net?.pshopCreate(title.trim(), this.merchantItem, 5);
-    } else if (code === 9) this.windows.notice('Fredrick in the Free Market Entrance is keeping items or mesos for you.\nCollect them before opening a new store.');
-    else if (code === 0x10) this.windows.notice('Your Hired Merchant is open in another channel.');
-    else this.windows.notice('You cannot open a Hired Merchant right now.');
+  /** A channel's label: what follows '-' in its name, else "CH." and the name. */
+  channelLabel(ch) {
+    const n = String(this.channelNames?.[ch] ?? ch + 1), i = n.indexOf('-');
+    return i >= 0 ? n.slice(i + 1) : `CH.${n}`;
   }
+  /** ENTRUSTED_SHOP_CHECK_RESULT. */
+  async onMerchantCheck(e) {
+    const say = (t) => this.windows.notice(t);
+    switch (e.mode) {
+      case 7: {
+        const title = await this.windows.askText('Enter the title of your store.', `${this.player.name}'s store`, { max: 25, width: 200 });
+        if (title?.trim()) this.net?.pshopCreate(title.trim(), this.merchantItem, 5);
+        break;
+      }
+      case 8: say(`Your store is currently open\r\nin Channel ${this.channelLabel(e.channel)}, Free Market ${e.room % 100}.\r\nPlease use this after closing the store.`); break;
+      case 9: say('Please use this after retrieving items\r\n from Fredrick of Free Market.'); break;
+      case 10: say('Another character is currently using the item.\r\nPlease log on as a different character and close\r\nthe store, or empty out the Store Bank.'); break;
+      case 11: say('You are currently unable to open the store.'); break;
+      case 14: this.hud.message(e.ok ? 'Renaming Successful.' : "Renaming Failed - Can't find the Hired Merchant.", CHAT_COLOR.error); break;
+      case 15: say('Please retrieve your items from Fredrick.'); break;
+      case 16:
+        if (e.channel >= 0xFD) say('Unable to use this due to the Remote Shop not being open.');
+        else if (await this.windows.confirm(`The store is open at Channel ${this.channelLabel(e.channel)}.\r\nWould you like to change to that channel?`)) this.switchChannel(e.channel);
+        break;
+      case 17: {
+        if (!(await this.windows.confirm("You can't sell items while managing the store.\r\nWould you like to start managing the store?"))) break;
+        const b = await this.windows.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
+        if (/^\d{8}$/.test(b || '')) this.net?.manageStore(Number(b), e.a, e.b, e.c);
+        break;
+      }
+      case 18: if (e.show) say(e.text); break;
+      default: break;
+    }
+  }
+
 
   /**
    * FIND NPC: a bouncing arrow over that NPC for a few seconds - or, while it is off screen, one at the
@@ -1206,7 +1719,7 @@ export class Game {
     // above the head - and above the quest bulb when the NPC wears one
     const q = this.quests?.npcQuests(Number(k.ent.spawn?.id), this.textCtx());
     const bulb = q && (q.start.length || q.complete.length || q.progress.length) ? 38 : 0;
-    const top = (k.ent.box ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
+    const top = (typeof k.ent.box === 'function' ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
     const sx = k.ent.x - cam.x, sy = top - cam.y;
     // the arrow points down at (0, 8) from its own origin; turned for the edge pointer
     const arrow = (x, y, angle) => {
@@ -1235,6 +1748,7 @@ export class Game {
   /** A face expression from its key (F1-F7 = 1 hit .. 7 stunned): shown here and sent to the map. */
   emote(n) {
     if (!EMOTES[n - 1]) return;   // a ghost can make faces too
+    if (this.player.morph) return;   // no faces while morphed
     const now = performance.now();
     if (now - (this.lastEmote || 0) < 2000) return;   // one every 2s
     this.lastEmote = now;
@@ -1256,6 +1770,7 @@ export class Game {
    */
   useItemEffect(id) {
     if (!this.itemCount(id)) return;
+    if (this.player.morph) { this.transformRefusal(); return; }
     const now = performance.now();
     if (now - (this.itemEffectT || 0) < 2000) return;
     if (this.player.itemFxId === id) id = 0; else this.itemEffectT = now;
@@ -1371,15 +1886,32 @@ export class Game {
     this.windows.toggle('skill');
   }
 
-  useItemById(id) {
-    if (this.hidden() || this.dead) return;
-    const t = Math.floor(id / 1000000);
-    const slot = Object.entries(this.inventory?.[t] || {}).find(([, it]) => it.id === id)?.[0];
-    if (slot && t === 2 && isPetFood(id)) this.feedPet(Number(slot), id);
-    else if (slot && t === 5 && Math.floor(id / 10000) === 524) this.useCashPetFood(Number(slot), id);
-    else if (slot && t === 2) this.useConsume(Number(slot), id);
-    else if (slot && t === 3 && Math.floor(id / 10000) === 301) this.sitChair(id);
+  /**
+   * An item on a key: only these kinds, silently, once nothing is waiting (200ms apart): reward boxes, the Maplemas
+   * Party Potion, the plain Use types, pet food, mount food, catch items, the 2109xxx summoning sacks and 2100067,
+   * chairs, cash pet food and morphs. The first stack of it that isn't sealed is used.
+   */
+  async useItemById(id) {
+    if (this.hidden() || this.dead || !this.canExclusive(200)) return;
+    const type = Math.floor(id / 10000);
+    const bag = Math.floor(id / 1000) === 2109 || id === 2100067;
+    if (!PLAIN_USE.has(type) && ![212, 524, 301, 530, 226, 227].includes(type) && !bag) return;
+    const t = type === 301 ? 3 : type === 524 || type === 530 ? 5 : 2;
+    const entry = Object.entries(this.inventory?.[t] || {}).sort((a, b) => a[0] - b[0]).find(([, it]) => it.id === id && !(it.flag & 1));
+    if (!entry) return;
+    const slot = Number(entry[0]);
+    if (await itemReward(this.assets, id)) this.useItemReward(slot, id);
+    else if (type === 221 && Math.floor((id % 10000) / 1000) === 2) this.openTransform(slot, id);
+    else if (PLAIN_USE.has(type)) this.usePlainItem(slot, id);
+    else if (type === 212) this.feedPet(slot, id);
+    else if (type === 226) this.useMountFood(slot, id);
+    else if (type === 524) this.useCashPetFood(slot, id);
+    else if (type === 530) { if (this.cashFree()) this.useMorphItem(slot, id); }
+    else if (type === 301) this.sitChair(id);
+    else if (type === 227) this.useCatchItem(slot, id);
+    else if (bag) this.useSummonBag(slot, id);
   }
+
 
   // ------------------------------------------------------------------ pets
   /** A pet comes out at its index: one there already is replaced, or pushed along with those after it. */
@@ -1808,6 +2340,12 @@ export class Game {
    * (Haste, Nimble Feet, a speed potion...), held to 80-140 and 80-123 as the client does (openms, docs/skills.md).
    */
   moveStats() {
+    // a normal or hide morph: its own speed and jump, nothing from equipment or buffs
+    const mt = this.morphTpl();
+    if (mt && !mt.superman && !this.player.morphView?.dropped) {
+      const water = !!this.map?.swimming(this.player.x, this.player.y);
+      if (!((mt.type === 0 && water) || (mt.type === 1 && !water))) return { speed: Math.min(Math.max(80, mt.speed), 140) / 100, jump: Math.min(123, Math.max(80, mt.jump)) / 100, morphSwim: mt.swim };
+    }
     const now = Date.now(), active = (this.buffs || []).filter((b) => b.until > now);
     // the last speed buff given sets it, a slowing one too (Dark Sight's -30); jump takes the strongest
     const buff = (k) => (k === 'speed' ? active.findLast((b) => b.speed)?.speed || 0 : Math.max(0, ...active.filter((b) => b[k]).map((b) => b[k])));
@@ -1832,7 +2370,7 @@ export class Game {
   /** Hook a ChannelSession's events to this game. `entered` is the result of session.enter(). */
   async goOnline(entered, uiRoot) {
     const info = entered.info;
-    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.linked = info.linked;
+    this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.linked = info.linked;
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
     this.quickKeys2 = loadQuickKeys2(info.stats.name);
@@ -1983,7 +2521,7 @@ export class Game {
         this.playerShop = this.windows.show(win, null);
       }),
       shopItems: later((items, mesos) => this.playerShop?.setItems(items, mesos)),
-      merchantCheck: later((code) => this.onMerchantCheck(code)),
+      merchantCheck: later((e) => this.onMerchantCheck(e)),
       messenger: later((e) => this.onMessenger(e)),
       family: later((e) => this.onFamily(e)),
       shopSold: later((i, qty, buyer) => this.playerShop?.soldUpdate(i, qty, buyer)),
@@ -1991,11 +2529,39 @@ export class Game {
       shopChat: later((slot, text) => this.playerShop?.say(text)),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
       shopClosed: later((reason) => this.playerShop?.end(reason)),
-      shopError: later((code) => { this.playerShop?.end(); this.windows.notice(SHOP_ERRORS[code] || 'The shop could not be opened.'); }),
+      roomError: later((code) => { if (ROOM_ERRORS[code]) this.windows.notice(ROOM_ERRORS[code]); }),
       merchantSpawn: later((m) => this.boards.spawn(m)),
       merchantUpdate: later((owner, info) => this.boards.update(owner, info)),
       merchantRemove: later((owner) => this.boards.remove(owner)),
       duey: later((e) => this.onDuey(e)),
+      accountGender: (g) => { this.accountGender = g; },
+      incubated: later((id, count) => this.onIncubated(id, count)),
+      hammer: (e) => { if (this.hammerWin && this.windows.order.includes(this.hammerWin)) this.hammerWin.onResult(e); else this.releaseExclusive(); },
+      gameRoom: later((room) => this.openGameRoom(room)),
+      gameOp: (e) => this.onGameOp(e),
+      owlPopular: (ids) => this.owlWin?.setPopular(ids),
+      owlResults: later((d) => this.onOwlResults(d)),
+      owlLink: (code) => { if (this.owlResult && this.windows.order.includes(this.owlResult)) this.owlResult.onLink(code); },
+      csSurprise: (e) => this.csWin?.surprise(e),
+      mapleLifeName: (code) => this.mapleLife?.onName(code),
+      mapleLifeCreated: (result, code) => this.mapleLife?.onCreated(result, code),
+      vega: (v) => { if (this.vegaWin && this.windows.order.includes(this.vegaWin)) this.vegaWin.onResult(v); },
+      treasureBoxOpened: later((id) => this.openStep(TreasureBoxWin, 1, id === 4280000 || id === 4280002)),
+      proposal: later((name, id) => this.onProposal(name, id)),
+      marriageResult: later((e) => this.onMarriageResult(e)),
+      newYearCard: later((e) => this.onNewYearCard(e)),
+      kite: later((k) => this.kites.spawn(k)),
+      kiteRemove: later((type, id) => this.kites.remove(type, id)),
+      kiteRefused: () => this.windows.notice("You can't fly it there."),
+      jukebox: later((id, name) => this.onJukebox(id, name)),
+      mesoBag: (mesos) => this.windows.notice(mesos == null ? 'You have failed to use the meso bag.' : `You have used the meso bag\r\nto receive ${mesos} mesos.`),
+      cancelResult: (kind, v, reason) => this.onCancelResult(kind, v, reason),
+      cancelNotRequested: () => this.windows.notice('The character you logged on with\r\nhas not requested a name change.'),
+      memoSent: () => this.windows.notice('The note has successfully been sent'),
+      memoFailed: (code) => {
+        const t = ['The other character is online now.\r\nPlease use the whisper function,', 'Please check the name of the receiving character.', "The receiver's inbox is full.\r\nPlease try again."][code];
+        if (t) this.windows.notice(t);
+      },
       chalkboard: later((id, text) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.chalk = text; }),
       rocks: (vip, list) => { if (this.rocks) this.rocks[vip ? 'vip' : 'regular'] = list; },
       rockError: (code) => {
@@ -2006,7 +2572,6 @@ export class Game {
         if (t) this.windows.notice(t);
       },
       charBox: later((id, box) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.box = box; }),
-      tradeError: (code) => { this.tradeWin?.ended(0); this.windows.notice(TRADE_ERRORS[code] || 'The trade could not be started.'); },
       charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i), null); },
       // a Party Search invitation comes as "PS: <leader>"
       // refused at once with party invites switched off, from someone on the Blacklist, or while another is up;
@@ -2108,11 +2673,15 @@ export class Game {
         for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
       }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
-      spawnMob: later((m) => this.spawnLife('Mob', m, false)),
+      spawnMob: later(async (m) => {
+        await this.spawnLife('Mob', m, false);
+        const e = this.lifeByOid.get(m.oid);
+        if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);
+      }),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
         if (e && !e.pending) e.controlled = true; else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
-        if (e && !e.pending && m.statuses) this.applyMobStatus(e, m.statuses);   // what it was already under
+        if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);   // what it was already under
         if (aggro && e && !e.pending) e.chase(this.player);      // the server wants it after us
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
@@ -2121,12 +2690,14 @@ export class Game {
       disease: later((d) => this.onDisease(d)),
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
       foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
+      foreignMorph: later((id, morph) => this.onOther(id, (rp) => this.setMorph(rp, morph))),
       foreignCancel: later((id, m1, m2) => this.onOther(id, (rp) => {
         if (rp.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
         if (BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
         if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) rp.mount = 0;
         if (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK) rp.hidden = false;
         if (BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
+        if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(rp, 0);
       })),
       // a mount's level / exp / tiredness; levelling up plays the pet level-up effect on its rider (the client's)
       mountInfo: later(async (id, level, exp, tired, up) => {
@@ -2223,17 +2794,22 @@ export class Game {
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
       cooldown: (id, sec) => {
+        if (id === 5221999) { this.battleshipHp = sec; return; }   // the Battleship's HP, not a cooldown (0 takes its icon away)
         if (sec) { this.skills.cooldowns[id] = Date.now() + sec * 1000; (this.skills.cooldownTotal ??= {})[id] = sec * 1000; }
         else delete this.skills.cooldowns[id];
       },
       buff: (b) => {
-        if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); }
+        // the Battleship (1932000) given while on a ladder or rope: the client turns it down itself
+        if (b.mount && Math.floor(b.mount / 10000) === 193 && !isSkillVehicle(b.mount) && this.player.ladder) { this.net?.cancelBuff(5221006); return; }
+        if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); if (b.source === 5221006) this.battleshipHp = undefined; }
+        if (b.morph) { this.morphReason = b.morphSource; this.setMorph(this.player, b.morph); }
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
           watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
       cancelBuff: (m1, m2) => {
         if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) this.riding = null;
+        if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(this.player, 0);
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
         this.diseases = (this.diseases || []).filter((d) => !((d.m1 & m1) || (d.m2 & m2)));
       },
@@ -2323,6 +2899,10 @@ export class Game {
 
   /** SHOW_STATUS_INFO mode 1: a quest record. Nothing goes to the chat; progress shows as the yellow lines. */
   onQuest(id, status, data) {
+    for (const w of this.windows.order) if (w instanceof RaiseWin && w.questId === id) {
+      if (status === 1) w.setValue(parseInt(String(data ?? '').split(':')[0], 10) || 0);
+      else if (status === 2) this.closeRaise(w.itemId);
+    }
     const book = this.quests, old = book.started[id];
     book.update(id, status, data);
     this.questLayerTags();
@@ -2632,7 +3212,8 @@ export class Game {
       if (this.player.chalk && Number(map.info?.personalShop)) this.closeChalkboard('You cannot use the chalkboard here.');
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
-      this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
+      this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
+      if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
@@ -2804,7 +3385,7 @@ export class Game {
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look;
-    rp.box = d.box; rp.rings = d.rings; rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
     if (rp.chair) this.chairArt(rp.chair);
@@ -3084,6 +3665,11 @@ export class Game {
     if (tab === 5 && it.id === 5170000) { this.useNameTag(slot, it.id); return; }                  // Pet Name Tag
     if (tab === 5 && it.id === 5180000) { if (this.cashFree()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
     if (tab === 5 && Math.floor(it.id / 10000) === 524) { this.useCashPetFood(slot, it.id); return; }
+    if (tab === 5 && this.useCashTabItem(slot, it.id)) return;
+    if (tab === 5 && it.id === 5060002) {
+      if (this.tradeOpen()) this.hud.message('Not available', CHAT_COLOR.error); else this.showSingle(new IncubatorWin(this.windows, Number(slot), it.id));
+      return;
+    }
     if (tab === 5 && Math.floor(it.id / 10000) === 512) { this.useWeather(slot, it.id); return; }
     if (tab === 5 && it.id === 5050000) { this.useApReset(slot, it.id); return; }
     if (tab === 5 && (it.id === 5060001 || Math.floor(it.id / 1000) === 5061)) { this.useItemGuard(slot, it.id); return; }
@@ -3099,14 +3685,8 @@ export class Game {
     if (tab === 5 && Math.floor(it.id / 10000) === 501) { this.useItemEffect(it.id); return; }           // a character effect
     if (tab === 3 && Math.floor(it.id / 10000) === 301) { this.sitChair(it.id); return; }        // a chair
     if (tab === 4 && Math.floor(it.id / 10000) === 416) { this.openBook(it.id); return; }        // a book (the Beginner's Guide)
+    if (tab === 4 && this.useEtcItem(slot, it)) return;
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
-    if (tab === 2 && isScroll(it.id)) {
-      // a scroll is put on an item, not used: pick it up and show what you wear
-      this.windows.startCarry({ kind: 'item', tab: 2, slot, id: it.id, sticky: true, x: -99, y: -99, at: 0 }, this.windows.icon(it.id));
-      this.windows.open('equip');
-      this.hud.message('Click the equipped item to use the scroll on.', '#fff');
-      return;
-    }
     if (tab === 2) { this.useConsume(slot, it.id); return; }
     else if (tab === 1) {
       if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
@@ -3416,10 +3996,13 @@ export class Game {
     if (!scrollFits(sid, eq.id)) { this.notice('This scroll cannot be used on this item.'); return; }
     if (!modifier && !(eq.slots > 0)) { this.notice('This item has no upgrades available.'); return; }
     if (eq.flag & 1 && !(await this.windows.confirm('Due to the potency of the scroll,\r\nthe sealed item might be destroyed.\r\nAre you sure you still want to use the scroll?'))) return;
-    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && Math.floor(sid / 100) !== 20490;
-    const white = hasWhite && (await this.windows.confirm('Would you like to use a #bWhite Scroll#k too?\nIt keeps the upgrade slot if the scroll fails.'));
+    // Spikes, Cold Protection and Clean Slate scrolls never take a White Scroll
+    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && ![2040727, 2041058, 2049000, 2049001, 2049002, 2049003].includes(sid);
+    const white = hasWhite && (await this.windows.confirm('Would you like to use the White Scroll?'));
     if (inv[2][scrollSlot] !== scroll) return;          // it moved while you were deciding
-    this.net?.useScroll(scrollSlot, equipSlot, white);
+    if (!this.canExclusive(500)) return;
+    this.net?.useScroll(scrollSlot, equipSlot, white, equipSlot > 0);
+    this.lockExclusive();
   }
 
   /**
@@ -3599,6 +4182,9 @@ export class Game {
     // the Maplemas Party Potion (221x2xxx) opens its Transform window, once nothing is waiting (200ms apart)
     if (type === 221 && Math.floor((id % 10000) / 1000) === 2) { if (this.canExclusive(200)) this.openTransform(slot, id); return; }
     if (type === 232) { if (this.canExclusive(200)) this.openRock(slot, id); return; }
+    if (type === 224) { if (this.canExclusive(200)) this.useRingBox(slot, id); return; }
+    if (type === 231) { if (this.canExclusive(200)) this.openOwl({ kind: 'use', slot, id }); return; }
+    if (type === 216) { if (this.canExclusive(200)) this.openNewYearCard(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
     // only these Use types are used with a plain USE_ITEM, once nothing is waiting (200ms apart); the Maplemas Party
@@ -4049,6 +4635,10 @@ export class Game {
     this.windows?.update(dt);
     this.vfx?.update(dt);
     this.weather.update(dt);
+    this.kites.update(dt);
+    const p = this.player;
+    if (p.morphView) p.morphView.update(p, p.action, !!p.attack, dt, p.attack ? p.attackScale || 1 : 1);
+    for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
     this.questAlert?.update(dt * 1000); this.questAlert?.tick();
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
@@ -4408,7 +4998,7 @@ export class Game {
   swimShoe(ms = this.moveStats()) {
     const ride = this.riding && this.mountData(this.riding.item)?.stats;
     const shoes = !ride && this.windows?.info?.(this.inventory?.equipped?.[-7]?.id);
-    const pct = Number((ride || shoes)?.swim ?? 100);
+    const pct = ms.morphSwim ?? Number((ride || shoes)?.swim ?? 100);
     return { acc: 1, speed: ms.speed * pct / 100, v: ms.speed };
   }
   /** Off the ground: in water you swim (no gravity; left / right and up / down steer it), else you fall. */
@@ -4615,6 +5205,10 @@ export class Game {
   /** Try a skill from its hotkey. Returns true when it started (so movement is skipped this frame). */
   useSkill(id) {
     if (this.hasDisease(SEAL) && !HEROS_WILLS.has(id)) return false;   // sealed by a monster: only Hero's Will
+    // morphed: a potion morph or the Oak Barrel (going in or out too) uses no skill; a transformation not these
+    const mt = this.morphTpl();
+    if ((mt && !mt.superman) || performance.now() < (this.barrelUntil || 0)) return false;
+    if (mt?.superman && SUPERMAN_BLOCKED.has(id)) return false;
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     const kind = sb.kind(id, this.weaponId());
@@ -4680,6 +5274,17 @@ export class Game {
   attack(skillId = 0, kind = null, opts = {}) {
     const { charge = 0, heal = false } = opts;
     const p = this.player, sb = this.skills, weapon = this.weaponId();
+    // morphed: a potion morph can't attack, the Oak Barrel's attack ends it; a transformation attacks plainly only
+    // with knuckles (or a bow from Eagle Eye) - in melee it says so
+    const mt = this.morphTpl();
+    if (mt && !p.morphView?.dropped) {
+      if (mt.hide) { this.net?.cancelBuff(5101007); return false; }
+      if (!mt.superman) return false;
+      if (!skillId && !supermanPlainAttackOk(weapon, this.morphReason)) {
+        if (!RANGED_WEAPONS.has(weapon ? Math.floor(weapon / 10000) : 0)) this.hud.message('This skill cannot be used with the equipped item.', CHAT_COLOR.error);
+        return false;
+      }
+    }
     const wcat = weapon ? Math.floor(weapon / 10000) : 0;
     // lying down, a plain attack is the prone stab: a short melee jab with any weapon
     const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
@@ -5515,7 +6120,8 @@ export class Game {
   // ------------------------------------------------------------------ sitting
   /** Sitting needs you standing still on the ground (the client's check), and 200ms since the last try. */
   canSit() {
-    const p = this.player;
+    const p = this.player, mt = this.morphTpl();
+    if (mt && !mt.superman) return false;   // not as a potion morph or the Oak Barrel
     if (!p.fh || p.ladder || p.attack || p.seat || this.dead || Math.abs(p.vx || 0) > 1) return false;
     if (performance.now() - (this.lastSit || 0) < 200) return false;
     this.lastSit = performance.now();
@@ -7242,6 +7848,8 @@ export class Game {
       if (l === playerLayer) this.vfx?.drawTombs(ctx, cam);   // behind every character, so a ghost floats in front of its stone
       if (l === playerLayer) {
         for (const m of this.boards.merchants.values()) this.boards.drawMerchant(ctx, cam, m);   // Hired Merchants, behind people
+        this.kites.draw(ctx, cam);
+        this.drawCardPairs(ctx, cam);
         for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
         if (inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.questAlert?.draw(ctx, cam); }
       }
@@ -7373,6 +7981,20 @@ export class Game {
     // while protected after a hit, alternate gray and normal every 60ms, as the original does (never a ghost)
     const blink = local && !dead && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
+    // morphed: only the morph's frame (no body, equipment or their effects); its character effect stays
+    const morphed = !mount && ent.morphView?.node();
+    if (morphed) {
+      this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
+      if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }
+      ent.morphView.draw(ctx, this.assets, sx, sy, drawnRight(ent), (local ? this.hidden() || this.gmHidden : ent.hidden) ? 0.5 : 1);
+      if (blink) ctx.restore();
+      this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
+      if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
+      else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
+      if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
+      this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
+      return;
+    }
     this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
@@ -7386,6 +8008,7 @@ export class Game {
     this.drawRingFx(ctx, cam, ent);
     // a shop's sign: a booth around its owner (in front of them) or a board over the head; name tags on top
     if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
+    else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
     this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
