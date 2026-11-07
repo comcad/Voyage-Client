@@ -2193,6 +2193,7 @@ export class Game {
       portalSound: () => sfx.play('Game/Portal'),
       spawnNpc: later((n, controlled) => this.spawnLife('Npc', n, !!controlled)),
       npcAction: later((oid, action, chat) => this.lifeByOid.get(oid)?.npcActed?.(action, chat)),
+      forcedMapEquip: later(() => this.forceMapEquip()),
       removeNpc: later((oid) => this.killLife(oid, 0)),
       imitatedNpcs: later((list) => this.imitateNpcs(list)),
       drop: later((d) => this.spawnDrop(d)),
@@ -2603,6 +2604,7 @@ export class Game {
     // a scene ends with its map; the next map's scene comes while that one loads
     this.direction = null;
     if (this.directionDressed) { this.directionDressed = false; this.rebuildLook(); }
+    if (this.forcedEquips) { this.forcedEquips = null; this.rebuildLook(); }
     // the old map fades to black while the new one loads; the loading screen only shows if that takes a while
     this.fadeOut();
     const fadeStart = this.fade.t0;
@@ -2723,6 +2725,22 @@ export class Game {
       while (a.t >= look.delay(action, a.frame)) { a.t -= look.delay(action, a.frame); a.frame = look.nextFrame(action, a.frame, false).frame; }
       drawParts(ctx, this.assets, look.compose(action, a.frame), sx, sy, e.facingRight);
     };
+  }
+
+  /**
+   * FORCED_MAP_EQUIP: the map dresses you, until you leave it. On a fieldType 82 map, the Training Headgear for
+   * Beginners and Training Uniform for Beginners with your own weapon; in the sauna (fieldType 1001), nothing but the
+   * bathrobe for your gender if you have it on. Other maps keep your own look.
+   */
+  forceMapEquip() {
+    const t = Number(this.map?.info?.fieldType), eq = this.inventory?.equipped || {};
+    const shown = (slot) => eq[-(slot + 100)]?.id ?? eq[-slot]?.id;
+    let equips;
+    if (t === 82) equips = [1002562, 1052081, eq[-11]?.id];
+    else if (t === 1001) { const robe = this.stats?.gender ? 1051098 : 1050100; equips = [shown(5) === robe ? robe : 0]; }
+    else return;
+    this.forcedEquips = equips.filter(Boolean);
+    this.rebuildLook();
   }
 
   killLife(oid, anim) {
@@ -2997,7 +3015,7 @@ export class Game {
 
   async rebuildLook() {
     const s = this.stats;
-    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, gender: s.gender, equips: equippedIds(this.inventory.equipped) });
+    const look = new CharacterLook(this.assets, { skin: s.skin, face: s.face, hair: s.hair, gender: s.gender, equips: this.forcedEquips || equippedIds(this.inventory.equipped) });
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
