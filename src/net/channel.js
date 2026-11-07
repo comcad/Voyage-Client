@@ -966,6 +966,10 @@ export class ChannelSession {
       this.emit('mobSkillOffer', oid, skill, level);
     });
 
+    // a move or a door turned down (BLOCKED_MAP), or a channel / shop the server won't let you into (BLOCKED_SERVER):
+    // both answer the request, and say why
+    on(S.BLOCKED_MAP, (r) => { this.emit('exclusiveAnswered'); this.emit('blocked', 'map', r.ubyte()); });
+    on(S.BLOCKED_SERVER, (r) => { this.emit('exclusiveAnswered'); this.emit('blocked', 'server', r.ubyte()); });
     // NPCs drawn as a character (ranking statues): per NPC id, the name and look they take
     on(S.IMITATED_NPC_DATA, (r) => {
       const list = [];

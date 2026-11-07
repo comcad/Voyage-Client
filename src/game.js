@@ -2195,6 +2195,7 @@ export class Game {
       npcAction: later((oid, action, chat) => this.lifeByOid.get(oid)?.npcActed?.(action, chat)),
       removeNpc: later((oid) => this.killLife(oid, 0)),
       imitatedNpcs: later((list) => this.imitateNpcs(list)),
+      blocked: (kind, type) => this.blocked(kind, type),
       drop: later((d) => this.spawnDrop(d)),
       removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
       inventory: (ops, unlock) => { if (unlock) this.cashBusy = false; this.onInventory(ops); },
@@ -2697,6 +2698,26 @@ export class Game {
     if (kind === 'Mob' && Number(e.src?.info?.damagedByMob)) { this.friendlyMob = e; this.friendlyHitAt = performance.now(); }
   }
 
+  /**
+   * BLOCKED_MAP / BLOCKED_SERVER: why a move, door, channel change or shop was turned down. Most go to chat in red;
+   * BLOCKED_MAP 4 and 7 come up as a notice.
+   */
+  blocked(kind, type) {
+    const say = (t) => this.hud.message(t, CHAT_COLOR.error), ground = 'Unable to approach due to the force of the ground.';
+    if (kind === 'map') {
+      const chat = { 1: 'The portal is closed for now.', 2: 'You cannot go to that place.', 3: ground, 5: ground, 6: 'This map can only be entered by party members.' }[type];
+      const notice = { 4: 'You cannot teleport to or on this map.', 7: 'The cash shop is currently\r\nnot available.\r\nStay tuned...' }[type];
+      if (chat) say(chat); else if (notice) this.windows.notice(notice);
+      return;
+    }
+    const chat = {
+      1: 'You cannot move that channel. Please try again later.', 2: 'You cannot go into the cash shop. Please try again later.',
+      3: 'The Item-Trading Shop is currently unavailable. Please try again later.',
+      4: 'You cannot go into the trade shop, due to the limitation of user count.',
+      5: 'You do not meet the minimum level requirement to access the Trade Shop.',
+    }[type];
+    if (chat) say(chat);
+  }
   /**
    * IMITATED_NPC_DATA: every NPC of each id on the map takes that name and is drawn as a character with that look,
    * standing (a ranking statue). Kept for the map, so one that is still loading takes it as it appears.
