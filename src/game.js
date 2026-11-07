@@ -2631,6 +2631,8 @@ export class Game {
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
     if (kind === 'Npc' && this.vfx) this.vfx.questT = 0;   // its quest icon at once
+    // a monster others can hurt (info/damagedByMob: the Watch Hog, Moon Bunny, Tylus...) is the field's friendly one
+    if (kind === 'Mob' && Number(e.src?.info?.damagedByMob)) { this.friendlyMob = e; this.friendlyHitAt = performance.now(); }
   }
 
   killLife(oid, anim) {
@@ -3904,6 +3906,7 @@ export class Game {
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
     if (this.net) this.autoAggro();
+    if (this.net) this.friendlyMobHit();
     if (this.net) this.touchReactors();
     if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
     if (this.fade?.dir !== 'out') { if (this.dead) this.updateDeadBody(dt); else this.updatePlayer(dt); }   // you stand still while the old map goes dark
@@ -6307,6 +6310,31 @@ export class Game {
       this.touchAttack(m);
       this.hurtBy(m, m.src.info?.PADamage || 1, false, -1, knock);
       return;
+    }
+  }
+  /**
+   * The friendly monster (the last one spawned with damagedByMob) is hurt by a monster whose body overlaps it: one
+   * of its damagedBySelectedMob kinds, or any monster if that list is empty. The party leader reports it (or you,
+   * alone on the map), at most once every 1.5s, as MOB_DAMAGE_MOB_FRIENDLY; the server works out the damage.
+   */
+  friendlyMobHit() {
+    const f = this.friendlyMob;
+    if (!f || !this.map.life.includes(f) || !f.alive || f.dying) return;
+    if (!(this.party ? this.party.leader === this.player.id : this.others.size === 0)) return;
+    const now = performance.now();
+    if (now - (this.friendlyHitAt ?? 0) < 1500) return;
+    const sel = f.src?.info?.damagedBySelectedMob, kinds = sel && typeof sel === 'object'
+      ? Object.entries(sel).filter(([k]) => !k.startsWith('_')).map(([, v]) => Number(v)) : [];
+    const fb = f.hitBox();
+    for (const m of this.map.life) {
+      if (m === f || m.kind !== 'Mob' || !m.alive || m.dying || m.oid == null) continue;
+      if (kinds.length && !kinds.includes(Number(m.spawn?.id))) continue;
+      const b = m.hitBox();
+      if (b.left < fb.right && fb.left < b.right && b.top < fb.bottom && fb.top < b.bottom) {
+        this.net.mobDamageMobFriendly(m.oid, this.player.id, f.oid);
+        this.friendlyHitAt = now;
+        return;
+      }
     }
   }
   /**

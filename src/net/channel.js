@@ -1140,6 +1140,8 @@ export class ChannelSession {
   }
   closeRangeAttack(o) { this.attack('melee', o); }
   /** A monster that seeks you out (firstAttack / pickUp): its object id and how far you are from it. */
+  /** A monster ran into the escorted (friendly) one: the attacker, your character id and the friendly one. */
+  mobDamageMobFriendly(attacker, charId, friendly) { this.send(new PacketWriter(C.MOB_DAMAGE_MOB_FRIENDLY).int(attacker).int(charId).int(friendly)); }
   autoAggro(oid, distance) { this.send(new PacketWriter(C.AUTO_AGGRO).int(oid).int(distance)); }
   /**
    * A skill that strikes the monster your body touches (Body Pressure): one monster, one line; 8 bytes where the
