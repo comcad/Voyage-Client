@@ -2219,6 +2219,8 @@ export class Game {
       avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
+      objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
+      objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
       hint: (text, width, seconds, at) => { this.vfx?.hint(text, width, seconds, at || this.player); },
@@ -3905,6 +3907,7 @@ export class Game {
     this.updateDiseases(dt);
     if (this.net) this.autoAggro();
     if (this.net) this.touchReactors();
+    if (this.net) this.obstaclesHitMobs();
     if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
     if (this.fade?.dir !== 'out') { if (this.dead) this.updateDeadBody(dt); else this.updatePlayer(dt); }   // you stand still while the old map goes dark
     for (const rp of this.others.values()) { rp.update(dt); this.watchDeath(rp); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); }
@@ -6323,6 +6326,32 @@ export class Game {
       m.aggroAt = now;
       const far = Math.trunc(Math.abs(Math.round(p.x) - Math.round(m.x)) / 10) + Math.trunc(Math.abs(Math.round(p.y) - Math.round(m.y)) / 3);
       this.net.autoAggro(m.oid, far + (this.dead ? 100 : 0));
+    }
+  }
+  /** A trap's new state, with its sound (Sound/Field.img/<sfx>) where it stands. */
+  setObjectState(name, state) {
+    const st = this.map?.setObjectState(name, state), o = this.map?.namedObjs.get(String(name));
+    if (st?.sfx && o) sfx.play(`Field/${st.sfx}`, { volume: this.volumeAt(o.x, o.y) });
+  }
+  /**
+   * A monster whose body touches an obstacle with mobdamage takes it (over 10: give or take a tenth), at most once a
+   * second per monster, sent as FIELD_DAMAGE_MOB.
+   */
+  obstaclesHitMobs() {
+    const obs = this.map.obstacles().filter((o) => Number(o.info.mobdamage) > 0);
+    if (!obs.length) return;
+    const now = performance.now();
+    for (const m of this.map.life) {
+      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid == null || now - (m.fieldHitAt ?? -Infinity) < 1000) continue;
+      const b = m.hitBox(true);
+      for (let i = obs.length - 1; i >= 0; i--) {
+        const r = obs[i].rect;
+        if (!(b.left < r.right && r.left < b.right && b.top < r.bottom && r.top < b.bottom)) continue;
+        let d = Number(obs[i].info.mobdamage);
+        if (d > 10) { const t = Math.trunc(d / 10); d = d - t + Math.floor(Math.random() * (t * 2 + 1)); }
+        if (d > 0) { this.net.fieldDamageMob(m.oid, d); m.fieldHitAt = now; }
+        break;
+      }
     }
   }
   /**

@@ -60,7 +60,7 @@ export class Anim {
 export class GameMap {
   constructor(assets, id) {
     this.assets = assets; this.id = id;
-    this.backs = []; this.layers = []; this.life = []; this.portals = []; this.objTags = new Map();
+    this.backs = []; this.layers = []; this.life = []; this.portals = []; this.objTags = new Map(); this.namedObjs = new Map();
     this.scroll = 0;
   }
 
@@ -132,6 +132,11 @@ export class GameMap {
         if (!node) continue;
         // `hide` starts it hidden; its `tags` (comma-separated) let the server show or hide it (SET_MAP_OBJECT_VISIBLE)
         const obj = { ...o, anim: new Anim(node), visible: !Number(o.hide), tags: String(o.tags ?? '').split(',').map((t) => t.trim()).filter(Boolean) };
+        // its states: the node itself, then s1, s2...; a named one is switched by the server (FIELD_OBSTACLE_ONOFF)
+        obj.states = [node];
+        for (let s = 1; node[`s${s}`] && typeof node[`s${s}`] === 'object'; s++) obj.states.push(node[`s${s}`]);
+        obj.state = 0;
+        if (o.name) this.namedObjs.set(String(o.name), obj);
         objs.push(obj);
         for (const t of obj.tags) { if (!this.objTags.has(t)) this.objTags.set(t, []); this.objTags.get(t).push(obj); }
       }
@@ -282,6 +287,38 @@ export class GameMap {
 
   /** Shows or hides every object with this tag. */
   setObjectVisible(tag, on) { for (const o of this.objTags.get(tag) || []) o.visible = on; }
+  /**
+   * Switch a named object to one of its states (0: itself, n: its sN), restarting that state's animation and
+   * playing its sfx (Sound/Field.img/...). Returns the state node, or null for an unknown name or state.
+   */
+  setObjectState(name, state) {
+    const o = this.namedObjs.get(String(name));
+    if (!o || state < 0 || state >= o.states.length) return null;
+    o.state = state;
+    o.anim = new Anim(o.states[state]);
+    return o.states[state];
+  }
+  /**
+   * The obstacles in play: each object whose current state has `obstacle`, from its current frame's lt / rb (mirrored
+   * when it is flipped) where it stands, while the frame is shown (alpha over 125) and at least 5px across or high.
+   * info is the state's node (damage, mobdamage, dir, disease, level, forceHP, targetField).
+   */
+  obstacles() {
+    const out = [];
+    for (const l of this.layers) {
+      for (const o of l.objs) {
+        const info = o.states?.[o.state];
+        if (!o.visible || !info || !Number(info.obstacle)) continue;
+        const f = o.anim.node, lt = f?.lt, rb = f?.rb;
+        if (!lt || !rb || o.anim.alpha * 255 <= 125) continue;
+        if (rb[0] - lt[0] < 5 && rb[1] - lt[1] < 5) continue;
+        const rect = o.f ? { left: o.x - rb[0], top: o.y + lt[1], right: o.x - lt[0], bottom: o.y + rb[1] }
+          : { left: o.x + lt[0], top: o.y + lt[1], right: o.x + rb[0], bottom: o.y + rb[1] };
+        out.push({ rect, info, obj: o });
+      }
+    }
+    return out;
+  }
 
   drawLayer(ctx, cam, l) {
     const layer = this.layers[l];
