@@ -115,10 +115,11 @@ export class GameOptWin extends Win {
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
  *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
- * Three rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
+ * Four rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
  * under them: SCREEN SIZE (the game's resolution, a combo box), UI SIZE (a slider from 100% to as large as the
- * screen size allows, in 10% steps, its value beside it; it takes effect when let go) and FIT TO SCREEN (a check box:
- * the game is stretched to fill the window, with no black bars).
+ * screen size allows, in 10% steps, its value beside it; it takes effect when let go), ZOOM (a slider from 100% to
+ * 200% in 10% steps, its value beside it: the view closes in on your character as you drag, the interface keeping
+ * its size) and FIT TO SCREEN (a check box: the game is stretched to fill the window, with no black bars).
  * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
  * the art, 90px lower with the added rows.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
@@ -127,11 +128,13 @@ const ROW_Y = (i) => 46 + i * 30;
 const SLIDERS = {
   quality: { row: 0, x0: 104, x1: 238 }, bgm: { row: 1, x0: 92, x1: 208 }, sound: { row: 2, x0: 92, x1: 208 },
   mouse: { row: 4, x0: 96, x1: 238, disabled: true }, hpAlert: { row: 5, x0: 100, x1: 244 }, mpAlert: { row: 6, x0: 100, x1: 244 },
-  uiScale: { row: 11, x0: 100, x1: 236 },
+  uiScale: { row: 11, x0: 100, x1: 236 }, zoom: { row: 12, x0: 100, x1: 236 },
 };
+/** ZOOM's range: 100% .. 200%. */
+const ZOOM_MAX = 2;
 const MUTE_X = 246, COMBO = { x: 66, w: 172 }, CHECK_X = 64, VIEW_X = 61;   // WINDOW / FULL SCREEN start further left
 const SHOT_PLACES = ['Downloads Folder'];
-const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, FIT_ROW = 12, ADDED = 3, WIN_H = ART_H + ADDED * 30;
+const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, FIT_ROW = 13, ADDED = 4, WIN_H = ART_H + ADDED * 30;
 // the labels' 5x7 letters (white on a dark outline) and the rows' digits (navy, as the art's 100%)
 const GLYPHS = {
   F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'], T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
@@ -146,6 +149,7 @@ const GLYPHS = {
   S: ['.###.', '#...#', '#....', '.###.', '....#', '#...#', '.###.'], C: ['.###.', '#...#', '#....', '#....', '#....', '#...#', '.###.'],
   R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'], E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
   N: ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'], I: ['#', '#', '#', '#', '#', '#', '#'],
+  M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
   Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
 };
 // the rows' own 4px-wide letters, as in SHAKE UP THE SCREEN WHEN USING SKILLS
@@ -195,11 +199,13 @@ export class SysOptWin extends Win {
     if (k === 'sound') return sfx.volume;
     if (k === 'mouse') return 0.5;
     if (k === 'uiScale') { const max = maxUiScale(); return max > 1 ? ((this.pendingScale ?? UI_SCALE) - 1) / (max - 1) : 0; }
+    if (k === 'zoom') return ((Number(settings.zoom) || 1) - 1) / (ZOOM_MAX - 1);
     return settings[k];
   }
   off(k) { return SLIDERS[k].disabled || this.muted(k) || (k === 'uiScale' && maxUiScale() <= 1); }
   setValue(k, v) {
     if (k === 'uiScale') this.pendingScale = Math.round((1 + v * (maxUiScale() - 1)) * 10) / 10;
+    else if (k === 'zoom') { settings.zoom = Math.round((1 + v * (ZOOM_MAX - 1)) * 10) / 10; saveSettings(); }
     else if (k === 'bgm') music.setVolume(v);
     else if (k === 'sound') sfx.setVolume(v);
     else { settings[k] = k === 'quality' ? v : Math.round(v * 20) / 20; saveSettings(); }
@@ -235,11 +241,13 @@ export class SysOptWin extends Win {
       c.width = 299; c.height = ADDED * 30;
       this.label(lc, 'SCREEN', 32, 6); this.label(lc, 'SIZE', 32, 16);
       this.label(lc, 'UI SIZE', 32, 41);
-      this.label(lc, 'FIT TO', 32, 66); this.label(lc, 'SCREEN', 32, 76);
+      this.label(lc, 'ZOOM', 32, 71);
+      this.label(lc, 'FIT TO', 32, 96); this.label(lc, 'SCREEN', 32, 106);
       this.label(lc, 'STRETCH TO FILL THE WINDOW', CHECK_X + 16, ROW_Y(FIT_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
     }
     ctx.drawImage(this.letters, 0, ROWS_END);
     this.label(ctx, `${Math.round((this.pendingScale ?? UI_SCALE) * 100)}%`, 270, ROW_Y(SLIDERS.uiScale.row) - 3, '#224466', null);
+    this.label(ctx, `${Math.round((Number(settings.zoom) || 1) * 100)}%`, 270, ROW_Y(SLIDERS.zoom.row) - 3, '#224466', null);
   }
   /** Lettering centred on cx (or from it): white on the labels' dark outline, or one colour with no outline. */
   label(ctx, text, cx, y, color = '#ffffff', outline = '#993366', font = GLYPHS, centred = true) {
