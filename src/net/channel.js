@@ -1434,6 +1434,10 @@ export class ChannelSession {
   useCatchItem(slot, itemId, oid) { this.send(new PacketWriter(C.USE_CATCH_ITEM).int(Date.now() | 0).short(slot).int(itemId).int(oid)); }
   useMountFood(slot, itemId) { this.send(new PacketWriter(C.USE_MOUNT_FOOD).int(Date.now() | 0).short(slot).int(itemId)); }
   useScriptedItem(slot, itemId) { this.send(new PacketWriter(C.SCRIPTED_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
+  /** A Writ of Solomon (237xxxx): the time, its slot and the item. */
+  useSolomonItem(slot, itemId) { this.send(new PacketWriter(C.USE_SOLOMON_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
+  /** Charge the EXP stored from Writs of Solomon: the time. */
+  useGachaExp() { this.send(new PacketWriter(C.USE_GACHA_EXP).int(Date.now() | 0)); }
   useItemReward(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM_REWARD).short(slot).int(itemId)); }
   useSkillBook(slot, itemId) { this.send(new PacketWriter(C.USE_SKILL_BOOK).int(Date.now() | 0).short(slot).int(itemId)); }
   useItem(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
