@@ -124,13 +124,26 @@ export class WorldFx {
   untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
+  /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin. */
+  async screen(name) {
+    this.mapFx ??= await this.assets.json('Map/Effect.img');
+    const node = name.split('/').reduce((n, k) => n?.[k], this.mapFx);
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    (this.screens ??= []).push(anim);
+  }
+  drawScreen(ctx) {
+    const im = (n) => this.assets.image(n);
+    for (const a of this.screens || []) drawAt(ctx, im, a.node, 400, 260, a.alpha);
+  }
   /** A canvas shown at a spot on the map, whole for `hold` ms, then fading out over `fade` ms. */
   flash(node, x, y, hold, fade) {
     if (!node) return;
     this.assets.preload([node]);
     (this.flashes ??= []).push({ node, x, y, t: 0, hold, fade });
   }
-  mapChanged() { this.flashes = []; this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
+  mapChanged() { this.flashes = []; this.screens = []; this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
 
   /** Where an NPC's quest icon is (world coordinates); clicking it opens the NPC. */
   questIconRect(e) {
@@ -145,6 +158,10 @@ export class WorldFx {
     for (const n of this.nums) n.t += dt * 1000;
     this.nums = this.nums.filter((n) => n.t < NUM_MS);
     for (const a of this.anims) a.anim.update(dt * 1000);
+    if (this.screens?.length) {
+      for (const a of this.screens) a.update(dt * 1000);
+      this.screens = this.screens.filter((a) => !a.done);
+    }
     if (this.flashes?.length) {
       for (const f of this.flashes) f.t += dt * 1000;
       this.flashes = this.flashes.filter((f) => f.t < f.hold + f.fade);

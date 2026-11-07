@@ -16,6 +16,7 @@ import { PadInput } from './gamepad.js';
 import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { KeyCommands } from './commands.js';
+import { DojoWindow } from './ui/dojo.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
@@ -2003,7 +2004,11 @@ export class Game {
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
       chat: later((c) => this.onChat(c)),
       spawnPlayer: later((d) => this.spawnPlayer(d)),
-      clock: later((secs) => { this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt(); }),
+      clock: later((secs) => {
+        // a Dojo floor draws its own clock
+        if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
+        this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt();
+      }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
       ship: later((here) => this.moveShip(here)),
       // the Balrog's ship comes alongside: its music cuts in, for the rest of the voyage
@@ -2039,6 +2044,7 @@ export class Game {
       weather: later((type, id, text) => { if (id) this.weather.start(id, text); else this.weather.stop(); }),
       // 4: a sound from Sound/Field.img; 6: the map's music changes until the next map
       fieldEffect: later((type, str) => {
+        if (type === 3 && str) this.vfx.screen(str);   // 3: Map/Effect.img/<str> on the screen
         if (type === 4 && str) sfx.play(`Field/${str}`);
         if (type === 6 && str) { this.fieldBgm = str.replace(/^Sound\//, '').replace('.img', ''); music.play(this.fieldBgm); }
       }),
@@ -2594,7 +2600,7 @@ export class Game {
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
-      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null;
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
@@ -3929,6 +3935,7 @@ export class Game {
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
     this.updateAranCombo(dt);
+    (this.dojo ??= new DojoWindow(this)).update(dt);
     if (this.net) this.autoAggro();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.touchReactors();
@@ -7099,6 +7106,7 @@ export class Game {
     }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
+    this.vfx?.drawScreen(ctx);
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
     if (ui) {
       this.vfx?.drawHud(ctx);
@@ -7106,6 +7114,7 @@ export class Game {
       this.weather.drawNotice(ctx);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
+      this.dojo?.draw(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top
       this.drawQuestTimers(ctx);
       this.hud?.draw?.(ctx);            // what you gain, in the lower-right corner
