@@ -3522,11 +3522,28 @@ export class Game {
     // only these Use types are used with a plain USE_ITEM, once nothing is waiting (200ms apart); the Maplemas Party
     // Potion (221x2xxx) opens its own window, not built yet; other types without a route of their own do nothing
     if (!USE_ROUTED.has(type)) {
-      if (!PLAIN_USE.has(type) || (type === 221 && Math.floor((id % 10000) / 1000) === 2) || !this.canExclusive(200)) return;
-    }
+      if (!PLAIN_USE.has(type) || (type === 221 && Math.floor((id % 10000) / 1000) === 2)) return;
+    } else if (!this.canExclusive(200)) return;
     if (type === 243) { this.useScriptedItem(slot, id); return; }
     if (type === 227) { this.useCatchItem(slot, id); return; }
-    this.net.useItem(slot, id); sfx.play(`Item/${pad(id, 8)}/Use`);   // Sound/Item.img: a potion's gulp...
+    this.usePlainItem(slot, id);
+  }
+
+  /**
+   * USE_ITEM. On a map whose fieldLimit has 0x400 only the map's info/allowedItem go ("This item cannot be used
+   * here."); not while riding a tamed monster, and a 221 / 236 item not on a 193xxxx vehicle either. Then, once
+   * nothing is waiting, as an exclusive request (200ms apart), with the item's Use sound.
+   */
+  usePlainItem(slot, id) {
+    const type = Math.floor(id / 10000), ride = Math.floor((this.riding?.item || 0) / 10000);
+    const allowed = Object.values(this.map?.info?.allowedItem || {}).map(Number);
+    if ((this.map?.info?.fieldLimit || 0) & 0x400 && !allowed.includes(id)) { this.hud.message('This item cannot be used here.', CHAT_COLOR.error); return; }
+    if (ride === 190) { this.hud.message('Not available while riding on the tamed monster.', CHAT_COLOR.error); return; }
+    if ((type === 221 || type === 236) && ride === 193) return;
+    if (!this.canExclusive(200)) return;
+    this.net.useItem(slot, id);
+    this.lockExclusive();
+    sfx.play(`Item/${pad(id, 8)}/Use`);   // Sound/Item.img: a potion's gulp...
   }
 
   /**
