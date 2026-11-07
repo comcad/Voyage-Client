@@ -402,6 +402,8 @@ const MORPH = 0x2n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /** Body Pressure (Aran): the monster your body touches takes its damage. */
 const BODY_PRESSURE = 21101003;
+/** Energy Charge (Marauder / Thunder Breaker): once charged, the monster your body touches takes its damage. */
+const ENERGY_CHARGE = 5110001, THUNDER_ENERGY_CHARGE = 15100004;
 /** Use types (id / 10000) used with a plain USE_ITEM: potions, food, elixirs, cures, morph potions, cards... */
 const PLAIN_USE = new Set([200, 201, 202, 205, 221, 236, 238, 245]);
 /** Use types with a request of their own (catch items, Solomon's writs, the Use-tab teleport rock, scripted items...). */
@@ -2220,6 +2222,8 @@ export class Game {
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
       objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
+      energyCharge: (v) => { this.energy = v; },
+      aranCombo: (n) => { this.aranCombo = n; },
       objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
@@ -4660,11 +4664,12 @@ export class Game {
         const strong = Math.random() * 100 < knockback;
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash);
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
           this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
           return;
         }
         t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash);
+        this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
@@ -6389,17 +6394,32 @@ export class Game {
    * available with an Admin account."
    */
   touchAttack(m) {
-    const now = Date.now(), lv = this.skills?.levels?.[BODY_PRESSURE]?.level || 0;
-    if (!lv || !this.buffs?.some((b) => b.source === BODY_PRESSURE && b.until > now)) return;
-    if (this.admin & 0x80) { this.hud.message('Not available with an Admin account.', CHAT_COLOR.error); return; }
-    const t = performance.now();
-    if (t < (this.touchAttackAt ?? 0)) return;
-    this.touchAttackAt = t + 1000;
-    const p = this.player, ld = this.skills.levelData(BODY_PRESSURE, lv), wcat = Math.floor(this.weaponId() / 10000);
-    const h = this.physicalHit(m, wcat % 100, BODY_PRESSURE, ld, false, null, 0, critical(this, wcat, false));
-    this.net?.touchAttack({ skill: BODY_PRESSURE, mob: m, dmg: h.d, facingLeft: !p.facingRight, speed: this.attackSpeed(BODY_PRESSURE), pos: p });
-    m.hit(h.d, !p.facingRight, false);
-    this.damageNumbers(m, [h.d], true, BODY_PRESSURE, [h.c]);
+    const now = Date.now(), job = this.stats?.job || 0, level = (id) => this.skills?.levels?.[id]?.level || 0;
+    // a full Energy Charge (a Thunder Breaker's in the Cygnus jobs, a Marauder's otherwise), then Body Pressure
+    const energy = Math.floor(job / 1000) === 1 ? THUNDER_ENERGY_CHARGE : ENERGY_CHARGE, skills = [];
+    if ((this.energy || 0) >= 10000 && level(energy)) skills.push(energy);
+    if (level(BODY_PRESSURE) && this.buffs?.some((b) => b.source === BODY_PRESSURE && b.until > now)) skills.push(BODY_PRESSURE);
+    for (const skill of skills) {
+      if (this.admin & 0x80) { this.hud.message('Not available with an Admin account.', CHAT_COLOR.error); return; }
+      const t = performance.now(), at = (this.touchAttackAt ??= {});
+      if (t < (at[skill] ?? 0)) continue;
+      at[skill] = t + 1000;
+      const p = this.player, ld = this.skills.levelData(skill, level(skill)), wcat = Math.floor(this.weaponId() / 10000);
+      const h = this.physicalHit(m, wcat % 100, skill, ld, false, null, 0, critical(this, wcat, false));
+      this.net?.touchAttack({ skill, mob: m, dmg: h.d, facingLeft: !p.facingRight, speed: this.attackSpeed(skill), pos: p });
+      m.hit(h.d, !p.facingRight, false);
+      this.damageNumbers(m, [h.d], true, skill, [h.c]);
+      this.aranComboHit(h.d);
+    }
+  }
+  /**
+   * An Aran's hit that did damage, with a polearm (weapon type 44) and Combo Ability learned (the tutorial's combo
+   * skill for a job 2000 beginner), counts toward the combo: ARAN_COMBO_COUNTER.
+   */
+  aranComboHit(damage) {
+    if (!(damage > 0) || Math.floor(this.weaponId() / 10000) % 100 !== 44) return;
+    const skill = (this.stats?.job || 0) === 2000 ? 20000017 : 21000000;
+    if (this.skills?.levels?.[skill]?.level > 0) this.net?.aranComboCounter();
   }
   /**
    * An obstacle (a trap whose current state has `obstacle`) touching your body hurts you: its damage (over 10: give or
