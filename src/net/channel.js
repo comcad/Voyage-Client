@@ -1215,6 +1215,10 @@ export class ChannelSession {
   }
   /** TOUCHING_REACTOR: walked onto (true) or off (false) a reactor set off by touch. */
   touchReactor(oid, touching) { this.send(new PacketWriter(C.TOUCHING_REACTOR).int(oid).byte(touching ? 1 : 0)); }
+  /** An obstacle (a trap) hurt you: -3, no element, the damage, its disease (skill << 8 | level), then 0. */
+  takeObstacleDamage(damage, disease = 0) {
+    this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(-3).byte(0).int(damage).short(disease).byte(0));
+  }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
   }

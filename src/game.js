@@ -6301,6 +6301,7 @@ export class Game {
     // the original receiver: 44x65 standing, 46x31 lying down
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
+    if (this.obstacleHurt(pb, dx, dy)) return;
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
@@ -6399,6 +6400,46 @@ export class Game {
     this.net?.touchAttack({ skill: BODY_PRESSURE, mob: m, dmg: h.d, facingLeft: !p.facingRight, speed: this.attackSpeed(BODY_PRESSURE), pos: p });
     m.hit(h.d, !p.facingRight, false);
     this.damageNumbers(m, [h.d], true, BODY_PRESSURE, [h.c]);
+  }
+  /**
+   * An obstacle (a trap whose current state has `obstacle`) touching your body hurts you: its damage (over 10: give or
+   * take a tenth), or with forceHP everything above that (all of it when you have no more); thrown along its dir
+   * (90 - dir x 30 degrees, 270 strong; mirrored when the trap is), or on the way you were moving when it has none. Sent as
+   * TAKE_DAMAGE -3 with its disease (skill << 8 | level); its targetField then takes you there. Returns whether it hit.
+   */
+  obstacleHurt(pb, dx, dy) {
+    const obs = this.map?.obstacles() || [];
+    for (let i = obs.length - 1; i >= 0; i--) {
+      const { rect: r, info, obj } = obs[i];
+      if (!(pb.left < r.right && r.left < pb.right && pb.top < r.bottom && r.top < pb.bottom)) continue;
+      let d = Number(info.damage) || 0;
+      if (d > 10) { const t = Math.trunc(d / 10); d = d - t + Math.floor(Math.random() * (t * 2 + 1)); }
+      const force = info.forceHP === undefined ? -1 : Number(info.forceHP), hp = this.stats?.hp || 0;
+      if (force >= 0) d = force < hp ? hp - force : hp;
+      const disease = Number(info.disease) && Number(info.level) ? ((Number(info.disease) & 0xff) << 8) | (Number(info.level) & 0xff) : 0;
+      if (d > 0) {
+        const p = this.player, dir = Number(info.dir) || 0;
+        // the push: along dir, or 270 the way you were moving (and 270 up unless you were falling)
+        let vx, vy;
+        if (dir) { const a = ((90 - dir * 30) * Math.PI) / 180; vx = Math.round(Math.cos(a) * KNOCKBACK); vy = -Math.round(Math.sin(a) * KNOCKBACK); if (obj.f) vx = -vx; }
+        else { vx = dx < 0 ? -KNOCKBACK : dx > 0 ? KNOCKBACK : 0; vy = dy < 1 ? -KNOCKBACK : 0; }
+        this.net.takeObstacleDamage(d, disease);
+        this.vfx?.damage(p, [d], 'violet');
+        setExpression(p, 1, HIT_FACE_TIME);
+        this.standUp();
+        if ((vx || vy) && !this.holdsStance()) {
+          if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
+          if (vy < 0) { p.fh = null; p.ladder = null; }
+          p.vx = vx; if (vy) p.vy = vy;
+        }
+        p.attack = null;
+        this.invincible = HIT_PROTECTION; this.missed = false;
+      }
+      const target = Number(info.targetField) || 0;
+      if (target && target !== 999999999) this.net.directionField(target);
+      return true;
+    }
+    return false;
   }
   /**
    * The damage a monster's blow does you, or 0 for a MISS.
