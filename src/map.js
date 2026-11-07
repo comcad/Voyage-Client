@@ -79,6 +79,7 @@ export class GameMap {
     if (kind === 'Npc' && src.info?.MapleTV) e.tv = mapleTV(await a.json('UI/MapleTV.img'), src.info);
     if (kind === 'Npc') {
       e.picks = npcPicks(src, strings?.[Number(spawn.id)]);
+      e.npcLists = npcLists(src, strings?.[Number(spawn.id)]);
       e.hideName = hideName; e.func = strings?.[Number(spawn.id)]?.func || '';
     }
     await a.preload(e.allFrames());
@@ -446,6 +447,19 @@ function npcPicks(src, str) {
   const acts = Object.entries(src).filter(([k, v]) => !['info', 'stand', 'move', 'hide'].includes(k) && v && typeof v === 'object' && !v.special);
   return [...acts.map(([k, v]) => ({ action: k, lines: say(v) })), ...say(src.info).map((l) => ({ lines: [l] }))];
 }
+
+/**
+ * What an NPC we control can do, as the client lists it: its actions (every child but info, stand, move and the
+ * condition sets, in order; each with its speak lines, `special` ones left to scripts, `shop` never picked at random),
+ * and its own info/speak lines.
+ */
+function npcLists(src, str) {
+  const say = (n) => Object.values(n?.speak || {}).map((k) => str?.[k]).filter((t) => typeof t === 'string' && t.trim());
+  const acts = Object.entries(src).filter(([k, v]) => !['info', 'stand', 'move'].includes(k) && !k.startsWith('condition') && v && typeof v === 'object');
+  return { actions: acts.map(([k, v]) => ({ action: k, lines: say(v), special: !!Number(v.special), shop: k === 'shop' })), lines: say(src.info) };
+}
+/** A random number below 50, as the client draws them for NPCs. */
+const npcRoll = () => Math.floor(Math.random() * 50);
 
 /** NPC or monster placed by the map's `life` list. */
 export class Life {
@@ -912,7 +926,8 @@ export class Life {
   npcStep(dt) {
     if (this.chat && (this.chat.t -= dt) <= 0) this.chat = null;
     if (this.acting && this.anims[this.acting]?.done !== false) this.acting = null;
-    if ((this.actT -= dt) <= 0 && !this.chat && !this.acting && this.picks.length) {
+    if (this.onNpcAction && !this.walks) this.npcAsk(dt);
+    else if ((this.actT -= dt) <= 0 && !this.chat && !this.acting && this.picks.length) {
       this.actT = 3 + Math.random() * 6;
       const p = this.picks[Math.floor(Math.random() * this.picks.length)];
       if (this.anims[p.action]) { this.acting = p.action; this.setState(p.action); }
@@ -920,6 +935,36 @@ export class Life {
     }
     if (this.walks && this.fh) this.npcWalk(dt);
     if (!this.acting) this.setState(this.dir ? 'move' : 'stand');
+  }
+  /**
+   * An NPC we control (one that stays put): once its 3-9s wait is up, with no line up, no action playing and no answer
+   * waiting, it picks a number below 50, taken modulo its actions (but the special ones) and lines together. An
+   * action (not the shop) goes as 2 + its place, with one of its own lines if it has any; otherwise that line of its
+   * own. It sends NPC_ACTION and does nothing until the server sends it back (npcActed).
+   */
+  npcAsk(dt) {
+    if ((this.actT -= dt) > 0 || this.chat || this.acting || this.npcWaiting) return;
+    this.actT = (3000 + Math.floor(Math.random() * 6000)) / 1000;
+    const L = this.npcLists, n = L.actions.filter((a) => !a.special).length, m = L.lines.length;
+    if (!(n + m)) return;
+    const r = npcRoll() % (n + m);
+    let action = -1, chat;
+    if (r < n && !L.actions[r].shop) { action = r + 2; const k = L.actions[r].lines.length; chat = k ? npcRoll() % k : -1; }
+    else chat = r - n;
+    this.npcWaiting = true;
+    this.onNpcAction(this, action, chat);
+  }
+  /** NPC_ACTION back from the server: play that action (from 2) and say that line, or say that line of its own (-1). */
+  npcActed(action, chat) {
+    this.npcWaiting = false;
+    const L = this.npcLists;
+    if (!L) return;
+    const say = (lines) => { if (chat >= 0 && chat < lines.length && !this.questIcon) this.chat = { text: lines[chat], t: 5 }; };
+    if (action === -1) { say(L.lines); return; }
+    const a = L.actions[action - 2];
+    if (!a) return;
+    if (this.anims[a.action]) { this.acting = a.action; this.setState(a.action); }
+    say(a.lines);
   }
   npcWalk(dt) {
     const s = this.spawn;

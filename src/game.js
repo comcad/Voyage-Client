@@ -2191,7 +2191,8 @@ export class Game {
         if (FOREIGN_SOUND[effect]) sfx.play(FOREIGN_SOUND[effect]);
       }),
       portalSound: () => sfx.play('Game/Portal'),
-      spawnNpc: later((n) => this.spawnLife('Npc', n, false)),
+      spawnNpc: later((n, controlled) => this.spawnLife('Npc', n, !!controlled)),
+      npcAction: later((oid, action, chat) => this.lifeByOid.get(oid)?.npcActed?.(action, chat)),
       removeNpc: later((oid) => this.killLife(oid, 0)),
       drop: later((d) => this.spawnDrop(d)),
       removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
@@ -2684,6 +2685,8 @@ export class Game {
       // one we control tells the server each path it plans, as it starts on it
       e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity); };
     }
+    // an NPC we control asks the server what it does next, and does what comes back
+    if (kind === 'Npc' && controlled) e.onNpcAction = (n, action, chat) => this.net?.npcAction(n.oid, action, chat);
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`, { volume: this.volumeAt(e.x, e.y) }); }
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
