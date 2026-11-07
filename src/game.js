@@ -3856,8 +3856,8 @@ export class Game {
   // ------------------------------------------------------------------ loop
   /**
    * A hidden browser tab gets no frames, but MOVE_PLAYER / MOVE_PET / MOVE_SUMMON / MOVE_MONSTER keep arriving and
-   * queue. The v83 client keeps running in the background and times a path against the current time
-   * (FUN_0068b371), so what came in meanwhile has already played when you look. Play the missed time through
+   * queue. The v83 client keeps running in the background and times a path against the current time,
+   * so what came in meanwhile has already played when you look. Play the missed time through
    * every queued path at once, in 50ms steps, until it is used up or nothing is left to play.
    */
   catchUpPaths(sec) {

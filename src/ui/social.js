@@ -121,8 +121,8 @@ export class CharInfoWin extends Win {
     this.button(U.BtTrade, 148, 42, () => { if (rp) g.requestTrade(rp); }).enabled = other && !!rp;
     this.button(U.BtItem, 208, 21, () => this.toggleSide('item'));
     this.button(U.BtWish, 208, 42, () => this.toggleSide('wish'));
-    // fame up / down (FUN_008ffe3b: UI/Basic.img BtUP 0x7d4 at (237, 114), BtDown 0x7d5 at (252, 114)); both are
-    // disabled under level 15 and on your own window (On_CHAR_INFO__sub_903b86), and send by name (vfunc_08)
+    // fame up / down (UI/Basic.img BtUP at (237, 114), BtDown at (252, 114)); both are disabled under level 15 and
+    // on your own window, and send by name
     this.fameUp = this.button(mgr.B.BtUP, 237, 114, () => g.giveFame(this.name(), 1));
     this.fameDown = this.button(mgr.B.BtDown, 252, 114, () => g.giveFame(this.name(), 0));
     this.fameUp.enabled = this.fameDown.enabled = other && (g.stats?.level ?? 0) >= 15;
