@@ -4,6 +4,7 @@
  * face; the chosen option is a pink cap like the reserved Esc / Tab keys.
  */
 import { uiText, wrapText } from './wzui.js';
+import { UI_W, UI_H } from '../view.js';
 import { PAD_BUTTONS, defaultPad, defaultTouch, TOUCH_MAX_BUTTONS, bindingLabel } from '../controls.js';
 
 /** The keyboard panel the tabs cover, and the tab caps on the button strip. */
@@ -156,7 +157,8 @@ export function drawBinding(win, ctx, b, cx, cy, size) {
 }
 
 /** The Touch tab: settings on the left, a preview of the screen on the right. */
-const PREVIEW = { x: 330, y: 30, w: 268, h: 201 };
+// the screen's shape (the interface's space, which the touch controls are sized to), 268 wide and at most 201 tall
+const preview = () => ({ x: 330, y: 30, w: 268, h: Math.min(201, Math.round((268 * UI_H) / UI_W)) });
 const SHOW = [['auto', 'Auto'], ['on', 'On'], ['off', 'Off']];
 const SIZES = [[0.8, 'Small'], [1, 'Medium'], [1.25, 'Large']];
 const OPACITY = [[0.5, '50%'], [0.75, '75%'], [1, '100%']];
@@ -321,12 +323,12 @@ export class ControlTabs {
     cap(ctx, rem.x, rem.y, rem.w, rem.h);
     uiText(ctx, '- Remove selected', rem.x + rem.w / 2, rem.y + 5, { color: this.picked ? '#334455' : '#99aabb', size: 11, bold: true, align: 'center' });
     // the screen preview: dark like the client's panels, with a white ring
-    const P = PREVIEW;
+    const P = preview();
     ctx.fillStyle = '#222222'; ctx.fillRect(P.x - 2, P.y - 2, P.w + 4, P.h + 4);
     ctx.fillStyle = '#ffffff'; ctx.fillRect(P.x - 1, P.y - 1, P.w + 2, P.h + 2);
     ctx.fillStyle = '#556677'; ctx.fillRect(P.x, P.y, P.w, P.h);
-    ctx.fillStyle = '#445566'; ctx.fillRect(P.x, P.y + P.h * 0.875, P.w, P.h * 0.125);   // where the status bar sits
-    const k = P.w / 800 * (t.size || 1);
+    ctx.fillStyle = '#445566'; ctx.fillRect(P.x, P.y + P.h * (1 - 71 / UI_H), P.w, P.h * 71 / UI_H);   // where the status bar sits
+    const k = P.w / UI_W * (t.size || 1);
     this.circle(ctx, P.x + t.stick.x * P.w, P.y + t.stick.y * P.h, STICK * k / 2, t.opacity);
     this.circle(ctx, P.x + t.stick.x * P.w, P.y + t.stick.y * P.h, 25 * k, t.opacity, '#ffffff');
     for (const b of t.buttons) {
@@ -352,12 +354,12 @@ export class ControlTabs {
   }
   /** The touch control under a preview point: a button's id, 'stick', or null. */
   touchAt(lx, ly) {
-    const t = this.draft.touch, P = PREVIEW, k = P.w / 800 * (t.size || 1);
+    const t = this.draft.touch, P = preview(), k = P.w / UI_W * (t.size || 1);
     for (const b of [...t.buttons].reverse()) if (Math.hypot(lx - (P.x + b.x * P.w), ly - (P.y + b.y * P.h)) <= BUTTON * k / 2 + 2) return b.id;
     if (Math.hypot(lx - (P.x + t.stick.x * P.w), ly - (P.y + t.stick.y * P.h)) <= STICK * k / 2) return 'stick';
     return null;
   }
-  inPreview(lx, ly) { const P = PREVIEW; return lx >= P.x && lx < P.x + P.w && ly >= P.y && ly < P.y + P.h; }
+  inPreview(lx, ly) { const P = preview(); return lx >= P.x && lx < P.x + P.w && ly >= P.y && ly < P.y + P.h; }
 
   // ---------------------------------------------------------------- input
   down(lx, ly, tab) {
@@ -395,7 +397,7 @@ export class ControlTabs {
   }
   move(lx, ly) {
     if (this.dragging === null) return;
-    const t = this.draft.touch, P = PREVIEW;
+    const t = this.draft.touch, P = preview();
     const fx = Math.min(0.97, Math.max(0.03, (lx - P.x) / P.w)), fy = Math.min(0.97, Math.max(0.03, (ly - P.y) / P.h));
     const target = this.dragging === 'stick' ? t.stick : t.buttons.find((b) => b.id === this.dragging);
     if (target) { target.x = fx; target.y = fy; }

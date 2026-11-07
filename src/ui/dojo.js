@@ -5,6 +5,7 @@
  */
 import { Anim } from '../map.js';
 import { sfx } from '../audio.js';
+import { UI_W } from '../view.js';
 
 /** A bar is 305px at full; yours ends at x 318, the boss's starts at x 482. */
 const BAR_W = 305, PLAYER_BAR_END = 318, BOSS_BAR_X = 482, BAR_Y = 32;
@@ -89,6 +90,12 @@ export class DojoWindow {
       if (i && w > 0) ctx.drawImage(i, x, BAR_Y - (node.origin?.[1] || 0), w, i.height);
     };
     const energy = g.dojoEnergy || 0;
+    // laid out for 800 wide: centred on a wider screen
+    ctx.save(); ctx.translate((UI_W - 800) >> 1, 0);
+    try { this.drawHud(ctx, R, put, bar, im, energy); } finally { ctx.restore(); }
+  }
+  drawHud(ctx, R, put, bar, im, energy) {
+    const g = this.game;
     put(R.player[0], 169, 50);
     put(R.clock[0], 400, 26);
     put(R.monster[0], 631, 50);

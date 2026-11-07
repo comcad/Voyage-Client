@@ -3,7 +3,7 @@ import { Anim } from './map.js';
 import { itemIcon } from './data.js';
 import { uiText } from './ui/wzui.js';
 import { settings } from './settings.js';
-import { UI_W } from './view.js';
+import { UI_W, VIEW_W, VIEW_H } from './view.js';
 
 /**
  * World-space effects from the original art:
@@ -125,7 +125,7 @@ export class WorldFx {
   untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
-  /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin. */
+  /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin (as on 800x600). */
   async screen(name) {
     this.mapFx ??= await this.assets.json('Map/Effect.img');
     const node = name.split('/').reduce((n, k) => n?.[k], this.mapFx);
@@ -136,7 +136,7 @@ export class WorldFx {
   }
   drawScreen(ctx) {
     const im = (n) => this.assets.image(n);
-    for (const a of this.screens || []) drawAt(ctx, im, a.node, 400, 260, a.alpha);
+    for (const a of this.screens || []) drawAt(ctx, im, a.node, VIEW_W / 2, VIEW_H / 2 - 40, a.alpha);
   }
   /** A canvas shown at a spot on the map, whole for `hold` ms, then fading out over `fade` ms. */
   flash(node, x, y, hold, fade) {

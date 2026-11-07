@@ -6561,13 +6561,13 @@ export class Game {
     this.net?.cancelBuff(skill);
   }
   drawAranCombo(ctx) {
-    const art = this.comboArt, now = performance.now();
+    const art = this.comboArt, now = performance.now(), ox = UI_W - 800;   // placed from the right edge
     const draw = (p, alpha, dy) => {
       const n = p.anim.node, img = n && this.assets.image(n);
       if (!img || alpha <= 0) return;
       const o = n.origin || [0, 0];
       ctx.save(); ctx.globalAlpha = alpha * p.anim.alpha;
-      ctx.drawImage(img, Math.round(p.x - o[0]), Math.round(p.y - o[1] + dy));
+      ctx.drawImage(img, Math.round(p.x + ox - o[0]), Math.round(p.y - o[1] + dy));
       ctx.restore();
     };
     if (art) {
@@ -7071,6 +7071,7 @@ export class Game {
     this.cam.w = VIEW_W; this.cam.h = VIEW_H;
     this.statusBar?.layout(UI_W, UI_H);
     this.placeUi?.();
+    this.touch?.render();
     for (const w of this.windows?.order || []) {
       if (w === this.csWin) { w.x = (UI_W - w.w) >> 1; w.y = (UI_H - w.h) >> 1; continue; }
       this.windows.fit(w);
