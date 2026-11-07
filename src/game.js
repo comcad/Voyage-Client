@@ -117,12 +117,13 @@ class Input {
       if (document.querySelector('.modal-overlay')) return;
       const k = map(e) || (e.code === 'Numpad0' ? 'Numpad0' : null); if (!k || e.code === 'Enter' || e.code === 'Escape') return;
       e.preventDefault();
+      if (this.filter?.(k, 1)) return;   // held back (the Dojo's Ctrl + Alt)
       if (!this.down.has(k)) this.pressed.add(k);
       if (e.repeat) this.repeats.add(k);   // the system's key repeat: only the last key pressed repeats
       this.down.add(k);
       this.events.push({ k, down: 1 });
     });
-    addEventListener('keyup', (e) => { const k = map(e); if (k) { this.down.delete(k); this.events.push({ k, down: 0 }); } });
+    addEventListener('keyup', (e) => { const k = map(e); if (k) { this.filter?.(k, 0); this.down.delete(k); this.events.push({ k, down: 0 }); } });
     addEventListener('blur', () => this.down.clear());
     // NPCs open on a double-click, as in the client
     canvas.addEventListener('dblclick', (e) => {
@@ -159,6 +160,12 @@ class Input {
   hit(k) { return this.pressed.has(k); }
   repeated(k) { return this.repeats.has(k); }
   endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; this.events.length = 0; }
+  /** A press held back earlier, let through now (`held`: the key is still down). */
+  inject(k, held) {
+    if (!this.down.has(k)) this.pressed.add(k);
+    if (held) this.down.add(k);
+    this.events.push({ k, down: 1 });
+  }
 }
 
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
@@ -646,6 +653,7 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
+    this.input.filter = (k, down) => this.dojoKey(k, down);
     this.controls = loadControls();          // controller and touch layouts, kept in this browser
     this.padInput = new PadInput(this.input, () => this.controls?.padMove || 'ls');
     this.cam = { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
@@ -2232,6 +2240,7 @@ export class Game {
       objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
       energyCharge: (v) => { this.energy = v; },
       aranCombo: (n) => this.setAranCombo(n),
+      sessionValue: (k, v) => this.sessionValue(k, v),
       objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
@@ -4054,6 +4063,8 @@ export class Game {
   updatePlayer(dt) {
     this.clickedSkill = this.pendingSkill || 0; this.pendingSkill = 0;
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
+    // a lone Ctrl or Alt held back in the Dojo goes through after 50ms
+    if (this.dojoMod && performance.now() > this.dojoMod.t + 50) { const k = this.dojoMod.k; this.dojoMod = null; inp.inject(k, true); }
     // key commands see every press and release; one that takes a press keeps it from doing anything else
     this.commands ??= new KeyCommands(this);
     for (const e of inp.events.splice(0)) {
@@ -6433,6 +6444,62 @@ export class Game {
       this.damageNumbers(m, [h.d], true, skill, [h.c]);
       this.aranComboHit(h.d);
     }
+  }
+  /**
+   * SESSION_VALUE: a number the map keeps for you, by name. `energy`: Mu Lung Dojo energy. The Pyramid's
+   * `massacre_hit` / `_miss` / `_cool` / `_skill`: a cool hit going up shows CoolHit/cool over your head, a skill
+   * point (Rage of Pharaoh) going up plays GetParao on you. `PRaid_Team`: redTeam 0, blueTeam 1, else 0xff.
+   */
+  sessionValue(key, value) {
+    const n = parseInt(value, 10) || 0, p = this.player, m = (this.massacre ??= { hit: 0, miss: 0, cool: 0, skill: 0 });
+    if (key === 'energy') this.dojoEnergy = n;
+    else if (key === 'massacre_hit') m.hit = n;
+    else if (key === 'massacre_miss') m.miss = n;
+    else if (key === 'massacre_cool') {
+      if (n > m.cool && p) this.vfx.flash(this.vfx.E?.CoolHit?.cool, p.x, p.y - this.avatarHeight(), 400, 600);
+      m.cool = n;
+    } else if (key === 'massacre_skill') {
+      if (n > m.skill && p) this.vfx.play('GetParao', p);
+      m.skill = n;
+    } else if (key === 'PRaid_Team') this.praidTeam = value === 'redTeam' ? 0 : value === 'blueTeam' ? 1 : 0xff;
+  }
+  /**
+   * Mu Lung Dojo (fieldType 14) with full energy (10000): Ctrl and Alt pressed one after the other casts a Dojo skill
+   * by the arrow held: Up Bamboo Rain (1009), Left Invincibility (1010), Right Power Explosion (1011), for your job.
+   * The first of the two is held back until the next key, or 50ms; anything else lets it through.
+   * True when the press is held back or taken.
+   */
+  dojoKey(k, down) {
+    const sc = CODE_TO_SC[k], mod = sc === 0x1d || sc === 0x38, prev = this.dojoMod;
+    this.dojoMod = null;
+    const on = Number(this.map?.info?.fieldType) === 14 && (this.dojoEnergy || 0) >= 10000 && this.player && !this.dead;
+    if (on && down && mod) {
+      if (prev && CODE_TO_SC[prev.k] !== sc) return this.dojoSkill();
+      this.dojoMod = { k, t: performance.now() };
+      return true;
+    }
+    if (prev) this.input.inject(prev.k, !(!down && prev.k === k));
+    return false;
+  }
+  /** The Dojo skill for the arrow held (none: nothing). */
+  dojoSkill() {
+    const inp = this.input, base = this.jobSkillBase() * 10000;
+    const id = inp.is('up') ? base + 1009 : inp.is('left') ? base + 1010 : inp.is('right') ? base + 1011 : 0;
+    if (!id) return false;
+    this.skillKeyPressed = true;
+    this.useSkill(id);
+    this.skillKeyPressed = false;
+    return true;
+  }
+  /** How tall your character's current frame is (from the feet to the top of its highest part). */
+  avatarHeight() {
+    const p = this.player, parts = this.look.compose(p.action, p.frame) || [];
+    return -Math.min(0, ...parts.map((q) => q.y));
+  }
+  /** The job a beginner skill is numbered from: 0, 1000 (Noblesse), 2000 (Legend) or 2001 (Evan). */
+  jobSkillBase() {
+    const job = this.stats?.job || 0;
+    return Math.floor(job / 100) === 22 || job === 2001 ? 2001 : Math.floor(job / 1000) * 1000;
   }
   /**
    * SHOW_COMBO: the Aran combo count, drawn at the top right from Effect/BasicEff.img/Combo/<tier> (tier 0 under 30,

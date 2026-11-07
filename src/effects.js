@@ -124,7 +124,13 @@ export class WorldFx {
   untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
-  mapChanged() { this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
+  /** A canvas shown at a spot on the map, whole for `hold` ms, then fading out over `fade` ms. */
+  flash(node, x, y, hold, fade) {
+    if (!node) return;
+    this.assets.preload([node]);
+    (this.flashes ??= []).push({ node, x, y, t: 0, hold, fade });
+  }
+  mapChanged() { this.flashes = []; this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
 
   /** Where an NPC's quest icon is (world coordinates); clicking it opens the NPC. */
   questIconRect(e) {
@@ -139,6 +145,10 @@ export class WorldFx {
     for (const n of this.nums) n.t += dt * 1000;
     this.nums = this.nums.filter((n) => n.t < NUM_MS);
     for (const a of this.anims) a.anim.update(dt * 1000);
+    if (this.flashes?.length) {
+      for (const f of this.flashes) f.t += dt * 1000;
+      this.flashes = this.flashes.filter((f) => f.t < f.hold + f.fade);
+    }
     this.anims = this.anims.filter((a) => !a.anim.done);
     for (const t of this.tombs) t.anim.update(dt * 1000);
     this.bulb?.update(dt * 1000); this.book?.update(dt * 1000); this.bubble?.update(dt * 1000);
@@ -178,6 +188,7 @@ export class WorldFx {
     }
     // level up / job change / quest clear, following their character
     for (const a of this.anims) drawAt(ctx, im, a.anim.node, a.ent.x - cam.x, a.ent.y - cam.y, a.anim.alpha);
+    for (const f of this.flashes || []) drawAt(ctx, im, f.node, f.x - cam.x, f.y - cam.y, f.t < f.hold ? 1 : 1 - (f.t - f.hold) / f.fade);
     for (const n of this.nums) this.drawNumber(ctx, n, cam);
     if (this.hints?.length) {
       this.hints = this.hints.filter((h) => performance.now() < h.until);

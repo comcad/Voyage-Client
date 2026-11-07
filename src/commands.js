@@ -1,7 +1,7 @@
 /**
  * Key commands: skills that come out of a run of key presses and releases instead of a hotkey. The Aran's
  * attack chain (Double Swing, Triple Swing and its finishers), Combo Smash / Fenrir / Tempest, Combo Drain /
- * Barrier, Rolling Spin and Combat Step, and the Pirate / Thunder Breaker Dash.
+ * Barrier, Rolling Spin and Combat Step, the Pirate / Thunder Breaker Dash, and the Pyramid's Rage of Pharaoh.
  *
  * Every key press and release (by scancode) goes through `key()`. A command's steps are matched in order: each
  * names a key, press or release, and how long the run may take from its first key. A step can let some
@@ -57,6 +57,7 @@ const COMMANDS = [
   /* 9, 10 */ ...[LEFT, RIGHT].map((k) => ({ steps: [press(DOWN, 600), press(k, 0), step(ATK, 1, 0, true, 'smash', k === LEFT)] })),
   /* 11 */ { steps: [plain(DOWN, 1, 600), plain(DOWN, 0, 0), press(DOWN, 0), step(ATK, 1, 0, true, 'drain')] },
   /* 12, 13 */ ...[LEFT, RIGHT].map((k) => ({ steps: [plain(k, 1, 300), plain(k, 0, 0), step(k, 1, 0, false, 'combatStep'), plain(k, 0, 0)] })),
+  /* 14 */ { steps: [press(DOWN, 300), press(UP, 0), step(ATK, 1, 0, true, 'pharaoh')] },
 ];
 
 export class KeyCommands {
@@ -102,6 +103,7 @@ export class KeyCommands {
       if (this.learned(COMBO_DRAIN)) out.push(11);
     }
     if (this.aran() && this.learned(COMBAT_STEP)) out.push(12, 13);
+    out.push(14);
     return out;
   }
   /** Triple Swing follows Double Swing once you have it. */
@@ -261,6 +263,13 @@ export class KeyCommands {
     if (now) return this.cast(id);
     this.enqueue({ does: 'drain' }, false);
     return false;
+  }
+  /** Rage of Pharaoh, once the Pyramid has given you a skill point (massacre_skill). */
+  pharaoh(now) {
+    if (!((this.game.massacre?.skill || 0) > 0)) return false;
+    if (now) return this.cast(this.game.jobSkillBase() * 10000 + 1020);
+    this.enqueue({ does: 'pharaoh' }, false);
+    return true;
   }
   combatStep(now, _arg, key, q) {
     if (!this.learned(COMBAT_STEP)) return false;
