@@ -745,6 +745,8 @@ export class ChannelSession {
         return;
       }
       const start = r.pos;
+      // Energy Charge (first mask): its bar, the value (10000 and over: charged)
+      if (BigInt.asUintN(64, m1) & 0x4000000000000n && r.available >= 2) { this.emit('energyCharge', r.short()); return; }
       // giveBuff: per stat (short value, int source, int duration ms)
       r.pos = start + 2;
       const normal = { source: r.int(), duration: r.int() };
@@ -1089,6 +1091,8 @@ export class ChannelSession {
       this.emit('objectStates', list);
     });
     on(S.FIELD_OBSTACLE_ALL_RESET, () => this.emit('objectStatesReset'));
+    // an Aran's combo count
+    on(S.SHOW_COMBO, (r) => this.emit('aranCombo', r.int()));
     on(S.LOCK_UI, (r) => this.emit('lockUi', r.bool()));
     on(S.DISABLE_UI, (r) => this.emit('disableUi', r.bool()));
     on(S.CHANGE_CHANNEL, (r) => { r.ubyte(); const ip = Array.from(r.bytes(4)).join('.'); this.emit('changeChannel', { ip, port: r.ushort() }); });
@@ -1194,6 +1198,8 @@ export class ChannelSession {
   cancelItemEffect(itemId) { this.send(new PacketWriter(C.CANCEL_ITEM_EFFECT).int(-itemId)); }
   /** One of your curses is past its time: asks the server to lift it (no body). */
   cancelDebuff() { this.send(new PacketWriter(C.CANCEL_DEBUFF)); }
+  /** An Aran's hit on a monster counts toward the combo (no body). */
+  aranComboCounter() { this.send(new PacketWriter(C.ARAN_COMBO_COUNTER)); }
   /** A monster that banishes on touch (info/ban/banType 1) touched you: its id; the server sends you to its banMap. */
   mobBanishPlayer(mobId) { this.send(new PacketWriter(C.MOB_BANISH_PLAYER).int(mobId)); }
   /** Sit on a chair item (Install 0301xxxx). */
