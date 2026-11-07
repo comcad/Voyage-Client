@@ -15,6 +15,8 @@ import { loadControls } from './controls.js';
 import { PadInput } from './gamepad.js';
 import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
+import { KeyCommands } from './commands.js';
+import { DojoWindow } from './ui/dojo.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { pad, frames } from './assets.js';
 import { music, sfx } from './audio.js';
@@ -93,6 +95,10 @@ const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST
 export const VIEW_W = 800, VIEW_H = 600;
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2', 'stabT2'];
+/** An Aran's basic attacks with a polearm. */
+const POLEARM_SWINGS = ['swingT2PoleArm', 'swingP1PoleArm', 'swingP2PoleArm'];
+/** The arrows' scancodes, for the key commands. */
+const COMMAND_SC = { left: 0x4b, right: 0x4d, up: 0x48, down: 0x50 };
 // portal types that fire on touch instead of the Up key (types 3 and 9 have their own checks, also off the floor)
 const TOUCH_PORTALS = new Set([12, 13, 14]);
 
@@ -103,6 +109,7 @@ const TOUCH_PORTALS = new Set([12, 13, 14]);
 class Input {
   constructor(canvas) {
     this.down = new Set(); this.pressed = new Set(); this.repeats = new Set(); this.clicks = [];
+    this.events = [];   // every press (the system's repeats too) and release, in order, for the key commands
     this.sources = new Map();   // controller / touch: source -> codes it holds
     const ARROWS = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
     const map = (e) => ARROWS[e.code] || (CODE_TO_SC[e.code] ? e.code : null);
@@ -111,11 +118,13 @@ class Input {
       if (document.querySelector('.modal-overlay')) return;
       const k = map(e) || (e.code === 'Numpad0' ? 'Numpad0' : null); if (!k || e.code === 'Enter' || e.code === 'Escape') return;
       e.preventDefault();
+      if (this.filter?.(k, 1)) return;   // held back (the Dojo's Ctrl + Alt)
       if (!this.down.has(k)) this.pressed.add(k);
       if (e.repeat) this.repeats.add(k);   // the system's key repeat: only the last key pressed repeats
       this.down.add(k);
+      this.events.push({ k, down: 1 });
     });
-    addEventListener('keyup', (e) => { const k = map(e); if (k) this.down.delete(k); });
+    addEventListener('keyup', (e) => { const k = map(e); if (k) { this.filter?.(k, 0); this.down.delete(k); this.events.push({ k, down: 0 }); } });
     addEventListener('blur', () => this.down.clear());
     // NPCs open on a double-click, as in the client
     canvas.addEventListener('dblclick', (e) => {
@@ -134,8 +143,9 @@ class Input {
    */
   setHeld(source, codes) {
     const before = this.sources.get(source) || new Set();
-    for (const c of codes) if (!before.has(c) && !this.is(c)) this.pressed.add(c);
+    for (const c of codes) if (!before.has(c) && !this.is(c)) { this.pressed.add(c); this.events.push({ k: c, down: 1 }); }
     this.sources.set(source, new Set(codes));
+    for (const c of before) if (!this.is(c)) this.events.push({ k: c, down: 0 });
   }
   /** Every code held by the keyboard or any other source. */
   held() {
@@ -150,7 +160,13 @@ class Input {
   }
   hit(k) { return this.pressed.has(k); }
   repeated(k) { return this.repeats.has(k); }
-  endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; }
+  endFrame() { this.pressed.clear(); this.repeats.clear(); this.clicks.length = 0; this.events.length = 0; }
+  /** A press held back earlier, let through now (`held`: the key is still down). */
+  inject(k, held) {
+    if (!this.down.has(k)) this.pressed.add(k);
+    if (held) this.down.add(k);
+    this.events.push({ k, down: 1 });
+  }
 }
 
 /** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
@@ -638,6 +654,7 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
+    this.input.filter = (k, down) => this.dojoKey(k, down);
     this.controls = loadControls();          // controller and touch layouts, kept in this browser
     this.padInput = new PadInput(this.input, () => this.controls?.padMove || 'ls');
     this.cam = { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
@@ -1987,7 +2004,11 @@ export class Game {
       partyHp: (id, hp, maxHp) => { const m = this.party?.members.find((x) => x.id === id); if (m) Object.assign(m, { hp, maxHp }); },
       chat: later((c) => this.onChat(c)),
       spawnPlayer: later((d) => this.spawnPlayer(d)),
-      clock: later((secs) => { this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt(); }),
+      clock: later((secs) => {
+        // a Dojo floor draws its own clock
+        if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
+        this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt();
+      }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
       ship: later((here) => this.moveShip(here)),
       // the Balrog's ship comes alongside: its music cuts in, for the rest of the voyage
@@ -2023,6 +2044,7 @@ export class Game {
       weather: later((type, id, text) => { if (id) this.weather.start(id, text); else this.weather.stop(); }),
       // 4: a sound from Sound/Field.img; 6: the map's music changes until the next map
       fieldEffect: later((type, str) => {
+        if (type === 3 && str) this.vfx.screen(str);   // 3: Map/Effect.img/<str> on the screen
         if (type === 4 && str) sfx.play(`Field/${str}`);
         if (type === 6 && str) { this.fieldBgm = str.replace(/^Sound\//, '').replace('.img', ''); music.play(this.fieldBgm); }
       }),
@@ -2223,7 +2245,8 @@ export class Game {
       lockUi: (on) => this.setUiLock(on),
       objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
       energyCharge: (v) => { this.energy = v; },
-      aranCombo: (n) => { this.aranCombo = n; },
+      aranCombo: (n) => this.setAranCombo(n),
+      sessionValue: (k, v) => this.sessionValue(k, v),
       objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
@@ -2577,7 +2600,7 @@ export class Game {
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.reactors?.clear();
-      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null;
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
@@ -3911,6 +3934,8 @@ export class Game {
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.updateDiseases(dt);
+    this.updateAranCombo(dt);
+    (this.dojo ??= new DojoWindow(this)).update(dt);
     if (this.net) this.autoAggro();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.touchReactors();
@@ -4045,6 +4070,14 @@ export class Game {
   updatePlayer(dt) {
     this.clickedSkill = this.pendingSkill || 0; this.pendingSkill = 0;
     const p = this.player, map = this.map, fh = map.fh, inp = this.input, look = this.look;
+    // a lone Ctrl or Alt held back in the Dojo goes through after 50ms
+    if (this.dojoMod && performance.now() > this.dojoMod.t + 50) { const k = this.dojoMod.k; this.dojoMod = null; inp.inject(k, true); }
+    // key commands see every press and release; one that takes a press keeps it from doing anything else
+    this.commands ??= new KeyCommands(this);
+    for (const e of inp.events.splice(0)) {
+      const sc = COMMAND_SC[e.k] ?? CODE_TO_SC[e.k];
+      if (sc !== undefined && this.commands.key(sc, e.down) && e.down) inp.pressed.delete(e.k);
+    }
     let dir = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
     if (this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
@@ -4139,6 +4172,8 @@ export class Game {
 
     // wait out an attack cut short by a hit
     if (performance.now() >= (this.attackLock || 0)) {
+      // a key command's queued skill, once the pose before it is over
+      if (this.commands.run()) return;
       // a macro's next skill, once the last one's animation is over
       if (this.macroQueue?.length && !p.attack) {
         const id = this.macroQueue.shift();
@@ -4932,6 +4967,11 @@ export class Game {
   }
 
   defaultAttackAction(kind) {
+    // an Aran (or a Legend) with a polearm swings one of its three polearm swings, which its attack chain follows
+    const job = this.stats?.job || 0;
+    if ((Math.floor(job / 100) === 21 || job === 2000) && Math.floor(this.weaponId() / 10000) % 100 === 44) {
+      return POLEARM_SWINGS[Math.floor(Math.random() * POLEARM_SWINGS.length)];
+    }
     return (kind === 'ranged' && this.look.shootAction()) || this.look.attackAction();
   }
 
@@ -6413,6 +6453,120 @@ export class Game {
     }
   }
   /**
+   * SESSION_VALUE: a number the map keeps for you, by name. `energy`: Mu Lung Dojo energy. The Pyramid's
+   * `massacre_hit` / `_miss` / `_cool` / `_skill`: a cool hit going up shows CoolHit/cool over your head, a skill
+   * point (Rage of Pharaoh) going up plays GetParao on you. `PRaid_Team`: redTeam 0, blueTeam 1, else 0xff.
+   */
+  sessionValue(key, value) {
+    const n = parseInt(value, 10) || 0, p = this.player, m = (this.massacre ??= { hit: 0, miss: 0, cool: 0, skill: 0 });
+    if (key === 'energy') this.dojoEnergy = n;
+    else if (key === 'massacre_hit') m.hit = n;
+    else if (key === 'massacre_miss') m.miss = n;
+    else if (key === 'massacre_cool') {
+      if (n > m.cool && p) this.vfx.flash(this.vfx.E?.CoolHit?.cool, p.x, p.y - this.avatarHeight(), 400, 600);
+      m.cool = n;
+    } else if (key === 'massacre_skill') {
+      if (n > m.skill && p) this.vfx.play('GetParao', p);
+      m.skill = n;
+    } else if (key === 'PRaid_Team') this.praidTeam = value === 'redTeam' ? 0 : value === 'blueTeam' ? 1 : 0xff;
+  }
+  /**
+   * Mu Lung Dojo (fieldType 14) with full energy (10000): Ctrl and Alt pressed one after the other casts a Dojo skill
+   * by the arrow held: Up Bamboo Rain (1009), Left Invincibility (1010), Right Power Explosion (1011), for your job.
+   * The first of the two is held back until the next key, or 50ms; anything else lets it through.
+   * True when the press is held back or taken.
+   */
+  dojoKey(k, down) {
+    const sc = CODE_TO_SC[k], mod = sc === 0x1d || sc === 0x38, prev = this.dojoMod;
+    this.dojoMod = null;
+    const on = Number(this.map?.info?.fieldType) === 14 && (this.dojoEnergy || 0) >= 10000 && this.player && !this.dead;
+    if (on && down && mod) {
+      if (prev && CODE_TO_SC[prev.k] !== sc) return this.dojoSkill();
+      this.dojoMod = { k, t: performance.now() };
+      return true;
+    }
+    if (prev) this.input.inject(prev.k, !(!down && prev.k === k));
+    return false;
+  }
+  /** The Dojo skill for the arrow held (none: nothing). */
+  dojoSkill() {
+    const inp = this.input, base = this.jobSkillBase() * 10000;
+    const id = inp.is('up') ? base + 1009 : inp.is('left') ? base + 1010 : inp.is('right') ? base + 1011 : 0;
+    if (!id) return false;
+    this.skillKeyPressed = true;
+    this.useSkill(id);
+    this.skillKeyPressed = false;
+    return true;
+  }
+  /** How tall your character's current frame is (from the feet to the top of its highest part). */
+  avatarHeight() {
+    const p = this.player, parts = this.look.compose(p.action, p.frame) || [];
+    return -Math.min(0, ...parts.map((q) => q.y));
+  }
+  /** The job a beginner skill is numbered from: 0, 1000 (Noblesse), 2000 (Legend) or 2001 (Evan). */
+  jobSkillBase() {
+    const job = this.stats?.job || 0;
+    return Math.floor(job / 100) === 22 || job === 2001 ? 2001 : Math.floor(job / 1000) * 1000;
+  }
+  /**
+   * SHOW_COMBO: the Aran combo count, drawn at the top right from Effect/BasicEff.img/Combo/<tier> (tier 0 under 30,
+   * 1 from 30, 2 from 100, 3 from 200): its digits right to left from x 750, 23px apart, at y 169 and 165 by turns
+   * (the last digit at 169), and its Combo label at (750, 180). They fade out over 3s; below tier 3 they hop as the
+   * count changes (the digits above the lowest non-zero one 4px, the rest 10px, down by 50ms and back by 300ms).
+   * At exactly 30, 100 and 200 the ComboCommand/<tier> keys of the combo skills you have (Smash / Drain, Fenrir /
+   * Drain, Tempest / Barrier) appear at (800, 215), the second 35px lower, until the combo ends.
+   */
+  setAranCombo(n) {
+    const now = performance.now();
+    this.aranCombo = n; this.aranComboAt = now;
+    const C = this.vfx?.E?.Combo, cmd = this.vfx?.E?.ComboCommand;
+    if (n < 1 || !C) { this.comboArt = null; return; }
+    const tier = n >= 200 ? 3 : n >= 100 ? 2 : n >= 30 ? 1 : 0, art = C[tier];
+    const digits = [];
+    let first = -1;
+    for (let v = n, i = 0; i < 5; i++) { const d = v % 10; digits.push(d); if (first < 0 && d > 0) first = i; v = Math.trunc(v / 10); if (!v) break; }
+    const parts = digits.map((d, i) => ({ anim: new Anim(art?.[d]), x: 750 - 23 * i, y: i % 2 !== digits.length % 2 ? 165 : 169, hop: i > first ? 4 : 10 }));
+    parts.push({ anim: new Anim(art?.Combo), x: 750, y: 180, hop: 0 });
+    this.comboArt = { parts, t0: now, hops: tier < 3 };
+    this.assets.preload(parts.flatMap((p) => p.anim.frames));
+    const pair = { 30: [21100004, 21100005], 100: [21110004, 21100005], 200: [21120006, 21120007] }[n];
+    if (pair && cmd?.[tier]) {
+      const has = (id) => (this.skills?.levels?.[id]?.level || 0) > 0;
+      this.comboCommands = [];
+      if (has(pair[0])) this.comboCommands.push({ anim: new Anim(cmd[tier][0]), x: 800, y: 215 });
+      if (has(pair[1])) this.comboCommands.push({ anim: new Anim(cmd[tier][1]), x: 800, y: 215 + (this.comboCommands.length ? 35 : 0) });
+      this.assets.preload(this.comboCommands.flatMap((p) => p.anim.frames));
+    }
+  }
+  /** 3s after the last count, an Aran's combo ends: back to 0 and CANCEL_BUFF for Combo Ability (the tutorial's at 2000). */
+  updateAranCombo(dt) {
+    for (const p of [...(this.comboArt?.parts || []), ...(this.comboCommands || [])]) p.anim.update(dt * 1000);
+    if (!(this.aranCombo > 0) || performance.now() - (this.aranComboAt ?? 0) <= 3000) return;
+    const skill = (this.stats?.job || 0) === 2000 ? 20000017 : 21000000;
+    if (!((this.skills?.levels?.[skill]?.level || 0) > 0)) return;
+    this.aranCombo = 0; this.comboArt = null; this.comboCommands = [];
+    this.net?.cancelBuff(skill);
+  }
+  drawAranCombo(ctx) {
+    const art = this.comboArt, now = performance.now();
+    const draw = (p, alpha, dy) => {
+      const n = p.anim.node, img = n && this.assets.image(n);
+      if (!img || alpha <= 0) return;
+      const o = n.origin || [0, 0];
+      ctx.save(); ctx.globalAlpha = alpha * p.anim.alpha;
+      ctx.drawImage(img, Math.round(p.x - o[0]), Math.round(p.y - o[1] + dy));
+      ctx.restore();
+    };
+    if (art) {
+      const t = now - art.t0, alpha = Math.max(0, 1 - t / 3000);
+      for (const p of art.parts) {
+        const h = art.hops && p.hop ? (t < 50 ? (p.hop * t) / 50 : t < 300 ? p.hop * (1 - (t - 50) / 250) : 0) : 0;
+        draw(p, alpha, h);
+      }
+    }
+    for (const p of this.comboCommands || []) draw(p, 1, 0);
+  }
+  /**
    * An Aran's hit that did damage, with a polearm (weapon type 44) and Combo Ability learned (the tutorial's combo
    * skill for a job 2000 beginner), counts toward the combo: ARAN_COMBO_COUNTER.
    */
@@ -6952,12 +7106,15 @@ export class Game {
     }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
+    this.vfx?.drawScreen(ctx);
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
     if (ui) {
       this.vfx?.drawHud(ctx);
+      this.drawAranCombo(ctx);
       this.weather.drawNotice(ctx);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
+      this.dojo?.draw(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top
       this.drawQuestTimers(ctx);
       this.hud?.draw?.(ctx);            // what you gain, in the lower-right corner

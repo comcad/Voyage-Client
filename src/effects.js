@@ -67,7 +67,7 @@ export class WorldFx {
       a.json('Effect/BasicEff.img'), a.json('Effect/Tomb.img'), a.json('UI/ChatBalloon.img'), a.json('UI/UIWindow.img')]);
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
     this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
-    await a.preload([...sets, this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
+    await a.preload([...sets, ...deepCanvases(this.E.Combo), ...deepCanvases(this.E.ComboCommand), this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
       ...deep(this.W.MobGage, 3), ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
   }
 
@@ -124,7 +124,26 @@ export class WorldFx {
   untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
-  mapChanged() { this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
+  /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin. */
+  async screen(name) {
+    this.mapFx ??= await this.assets.json('Map/Effect.img');
+    const node = name.split('/').reduce((n, k) => n?.[k], this.mapFx);
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    (this.screens ??= []).push(anim);
+  }
+  drawScreen(ctx) {
+    const im = (n) => this.assets.image(n);
+    for (const a of this.screens || []) drawAt(ctx, im, a.node, 400, 260, a.alpha);
+  }
+  /** A canvas shown at a spot on the map, whole for `hold` ms, then fading out over `fade` ms. */
+  flash(node, x, y, hold, fade) {
+    if (!node) return;
+    this.assets.preload([node]);
+    (this.flashes ??= []).push({ node, x, y, t: 0, hold, fade });
+  }
+  mapChanged() { this.flashes = []; this.screens = []; this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
 
   /** Where an NPC's quest icon is (world coordinates); clicking it opens the NPC. */
   questIconRect(e) {
@@ -139,6 +158,14 @@ export class WorldFx {
     for (const n of this.nums) n.t += dt * 1000;
     this.nums = this.nums.filter((n) => n.t < NUM_MS);
     for (const a of this.anims) a.anim.update(dt * 1000);
+    if (this.screens?.length) {
+      for (const a of this.screens) a.update(dt * 1000);
+      this.screens = this.screens.filter((a) => !a.done);
+    }
+    if (this.flashes?.length) {
+      for (const f of this.flashes) f.t += dt * 1000;
+      this.flashes = this.flashes.filter((f) => f.t < f.hold + f.fade);
+    }
     this.anims = this.anims.filter((a) => !a.anim.done);
     for (const t of this.tombs) t.anim.update(dt * 1000);
     this.bulb?.update(dt * 1000); this.book?.update(dt * 1000); this.bubble?.update(dt * 1000);
@@ -178,6 +205,7 @@ export class WorldFx {
     }
     // level up / job change / quest clear, following their character
     for (const a of this.anims) drawAt(ctx, im, a.anim.node, a.ent.x - cam.x, a.ent.y - cam.y, a.anim.alpha);
+    for (const f of this.flashes || []) drawAt(ctx, im, f.node, f.x - cam.x, f.y - cam.y, f.t < f.hold ? 1 : 1 - (f.t - f.hold) / f.fade);
     for (const n of this.nums) this.drawNumber(ctx, n, cam);
     if (this.hints?.length) {
       this.hints = this.hints.filter((h) => performance.now() < h.until);
@@ -422,6 +450,8 @@ function drawAt(ctx, im, node, x, y, alpha) {
   ctx.drawImage(i, Math.round(x - o[0]), Math.round(y - o[1]));
   ctx.restore();
 }
+/** Every canvas under a node, however deep (the Aran combo counter's tiers, digits and frames). */
+function deepCanvases(node) { return !node || typeof node !== 'object' ? [] : isCanvas(node) ? [node] : Object.values(node).flatMap(deepCanvases); }
 function canvases(node) { return node ? frames(node).filter(isCanvas).concat(Object.values(node).filter(isCanvas)) : []; }
 function deep(node, depth) {
   if (!node || typeof node !== 'object') return [];

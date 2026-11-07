@@ -61,6 +61,9 @@ export function jobBooks(job) {
 
 export const bookFile = (book) => `Skill/${pad(book, 3)}.img`;
 
+/** Bamboo Rain and Rage of Pharaoh for the Beginner, Noblesse, Legend and Evan. */
+const ARENA_ATTACKS = new Set([1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
+
 export class SkillBook {
   constructor(assets) {
     this.assets = assets;
@@ -158,6 +161,8 @@ export class SkillBook {
     if (NO_AMMO_SHOTS.has(id) || id === SNIPE) return 'ranged';
     // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
+    // the Dojo's Bamboo Rain and the Pyramid's Rage of Pharaoh (every beginner job's) are close-range attacks
+    if (ARENA_ATTACKS.has(id)) return 'melee';
     // an attack has power (damage, magic, a projectile's x...); one that also lasts a while (a stun, a poison, a
     // freeze) is still an attack when it has targets - only heals, summons and the buffs below are not
     const targets = ld.mobCount || ld.attackCount || ld.bulletCount || n.ball;

@@ -1093,6 +1093,8 @@ export class ChannelSession {
     on(S.FIELD_OBSTACLE_ALL_RESET, () => this.emit('objectStatesReset'));
     // an Aran's combo count
     on(S.SHOW_COMBO, (r) => this.emit('aranCombo', r.int()));
+    // a value the map keeps for you, by name: Mu Lung Dojo energy, the Pyramid's counts
+    on(S.SESSION_VALUE, (r) => this.emit('sessionValue', r.string(), r.string()));
     on(S.LOCK_UI, (r) => this.emit('lockUi', r.bool()));
     on(S.DISABLE_UI, (r) => this.emit('disableUi', r.bool()));
     on(S.CHANGE_CHANNEL, (r) => { r.ubyte(); const ip = Array.from(r.bytes(4)).join('.'); this.emit('changeChannel', { ip, port: r.ushort() }); });
