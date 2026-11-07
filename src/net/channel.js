@@ -100,6 +100,29 @@ function readShopRoom(r) {
   return { slot, sold, people, title, items: readShopItems(r) };
 }
 
+/** A monster's 128-bit status flag: the last int holds bits 0-31, the one before it bits 32-63. */
+function readMobMask(r) {
+  r.int(); r.int(); const high = r.uint(), low = r.uint();
+  return (b) => ((b < 32 ? low : b < 64 ? high : 0) >>> (b % 32)) & 1;
+}
+// the order the statuses are read in
+const MOB_STAT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 16, 17, 21, 22, 24, 25, 26, 28, 29, 30, 32, 33, 34];
+/** Each status's value, source skill and duration, then the extras of bits 27, 29-31; as { first, second, source, value }. */
+function readMobStats(r, has) {
+  const out = [];
+  for (const b of MOB_STAT_ORDER) {
+    if (!has(b)) continue;
+    const value = r.short(), source = r.int(); r.short();
+    out.push({ first: b >= 32 ? 2 ** (b - 32) : 0, second: b < 32 ? (2 ** b) >>> 0 : 0, source, value });
+  }
+  if (has(27)) for (let n = r.int(); n > 0; n--) r.skip(12);
+  if (has(29)) r.int();
+  if (has(30)) r.int();
+  if (has(29) || has(30)) r.int();
+  if (has(31)) { r.ubyte(); r.ubyte(); }
+  return out;
+}
+
 export class ChannelSession {
   constructor(transport, handler = {}) {
     this.conn = new Connection(transport);
@@ -538,13 +561,8 @@ export class ChannelSession {
       if ((this.roomType === 4 || this.roomType === 5) && this.shopOp(op, r)) return;
       if (op === 5) {                                     // ROOM
         const type = r.ubyte();
-        if (type === 0) {
-          const shop = this.roomType === 4 || this.roomType === 5 || this.shopPending;
-          this.shopPending = false;
-          this.emit(shop ? 'shopError' : 'tradeError', r.ubyte());
-          return;
-        }
-        this.roomType = type; this.shopPending = false;
+        if (type === 0) { this.emit('roomError', r.ubyte()); return; }
+        this.roomType = type;
         if (type === 4) { this.emit('shopOpen', readShopRoom(r)); return; }
         if (type === 5) { this.emit('shopOpen', readMerchantRoom(r, this.selfName)); return; }
         if (type !== 3) return;
@@ -913,20 +931,12 @@ export class ChannelSession {
 
     const readMob = (r, controlMode) => {
       const oid = r.int(); r.ubyte(); const id = r.int();
-      if (controlMode !== undefined) {
-        // encodeTemporary: 4 mask ints (Cosmic writes each int-sized status into both halves,
-        // so count ints 0 and 2 only), then 8 bytes per active status
-        const masks = [r.uint(), r.uint(), r.uint(), r.uint()];
-        let entries = 0; for (const m of [masks[0], masks[2]]) for (let v = m; v; v &= v - 1) entries++;
-        // each: value (short), its source skill (int), duration (short); keep the statuses it already has
-        const sources = Array.from({ length: entries }, () => { r.short(); const s = r.int(); r.short(); return s; });
-        var statuses = entries ? { first: masks[0], second: masks[2], source: sources[0] } : null;
-      } else r.skip(16);
+      const statuses = readMobStats(r, readMobMask(r));
       const pos = r.pos2(); const stance = r.ubyte(); r.short(); const fh = r.short();
       // the appearance: an optional summon effect (id, 0, short, +1 byte for 15), then -2 a new spawn / -1 already here
       let appear = r.available ? r.byte() : -1;
       if (appear > 0) { r.byte(); r.short(); if (appear === 15) r.byte(); appear = r.available ? r.byte() : -1; }
-      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, statuses: controlMode !== undefined ? statuses : null };
+      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, statuses };
     };
     on(S.SPAWN_MONSTER, (r) => this.emit('spawnMob', readMob(r)));
     on(S.SPAWN_MONSTER_CONTROL, (r) => {
@@ -953,12 +963,9 @@ export class ChannelSession {
       this.emit('mobDamaged', oid, dmg, r.available >= 8 ? r.int() : null, r.available >= 4 ? r.int() : null);
     });
     // the controller's answer: the monster's MP and the skill it may cast next (0 for none)
-    // a monster's statuses: two masks (first / second, MonsterStatus), then per status its value (short), the skill
-    // behind it (a player skill id, or a monster skill as short id + short level) and a short; all from one skill
     on(S.APPLY_MONSTER_STATUS, (r) => {
-      const oid = r.int(); r.long(); const first = r.uint(), second = r.uint();
-      const value = r.short(), source = r.int();
-      this.emit('mobStatus', oid, { first, second, source, value });
+      const oid = r.int();
+      for (const s of readMobStats(r, readMobMask(r))) this.emit('mobStatus', oid, s);
     });
     on(S.CANCEL_MONSTER_STATUS, (r) => { const oid = r.int(); r.long(); this.emit('mobStatusCancel', oid, r.uint(), r.uint()); });
     on(S.MOVE_MONSTER_RESPONSE, (r) => {
@@ -1316,9 +1323,10 @@ export class ChannelSession {
     return false;
   }
   /** CREATE type 4 (a Shop Permit) or 5 (a Hired Merchant): the title and the item that opens it */
-  pshopCreate(title, itemId, type = 4) { this.shopPending = true; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
-  pshopVisit(oid) { this.shopPending = true; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
+  pshopCreate(title, itemId, type = 4) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
+  pshopVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
   pshopOpenStore() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0B).byte(1)); }
+  pshopOpenCash(type, birthday) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(0x0B).byte(type).int(birthday)); }
   /** ADD_ITEM: inventory tab, slot, how many bundles, how many in each, the price of one bundle */
   pshopPut(tab, slot, bundles, perBundle, price) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x16).byte(tab).short(slot).short(bundles).short(perBundle).int(price)); }
   pshopRemove(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1B).short(index)); }
@@ -1542,8 +1550,8 @@ export class ChannelSession {
     }
     this.send(w);
   }
-  /** USE_UPGRADE_SCROLL: the scroll's USE slot, the equip's slot (negative = worn), 2 = also use a White Scroll */
-  useScroll(scrollSlot, equipSlot, white) { this.send(new PacketWriter(C.USE_UPGRADE_SCROLL).int(Date.now() | 0).short(scrollSlot).short(equipSlot).short(white ? 2 : 0)); }
+  /** USE_UPGRADE_SCROLL: the scroll's USE slot, the equip's slot (negative = worn), 2 with a White Scroll (else 1), Legendary Spirit */
+  useScroll(scrollSlot, equipSlot, white, legendary) { this.send(new PacketWriter(C.USE_UPGRADE_SCROLL).int(Date.now() | 0).short(scrollSlot).short(equipSlot).short(white ? 2 : 1).byte(legendary ? 1 : 0)); }
   moveItem(inv, from, to, qty = 1) { this.send(new PacketWriter(C.ITEM_MOVE).int(Date.now() | 0).byte(inv).short(from).short(to).short(qty)); }
   healOverTime(hp, mp) { this.send(new PacketWriter(C.HEAL_OVER_TIME).zero(8).short(hp).short(mp).byte(0)); }
   changeChannel(ch) { this.send(new PacketWriter(C.CHANGE_CHANNEL).byte(ch).int(Date.now() | 0)); }

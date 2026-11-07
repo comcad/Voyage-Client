@@ -81,10 +81,18 @@ const PET_DOLL_TIME = 0x0217E646BB058000n;   // a dateDead from 2079 on: a doll
 const FOLLOW_THE_LEAD = { 0: 8, 1: 10000018, 2: 20000024 };
 export const MESO_ID = 2147483647;
 const MAGIC_GUARDS = [2001002, 12001001, 22111001], POWER_GUARDS = [1101007, 1201007];
-const SHOP_ERRORS = { 1: 'This shop is not open.', 2: 'The shop is full.', 4: 'You cannot do that while dead.', 6: 'You need a Shop Permit to open a shop.',
-  10: 'You cannot open a store this close to a portal.', 13: 'You cannot open a store this close to another one.',
-  15: 'You cannot open a shop here. Shops open in the Free Market rooms.', 16: 'You cannot open a shop here.',
-  17: 'You may not enter this store.', 18: 'The owner is tending to this store. Please try again later.' };
+// a mini room (trade, shop, game) that couldn't be opened or entered; 8 and 0x17 say nothing
+const ROOM_ERRORS = { 1: 'The room is already closed.', 2: "You can't enter the room due to full capacity.",
+  3: 'Other requests are being fulfilled this minute.', 4: "You can't do it while you're dead.",
+  5: "You can't do it in the middle of the event.", 6: 'This character is unable to do it.',
+  7: 'You are not allowed to trade other items at this point.', 9: 'You can only make trade\r\nif you two are in the same map.',
+  10: 'You may not open the store near a portal.', 11: "You can't start the game here.",
+  12: 'You cannot open a store in this channel. Please use a different channel.', 13: "You can't establish a miniroom right here.",
+  14: "You can't start the game here.", 15: 'The personal store can only be built\r\nat the free market available at main towns.',
+  16: 'You may only use it at Room 7~22, located at the 2nd floor and above of the Free Market Entrance.',
+  17: 'You may not enter this store.', 18: 'The owner of the store is currently\r\nundergoing store maintenance.\r\nPlease try again in a bit.',
+  19: 'You are unable to enter the tournament room.', 20: 'You are not allowed to trade other items at this point.',
+  21: "You don't have enough mesos to enter.", 22: 'The password is incorrect.', 24: 'This item has expired.' };
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 /** Teleport can be used again this long after it lands (ms), and this long after Meteor Shower, Blizzard or Genesis. */
 const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
@@ -616,7 +624,6 @@ const GUILD_MESSAGES = {
 };
 const GUILD_ERROR = 'The guild request has not been accepted, due to unknown reason.';
 /** PacketCreator.getMiniRoomError codes for trades */
-const TRADE_ERRORS = { 2: 'The other character is already trading.', 4: 'You cannot trade right now.', 5: 'The other character cannot trade right now.' };
 const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
   14: 'You cannot add a GM to your buddy list.', 15: 'That character is not registered.' };
 
@@ -1991,7 +1998,7 @@ export class Game {
       shopChat: later((slot, text) => this.playerShop?.say(text)),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
       shopClosed: later((reason) => this.playerShop?.end(reason)),
-      shopError: later((code) => { this.playerShop?.end(); this.windows.notice(SHOP_ERRORS[code] || 'The shop could not be opened.'); }),
+      roomError: later((code) => { if (ROOM_ERRORS[code]) this.windows.notice(ROOM_ERRORS[code]); }),
       merchantSpawn: later((m) => this.boards.spawn(m)),
       merchantUpdate: later((owner, info) => this.boards.update(owner, info)),
       merchantRemove: later((owner) => this.boards.remove(owner)),
@@ -2006,7 +2013,6 @@ export class Game {
         if (t) this.windows.notice(t);
       },
       charBox: later((id, box) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.box = box; }),
-      tradeError: (code) => { this.tradeWin?.ended(0); this.windows.notice(TRADE_ERRORS[code] || 'The trade could not be started.'); },
       charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i), null); },
       // a Party Search invitation comes as "PS: <leader>"
       // refused at once with party invites switched off, from someone on the Blacklist, or while another is up;
@@ -2108,11 +2114,15 @@ export class Game {
         for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
       }),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
-      spawnMob: later((m) => this.spawnLife('Mob', m, false)),
+      spawnMob: later(async (m) => {
+        await this.spawnLife('Mob', m, false);
+        const e = this.lifeByOid.get(m.oid);
+        if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);
+      }),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
         if (e && !e.pending) e.controlled = true; else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
-        if (e && !e.pending && m.statuses) this.applyMobStatus(e, m.statuses);   // what it was already under
+        if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);   // what it was already under
         if (aggro && e && !e.pending) e.chase(this.player);      // the server wants it after us
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
@@ -2223,6 +2233,7 @@ export class Game {
       },
       knowsSkill: (id) => this.skills.level(id) > 0,
       cooldown: (id, sec) => {
+        if (id === 5221999) { this.battleshipHp = sec || 0; return; }   // the Battleship's HP, not a cooldown
         if (sec) { this.skills.cooldowns[id] = Date.now() + sec * 1000; (this.skills.cooldownTotal ??= {})[id] = sec * 1000; }
         else delete this.skills.cooldowns[id];
       },
@@ -3100,13 +3111,6 @@ export class Game {
     if (tab === 3 && Math.floor(it.id / 10000) === 301) { this.sitChair(it.id); return; }        // a chair
     if (tab === 4 && Math.floor(it.id / 10000) === 416) { this.openBook(it.id); return; }        // a book (the Beginner's Guide)
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
-    if (tab === 2 && isScroll(it.id)) {
-      // a scroll is put on an item, not used: pick it up and show what you wear
-      this.windows.startCarry({ kind: 'item', tab: 2, slot, id: it.id, sticky: true, x: -99, y: -99, at: 0 }, this.windows.icon(it.id));
-      this.windows.open('equip');
-      this.hud.message('Click the equipped item to use the scroll on.', '#fff');
-      return;
-    }
     if (tab === 2) { this.useConsume(slot, it.id); return; }
     else if (tab === 1) {
       if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
@@ -3416,10 +3420,13 @@ export class Game {
     if (!scrollFits(sid, eq.id)) { this.notice('This scroll cannot be used on this item.'); return; }
     if (!modifier && !(eq.slots > 0)) { this.notice('This item has no upgrades available.'); return; }
     if (eq.flag & 1 && !(await this.windows.confirm('Due to the potency of the scroll,\r\nthe sealed item might be destroyed.\r\nAre you sure you still want to use the scroll?'))) return;
-    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && Math.floor(sid / 100) !== 20490;
-    const white = hasWhite && (await this.windows.confirm('Would you like to use a #bWhite Scroll#k too?\nIt keeps the upgrade slot if the scroll fails.'));
+    // Spikes, Cold Protection and Clean Slate scrolls never take a White Scroll
+    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && ![2040727, 2041058, 2049000, 2049001, 2049002, 2049003].includes(sid);
+    const white = hasWhite && (await this.windows.confirm('Would you like to use the White Scroll?'));
     if (inv[2][scrollSlot] !== scroll) return;          // it moved while you were deciding
-    this.net?.useScroll(scrollSlot, equipSlot, white);
+    if (!this.canExclusive(500)) return;
+    this.net?.useScroll(scrollSlot, equipSlot, white, equipSlot > 0);
+    this.lockExclusive();
   }
 
   /**
