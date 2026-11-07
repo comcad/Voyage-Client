@@ -83,15 +83,18 @@ export class WorldMapWin extends Win {
     if (this.hover?.spot?.path) draw(this.hover.spot.path, cx, cy);
     const H2 = this.helper || {};
     for (const s of Object.values(d.MapList || {})) if (s?.spot) draw(H2.mapImage?.[s.type], cx + s.spot[0], cy + s.spot[1]);
-    // party members elsewhere on this channel, then you (both bob through 4 frames)
+    // one mark per spot (each bobs through 4 frames): curPos where you are; else partyPos or lovePos, whichever of
+    // your party members elsewhere on this channel and your spouse (NOTIFY_MARRIED_PARTNER_MAP_TRANSFER) comes last
     const f = Math.floor(performance.now() / CUR_FRAME_MS) % 4;
-    for (const pm of this.g.party?.members || []) {
-      if (pm.id === this.g.player.id || pm.channel !== this.g.channel) continue;
-      const s = this.spotOf(d, pm.map);
-      if (s) draw(H2.partyPos?.[f], cx + s.spot[0], cy + s.spot[1]);
+    const marks = [{ map: this.g.map?.id, kind: 'curPos' }];
+    for (const pm of this.g.party?.members || []) if (pm.id !== this.g.player.id && pm.channel === this.g.channel) marks.push({ map: pm.map, kind: 'partyPos' });
+    if (this.g.spouseMap) marks.push({ map: this.g.spouseMap, kind: 'lovePos' });
+    for (const s of Object.values(d.MapList || {})) {
+      if (!s?.spot) continue;
+      let kind = null;
+      for (const no of Object.values(s.mapNo || {})) for (const m of marks) if (m.map === no && kind !== 'curPos') kind = m.kind;
+      if (kind) draw(H2[kind]?.[f], cx + s.spot[0], cy + s.spot[1]);
     }
-    const me = this.spotOf(d, this.g.map?.id);
-    if (me) draw(H2.curPos?.[f], cx + me.spot[0], cy + me.spot[1]);
   }
 
   // ---------------------------------------------------------------- mouse

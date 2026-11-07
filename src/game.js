@@ -19,6 +19,7 @@ import { KeyCommands } from './commands.js';
 import { DojoWindow } from './ui/dojo.js';
 import { PyramidWindow } from './ui/pyramid.js';
 import { Reactor, loadReactorImg } from './reactors.js';
+import { Guide } from './guide.js';
 import { pad, frames } from './assets.js';
 import { music, sfx, songLength } from './audio.js';
 import { StatusBar, CHAT_COLOR, CHAT_BAR } from './ui/statusbar.js';
@@ -29,7 +30,7 @@ import { ItemGuardWin } from './ui/itemguard.js';
 import { ApResetWin, ApConfirmWin, SpResetWin, SpConfirmWin, branchOf, advancement, spBook } from './ui/reset.js';
 /** ENABLE_TV's error codes. */
 const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
-import { WindowManager, allCanvases } from './ui/windows.js';
+import { WindowManager, allCanvases, drawTip } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
@@ -682,6 +683,9 @@ function snapToPixels(ctx) {
   return ctx;
 }
 
+/** This computer's wall-clock time, as ms whose UTC fields read as the local time. */
+const localWallMs = () => Date.now() - new Date().getTimezoneOffset() * 60000;
+
 export class Game {
   /** net: ChannelSession when playing online, null for the offline map viewer. */
   constructor(canvas, assets, look, hooks = {}, net = null) {
@@ -765,6 +769,7 @@ export class Game {
       if (rp) { this.requestCharInfo(rp.id); return; }
       // a pet: its owner's
       for (const pet of this.pets.values()) if (pet.hits(wx, wy)) { this.requestCharInfo(pet.owner); return; }
+      if (this.guide?.hits(wx, wy)) this.net.clickGuide();
     });
     c.addEventListener('wheel', (e) => {
       // deltaMode 1 = lines (some mice / Firefox): count each as a pixel step of 40
@@ -844,6 +849,7 @@ export class Game {
       const entered = await net.enter(this.player.id);
       this.net = net;
       this.channel = entered.channel;
+      this.setServerTime(entered.serverTime);
       const info = entered.info;
       if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); }
@@ -866,7 +872,21 @@ export class Game {
     }
   }
 
-  /** The other player under a canvas point. */
+  /**
+   * SET_FIELD ends with the server's clock (a FILETIME of its wall-clock time); the gap to this computer's wall clock
+   * is kept, and serverNow() is the server's time from then on.
+   */
+  setServerTime(ft) {
+    if (ft === undefined) return;
+    const ms = Number(BigInt(ft) / 10000n) - 11644473600000;
+    if (Number.isFinite(ms)) this.serverClockGap = ms - localWallMs();
+  }
+  /**
+   * The server's wall-clock time now, as ms whose UTC fields (getUTCHours...) read as that wall clock, like the
+   * FILETIMEs it sends. Before the first SET_FIELD, this computer's own clock.
+   */
+  serverNow() { return localWallMs() + (this.serverClockGap || 0); }
+
   /**
    * The field's cursor under the mouse, as v83 picks it each frame when no window is there: 1 over an NPC, 2 over
    * another player (who wins over an NPC), else 0. (x, y) is the interface's point.
@@ -1871,7 +1891,8 @@ export class Game {
       const w = this.windows.wins.minimap;
       if (!this.windows.order.includes(w)) this.windows.open('minimap', 'UI/MenuUp'); else w?.cycle();
     }
-    else if (m === MENU.WORLDMAP) this.windows.toggle('worldmap');
+    // as BtMap: a notice where no world map lists this map; nothing on a fieldType 22 map
+    else if (m === MENU.WORLDMAP) { if (Number(this.map?.info?.fieldType) !== 22) this.windows.wins.minimap?.openWorldMap(); }
     else if (m === MENU.KEYS) this.windows.toggle('keyconfig');
     else if (m === MENU.BUDDY) this.windows.toggle('userlist', 0);
     else if (m === MENU.PARTY) this.windows.toggle('userlist', 1);
@@ -2377,6 +2398,7 @@ export class Game {
   /** Hook a ChannelSession's events to this game. `entered` is the result of session.enter(). */
   async goOnline(entered, uiRoot) {
     const info = entered.info;
+    this.setServerTime(entered.serverTime);
     this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.linked = info.linked;
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
@@ -2411,6 +2433,7 @@ export class Game {
     this.hud = new Hud(uiRoot, this);
     this.hud.update(this.stats);
     this.quests = new QuestBook(this.assets);
+    this.quests.now = () => this.serverNow();
     this.questMsg = new QuestMessages(); this.questTimers = new Map();
     await this.quests.load();
     this.quests.setState(info.quests);
@@ -2453,6 +2476,7 @@ export class Game {
       csWorldTransferRules: (error, x, worlds) => this.csWin?.worldTransferRules(error, x, worlds),
       csTransferBought: (kind, item) => this.csWin?.transferBought(kind, item),
       setField: (f) => {
+        this.setServerTime(f.serverTime);
         if (f.hp !== undefined && this.stats) this.stats.hp = f.hp;
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });
       },
@@ -2646,6 +2670,13 @@ export class Game {
         if (type === 4 && str) sfx.play(`Field/${str}`);
         if (type === 6 && str) { this.fieldBgm = str.replace(/^Sound\//, '').replace('.img', ''); music.play(this.fieldBgm); }
       }),
+      openUI: later((type) => this.openUI(type)),
+      guide: later((on) => this.spawnGuide(on)),
+      guideSay: later((text, w, ms) => this.guide?.say(text, w, ms)),
+      guideShow: later((n, ms) => this.guide?.show(n, ms)),
+      spouseMap: (map, id) => { this.spouseMap = map; this.spouseId = id; },
+      backEffect: later(({ mode, back, ms }) => { if (mode === 0 || mode === 1) this.map?.fadeBack(back, mode === 0 ? 255 : 0, ms); }),
+      backEffectClear: later(() => this.map?.resetBacks()),
       cashPetFood: later((slot) => {
         if (slot === -1) { this.windows.notice('Your pet cannot consume this food.\r\nPlease check again.'); return; }
         if (slot < 0) return;
@@ -2727,7 +2758,7 @@ export class Game {
       foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
-      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.setState(d.state); }),
+      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
       moveMob: later((oid, start, moves, act, skill, level) => {
         const e = this.lifeByOid.get(oid);
@@ -2861,13 +2892,13 @@ export class Game {
       avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
-      objectStates: (list) => { for (const { name, state } of list) this.setObjectState(name, state); },
+      objectStates: later((list) => { for (const { name, state } of list) this.setObjectState(name, state); }),
       energyCharge: (v) => { this.energy = v; },
       aranCombo: (n) => this.setAranCombo(n),
       sessionValue: (k, v) => this.sessionValue(k, v),
       pyramidGauge: (n) => (this.pyramid ??= new PyramidWindow(this)).gauge(n),
       pyramidScore: (rank, exp) => (this.pyramid ??= new PyramidWindow(this)).score(rank, exp),
-      objectStatesReset: () => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); },
+      objectStatesReset: later(() => { for (const name of this.map?.namedObjs.keys() || []) this.setObjectState(name, 0); }),
       mapObjectVisible: (list) => { if (this.loading) (this.objVisQueue ??= []).push(...list); else for (const { tag, on } of list) this.map?.setObjectVisible(tag, on); },
       disableUi: (on) => { this.uiDisabled = on; },
       hint: (text, width, seconds, at) => { this.vfx?.hint(text, width, seconds, at || this.player); },
@@ -3088,6 +3119,30 @@ export class Game {
     this.windows.toggle('quest');
   }
 
+  /**
+   * SPAWN_GUIDE: any guide goes at once (no die animation); on, a new one appears on you: 10001013 for the Cygnus jobs,
+   * else 20001013. It is made again on every map until the server takes it away.
+   */
+  spawnGuide(on) {
+    this.guide = null; this.guideSkill = 0;
+    if (!on || !this.player) return;
+    this.guideSkill = Math.floor((this.stats?.job || 0) / 1000) === 1 ? 10001013 : 20001013;
+    this.guide = new Guide(this, this.guideSkill);
+  }
+
+  /**
+   * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
+   * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, the Energy
+   * Charge gauge, Maker, Ranking, GM Board, Title, Maple Event) do nothing.
+   */
+  openUI(type) {
+    if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
+    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x21: 'skill' }[type];
+    if (!name || (name === 'skill' && !this.skills) || (name === 'quest' && !this.quests) || this.windows.isOpen(name)) return;
+    const w = this.windows.open(name);
+    if (name === 'familytree') w?.load(this.player.name);
+  }
+
   itemCount(id) {
     const t = invType(id);
     let n = 0;
@@ -3264,6 +3319,7 @@ export class Game {
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
+      if (this.guideSkill) this.guide = new Guide(this, this.guideSkill, this.guide);   // the guide comes along to every map
       this.snapCamera();
       if (!this.net) history.replaceState(null, '', `?map=${id}`);
       this.hooks.onMap?.(map);
@@ -4718,6 +4774,7 @@ export class Game {
     this.questAlert?.update(dt * 1000); this.questAlert?.tick();
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
+    this.guide?.update(dt);
     this.updateDiseases(dt);
     this.updateAranCombo(dt);
     (this.dojo ??= new DojoWindow(this)).update(dt);
@@ -5060,7 +5117,7 @@ export class Game {
     action ??= look.standAction();
 
     const b = map.bounds;
-    p.x = Math.max(fh.left + 25, Math.min(fh.right - 25, p.x));     // the client's side walls: footholds' extent, 25px in
+    p.x = Math.max(fh.wallL, Math.min(fh.wallR, p.x));     // the side walls
     if (p.y > b.bottom + 300) this.placeAtPortal(map.spawnPortal(null));
     this.advanceFrame(action, dt);
   }
@@ -7957,6 +8014,26 @@ export class Game {
     ctx.restore();
     this.zoomCrop = { sx, sy, z };
   }
+  /**
+   * Map tooltips (the map's ToolTip rects). The rect under the mouse, when no window is there, shows its Title / Desc
+   * 20px under the cursor; every rect whose Nchar rect you stand in shows it at the rect's (x2, y2), unless it is the
+   * one under the mouse.
+   */
+  drawMapTips(ctx, cam) {
+    const map = this.map, p = this.player;
+    this.hoverTip = null;
+    if (!map?.tips?.length || !p) return;
+    const m = this.windows?.mouse, tipOf = (t) => ({ title: t.title, lines: t.desc ? t.desc.split(/\r?\n|\r/) : [] });
+    let hover = null;
+    if (m && m.x >= 0 && !this.windows.top(m.x, m.y) && !this.statusBar?.contains?.(m.x, m.y)) {
+      const [vx, vy] = this.unzoom(m.x * UI_SCALE, m.y * UI_SCALE);
+      hover = map.tipAt(vx + cam.x, vy + cam.y);
+      if (hover && (hover.title || hover.desc)) this.hoverTip = { ...tipOf(hover), x: m.x, y: m.y + 20 };
+    }
+    for (const t of map.charTipsAt(Math.round(p.x), Math.round(p.y))) {
+      if (t !== hover && (t.title || t.desc)) drawTip(ctx, tipOf(t), t.right - cam.x, t.bottom - cam.y, VIEW_W, VIEW_H);
+    }
+  }
   /** A point on the screen as the unzoomed view has it (System Option ZOOM). */
   unzoom(x, y) {
     const z = this.zoomCrop;
@@ -7997,6 +8074,7 @@ export class Game {
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
+    this.guide?.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
     this.drawRingFx(ctx, cam);
@@ -8008,6 +8086,7 @@ export class Game {
     this.mapleTV.draw(ctx, cam, this.map);
     drawPartyHp(ctx, this, cam);
     this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
+    this.drawMapTips(ctx, cam);
 
     for (const e of this.effects) {
       if (e.t < 0) continue;
@@ -8041,6 +8120,7 @@ export class Game {
     }
     this.hud?.drawBanner?.(ctx);        // the server's scrolling notice, under the bar and every window
     if (ui) {
+      if (this.hoverTip) drawTip(ctx, this.hoverTip, this.hoverTip.x, this.hoverTip.y);
       this.statusBar?.draw(ctx);
       this.windows?.draw(ctx);
     }

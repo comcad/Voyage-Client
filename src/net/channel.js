@@ -141,6 +141,13 @@ function readMobStats(r, has) {
   return out;
 }
 
+/** SET_FIELD's last 8 bytes, the server's clock, whatever was left unread before them; undefined when too short. */
+function tailTime(r) {
+  if (r.available < 8) return undefined;
+  r.pos = r.b.length - 8;
+  return r.long();
+}
+
 export class ChannelSession {
   constructor(transport, handler = {}) {
     this.conn = new Connection(transport);
@@ -184,12 +191,14 @@ export class ChannelSession {
       const info = readCharacterInfo(r);
       this.job = info.stats.job;
       const out = { channel, charData: true, info, mapId: info.stats.mapId, portal: info.stats.spawnPoint, hp: info.stats.hp };
+      out.serverTime = tailTime(r);   // the server's clock (a FILETIME), the packet's last 8 bytes
       if (!first) this.emit('setField', out);
       return out;
     }
     r.skip(3);
     const out = { channel, charData: false, mapId: r.int(), portal: r.ubyte(), hp: r.short() };
     if (r.bool()) out.pos = { x: r.int(), y: r.int() };
+    out.serverTime = tailTime(r);
     this.emit('setField', out);
     return out;
   }
@@ -1173,7 +1182,12 @@ export class ChannelSession {
     });
     // reactors: spawn (oid, id, state, position, facing), hit (oid, new state, position, stance), destroy (oid, state)
     on(S.REACTOR_SPAWN, (r) => { const oid = r.int(), id = r.int(), state = r.byte(), pos = r.pos2(); this.emit('reactorSpawn', { oid, id, state, x: pos.x, y: pos.y }); });
-    on(S.REACTOR_HIT, (r) => { const oid = r.int(), state = r.byte(), pos = r.pos2(), stance = r.available ? r.ubyte() : 0; this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, stance }); });
+    // a hit: its new state, where it is, ms before the hit shows, the hit's index, then tenths of a second it can't be hit
+    on(S.REACTOR_HIT, (r) => {
+      const oid = r.int(), state = r.byte(), pos = r.pos2();
+      const delay = r.available >= 2 ? r.ushort() : 0, index = r.available ? r.byte() : 0, block = r.available ? r.byte() : 0;
+      this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, delay, index, block });
+    });
     on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(); this.emit('reactorDestroy', { oid, state }); });
     on(S.REMOVE_ITEM_FROM_MAP, (r) => {
       const anim = r.ubyte(), oid = r.int();
@@ -1270,6 +1284,8 @@ export class ChannelSession {
       const t = r.ubyte();
       // 5: boss HP gauge (oid, hp, maxHp, tag colour, tag background colour)
       if (t === 5) { this.emit('bossHp', { oid: r.int(), hp: r.int(), maxHp: r.int(), tag: r.ubyte(), bg: r.ubyte() }); return; }
+      // 2: a named map object plays its current state again (state -1)
+      if (t === 2) { this.emit('objectStates', [{ name: r.string(), state: -1 }]); return; }
       this.emit('fieldEffect', t, r.available ? r.string() : '');
     });
     // map objects by tag: a count, then each tag and 1 to show / 0 to hide
@@ -1278,6 +1294,19 @@ export class ChannelSession {
       for (let n = r.ubyte(); n > 0 && r.available >= 3; n--) list.push({ tag: r.string(), on: r.ubyte() !== 0 });
       this.emit('mapObjectVisible', list);
     });
+    // a background (back/<n>) fades in (mode 0) or out (mode 1) over ms; or every background back as the map made it
+    on(S.SET_BACK_EFFECT, (r) => { const mode = r.ubyte(); r.int(); const back = r.ubyte(); this.emit('backEffect', { mode, back, ms: r.int() }); });
+    on(S.CLEAR_BACK_EFFECT, () => this.emit('backEffectClear'));
+    // your spouse changed maps: the map, then their id
+    on(S.NOTIFY_MARRIED_PARTNER_MAP_TRANSFER, (r) => { const map = r.int(); this.emit('spouseMap', map, r.int()); });
+    // the beginner guide: on (1) or gone (0); what it says (text, wrap width, ms) or shows (UI/tutorial.img/<n>, ms)
+    on(S.SPAWN_GUIDE, (r) => this.emit('guide', r.ubyte() !== 0));
+    on(S.TALK_GUIDE, (r) => {
+      if (r.ubyte() === 0) { const text = r.string(), w = r.int(); this.emit('guideSay', text, w, r.int()); }
+      else { const n = r.int(); this.emit('guideShow', n, r.int()); }
+    });
+    // a script opens one of your windows, by its UI id
+    on(S.OPEN_UI, (r) => this.emit('openUI', r.ubyte()));
     // a named map object (a trap) switched to one of its states; or a list of them; or all back to their first
     on(S.FIELD_OBSTACLE_ONOFF, (r) => { const name = r.string(); this.emit('objectStates', [{ name, state: r.int() }]); });
     on(S.FIELD_OBSTACLE_ONOFF_LIST, (r) => {
@@ -1430,6 +1459,8 @@ export class ChannelSession {
   }
   /** TOUCHING_REACTOR: walked onto (true) or off (false) a reactor set off by touch. */
   touchReactor(oid, touching) { this.send(new PacketWriter(C.TOUCHING_REACTOR).int(oid).byte(touching ? 1 : 0)); }
+  /** CLICK_GUIDE: the beginner guide was double-clicked. */
+  clickGuide() { this.send(new PacketWriter(C.CLICK_GUIDE)); }
   /** An obstacle (a trap) hurt you: -3, no element, the damage, its disease (skill << 8 | level), then 0. */
   takeObstacleDamage(damage, disease = 0) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(-3).byte(0).int(damage).short(disease).byte(0));

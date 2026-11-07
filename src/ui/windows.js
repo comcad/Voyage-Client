@@ -1323,7 +1323,7 @@ class QuestWin extends Win {
       const ft = book.completed[e.ended || e.id];
       try {
         const d = new Date(Number(BigInt(ft) / 10000n - 11644473600000n));
-        if (!Number.isNaN(d.getTime())) return `Ended at ${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()} at ${String(d.getHours()).padStart(2, '0')}:00`;
+        if (!Number.isNaN(d.getTime())) return `Ended at ${d.getUTCMonth() + 1}/${d.getUTCDate()}/${d.getUTCFullYear()} at ${String(d.getUTCHours()).padStart(2, '0')}:00`;
       } catch { /* no time */ }
       return '';
     }
@@ -1652,7 +1652,10 @@ class MiniMapWin extends Win {
     ctx.restore();
   }
 
-  /** Markers bottom-centre on their point, in the client's order: strangers, portals, friends / guild / party, NPCs, you. */
+  /**
+   * Markers bottom-centre on their point, in this order: others' hired merchants, strangers, your merchant,
+   * portals, friends / guild / party, NPCs, you.
+   */
   drawMarkers(ctx, v, sc) {
     const g = this.g, H = this.helper?.minimap || {}, im = (n) => this.mgr.image(n);
     const put = (node, wx, wy) => {
@@ -1664,6 +1667,9 @@ class MiniMapWin extends Win {
     const lists = { friend: [], guild: [], guildmaster: [], party: [], partymaster: [], match: [] };
     const party = g.party, guild = g.guild, buddies = new Set((g.buddies || []).map((b) => b.id));
     const ring = g.rings?.marriage, me = g.player?.id, spouse = ring ? (ring.husbandId === me ? ring.wifeId : ring.husbandId) : 0;
+    // hired merchants first: others' now, your own after the players
+    const mine = [];
+    for (const hm of g.boards?.merchants?.values() || []) { if (hm.owner === me) mine.push(hm); else put(H.anothertrader, hm.x, hm.y); }
     for (const o of g.others.values()) {
       const gm = guild?.members?.find((x) => x.name === o.name);
       const kind = spouse && o.id === spouse ? 'match'
@@ -1672,6 +1678,7 @@ class MiniMapWin extends Win {
             : buddies.has(o.id) ? 'friend' : null;
       if (kind) lists[kind].push(o); else put(H.another, o.x, o.y);
     }
+    for (const hm of mine) put(H.usertrader, hm.x, hm.y);
     for (const p of g.map.portals) if (p.pt === 2 || p.pt === 7) put(H.portal, p.x, p.y);
     for (const k of ['friend', 'guild', 'guildmaster', 'party', 'partymaster', 'match']) for (const o of lists[k]) put(H[k], o.x, o.y);
     // NPCs from the map's own life list, marked by the spawned NPC's quests: plain, then can-complete, then can-start on top
@@ -2051,7 +2058,8 @@ export function helpTip(title, desc) {
     },
   };
 }
-function drawTip(ctx, tip, x, y) {
+/** A text tooltip panel, kept inside a viewW x viewH view. */
+export function drawTip(ctx, tip, x, y, viewW = UI_W, viewH = UI_H) {
   ctx.save();
   ctx.font = '12px Arial, sans-serif';
   const lines = tip.lines.flatMap((l) => (l ? wrapText(ctx, l, 255, 12) : ['']));
@@ -2060,7 +2068,7 @@ function drawTip(ctx, tip, x, y) {
   ctx.font = '12px Arial, sans-serif';
   const w = Math.ceil(Math.max(tw + 20, ...lines.map((l) => ctx.measureText(l).width + 20), 80));
   const h = 24 + lines.length * 15 + (lines.length ? 4 : 0);
-  x = Math.min(x, UI_W - w - 2); y = Math.min(y, UI_H - h - 2);
+  x = Math.min(x, viewW - w - 2); y = Math.min(y, viewH - h - 2);
   tipFrame(ctx, x, y, w, h);
   uiText(ctx, tip.title, x + w / 2, y + 6, { color: '#fff', bold: true, size: 12, align: 'center' });
   lines.forEach((l, i) => uiText(ctx, l, x + 10, y + 24 + i * 15, { color: '#fff', size: 12 }));

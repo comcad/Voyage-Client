@@ -63,7 +63,9 @@ export class Footholds {
     const ys = this.all.flatMap((f) => [f.y1, f.y2]);
     this.left = Math.min(...xs); this.right = Math.max(...xs);
     this.top = Math.min(...ys); this.bottom = Math.max(...ys);
-    this.ceiling = Number.isFinite(this.top) ? this.top - 300 : -Infinity;   // nothing in the air goes higher (the map raises it to VRTop + 65)
+    this.ceiling = Number.isFinite(this.top) ? this.top - 300 : -Infinity;   // nothing in the air goes higher
+    // the side walls: the outermost foothold ends, 30px in (a map with info/VRLimit narrows them, see Map)
+    this.wallL = this.left + 30; this.wallR = this.right - 30;
   }
 
   get(id) { return this.byId.get(id); }
@@ -131,13 +133,13 @@ export class Footholds {
       if (blocks(p)) return f.x1;
       const pp = p && this.get(p.prev);
       if (blocks(pp)) return p.x1;
-      return this.left + 25;
+      return this.wallL;
     }
     const n = this.get(f.next);
     if (blocks(n)) return f.x2;
     const nn = n && this.get(n.next);
     if (blocks(nn)) return n.x2;
-    return this.right - 25;
+    return this.wallR;
   }
 
   /** Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh. */

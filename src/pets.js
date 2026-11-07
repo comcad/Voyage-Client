@@ -285,7 +285,7 @@ export class Pet {
       fh.fall(this, dt / 3);
       if (this.fh) this.vx = this.inX * this.vx >= 0 ? this.vx * 0.5 : 0;
     }
-    this.x = Math.max(fh.left + 25, Math.min(fh.right - 25, this.x));
+    this.x = Math.max(fh.wallL, Math.min(fh.wallR, this.x));
     const b = this.g.map?.bounds;
     if (b && this.y > b.bottom + 300) { const p = this.g.player; this.x = p.x; this.y = p.y - 10; this.vx = 0; this.vy = 0; this.fh = null; }
   }
