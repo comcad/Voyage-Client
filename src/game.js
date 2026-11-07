@@ -6299,6 +6299,8 @@ export class Game {
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
       const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
+      // a monster with info/ban/banType 1 (Hogul, the Mirror Ghost...) banishes you to its banMap on touch
+      if (Number(m.src.info?.ban?.banType) === 1) this.net?.mobBanishPlayer(Number(m.spawn?.id));
       // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
       const knock = p.ladder && dy < 0 ? 0 : m.x - (m.prevX ?? m.x) - dx < 0 ? -1 : 1;
       this.touchAttack(m);
