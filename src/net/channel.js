@@ -934,7 +934,11 @@ export class ChannelSession {
       this.emit('moveMob', oid, start, readMovement(r), act, skill, level);
     });
     on(S.KILL_MONSTER, (r) => this.emit('killMob', r.int(), r.ubyte()));
-    on(S.CATCH_MONSTER_WITH_ITEM, (r) => { r.int(); this.emit('catchMob', r.int(), r.ubyte() !== 0); });   // mob, item, caught
+    on(S.CATCH_MONSTER_WITH_ITEM, (r) => { const oid = r.int(); this.emit('catchMob', r.int(), r.ubyte() !== 0, oid); });   // mob, item, caught
+    // another player's Monster Magnet pulled (or failed to pull) a monster: mob, success
+    on(S.CATCH_MONSTER, (r) => { const oid = r.int(); this.emit('magnetCatch', oid, r.ubyte() !== 0); });
+    // a catch item that didn't work: 0 the monster is too strong, 1 used again too soon; then the item
+    on(S.BRIDLE_MOB_CATCH_FAIL, (r) => { const type = r.ubyte(); this.emit('catchFail', type, r.int()); });
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
     // damage (negative: healed), then - for one other monsters can hurt - its HP and max HP
     on(S.DAMAGE_MONSTER, (r) => {
@@ -1426,6 +1430,8 @@ export class ChannelSession {
   itemSort(inv) { this.send(new PacketWriter(C.ITEM_SORT2).int(Date.now() | 0).byte(inv)); }
   /** USE_SUMMON_BAG / USE_MOUNT_FOOD / SCRIPTED_ITEM: tick, slot, item; USE_ITEM_REWARD: slot, item (no tick). */
   useSummonBag(slot, itemId) { this.send(new PacketWriter(C.USE_SUMMON_BAG).int(Date.now() | 0).short(slot).int(itemId)); }
+  /** A catch item (227xxxx) on a monster: the time, its slot, the item and the monster. */
+  useCatchItem(slot, itemId, oid) { this.send(new PacketWriter(C.USE_CATCH_ITEM).int(Date.now() | 0).short(slot).int(itemId).int(oid)); }
   useMountFood(slot, itemId) { this.send(new PacketWriter(C.USE_MOUNT_FOOD).int(Date.now() | 0).short(slot).int(itemId)); }
   useScriptedItem(slot, itemId) { this.send(new PacketWriter(C.SCRIPTED_ITEM).int(Date.now() | 0).short(slot).int(itemId)); }
   useItemReward(slot, itemId) { this.send(new PacketWriter(C.USE_ITEM_REWARD).short(slot).int(itemId)); }
