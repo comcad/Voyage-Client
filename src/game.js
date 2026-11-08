@@ -1973,9 +1973,12 @@ export class Game {
       this.setEffLoading ??= this.assets.json('Effect/SetEff.img').then((img) => { this.setEffSets = readSets(img); this.setEffImg = img || {}; });
       return;
     }
+    const now = performance.now();
+    if (ent.setFx && now < ent.setFx.checkAt) { for (const l of ent.setFx.layers) l.anim.update(dt * 1000); return; }
     const look = ent === this.player ? this.localLookSlots() : ent.lookData;
     if (!look) return;
     const key = JSON.stringify([look.equips, look.hair, look.cashWeapon, look.pets]);
+    if (ent.setFx) ent.setFx.checkAt = now + 250;
     if (ent.setFx?.key !== key) {
       const index = wornSet(this.setEffSets, { ...look.equips, 0: look.hair }, look.cashWeapon, look.pets), layers = [];
       for (const branch of ['effect', 'backgrnd']) {
@@ -1985,7 +1988,7 @@ export class Game {
         this.assets.preload(anim.frames);
         layers.push({ anim, z: Number(n.z) || 0, fixed: !!Number(n.fixed) });
       }
-      ent.setFx = { key, layers };
+      ent.setFx = { key, layers, checkAt: now + 250 };
     }
     for (const l of ent.setFx.layers) l.anim.update(dt * 1000);
   }
@@ -5600,8 +5603,8 @@ export class Game {
     // any other skill ends a Dash
     if (!DASHES.includes(id) && this.dashing() && performance.now() > (this.dashEndSent || 0)) {
       this.dashEndSent = performance.now() + 500;
-      const now = Date.now();
-      this.net?.cancelBuff(this.buffs.find((b) => DASHES.includes(b.source) && b.until > now).source);
+      const now = Date.now(), dash = this.buffs.find((b) => DASHES.includes(b.source) && b.until > now);
+      if (dash) this.net?.cancelBuff(dash.source);
     }
     if ((id === ENERGY_ORB || ENERGY_BLOWS.has(id)) && (this.energy || 0) < FULL_ENERGY) { this.notice('This skill is available only when your energy is fully charged.'); return false; }
     // Shockwave only while transformed; Demolition and Snatch only in Super Transformation
@@ -6222,11 +6225,11 @@ export class Game {
    * lands it goes off with its special art and strikes up to mobCount in its box.
    */
   throwGrenade(c, held) {
-    const p = this.player, at = { x: Math.round(p.x), y: Math.round(p.y) }, map = this.map;
+    const p = this.player, at = { x: Math.round(p.x), y: Math.round(p.y) }, map = this.map, right = p.facingRight;
     this.net?.grenadeEffect(at.x, at.y, held, c.id);
     this.launchGrenade(p, c.id, at, held, (x, y) => {
       if (this.dead || this.map !== map) return;
-      const box = this.skillBox({ x, y, facingRight: p.facingRight }, c.id, c.lv);
+      const box = this.skillBox({ x, y, facingRight: right }, c.id, c.lv);
       const mobs = this.mobsIn(box, x, y).slice(0, this.skills.levelData(c.id, c.lv)?.mobCount || 1);
       // the blast's attack carries no held time (its damage isn't scaled by it); its blows land 120ms in
       this.attack(c.id, 'melee', { held: true, quiet: true, launch: GRENADE_HIT, pose: p.action, mobs });
@@ -6238,11 +6241,11 @@ export class Game {
     const ball = Game.fxNode(node?.ball), anim = ball ? new Anim(ball, true) : null;
     if (anim) await this.assets.preload(anim.frames);
     if (this.map !== map) return;
-    const dir = ent.facingRight ? 1 : -1, v = (held / 1000) * GRENADE_SPEED * 1000;
-    this.grenades.push({ anim, x: at.x, y: at.y - 28, vx: dir * v, vy: -v, t: 0, flip: ent.facingRight, land: (x, y) => {
+    const right = ent.facingRight, dir = right ? 1 : -1, v = (held / 1000) * GRENADE_SPEED * 1000;
+    this.grenades.push({ anim, x: at.x, y: at.y - 28, vx: dir * v, vy: -v, t: 0, flip: right, land: (x, y) => {
       land?.(x, y);
       const sp = Game.fxNode(node?.special);
-      if (sp) { const a = new Anim(sp, false); this.assets.preload(a.frames).then(() => this.fx.push({ anim: a, x, y, flip: ent.facingRight })); }
+      if (sp) { const a = new Anim(sp, false); this.assets.preload(a.frames).then(() => this.fx.push({ anim: a, x, y, flip: right })); }
     } });
   }
   /** Grenades in the air: they fall and go off on the first floor they reach (or after 3s). */

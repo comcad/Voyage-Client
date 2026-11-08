@@ -838,7 +838,7 @@ export class Life {
       return;
     }
     if (this.state === 'die1') { if (anim?.done) this.respawnTimer = 6; return; }
-    if (this.state === 'hit1') { if (this.hitLanded && this.recoil && this.fh) this.recoilStep(dt); else this.hitFall(dt); this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
+    if (this.state === 'hit1') { if (this.recoil && this.fh) this.recoilStep(dt); else this.hitFall(dt); this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
     // a chase lasts 3-4 minutes from the last time it was set on someone
     if (this.aggro !== this.chased) { this.chased = this.aggro; this.chaseT = 180 + Math.random() * 60; }
     if (this.aggro && (this.chaseT -= dt) <= 0) this.aggro = this.chased = null;

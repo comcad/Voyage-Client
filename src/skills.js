@@ -233,13 +233,14 @@ export class SkillBook {
  * Critical Shot with a bow or crossbow, Critical Throw with a claw (their Cygnus copies), Critical Punch with a knuckle, plus Sharp Eyes
  * from yourself or a party member. A critical hit does (skill damage% + extra)% instead of the skill's damage%.
  */
-const CRIT_SKILLS = { 145: [3000001, 13000000], 146: [3000001, 13000000], 147: [4100001, 14100001], 148: [15110000, 15110000] };
+const CRIT_SKILLS = { 145: [3000001, 13000000], 146: [3000001, 13000000], 147: [4100001, 14100001], 148: [15110000] };
 export function critical(game, weaponCat, shot = true) {
   const sb = game.skills;
   let rate = 0, dmg = 0;
   // Critical Shot and Critical Throw only count for a shot (the Explorer's, or a Cygnus job's own); Critical Punch for
   // any knuckle blow. Whoever has a level in it gets it, whatever their job.
-  const id = (shot || weaponCat === 148) && CRIT_SKILLS[weaponCat]?.[Math.floor((game.stats?.job || 0) / 1000) === 1 ? 1 : 0];
+  const list = CRIT_SKILLS[weaponCat], cygnus = Math.floor((game.stats?.job || 0) / 1000) === 1;
+  const id = (shot || weaponCat === 148) && (list?.[cygnus ? 1 : 0] ?? list?.[0]);   // knuckles: Critical Punch for all
   const ld = id && sb.level(id) && sb.levelData(id);
   if (ld) { rate += ld.prop || 0; dmg += (ld.damage || 100) - 100; }
   const se = game.buffs?.find((b) => b.sharpEyes && b.until > Date.now())?.sharpEyes;

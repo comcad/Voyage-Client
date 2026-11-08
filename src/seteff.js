@@ -41,8 +41,7 @@ export function wornSet(sets, equips, cashWeapon, pets) {
     if (!worn) continue;
     if (s.pets.length && ![0, 1, 2].every((i) => s.pets.includes(pets?.[i]))) continue;
     if (s.type === 1) return s.index;
-    if (s.type === 2 && multi < 0) multi = s.index;
-    else if (other < 0) other = s.index;
+    if (s.type === 2) { if (multi < 0) multi = s.index; } else if (other < 0) other = s.index;
   }
   return other >= 0 ? other : multi;
 }
