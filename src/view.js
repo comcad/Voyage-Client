@@ -1,4 +1,5 @@
 import { settings } from './settings.js';
+import { IS_TOUCH_DEVICE } from './touchdevice.js';
 
 /**
  * The game's screen size in game pixels, set by the System Option SCREEN SIZE (800x600 by default). The phone sizes
@@ -11,7 +12,9 @@ export const BASE_W = 800, BASE_H = 600;
 export let VIEW_W = BASE_W, VIEW_H = BASE_H;
 /**
  * System Option UI SIZE: the interface (status bar, windows, notices) is drawn UI_SCALE times larger, laid out on a
- * UI_W x UI_H screen. It goes up in 10% steps and never past the size that leaves that screen 800x600 or bigger.
+ * UI_W x UI_H screen. It goes up in 10% steps and never past the size that leaves that screen 800x600 or bigger;
+ * on a phone size, 800x400 (a phone's screen is small, so its buttons need to be bigger to tap; a window taller than
+ * that is dragged up to reach its bottom).
  */
 export let UI_SCALE = 1, UI_W = BASE_W, UI_H = BASE_H;
 
@@ -20,12 +23,26 @@ export function resolutionIndex() {
   const i = RESOLUTIONS.findIndex(([w, h]) => `${w}x${h}` === settings.resolution);
   return i < 0 ? 0 : i;
 }
+const PHONE_UI_H = 400;
+/**
+ * FIT TO SCREEN: the game takes the window's own size in game pixels (nothing stretched), made just big enough to be
+ * 800x600 or more at the same shape (a phone's 852x393 is 1301x600).
+ */
+export function fitSize() {
+  const w = innerWidth || BASE_W, h = globalThis.visualViewport?.height || innerHeight || BASE_H;
+  const k = Math.max(1, BASE_W / w, BASE_H / h);
+  return [Math.round(w * k), Math.round(h * k)];
+}
 /** The largest UI SIZE the screen size allows. */
-export const maxUiScale = () => Math.max(1, Math.floor(Math.min(VIEW_W / BASE_W, VIEW_H / BASE_H) * 10 + 1e-9) / 10);
+export const maxUiScale = () => {
+  const phone = settings.fit ? IS_TOUCH_DEVICE : !!RESOLUTIONS[resolutionIndex()][2];
+  const minH = phone ? PHONE_UI_H : BASE_H;
+  return Math.max(1, Math.floor(Math.min(VIEW_W / BASE_W, VIEW_H / minH) * 10 + 1e-9) / 10);
+};
 
 /** Sizes the view to the chosen resolution; the page keeps the canvas at that shape, fitted to the window. */
 export function applyResolution() {
-  [VIEW_W, VIEW_H] = RESOLUTIONS[resolutionIndex()];
+  [VIEW_W, VIEW_H] = settings.fit ? fitSize() : RESOLUTIONS[resolutionIndex()];
   UI_SCALE = Math.min(maxUiScale(), Math.max(1, Math.round((Number(settings.uiScale) || 1) * 10) / 10));
   UI_W = VIEW_W / UI_SCALE; UI_H = VIEW_H / UI_SCALE;
   document.documentElement.style.setProperty('--view-ar', String(VIEW_W / VIEW_H));

@@ -192,7 +192,7 @@ export class WindowManager {
     if (this.drag) {
       const d = this.drag;
       d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(UI_W - 40, x - d.dx)));
-      d.win.y = Math.round(Math.max(0, Math.min(UI_H - 40, y - d.dy)));
+      d.win.y = Math.round(Math.max(Math.min(0, UI_H - d.win.h), Math.min(UI_H - 40, y - d.dy)));   // a window taller than the screen goes up to its bottom
       if (type === 'up') { this.drag = null; d.win.dragged?.(); }
       return true;
     }
@@ -225,7 +225,8 @@ export class WindowManager {
       this.raise(w);
       const lx = x - w.x, ly = y - w.y;
       for (const b of w.buttons) b.down = b === over;
-      if (!over && ly < (w.dragH ?? 20) && !w.fixed) { this.drag = { win: w, dx: lx, dy: ly }; return true; }
+      // pulled up past the top, a window is dragged by the top of what is still on screen
+      if (!over && ly - Math.max(0, -w.y) < (w.dragH ?? 20) && !w.fixed) { this.drag = { win: w, dx: lx, dy: ly }; return true; }
       const now = performance.now(), last = this.lastDown;
       this.lastDown = { w, x, y, t: now };
       if (last && last.w === w && now - last.t < 350 && Math.abs(last.x - x) < this.slop && Math.abs(last.y - y) < this.slop) {

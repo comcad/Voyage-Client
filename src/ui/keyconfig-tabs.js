@@ -160,7 +160,7 @@ export function drawBinding(win, ctx, b, cx, cy, size) {
 // the screen's shape (the interface's space, which the touch controls are sized to), 268 wide and at most 201 tall
 const preview = () => ({ x: 330, y: 30, w: 268, h: Math.min(201, Math.round((268 * UI_H) / UI_W)) });
 const SHOW = [['auto', 'Auto'], ['on', 'On'], ['off', 'Off']];
-const SIZES = [[0.8, 'Small'], [1, 'Medium'], [1.25, 'Large']];
+const SIZES = [[0.8, 'Small'], [1, 'Medium'], [1.25, 'Large'], [1.5, 'X-Large'], [1.8, 'Huge']];
 const OPACITY = [[0.5, '50%'], [0.75, '75%'], [1, '100%']];
 const BUTTON = 58, STICK = 120;
 
@@ -303,7 +303,8 @@ export class ControlTabs {
       ['Opacity', OPACITY, t.opacity, (v) => { t.opacity = v; }],
     ];
   }
-  optionRect(r, o) { return { x: 18 + o * 92, y: 46 + r * 48, w: 86, h: 22 }; }
+  /** A row's choices share the width left of the preview: 3 across, or 5 narrower ones. */
+  optionRect(r, o) { const w = this.rows()[r][1].length > 3 ? 56 : 86; return { x: 18 + o * (w + 6), y: 46 + r * 48, w, h: 22 }; }
   addRect() { return { x: 18, y: 192, w: 132, h: 22 }; }
   removeRect() { return { x: 156, y: 192, w: 132, h: 22 }; }
 

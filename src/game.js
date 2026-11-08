@@ -135,6 +135,9 @@ const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2', 'stabT2'];
 /** How far a finger may move during a tap and it still counts as one (a mouse click: 4px). */
 const TOUCH_SLOP = 12;
+/** A finger: wheel units a UI pixel of swipe (a row each 20px; the wheel's step is 100), and how far (CSS px) a tap
+ * may move, and two taps may be apart, to be a double tap. */
+const SWIPE_WHEEL = 5, TAP_PX = 12, DOUBLE_TAP_PX = 30, DOUBLE_TAP_MS = 400;
 /** An Aran's basic attacks with a polearm. */
 const POLEARM_SWINGS = ['swingT2PoleArm', 'swingP1PoleArm', 'swingP2PoleArm'];
 /** The arrows' scancodes, for the key commands. */
@@ -741,6 +744,41 @@ export class Game {
     c.addEventListener('pointerdown', (e) => { if (route('down', e)) e.stopImmediatePropagation(); }, true);
     addEventListener('pointerup', (e) => route('up', e));
     addEventListener('pointercancel', (e) => route('up', e));   // a touch the browser took back ends a drag where it is
+    // a finger: an up or down swipe over a window or the status bar scrolls it as the wheel would (unless the press
+    // picked something up or took a window), and two quick taps on the field are a double-click, which phones don't
+    // always send, so a double tap opens an NPC. These listen first (the window, capturing), before the UI takes the press.
+    let swipe = null, lastTap = null, synthDbl = -1e9;
+    addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch') { swipe = null; return; }
+      const [x, y] = at(e);
+      swipe = { x, y, last: y, on: false, cx: e.clientX, cy: e.clientY, t: performance.now(), ui: !!(wm.top(x, y) || sb.contains(x, y)) };
+    }, true);
+    addEventListener('pointermove', (e) => {
+      if (!swipe?.ui || e.pointerType !== 'touch') return;
+      const [x, y] = at(e);
+      if (!swipe.on) {
+        const ay = Math.abs(y - swipe.y);
+        if (ay < TOUCH_SLOP || ay < Math.abs(x - swipe.x) || wm.drag || wm.carry) return;
+        swipe.on = true; swipe.last = y;
+      }
+      const dy = (swipe.last - y) * SWIPE_WHEEL;
+      swipe.last = y;
+      if (dy && !wm.pointer('wheel', swipe.x, swipe.y, dy) && !this.inCashShop) sb.wheel(swipe.x, swipe.y, dy);
+    }, true);
+    addEventListener('pointerup', (e) => {
+      const s = swipe;
+      swipe = null;
+      if (!s || e.pointerType !== 'touch') return;
+      const now = performance.now(), u = at(e);
+      if (s.on || s.ui || wm.top(...u) || sb.contains(...u) || now - s.t > 500 || Math.hypot(e.clientX - s.cx, e.clientY - s.cy) > TAP_PX) { lastTap = null; return; }
+      const prev = lastTap;
+      lastTap = { cx: e.clientX, cy: e.clientY, t: now };
+      if (!prev || now - prev.t > DOUBLE_TAP_MS || Math.hypot(e.clientX - prev.cx, e.clientY - prev.cy) > DOUBLE_TAP_PX) return;
+      lastTap = null; synthDbl = now;
+      c.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: e.clientX, clientY: e.clientY }));
+    }, true);
+    // the browser's own double-click for those taps, when it does send one, isn't a second one
+    addEventListener('dblclick', (e) => { if (e.isTrusted && performance.now() - synthDbl < 800) e.stopImmediatePropagation(); }, true);
     c.addEventListener('click', (e) => { const p = at(e); if (wm.top(...p) || sb.contains(...p)) e.stopImmediatePropagation(); }, true);
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -786,6 +824,11 @@ export class Game {
     };
     new ResizeObserver(place).observe(c);
     place();
+    // FIT TO SCREEN follows the window (a resize, a phone turned, its browser bars showing or hiding)
+    let refit = 0;
+    const follow = () => { if (settings.fit && !refit) refit = requestAnimationFrame(() => { refit = 0; if (settings.fit) this.setResolution(); }); };
+    addEventListener('resize', follow);
+    globalThis.visualViewport?.addEventListener('resize', follow);
   }
 
   /**
@@ -3318,7 +3361,7 @@ export class Game {
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
-      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged();
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
