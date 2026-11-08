@@ -477,7 +477,7 @@ const SUPER_ONLY = new Set([5121004, 5121005]), SUPER_TRANSFORMATION = 5121003;
 const CAPSULES = { 5211004: 2331, 5211005: 2332 };
 /** Elemental Boost (Corsair): its damage % adds to Flamethrower's and Ice Splitter's. */
 const ELEMENTAL_BOOST = 5220001;
-const SNATCH = 5121005, RECOIL_SHOT = 5201006, BARRAGE_PUSH = [17, 6, 6, 6, 6, 27], WINGS = 5201005;
+const SNATCH = 5121005, DEMOLITION = 5121004, RECOIL_SHOT = 5201006, BARRAGE_PUSH = [17, 6, 6, 6, 6, 27], WINGS = 5201005;
 /** Skills a map that forbids movement skills (fieldLimit 0x2) refuses: Rush, Assaulter, Assassinate, Ninja Storm, the Brawler / Thunder Breaker dashes, Snatch, Recoil Shot and the Aran's. */
 const MOVE_LIMITED = new Set([1121006, 1221007, 1321003, 4211002, 4221001, 4121008, 5101002, 5101004, 15101003, 5121005,
   5201006, 21100002, 21110003, 21110006]);
@@ -546,6 +546,8 @@ const SILENT_SHOTS = new Set([3121004, 13111002, 5221007, 5221008, 13111006, 131
 // Barrage, Demolition and the like: only their first line sounds their Hit (Arrow Bomb's only if it hurt)
 const FIRST_HIT_ONLY = new Set([5121007, 15111004, 5121004, 22171002, 3101005]);
 const HIT_SPLIT = new Set([5101004, 15101003, 5101003]);
+// one hit art for the whole attack, on its first line
+const HIT_ART_ONCE = new Set([5121004, 5121007, 15111004, 14101006, 11111006, 22171002]);
 // effects left where they were cast: Aerial Strike, Shockwave, Corkscrew Blow, Demolition; on the Battleship
 // Flamethrower and Ice Splitter use effect_ship
 const FIXED_FX = new Set([5221003, 5111006, 15111003, 5101004, 15101003, 5121004]), SHIP_FX = new Set([5211004, 5211005]);
@@ -568,6 +570,7 @@ const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 /** How much movement (ms) gathers before it goes to the server, as the client does. */
 const MOVE_FLUSH = 500;
+const NEED_TARGET = new Set([5121007, 15111004, 5111004, 15111001]);
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 /** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
 const CRUSHERS = new Set([1311001, 1311002]);
@@ -5612,6 +5615,8 @@ export class Game {
     const ahead = (dx) => this.floorNear(this.player.x + (this.player.facingRight ? dx : -dx), this.player.y, 80);
     if (id === ASSAULTER && (!ahead(-(sb.levelData(id)?.lt?.[0] || 200))
       || !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length)) return false;
+    // Barrage and Energy Drain only go off with a monster in reach
+    if (NEED_TARGET.has(id) && !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length) return false;
     if (id === BOOMERANG_STEP && (!ahead(-(sb.levelData(id)?.lt?.[0] || 300) / 2) || performance.now() < (this.boomerangLock || 0))) return false;
     if (HELD_SHOTS.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
@@ -5738,7 +5743,8 @@ export class Game {
     }
     const pose = (opts.held ? opts.pose : p.attack) || this.defaultAttackAction(kind), scale = opts.held ? this.attackScale() : p.attackScale;
     // a few shots leave at a set time whatever the attack speed
-    const hitDelay = opts.launch ?? ((kind === 'ranged' && SHOT_LAUNCH[skillId]) || this.look.attackDelay(pose) * scale), trailAt = this.hitFrame(pose, kind);
+    // Demolition's lines run from the start of its pose
+    const hitDelay = opts.launch ?? (skillId === DEMOLITION ? 0 : (kind === 'ranged' && SHOT_LAUNCH[skillId]) || this.look.attackDelay(pose) * scale), trailAt = this.hitFrame(pose, kind);
     // the weapon swings with its trail, as well as any cast sound
     const swingSound = kind !== 'magic' && !NO_SWING.has(skillId);
     if (!opts.held) {
@@ -7698,7 +7704,8 @@ export class Game {
   async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0) {
     const node = id ? this.byCharLevel(await this.skills?.ensure(id), by) : null;
     const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
-    // Corkscrew Blow and Double Uppercut: hit/0 on the first line, hit/1 on the rest; Barrage: one for the whole attack
+    // Corkscrew Blow and Double Uppercut: hit/0 on the first line, hit/1 on the rest; Barrage, Demolition and a few
+    // others: one for the whole attack
     const later = HIT_SPLIT.has(id) && node?.hit?.[1] ? Game.fxNode(node.hit[1]) : fx;
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     if (later && later !== fx) await this.assets.preload(new Anim(later, false).frames);
@@ -7707,10 +7714,13 @@ export class Game {
     dmgs.forEach((d, line) => this.after(lineDelay(id, line, ...this.lineTiming(by)), () => {
       this.hitSound(id, mob, d, line, cash);
       const art = line ? later : fx;
-      if (!art || (line && BARRAGES.has(id))) return;
-      const head = mob.node?.head;
-      const x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
-      const y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
+      if (!art || (line && HIT_ART_ONCE.has(id))) return;
+      // the art's pos: 1 at the monster's feet, 3 at the middle of its body, otherwise at its head
+      const pos = Number(art.pos ?? node?.hit?.pos), head = mob.node?.head;
+      let x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
+      let y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
+      if (pos === 1) { x = mob.x; y = mob.y; }
+      else if (pos === 3 && typeof mob.hitBox === 'function') { const b = mob.hitBox(); x = (b.left + b.right) / 2; y = (b.top + b.bottom) / 2; }
       this.fx.push({ anim: new Anim(art, false), x, y, flip: !!by?.facingRight });
     }));
   }

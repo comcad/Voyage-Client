@@ -22,12 +22,13 @@ const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
  * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish, Assassinate
  * and Boomerang Step wait 80ms more per line and their second line longer still: 160 (Brandish with a one-handed
  * weapon) or 240. Vampire's four land 0, 60, 420 and 660ms in, Barrage's six 450, 720, 990, 1260, 1710 and 1980ms
- * and Demolition's eight 0, 180, 450, 720, 900, 990, 1080 and 1170ms, at the attack's speed (scale).
+ * and Demolition's eight 0, 180, 450, 720, 900, 990, 1080 and 1170ms, at the attack's speed (scale); Demolition's
+ * lines also keep the usual 120 per line on top.
  */
 export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   if (skillId === 14101006) return Math.round([0, 60, 420, 660][Math.min(line, 3)] * scale);
   if (skillId === 5121007 || skillId === 15111004) return Math.round([450, 720, 990, 1260, 1710, 1980][Math.min(line, 5)] * scale);
-  if (skillId === 5121004) return Math.round([0, 180, 450, 720, 900, 990, 1080, 1170][Math.min(line, 7)] * scale);
+  if (skillId === 5121004) return Math.trunc([0, 180, 450, 720, 900, 990, 1080, 1170][Math.min(line, 7)] * scale) + line * 120;
   if ([5101004, 15101003].includes(skillId)) return 0;   // these all show at once
   if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
   const brandish = skillId === 1121008 || skillId === 11111004;
@@ -78,12 +79,13 @@ export class WorldFx {
   // ---------------------------------------------------------------- triggers
   /**
    * values: one number per hit line (0 = MISS). kind: red (yours), blue (others'), violet (taken), crit.
-   * Each line is placed when it shows, LINE_GAP above the last, over where the target is by then; a monster's
-   * 15px above its head, your own right at your head.
+   * Each line is placed when it shows, LINE_GAP (Demolition 15) above the last, over where the target is by then; a
+   * monster's 15px above its head, your own right at your head.
    */
   damage(target, values, kind = 'red', skillId = 0, crits = [], weaponId = 0, scale = 1) {
     const lift = target.kind === 'Mob' ? 15 : 0;
-    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v && kind === 'red' ? 'crit' : kind, target, lift, line, t: -lineDelay(skillId, line, weaponId, scale) }));
+    const gap = skillId === 5121004 ? 15 : LINE_GAP;   // Demolition's eight stack closer
+    values.forEach((v, line) => this.nums.push({ v, kind: crits[line] && v && kind === 'red' ? 'crit' : kind, target, lift, line, gap, t: -lineDelay(skillId, line, weaponId, scale) }));
   }
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */
@@ -246,7 +248,7 @@ export class WorldFx {
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
     const top = typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
-    n.x = n.target.x; n.y = top - n.lift - LINE_GAP * n.line;
+    n.x = n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
     if (!n.v) {
       const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
       if (!img) return false;
