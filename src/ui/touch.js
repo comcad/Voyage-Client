@@ -124,10 +124,14 @@ export class TouchControls {
       const len = Math.hypot(dx, dy), max = radius - knob.offsetWidth / 4;
       if (len > max) { dx *= max / len; dy *= max / len; }
       knob.style.transform = `translate(${dx}px, ${dy}px)`;
-      // a direction once the knob is a third of the way out; diagonals hold both
-      const codes = new Set(), dead = radius * 0.33;
-      if (dx < -dead) codes.add('left'); else if (dx > dead) codes.add('right');
-      if (dy < -dead) codes.add('up'); else if (dy > dead) codes.add('down');
+      // left / right once the knob is a third of the way out, up to 60 degrees off level; up / down only pushed half
+      // way out within 30 degrees of straight up or down, so a thumb that drifts while running doesn't hold up (and
+      // walk into a portal)
+      const codes = new Set(), ax = Math.abs(dx), ay = Math.abs(dy);
+      if (ax > radius * 0.33 && ay < ax * 1.73) codes.add(dx < 0 ? 'left' : 'right');
+      if (ay > radius * 0.5 && ax < ay * 0.58) codes.add(dy < 0 ? 'up' : 'down');
+      // up held into a new map needs a fresh push: let go of up first (you'd go straight back through the portal)
+      if (this.upLocked) { if (codes.has('up')) codes.delete('up'); else this.upLocked = false; }
       this.held.set(e.pointerId, codes);
       this.sync();
     };
@@ -151,4 +155,10 @@ export class TouchControls {
   /** Hidden while Key Setting is open (the layout is edited there, and the buttons would cover the window). */
   suspend(on) { this.suspended = on; this.el.style.visibility = on ? 'hidden' : ''; if (on) this.release(); }
   release() { this.held.clear(); this.g.input?.setHeld('touch', new Set()); }
+  /** A new map: up from the stick stops until the stick leaves up. */
+  mapChanged() {
+    let had = false;
+    for (const codes of this.held.values()) if (codes.delete('up')) had = true;
+    if (had) { this.upLocked = true; this.sync(); }
+  }
 }

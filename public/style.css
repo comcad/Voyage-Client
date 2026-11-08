@@ -1,4 +1,9 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
+/* phones and tablets: every finger goes to the game (no page zoom, scroll, selection or long-press menu) */
+html.touch-device * { touch-action: none; }
+html.touch-device, html.touch-device body { touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+html.touch-device input, html.touch-device textarea { touch-action: manipulation; -webkit-user-select: text; user-select: text; }
 html, body { height: 100%; background: #000; color: #eee; font: 13px 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
 button { font: inherit; cursor: pointer; background: linear-gradient(#5a6b8c, #3d4a66); color: #fff; border: 1px solid #22293a; border-radius: 4px; padding: 4px 10px; }
 button:hover { filter: brightness(1.15); }
@@ -9,10 +14,14 @@ input.bad { border-color: #e33; }
 .row { display: flex; gap: 8px; justify-content: center; margin-top: 10px; flex-wrap: wrap; }
 
 /* Renders at the chosen resolution (800x600 like the v83 client by default), scaled to fit the window at its shape. */
-:root { --view-ar: 4 / 3; --view-w: min(100vw, calc(100vh * var(--view-ar))); --login-w: min(100vw, calc(100vh * 4 / 3)); }
+/* --screen-h is the height you can see: on a phone 100vh is the height with the browser's bars hidden, so while they
+   show the game would run past the top and bottom of the screen; 100dvh follows the bars */
+:root { --screen-h: 100vh; }
+@supports (height: 100dvh) { :root { --screen-h: 100dvh; } }
+:root { --view-ar: 4 / 3; --view-w: min(100vw, calc(var(--screen-h) * var(--view-ar))); --login-w: min(100vw, calc(var(--screen-h) * 4 / 3)); }
 #game-container { position: absolute; inset: 0; margin: auto; width: var(--view-w); height: calc(var(--view-w) / (var(--view-ar))); overflow: hidden; }
 #game-canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
-body.fit-screen #game-container { width: 100vw; height: 100vh; }   /* FIT TO SCREEN: stretched, no black bars */
+body.fit-screen #game-container { width: 100vw; height: var(--screen-h); }   /* FIT TO SCREEN: stretched, no black bars */
 #ui-root { position: absolute; inset: 0; pointer-events: none; }
 #ui-root > * { pointer-events: auto; }
 body.at-login #game-container { display: none; }

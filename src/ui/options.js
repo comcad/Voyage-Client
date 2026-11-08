@@ -1,7 +1,7 @@
 import { music, sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
 import { settings, saveSettings, MOB_INFO } from '../settings.js';
-import { RESOLUTIONS, UI_W, UI_H, UI_SCALE, maxUiScale, resolutionName, resolutionIndex } from '../view.js';
+import { RESOLUTIONS, VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, maxUiScale, resolutionName, resolutionIndex } from '../view.js';
 
 /**
  * Game Menu windows from UI/UIWindow.img: Change Channel, Game Option, System Option.
@@ -119,7 +119,8 @@ export class GameOptWin extends Win {
  * under them: SCREEN SIZE (the game's resolution, a combo box), UI SIZE (a slider from 100% to as large as the
  * screen size allows, in 10% steps, its value beside it; it takes effect when let go), ZOOM (a slider from 100% to
  * 200% in 10% steps, its value beside it: the view closes in on your character as you drag, the interface keeping
- * its size) and FIT TO SCREEN (a check box: the game is stretched to fill the window, with no black bars).
+ * its size) and FIT TO SCREEN (a check box: the game takes the window's own size, nothing stretched and no black
+ * bars; SCREEN SIZE is greyed out then, showing the size in use).
  * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
  * the art, 90px lower with the added rows.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
@@ -160,6 +161,7 @@ const SMALL = {
   O: ['.##.', '#..#', '#..#', '#..#', '#..#', '#..#', '.##.'], F: ['####', '#...', '#...', '###.', '#...', '#...', '#...'],
   I: ['###', '.#.', '.#.', '.#.', '.#.', '.#.', '###'], L: ['#...', '#...', '#...', '#...', '#...', '#...', '####'],
   W: ['#..#..#', '#..#..#', '#..#..#', '#..#..#', '#..#..#', '#..#..#', '.##.##.'], N: ['#..#', '#..#', '##.#', '#.##', '#..#', '#..#', '#..#'],
+  U: ['#..#', '#..#', '#..#', '#..#', '#..#', '#..#', '.##.'], Z: ['####', '...#', '..#.', '..#.', '.#..', '#...', '####'],
   D: ['###.', '#..#', '#..#', '#..#', '#..#', '#..#', '###.'], ' ': ['..', '..', '..', '..', '..', '..', '..'],
 };
 export class SysOptWin extends Win {
@@ -214,7 +216,8 @@ export class SysOptWin extends Win {
   combos() {
     return [{ row: 3, items: SHOT_PLACES, value: 0, set: () => {} },
       { row: 8, items: MOB_INFO, value: settings.mobInfo, set: (i) => { settings.mobInfo = i; saveSettings(); } },
-      { row: SIZE_ROW, items: RESOLUTIONS.map(resolutionName), value: resolutionIndex(), set: (i) => this.setResolution(i) }];
+      settings.fit ? { row: SIZE_ROW, items: [`${VIEW_W} x ${VIEW_H}  Auto`], value: 0, off: true, set: () => {} }
+        : { row: SIZE_ROW, items: RESOLUTIONS.map(resolutionName), value: resolutionIndex(), set: (i) => this.setResolution(i) }];
   }
   setResolution(i) {
     const [w, h] = RESOLUTIONS[i];
@@ -243,7 +246,7 @@ export class SysOptWin extends Win {
       this.label(lc, 'UI SIZE', 32, 41);
       this.label(lc, 'ZOOM', 32, 71);
       this.label(lc, 'FIT TO', 32, 96); this.label(lc, 'SCREEN', 32, 106);
-      this.label(lc, 'STRETCH TO FILL THE WINDOW', CHECK_X + 16, ROW_Y(FIT_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
+      this.label(lc, 'USE THE WINDOW SIZE', CHECK_X + 16, ROW_Y(FIT_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
     }
     ctx.drawImage(this.letters, 0, ROWS_END);
     this.label(ctx, `${Math.round((this.pendingScale ?? UI_SCALE) * 100)}%`, 270, ROW_Y(SLIDERS.uiScale.row) - 3, '#224466', null);
@@ -304,8 +307,11 @@ export class SysOptWin extends Win {
   combo(ctx, c, y) {
     const C = this.mgr.B.ComboBox, im = (n) => this.mgr.image(n), st = C[this.open === c ? 'pressed' : 'normal'] || C.normal;
     const a = im(st[0]), b = im(st[1]), e = im(st[2]);
+    ctx.save();
+    if (c.off) ctx.globalAlpha = 0.45;   // not in use
     if (a && b && e) { ctx.drawImage(a, COMBO.x, y); ctx.drawImage(b, COMBO.x + a.width, y, COMBO.w - a.width - e.width, 17); ctx.drawImage(e, COMBO.x + COMBO.w - e.width, y); }
     this.text(ctx, c.items[c.value] ?? '', COMBO.x + (COMBO.w - 18) / 2, y + 3, { align: 'center', size: 12 });
+    ctx.restore();
   }
 
   // ---------------------------------------------------------------- mouse
@@ -324,7 +330,7 @@ export class SysOptWin extends Win {
       return;
     }
     for (const c of this.combos()) {
-      if (lx >= COMBO.x && lx < COMBO.x + COMBO.w && Math.abs(ly - ROW_Y(c.row)) <= 9) { this.open = c; this.hover = c.value; sfx.play('UI/BtMouseClick'); return; }
+      if (!c.off && lx >= COMBO.x && lx < COMBO.x + COMBO.w && Math.abs(ly - ROW_Y(c.row)) <= 9) { this.open = c; this.hover = c.value; sfx.play('UI/BtMouseClick'); return; }
     }
     const row = Math.round((ly - 46) / 30), cy = ROW_Y(row);
     if (row === 7 && lx >= CHECK_X - 2 && lx < 290 && Math.abs(ly - cy) <= 8) { settings.shake = !settings.shake; saveSettings(); return; }
