@@ -1722,6 +1722,7 @@ export class ChannelSession {
   pickup(oid, pos) { this.send(new PacketWriter(C.ITEM_PICKUP).byte(0).int(Date.now() | 0).pos(pos).int(oid).int(0)); }
   /** The Cash Shop: entering is a bare ENTER_CASHSHOP, leaving a bare CHANGE_MAP (the server answers with a channel change) */
   enterCashShop() { this.send(new PacketWriter(C.ENTER_CASHSHOP).int(Date.now() | 0)); }
+  enterMTS() { this.send(new PacketWriter(C.ENTER_MTS)); }
   leaveCashShop() { this.send(new PacketWriter(C.CHANGE_MAP)); }
   checkCash() { this.send(new PacketWriter(C.CHECK_CASH)); }
   /**
