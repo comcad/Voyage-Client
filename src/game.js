@@ -72,6 +72,7 @@ import { settings } from './settings.js';
 import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution } from './view.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
+import { EnergyBarWin } from './ui/energybar.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -346,7 +347,7 @@ const BIG_BANGS = new Set([2121001, 2221001, 2321001]);
 const EXPLOSION = 2111002;
 /**
  * Corkscrew Blow (Brawler, Thunder Breaker) and Grenade charge while held (30ms to 1s counts) and go off when let go.
- * Corkscrew needs the ground; Grenade can be thrown in the air. While charging you stay in the pose you were in.
+ * Corkscrew needs the ground; Grenade can be thrown in the air. They hold no pose, so you can move while charging.
  */
 const CORKSCREWS = new Set([5101004, 15101003]), CHARGE_BLOWS = new Set([...CORKSCREWS, 5201002]);
 /**
@@ -2600,7 +2601,8 @@ export class Game {
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));
     // a name or a line: the small UtilDlg box with a white field, opened without a sound
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
-    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm) });
+    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
+      energybar: new EnergyBarWin(wm) });
     await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
@@ -3094,7 +3096,7 @@ export class Game {
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
       objectStates: later((list) => { for (const { name, state } of list) this.setObjectState(name, state); }),
-      energyCharge: (v) => { this.energy = v; this.energyOrb(); },
+      energyCharge: (v) => { this.energy = v; this.energyOrb(); this.windows?.wins.energybar?.set(v); },
       aranCombo: (n) => this.setAranCombo(n),
       sessionValue: (k, v) => this.sessionValue(k, v),
       pyramidGauge: (n) => (this.pyramid ??= new PyramidWindow(this)).gauge(n),
@@ -5166,13 +5168,19 @@ export class Game {
     }
     // charging (Monster Magnet, Big Bang) or winding up (Explosion): stand in its pose until the key is let go, or
     // the wind-up is over
+    // Corkscrew Blow and Grenade have no pose of their own to hold: you keep walking and jumping while they charge,
+    // but no other skill, attack or seat until they go off
+    let chargingFree = false;
     if (this.charging) {
       const c = this.charging;
       c.t += dt;
       if (this.dead) this.charging = null;
       else if (c.prepare ? c.t < c.prepare : this.heldSkill() === c.id) {
-        if (!p.fh) this.playerFall(dt, 0, 0, ms);   // a Grenade can be held in the air
-        this.advanceFrame(c.pose, dt); return;
+        if (CHARGE_BLOWS.has(c.id)) chargingFree = true;
+        else {
+          if (!p.fh) this.playerFall(dt, 0, 0, ms);
+          this.advanceFrame(c.pose, dt); return;
+        }
       }
       else this.releaseCharge();
     }
@@ -5233,10 +5241,10 @@ export class Game {
         this.advanceFrame('sit', dt);
         return;
       }
-    } else if (this.hitAction(ACTION.SIT) && this.trySit()) { this.advanceFrame('sit', dt); return; }
+    } else if (!chargingFree && this.hitAction(ACTION.SIT) && this.trySit()) { this.advanceFrame('sit', dt); return; }
 
     // wait out an attack cut short by a hit
-    if (performance.now() >= (this.attackLock || 0)) {
+    if (!chargingFree && performance.now() >= (this.attackLock || 0)) {
       // a key command's queued skill, once the pose before it is over
       if (this.commands.run()) return;
       // a macro's next skill, once the last one's animation is over
@@ -5855,7 +5863,7 @@ export class Game {
       });
     }
     if (RUSH_DASH.has(skillId) && out.length) this.startRush(ld, out.map((t) => t.mob));
-    this.blowMoves(skillId, ld, out.map((t) => t.mob), lv, hitDelay);
+    this.blowMoves(skillId, ld, out, lv, hitDelay);
     if (REUSE[skillId] && (!REUSE_ON_HIT.has(skillId) || out.length)) {
       const len = opts.held ? 0 : this.frameTime(pose, this.look.frameCount(pose)) * scale;
       this.reuseAt = { ...this.reuseAt, [skillId]: performance.now() + len + REUSE[skillId] };
@@ -5933,17 +5941,20 @@ export class Game {
   }
   /**
    * After a blow that struck something: Corkscrew Blow carries you about 130px ahead and Backspin Blow about 129px back
-   * (in 30ms steps along the floor, with pauses), throwing what they struck ahead of you or behind you, and lock them
+   * (in 30ms steps along the floor, with pauses), throwing what they struck - and didn't kill - ahead of you or behind
+   * you as each blow lands, and lock them
    * and Rush for 1.45s / 1.96s; Snatch pulls what it struck to you; Barrage pushes its monster 17, 6, 6, 6, 6 and 27px
    * as its blows land and steps you 14px ahead at 720ms. Recoil Shot jumps you back whether it struck or not.
    */
-  blowMoves(skillId, ld, mobs, lv, hitDelay) {
-    const p = this.player, dir = p.facingRight ? 1 : -1;
+  blowMoves(skillId, ld, targets, lv, hitDelay) {
+    const p = this.player, dir = p.facingRight ? 1 : -1, mobs = targets.map((t) => t.mob);
     const wait = (ms) => ({ type: 1, v: 0, ms }), step = (v) => ({ type: 0, v: v * dir, ms: DASH_TICK });
-    // thrown dx px ahead of you (behind, when negative), 0-19px further out
-    const throwTo = (dx) => {
-      for (const m of mobs) if (!m.src?.info?.boss) m.startPull({ x: p.x + dir * (dx + Math.sign(dx) * Math.floor(Math.random() * 20)), stop: 0 });
-    };
+    // a struck monster is moved as its blow lands - not one the blow killed (the server's kill is in by then), nor a boss
+    const standing = (m) => m.alive && !m.dying && !m.queuedKill && !m.src?.info?.boss;
+    const onLanding = (fn) => { for (const t of targets) this.after((t.delay ?? hitDelay) + 1, () => { if (standing(t.mob)) fn(t.mob); }); };
+    // thrown dx px ahead of you (behind, when negative), 0-19px further out, from where you stood
+    const x0 = p.x;
+    const throwTo = (dx) => onLanding((m) => m.startPull({ x: x0 + dir * (dx + Math.sign(dx) * Math.floor(Math.random() * 20)), stop: 0 }));
     if (skillId === RECOIL_SHOT) {
       const n = Math.floor(lv / 4), impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
       if (p.fh) p.y = Math.floor(p.y - 1);
@@ -5961,11 +5972,11 @@ export class Game {
       this.rushLock = performance.now() + BACKSPIN_LOCK;
       throwTo(-(15 + (ld?.rb?.[0] || 0)));
     } else if (skillId === SNATCH) {
-      for (const m of mobs) if (!m.src?.info?.boss) m.startPull({ x: p.x, stop: 0 });
+      onLanding((m) => m.startPull({ x: x0, stop: 0 }));
     } else if (BARRAGES.has(skillId)) {
-      const m = mobs[0], timing = this.lineTiming(p);
-      BARRAGE_PUSH.forEach((px, i) => this.after(hitDelay + lineDelay(skillId, i, ...timing), () => {
-        if (m.alive && !m.dying && !m.src?.info?.boss) m.startPull({ x: m.x + dir * px, stop: 0 });
+      const m = mobs[0], timing = this.lineTiming(p), at = targets[0].delay ?? hitDelay;
+      BARRAGE_PUSH.forEach((px, i) => this.after(at + lineDelay(skillId, i, ...timing), () => {
+        if (standing(m)) m.startPull({ x: m.x + dir * px, stop: 0 });
       }));
       this.rush = { steps: [wait(720), step(14)], acc: 0 };
     }
