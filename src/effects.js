@@ -484,7 +484,7 @@ function mobHpBar(ctx, e, cam, pct, color) {
   ctx.fillStyle = color; ctx.fillRect(x + 3, y + 3, w, 3);
   ctx.fillStyle = '#a00300'; ctx.fillRect(x + 3, y + 6, w, 1);
 }
-/** Its level and name under its feet, each in its own see-through dark tag: the name centred, its level just left of it. */
+/** Its level and name in yellow under its feet, each in its own see-through dark tag: the name centred, its level left of it. */
 function mobNameTag(ctx, e, cam, info) {
   const x = Math.round(e.x - cam.x), y = Math.round(e.y - cam.y) + 2;
   ctx.save();
@@ -494,7 +494,7 @@ function mobNameTag(ctx, e, cam, info) {
   const tag = (text, left, w) => {
     ctx.fillStyle = 'rgba(0,0,0,0.67)';
     ctx.fillRect(left + 1, y, w - 2, 13); ctx.fillRect(left, y + 1, w, 11);   // its corners rounded off
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = '#ff0';
     ctx.fillText(text, left + w / 2, y);
   };
   const nw = width(e.name), left = x - Math.floor(nw / 2);

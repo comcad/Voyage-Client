@@ -3660,15 +3660,25 @@ export class Game {
     const e = this.lifeByOid.get(oid);
     this.lifeByOid.delete(oid);
     if (!e || e.pending) return;
-    // the server says it died the moment our attack went out; let the swing (or shot) land first
+    // the server says it died the moment our attack went out; let the swing (or shot) land first, and every line of
+    // it show, so a blow of several lines that kills on its first still plays out before the monster dies
     if (e.pendingHits > 0) {
       e.queuedKill = { anim };
       (this.dying ??= new Map()).set(oid, e);
-      this.after(1500, () => { if (e.queuedKill) this.finishKill(e); });   // in case a shot never arrives
+      this.after(1500, () => { if (e.queuedKill && e.pendingHits > 0) this.finishKill(e); });   // in case a shot never arrives
+      return;
+    }
+    const wait = (e.linesUntil || 0) - performance.now();
+    if (wait > 0) {
+      e.queuedKill = { anim };
+      (this.dying ??= new Map()).set(oid, e);
+      this.after(wait, () => { if (e.queuedKill) this.finishKill(e); });
       return;
     }
     this.finishKill(e, anim);
   }
+  /** A blow landing on e: its last line shows `last` ms from now, and e can't die before then. */
+  linesLanded(e, last) { e.linesUntil = Math.max(e.linesUntil || 0, performance.now() + last); }
   finishKill(e, anim = e.queuedKill?.anim) {
     e.queuedKill = null;
     this.dying?.delete(e.oid);
@@ -3779,7 +3789,9 @@ export class Game {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
           this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
           this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null, a.kind === 'ranged' && [5020, 5021].includes(Math.floor(a.projectile / 1000)) ? a.projectile : 0);
-          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
+          const last = lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp));
+          this.linesLanded(e, last);
+          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(last, () => { if (e.queuedKill) this.finishKill(e); }); else this.releaseDrops(e); }
         };
         const planned = plan?.targets.find((p) => p.mob === e);
         if (planned) this.after(delay + planned.delay, land);
@@ -4385,10 +4397,11 @@ export class Game {
   async summonHit(sm, mob, dmgs, mine, which = 'attack1') {
     if (mine) {
       if (--mob.pendingHits <= 0 && !mob.queuedKill) this.releaseDrops(mob);
-      const kill = mob.pendingHits <= 0 && mob.queuedKill;
+      const kill = mob.pendingHits <= 0 && mob.queuedKill, last = lineDelay(0, dmgs.length - 1);
+      this.linesLanded(mob, last);
       mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x);
       this.damageNumbers(mob, dmgs, true);
-      if (kill) this.finishKill(mob);
+      if (kill) this.after(last, () => { if (mob.queuedKill) this.finishKill(mob); });
     } else { mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x); this.damageNumbers(mob, dmgs, false); }
     dmgs.forEach((d, line) => this.hitSound(sm.skill, mob, d, line));
     const node = sm.node?.[which]?.info?.hit || sm.node?.attack1?.info?.hit;
@@ -5828,11 +5841,12 @@ export class Game {
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
-        const strong = Math.random() * 100 < knockback;
+        const strong = Math.random() * 100 < knockback, last = lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p));
+        this.linesLanded(t.mob, last);
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
           t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
-          this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
+          this.after(last, () => { if (t.mob.queuedKill) this.finishKill(t.mob); });   // it dies after its last line lands
           return;
         }
         t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash);
@@ -7862,6 +7876,7 @@ export class Game {
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
     if (this.obstacleHurt(pb, dx, dy)) return;
+    if (isHideMorph(this.morphTpl())) return;   // in the Oak Barrel monsters walk past without touching you
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
