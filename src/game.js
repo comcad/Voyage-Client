@@ -738,7 +738,7 @@ export class Game {
     // windows sit above the bar: they see the event first, the bar only gets what they leave
     // in the Cash Shop only its windows take the mouse (the bar is hidden, and the shop may not cover the screen)
     // a finger is less exact than a mouse: a tap may move 12px and still be a tap (a click, 4px)
-    const route = (type, e) => { wm.slop = e.pointerType === 'touch' ? TOUCH_SLOP : 4; return this.uiLocked || (this.inCashShop ? (wm.pointer(type, ...at(e)), true)
+    const route = (type, e) => { wm.touch = e.pointerType === 'touch'; wm.slop = wm.touch ? TOUCH_SLOP : 4; return this.uiLocked || (this.inCashShop ? (wm.pointer(type, ...at(e)), true)
       : wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e))); };
     c.addEventListener('pointermove', (e) => route('move', e));
     c.addEventListener('pointerdown', (e) => { if (route('down', e)) e.stopImmediatePropagation(); }, true);
