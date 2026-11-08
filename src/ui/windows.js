@@ -880,8 +880,9 @@ export function cutText(ctx, s, w) {
  * macros show at a time (rows at y 56 + 45n, scrollbar at 185,54): macroslot (skill cells 1-2-3 at x 20 +
  * 37n) and macroslot1 holding the macro's own icon (Macroicon/<n>, x 146), macroslot2 behind the chosen
  * one. Below line02 sits macroname: its icon (22,200), the name field (59,215, 12 letters) and the SHOUT
- * SKILL NAME check box (166,241). Save (BtOK2 154,265) sends SKILL_MACRO; Cancel (BtCancel2 103,265)
- * drops the edits. Skills are dragged in from the list; right-click empties a cell; the macro icon is
+ * SKILL NAME check box (166,241). Save (BtOK2 154,265) checks the names for cursing ("Cursing is not allowed."),
+ * sends SKILL_MACRO and says "It is saved.", the editor staying open; there is no Cancel (the MACRO button closes it,
+ * edits not saved dropped). Skills are dragged in from the list; right-click empties a cell; the macro icon is
  * dragged onto a key (key type 8) or a quick slot.
  */
 const MACRO_W = 207, MACRO_ROWS = 3;
@@ -904,7 +905,6 @@ class SkillWin extends Win {
     this.M = mgr.W.SkillMacro; this.mSel = -1; this.mFirst = 0;
     this.button(mgr.B.BtMacro, 120, 265, () => this.toggleMacro());
     this.mSave = this.button(mgr.B.BtOK2, this.skillW + 154, 265, () => this.saveMacros());
-    this.mCancel = this.button(mgr.B.BtCancel2, this.skillW + 103, 265, () => { this.draft = null; this.toggleMacro(false); });
     this.toggleMacro(false);
   }
   frames() {
@@ -918,7 +918,7 @@ class SkillWin extends Win {
   toggleMacro(open = !this.macroOpen) {
     this.macroOpen = open;
     this.w = this.skillW + (open ? MACRO_W : 0);
-    this.mSave.visible = this.mCancel.visible = open;
+    this.mSave.visible = open;
     if (open) { this.draft = (this.g.macros || []).map((m) => ({ ...m, skills: [...m.skills] })); this.mSel = Math.max(0, this.mSel); }
     while (open && this.draft.length < 5) this.draft.push(emptyMacro());
     if (open && !this.nameField) {
@@ -929,12 +929,13 @@ class SkillWin extends Win {
     if (this.nameField) { this.nameField.show(open); if (open) this.nameField.value = this.draft[this.mSel]?.name || ''; }
   }
   onClose() { this.nameField?.show(false); this.macroOpen && this.toggleMacro(false); }
-  saveMacros() {
+  async saveMacros() {
     const list = this.draft || [];
+    for (const m of list) if (m.name && await this.g.cursed?.(m.name)) { this.mgr.notice('Cursing is not allowed.'); return; }
     this.g.macros = list.map((m) => ({ ...m, skills: [...m.skills] }));
     this.g.net?.skillMacros(list);
     this.g.statusBar?.render();
-    this.toggleMacro(false);
+    this.mgr.notice('It is saved.');
   }
   /** Which macro row / part is under (lx, ly): { row, slot 0-2 } or { row, icon: true }. */
   macroAt(lx, ly) {
