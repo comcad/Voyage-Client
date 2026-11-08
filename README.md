@@ -6,8 +6,9 @@
   </tr>
 </table>
 
-(ALPHA) Work in progress...
-<img width="2872" height="1602" alt="image" src="https://github.com/user-attachments/assets/a4522771-465b-47d4-8f5d-e5863c502d89" />
+(ALPHA)
+<img width="1440" height="809" alt="Screenshot 2026-11-08 at 6 52 55 PM" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
+
 
 
 ## Directories
