@@ -20,6 +20,9 @@ const STEPS = 19, DEFAULT_STEP = 15;
 const snap = (v) => Math.round(Math.max(0, Math.min(1, v)) * STEPS) / STEPS;
 const stepGain = (v) => sliderGain((Math.round(snap(v) * STEPS) + 1) / (STEPS + 1));
 
+/** What lets a page start sound: a press, a key, and (on a phone, the only ones that count there) a lift or a click. */
+const GESTURES = ['pointerdown', 'keydown', 'pointerup', 'touchend', 'click'];
+
 class Music {
   constructor() {
     this.level = this.loadVolume();
@@ -29,8 +32,9 @@ class Music {
     this.current = null;
     // resume on any gesture: browsers hold audio back until the first one
     const unlock = () => { const el = this.track?.el; if (this.current && el?.src && el.paused && !el.ended) el.play().catch(() => {}); };   // not one that played out
-    addEventListener('pointerdown', unlock);
-    addEventListener('keydown', unlock);
+    // a phone lets sound start on a finger lifted (or a click), not on one put down: music a warp started while
+    // nobody was touching the screen (a ship arriving) comes on with the next tap
+    for (const t of GESTURES) addEventListener(t, unlock, true);
   }
 
   loadVolume() {
@@ -122,9 +126,8 @@ class Sfx {
     this.last = new Map();     // path -> last start time, so multi-hit lines don't stack the same sound
     this.volume = this.loadVolume();
     this.muted = load('maple.sfxMute') === '1';
-    const unlock = () => { this.context()?.resume().catch(() => {}); };
-    addEventListener('pointerdown', unlock);
-    addEventListener('keydown', unlock);
+    const unlock = () => { if (this.context()?.state !== 'running') this.ctx?.resume().catch(() => {}); };
+    for (const t of GESTURES) addEventListener(t, unlock, true);
     // in-game windows are DOM: every button click gets the client's click sound
     document.addEventListener('click', (e) => { if (e.target.closest?.('button')) this.play('UI/BtMouseClick'); }, true);
   }
