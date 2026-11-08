@@ -858,6 +858,16 @@ export class Game {
   /** Back to the login screen, without the leave-page warning. */
   leave() { this.leaving = true; location.reload(); }
   enterCashShop() { if (this.net && !this.inCashShop && !this.dead) this.net.enterCashShop(); }
+  /**
+   * The status bar's MTS button: ENTER_MTS, one request at a time (500ms apart, none waiting for its answer), and not
+   * where the map forbids it (fieldLimit 0x10). Cosmic with the MTS off answers with enableActions.
+   */
+  enterMTS() {
+    if (!this.net || this.inCashShop || !this.canExclusive(500, true)) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
+    this.net.enterMTS();
+    this.lockExclusive();
+  }
   /** SET_CASH_SHOP: the server took us off the map; swap the world for the shop screen. */
   openCashShop(d) {
     this.inCashShop = true;

@@ -3,6 +3,7 @@ import { Anim } from '../map.js';
 import { EXP, jobName, itemIcon, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
 import { WzButton, TextField, uiText } from './wzui.js';
+import { helpTip } from './windows.js';
 import { settings } from '../settings.js';
 import { DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2 } from '../keymap.js';
 
@@ -82,6 +83,7 @@ export class StatusBar {
   async load() {
     const a = this.assets;
     [this.S, this.B, this.W] = await Promise.all([a.json('UI/StatusBar.img'), a.json('UI/Basic.img'), a.json('UI/UIWindow.img')]);
+    a.json('String/ToolTipHelp.img').then((t) => { this.btnHelp = t?.Game?.Button || null; }, () => {});
     const S = this.S, g = this.game;
     const y = () => this.y;
     // Cash Shop / Trade / Menu / Shortcut (the client's order), centred in backgrnd's grey band right of backgrnd2 (x 570-800, rows 35-70)
@@ -89,7 +91,7 @@ export class StatusBar {
     this.shopBtn = big(S.BtShop, 0, () => g.enterCashShop());
     this.menuBtn = big(S.BtMenu, 2, () => this.toggleMenu('GameMenu', this.menuBtn));
     this.shortBtn = big(S.BtShort, 3, () => this.toggleMenu('ShortCut', this.shortBtn));
-    this.tradeBtn = big(S.BtNPT, 1, () => g.notice('The Maple Trading System is not available on this server.'));
+    this.tradeBtn = big(S.BtNPT, 1, () => g.enterMTS());
     // hotkey tabs centred on the white band above (rows 3-29)
     const small = [
       [S.EquipKey, () => { this.blinks?.delete(0); g.windows.toggle('equip'); }], [S.InvenKey, () => { this.blinks?.delete(1); g.windows.toggle('inventory'); }],
@@ -437,9 +439,22 @@ export class StatusBar {
     }));
   }
 
+  /** A status bar button's ToolTipHelp key, or null (the trade and shortcut buttons and the hotkey tabs have none). */
+  helpKey(b) {
+    if (b === this.shopBtn) return 'Shop';
+    if (b === this.menuBtn) return 'Menu';
+    if (b === this.tabs?.[4]) return 'KeySet';
+    if (b === this.quickBtn) return 'QuickSlot';
+    if (b === this.quickBtnD) return 'QuickSlotD';
+    return null;
+  }
   /** The tooltip for the quick slot under the mouse: the item's, or the skill's. */
   quickTip(x, y) {
     x -= this.ox;
+    // the buttons' hints (String/ToolTipHelp.img/Game/Button): Cash Shop, Menu, Key Config., Show / Hide Quick Slot
+    const bt = this.allButtons().find((b) => !this.menu?.buttons.includes(b) && b.hit(x, y));
+    const help = bt && this.btnHelp?.[this.helpKey(bt)];
+    if (help) return helpTip(help.Title || '', help.Desc || '');
     // an Item Megaphone line in the log: its item
     const line = (this.itemHits || []).find((t) => x >= t.x && x < t.x + t.w && y >= t.y && y < t.y + t.h);
     if (line) return { item: line.item };
