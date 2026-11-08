@@ -1052,7 +1052,7 @@ export class LoginScene {
         sfx.play('Game/GameIn');
         store.set(lastKey, String(c.stats.id));
         this.s.close();
-        finish({ server, charId: c.stats.id, port: res.port, world: world.id, channel: channel.id, channels: world.channels.length, channelNames: world.channels.map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm, admin: this.account?.admin || 0, slots: list.slots, charCount: list.chars.length });
+        finish({ server, charId: c.stats.id, port: res.port, cafe: res.cafe, world: world.id, channel: channel.id, channels: world.channels.length, channelNames: world.channels.map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm, admin: this.account?.admin || 0, slots: list.slots, charCount: list.chars.length });
       };
       const start = guard(pick);
       // a new list after a create or delete; if it can't be loaded (world full...), back to world select
@@ -1256,7 +1256,7 @@ export class LoginScene {
           this.s.close();
           done = true;
           const w = this.worlds.find((x) => x.id === c.world);
-          resolve({ server, charId: c.stats.id, port: r.port, world: c.world, channels: w?.channels.length || 1, channelNames: (w?.channels || []).map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm, admin: this.account?.admin || 0 });
+          resolve({ server, charId: c.stats.id, port: r.port, cafe: r.cafe, world: c.world, channels: w?.channels.length || 1, channelNames: (w?.channels || []).map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm, admin: this.account?.admin || 0 });
         } catch (e) { done = true; reject(e); } finally { busy = false; }
       };
       const back = async () => {

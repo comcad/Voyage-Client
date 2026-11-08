@@ -887,7 +887,11 @@ export function cutText(ctx, s, w) {
  */
 const MACRO_W = 207, MACRO_ROWS = 3;
 const emptyMacro = () => ({ name: '', shout: false, skills: [0, 0, 0] });
-const GM_TAB = 'gm';
+/** Skill/tip<n> (an Aran's locked tab): shown from the screen's top-left corner until clicked. */
+class AranTipWin extends Win {
+  constructor(mgr, tip) { super(mgr, tip, 0, 0); this.buttons = []; this.closeBtn = null; }
+  down() { this.mgr.close(this); }
+}
 
 const SKILL_GUIDE = [
   { box: { x: -162, y: -2, w: 158, h: 77 }, arrow: 'seArrow', tip: [11, 103], lines: ['Place the mouse cursor', 'over the skill icon', 'for details about', 'a specific skill.'] },
@@ -903,7 +907,14 @@ class SkillWin extends Win {
     mgr.assets.json('Etc/RecommendSkill.img').then((r) => { this.recommendData = r || {}; }, () => { this.recommendData = {}; });
     this.skillW = this.w; this.closePinned = true; this.closeBtn.x = this.skillW - 17;
     this.M = mgr.W.SkillMacro; this.mSel = -1; this.mFirst = 0;
-    this.button(mgr.B.BtMacro, 120, 265, () => this.toggleMacro());
+    const macro = this.button(mgr.B.BtMacro, 120, 265, () => this.toggleMacro());
+    macro.tip = () => lineTip('You may open/close your own skill window.');
+    // an Aran's tabs not reached yet: Tab/AranButton/Bt<i>, each opening Skill/tip<i - 1>
+    this.aranBtns = [1, 2, 3, 4].map((i) => {
+      const b = W.Tab.AranButton?.[`Bt${i}`] && this.button(W.Tab.AranButton[`Bt${i}`], 3 + 34 * i, 23, () => this.aranTip(i));
+      if (b) b.visible = false;
+      return b;
+    });
     this.mSave = this.button(mgr.B.BtOK2, this.skillW + 154, 265, () => this.saveMacros());
     this.toggleMacro(false);
   }
@@ -929,6 +940,12 @@ class SkillWin extends Win {
     if (this.nameField) { this.nameField.show(open); if (open) this.nameField.value = this.draft[this.mSel]?.name || ''; }
   }
   onClose() { this.nameField?.show(false); this.macroOpen && this.toggleMacro(false); }
+  aranTip(i) {
+    const tip = this.W[`tip${i - 1}`];
+    if (!tip) return;
+    const w = new AranTipWin(this.mgr, tip);
+    this.mgr.assets.preload(w.frames()).then(() => this.mgr.show(w, null));
+  }
   async saveMacros() {
     const list = this.draft || [];
     for (const m of list) if (m.name && await this.g.cursed?.(m.name)) { this.mgr.notice('Cursing is not allowed.'); return; }
@@ -1016,24 +1033,14 @@ class SkillWin extends Win {
     }
     g.lines.forEach((ln, i) => uiText(ctx, ln, x + w / 2, y + Math.round((h - g.lines.length * 15) / 2) + i * 15, { color: '#000', size: 12, align: 'center' }));
   }
-  /**
-   * Your job's books, then for a GM (or anyone with a GM skill) one more tab, GM, holding the GM and Super GM
-   * books (900 / 910) together. There is no v83 label art for it, so its label is drawn as text.
-   */
-  get books() {
-    const sb = this.g.skills, jobs = sb?.jobBookIds || [];
-    const gm = this.g.gm || Object.entries(sb?.levels || {}).some(([id, s]) => id >= 9000000 && s.level > 0);
-    if (gm && sb) { sb.book(900); sb.book(910); }
-    return gm ? [...jobs, GM_TAB] : jobs;
-  }
+  /** Your job's books (a GM's 900, a Super GM's 900 and 910, as ordinary tabs). */
+  get books() { return this.g.skills?.jobBookIds || []; }
   get list() {
     const sb = this.g.skills;
-    const ids = this.book === GM_TAB ? [...(sb?.bookSkills(900) || []), ...(sb?.bookSkills(910) || [])] : sb?.bookSkills(this.book) || [];
-    return ids.filter((id) => sb.maxLevel(id));
+    return (sb?.bookSkills(this.book) || []).filter((id) => sb.maxLevel(id));
   }
   get sp() {
     const g = this.g, b = this.book;
-    if (b === GM_TAB) return g.stats.sp || 0;
     // the beginner book: a point a level up to 7, less what every beginner's Three Snails / Recovery / Nimble Feet hold
     if (b % 1000 === 0 || b === 2001) {
       let used = 0;
@@ -1043,7 +1050,6 @@ class SkillWin extends Win {
     return g.stats.sp || 0;
   }
   canRaise(id) {
-    if (this.book === GM_TAB) return false;   // GM skills are granted, not bought with SP
     const sb = this.g.skills;
     return !sb.node(id)?.disable && this.sp > 0 && sb.raiseState(id) === 'ok';
   }
@@ -1085,21 +1091,18 @@ class SkillWin extends Win {
     const g = this.g, sb = g.skills, m = this.mgr;
     if (!sb || !g.stats) return;
     if (this.macroOpen) this.drawMacros(ctx);
-    const books = this.books, gi = books.indexOf(GM_TAB), sel = books.indexOf(this.book);
-    const labels = gi < 0 ? this.W.Tab : { enabled: { ...this.W.Tab.enabled, [gi]: null }, disabled: { ...this.W.Tab.disabled, [gi]: null } };
-    this.tabRects = drawTabStrip(ctx, m, labels, books.length, sel, 34 * books.length);
-    if (gi >= 0 && this.tabRects[gi]) {
-      const [tx, tw, ty] = this.tabRects[gi];
-      uiText(ctx, 'GM', tx + Math.trunc((tw - 8) / 2), ty + 5, { color: gi === sel ? '#fff' : '#9aa6b8', bold: true, size: 9, align: 'center' });
-    }
-    const bookId = this.book === GM_TAB ? 900 : this.book;
+    const books = this.books, sel = books.indexOf(this.book);
+    this.tabRects = drawTabStrip(ctx, m, this.W.Tab, books.length, sel, 34 * books.length);
+    const job = g.stats.job || 0, aran = Math.floor(job / 1000) === 2 && Math.floor((job % 1000) / 100) === 1;
+    this.aranBtns.forEach((b, k) => { if (b) b.visible = aran && k + 1 >= books.length; });
+    const bookId = this.book;
     const book = sb.books[bookId], bi = book && !(book instanceof Promise) ? book.info?.icon : null;
     const bim = m.image(bi);
     if (bim) ctx.drawImage(bim, 10, 57);
     else if (bi) m.assets.preload([bi]);
     // the book's name centred on x 105, or from x 45 cut to 125px when it is 126px or wider
     ctx.save(); ctx.font = '11px Tahoma, Arial, "Segoe UI", sans-serif';
-    const bn = this.book === GM_TAB ? 'GM' : sb.bookName(this.book), wide = ctx.measureText(bn).width >= 126;
+    const bn = sb.bookName(this.book), wide = ctx.measureText(bn).width >= 126;
     const bookName = wide ? cutText(ctx, bn, 125) : bn;
     ctx.restore();
     this.text(ctx, bookName, wide ? 45 : 105, 66 + SKILL_TEXT_DY, { color: '#fff', align: wide ? 'left' : 'center', size: 11, font: 'Tahoma' });

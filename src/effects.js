@@ -38,7 +38,7 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   }
   return line * 120;
 }
-const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook', 0x0f: 'ItemLevelUp' };
+const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook/cardGet', 0x0f: 'ItemLevelUp' };
 
 /** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
 function balloonLines(ctx, text, max) {
@@ -90,7 +90,7 @@ export class WorldFx {
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */
   play(name, ent) {
-    const node = this.E?.[name];
+    const node = name.split('/').reduce((n, k) => n?.[k], this.E);   // a name, or a path under BasicEff
     if (!node) return;
     const anim = new Anim(node, false);
     this.assets.preload(anim.frames);
@@ -131,9 +131,8 @@ export class WorldFx {
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
   /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin (as on 800x600). */
-  async screen(name) {
-    this.mapFx ??= await this.assets.json('Map/Effect.img');
-    const node = name.split('/').reduce((n, k) => n?.[k], this.mapFx);
+  async screen(name, node = null) {
+    if (!node) { this.mapFx ??= await this.assets.json('Map/Effect.img'); node = name.split('/').reduce((n, k) => n?.[k], this.mapFx); }
     if (!node) return;
     const anim = new Anim(node, false);
     await this.assets.preload(anim.frames);
@@ -247,8 +246,10 @@ export class WorldFx {
    */
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
-    const top = typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
-    n.x = n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    // over the body it struck: a monster's own lt/rb (a boss part's, not the whole boss's), else its picture
+    const body = n.target.node?.lt && typeof n.target.hitBox === 'function' ? n.target.hitBox() : null;
+    const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
+    n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
     if (!n.v) {
       const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
       if (!img) return false;
@@ -338,9 +339,13 @@ export class WorldFx {
     if (icon) ctx.drawImage(icon, 4 + 5, 4 + 6);
     const x = 42, y = 12, w = UI_W - x - 12;
     ctx.drawImage(l, x, y); ctx.drawImage(tile, x + l.width, y, w - l.width - r.width, tile.height); ctx.drawImage(r, x + w - r.width, y);
-    const fill = im(G.Gage?.[String(Math.min(7, Math.max(1, d.tag || 1)))]?.[0]);
-    const inner = w - l.width - r.width, k = Math.max(0, Math.min(1, d.hp / Math.max(1, d.maxHp)));
-    if (fill) ctx.drawImage(fill, x + l.width, y + 5, Math.round(inner * k), fill.height);
+    // the filled part in Gage/<tag colour>, the rest in Gage/<background colour>; /0 is the 1px cap before it
+    const gage = (c) => G.Gage?.[String(Math.min(7, Math.max(1, c || 1)))], fg = gage(d.tag), bg = gage(d.bg);
+    const inner = w - l.width - r.width, k = Math.max(0, Math.min(1, d.hp / Math.max(1, d.maxHp))), n = Math.round(inner * k);
+    const cap = im((n > 0 ? fg : bg)?.[0]), on = im(fg?.[1]), off = im(bg?.[1]);
+    if (cap) ctx.drawImage(cap, x + 3, y + 4);
+    if (on && n > 0) ctx.drawImage(on, x + l.width, y + 4, n, on.height);
+    if (off && n < inner) ctx.drawImage(off, x + l.width + n, y + 4, inner - n, off.height);
   }
 
   /** Buff icons, newest on the left of the row, at the top right. */
