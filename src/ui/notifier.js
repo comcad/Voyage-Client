@@ -5,8 +5,8 @@ import { UI_W, UI_H } from '../view.js';
 
 /**
  * Notification balloons (UIWindow.img/FadeYesNo) above the status bar: invitations and quest notices.
- * Each sits with its tail tip (13px in from its right edge) at x 605, over the status bar notice box's pencil, so it
- * rises out of it (x 464 for the 154px ones, 423 for the 195px invitations); y = bar top - 21 - 5n (n = balloons alive when it came, itself included), all shown at once;
+ * Each sits with its tail tip (13px in from its right edge) at x 603 (the middle of the status bar notice box's pencil), so it
+ * rises out of it (x 462 for the 154px ones, 421 for the 195px invitations), resting on top of the bar: y = bar top - height - 5(n - 1) (n = balloons alive when it came, itself included), all shown at once;
  * when one goes, those after it drop 5px. A new one replaces the first of its kind (not buddy requests; quests only
  * for the same quest). Each fades in over 1s, holds until its deadline (counted from creation: 3 min for
  * invitations, 30s for quests), then fades out over 1s; a click on O or X - taken once the fade in is over -
@@ -30,7 +30,7 @@ const KINDS = {
 };
 let balloonSeq = 0;
 /** Where every balloon's tail tip sits (over the notice box's pencil), and how far in from its right edge the tip is. */
-const TAIL_X = 605, TAIL_IN = 13;
+const TAIL_X = 603, TAIL_IN = 13;
 const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, LOGIN_HOLD = 6000, NAME_W = 100;
 
 class Balloon extends Win {
@@ -69,7 +69,7 @@ class Balloon extends Win {
     this.update(now);
     const bar = this.g.statusBar?.y ?? UI_H - 71;
     this.x = (this.g.statusBar?.ox ?? 0) + TAIL_X + TAIL_IN - this.w;
-    this.y = bar - 21 - (this.lift || 0) - 5 * this.n;
+    this.y = bar - this.h - (this.lift || 0) - 5 * (this.n - 1);   // resting on the bar, its tail just over the pencil
     ctx.save(); ctx.globalAlpha = this.alpha;
     super.draw(ctx);
     ctx.restore();
