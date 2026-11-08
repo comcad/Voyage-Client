@@ -262,6 +262,7 @@ export class CharacterLook {
     if (ref?.rotate) out.rotate = Number(ref.rotate) || 0;
     out.brow = anchors.get('brow');
     out.navel = anchors.get('navel');
+    out.muzzle = anchors.get('muzzle');   // a gun's barrel end
     return out;
   }
 }

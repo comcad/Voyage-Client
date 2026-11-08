@@ -693,12 +693,18 @@ export class Life {
     if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.controlled) this.path = null;
-    if (this.fh && !this.flying && (this.controlled || !this.online)) { this.recoil = (fromRight ? -1 : 1) * (strong ? 300 : 130); this.recoilBrake = strong ? 200 : 400; }
+    if (!this.flying && (this.controlled || !this.online)) {
+      const push = (fromRight ? -1 : 1) * (strong ? 300 : 130);
+      // on the ground it slides back; in the air the blow sets its sideways speed, stops its rise and it falls on
+      this.hitBrake = strong ? 200 : 400; this.hitLanded = false;
+      if (this.fh) { this.recoil = push; this.recoilBrake = this.hitBrake; } else { this.vx = push; this.vy = 0; }
+    }
     if (this.controlled && this.online) this.planHit((this.hitTimer || 0) * 1000, stanceBefore);
   }
   /**
    * One we control was struck: what the client sends then, element for element - the blow's push (type 2: no time,
-   * the speed it sets off at), 300ms of sliding back, standing for the rest of its hit pose, then its own movement
+   * the speed it sets off at), 300ms of sliding back, standing for the rest of its hit pose (in the air: falling
+   * through it, pushed sideways by the blow), then its own movement
    * until at least a second is planned (1.65s at most, ending on the ground) - in the stance it had before the blow.
    * It then plays that same plan itself, so everyone sees one thing.
    */
@@ -709,7 +715,7 @@ export class Life {
     if (sim.recoil) moves.push({ cmd: 2, rx: Math.round(sim.recoil), ry: 0, stance, duration: 0 });
     const add = (px, py, st, t) => {
       const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), vy = Math.round((sim.y - py) / 0.03);
-      const fh = sim.fh?.id || 0, last = moves[moves.length - 1], phase = t < 300 ? 0 : t < hold ? 1 : 2;
+      const fh = sim.fh?.id || 0, last = moves[moves.length - 1], phase = t < 300 ? 0 : t < hold ? (sim.hitLanded ? 3 : 1) : 2;
       if (last && last.cmd === 0 && last.phase === phase && last.fh === fh && last.stance === st && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
         Object.assign(last, { x, y, vx, vy }); last.duration += 30;
       } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance: st, duration: 30, phase });
@@ -717,13 +723,14 @@ export class Life {
     for (let t = 0; t < 1650; t += 30) {
       if (t >= 1000 && (sim.fh || sim.flying)) break;
       const px = sim.x, py = sim.y;
-      if (t < 300) { if (sim.recoil && sim.fh) sim.recoilStep(0.03); add(px, py, stance, t); continue; }
-      if (t < hold) { add(px, py, stance, t); continue; }
-      if (sim.state === 'hit1') sim.setState(sim.flying ? 'fly' : 'stand');
+      if (t < 300) { if (sim.recoil && sim.fh) sim.recoilStep(0.03); else sim.hitFall(0.03); add(px, py, stance, t); continue; }
+      if (t < hold) { if (sim.hitLanded && sim.recoil && sim.fh) sim.recoilStep(0.03); else sim.hitFall(0.03); add(px, py, stance, t); continue; }
+      if (sim.state === 'hit1') { sim.setState(sim.flying ? 'fly' : 'stand'); sim.recoil = 0; }
       sim.step(0.03); add(px, py, sim.stance, t);
     }
-    // the slide ends where it got to in 300ms; standing, it no longer moves
-    for (const m of moves) { if (m.phase === 1) { m.vx = 0; m.vy = 0; } delete m.phase; }
+    // the slide ends where it got to in 300ms; standing, it no longer moves (falling, or sliding on from where it
+    // landed - phase 3 - it keeps its speed)
+    for (const m of moves) { if (m.phase === 1 && m.fh) { m.vx = 0; m.vy = 0; } delete m.phase; }
     for (const k of Object.keys(sim)) if (!PLAYED.has(k) && k !== 'recoil') this[k] = sim[k];
     this.recoil = 0;   // the plan carries the slide
     this.path = { steps: moves.filter((m) => m.cmd === 0), i: 0, t: 0, fromX: this.x, fromY: this.y };
@@ -751,6 +758,17 @@ export class Life {
     if (!this.fh || Math.abs(left) <= p.stop) { this.pull = null; return; }
     const { fh, x, y } = this;
     if (this.footholds.walk(this, Math.sign(left) * Math.min(Math.abs(left) - p.stop, 1000 * dt)) !== 'ok') { this.fh = fh; this.x = x; this.y = y; this.pull = null; }
+  }
+  /**
+   * Struck in the air (not flying): through its hit pose it falls as it would otherwise, carried sideways by the
+   * blow. Landing, it keeps that speed along the floor and slides on for the rest of the pose, slowing at the blow's
+   * rate (400px/s², a strong blow 200).
+   */
+  hitFall(dt) {
+    if (this.fh || this.flying) return;
+    if (this.swimming()) { swimVelocity(this, 0, 0, dt); this.footholds.fall(this, dt, null, true); }
+    else this.footholds.fall(this, dt);
+    if (this.fh) { this.recoil = this.vx; this.recoilBrake = this.hitBrake || 400; this.vx = 0; this.hitLanded = true; }
   }
   /** Slide back after a blow, braking to a stop; a floor's edge or a wall stops it. */
   recoilStep(dt) {
@@ -820,7 +838,7 @@ export class Life {
       return;
     }
     if (this.state === 'die1') { if (anim?.done) this.respawnTimer = 6; return; }
-    if (this.state === 'hit1') { this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
+    if (this.state === 'hit1') { if (this.hitLanded && this.recoil && this.fh) this.recoilStep(dt); else this.hitFall(dt); this.hitTimer -= dt; if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand'); return; }
     // a chase lasts 3-4 minutes from the last time it was set on someone
     if (this.aggro !== this.chased) { this.chased = this.aggro; this.chaseT = 180 + Math.random() * 60; }
     if (this.aggro && (this.chaseT -= dt) <= 0) this.aggro = this.chased = null;

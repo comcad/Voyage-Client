@@ -1095,7 +1095,9 @@ export class ChannelSession {
     // a mount's level, exp and tiredness (its rider, then a byte: it just levelled up)
     on(S.SET_TAMING_MOB_INFO, (r) => this.emit('mountInfo', r.int(), r.int(), r.int(), r.int(), r.ubyte() === 1));
     on(S.CANCEL_FOREIGN_BUFF, (r) => { const id = r.int(); this.emit('foreignCancel', id, r.long(), r.long()); });
-    on(S.CANCEL_SKILL_EFFECT, (r) => this.emit('foreignSkillCancel', r.int()));
+    on(S.CANCEL_SKILL_EFFECT, (r) => this.emit('foreignSkillCancel', r.int(), r.available >= 4 ? r.int() : 0));
+    // another player's Grenade thrown: who, from where, how long it was held (ms), the skill and its level
+    on(S.THROW_GRENADE, (r) => this.emit('foreignGrenade', r.int(), { x: r.int(), y: r.int() }, r.int(), r.int(), r.int()));
     on(S.DAMAGE_PLAYER, (r) => {
       const id = r.int(), from = r.byte();
       if (from === -3) r.int();
@@ -1444,6 +1446,8 @@ export class ChannelSession {
     this.send(w.byte(facingLeft ? 1 : 0));
   }
   cancelBuff(skillId) { this.send(new PacketWriter(C.CANCEL_BUFF).int(skillId)); }
+  /** Grenade thrown: where from, how long it was held (ms) and the skill. */
+  grenadeEffect(x, y, held, skillId) { this.send(new PacketWriter(C.GRENADE_EFFECT).int(x).int(y).int(held).int(skillId)); }
   /** End an item's buff early: the item id, negated. */
   cancelItemEffect(itemId) { this.send(new PacketWriter(C.CANCEL_ITEM_EFFECT).int(-itemId)); }
   /** One of your curses is past its time: asks the server to lift it (no body). */
@@ -1832,8 +1836,9 @@ export class ChannelSession {
    * SUMMON_ATTACK (SummonDamageHandler): oid, tick, direction, count, the summon's / first mob's position, then per
    * monster: oid, its id + 4 unread bytes, where it is now and next, the hit delay (ms) and the damage.
    */
-  summonAttack(s, hits, delay) {
-    const w = new PacketWriter(C.SUMMON_ATTACK).int(s.oid).int(Date.now() | 0).byte(s.facingRight ? 0 : 4).byte(hits.length);
+  /** A summon's attack: its action (4 attack1, 5 attack2) with facing left in the top bit, then each monster struck. */
+  summonAttack(s, hits, delay, action = 4) {
+    const w = new PacketWriter(C.SUMMON_ATTACK).int(s.oid).int(Date.now() | 0).byte((action & 0x7f) | (s.facingRight ? 0 : 0x80)).byte(hits.length);
     const sx = Math.round(s.x), sy = Math.round(s.y);
     w.short(sx).short(sy).short(sx).short(sy);
     for (const { mob, dmg } of hits) {

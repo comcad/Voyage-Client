@@ -21,11 +21,14 @@ const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
 /**
  * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish, Assassinate
  * and Boomerang Step wait 80ms more per line and their second line longer still: 160 (Brandish with a one-handed
- * weapon) or 240. Vampire's four land 0, 60, 420 and 660ms in, at the attack's speed (scale).
+ * weapon) or 240. Vampire's four land 0, 60, 420 and 660ms in, Barrage's six 450, 720, 990, 1260, 1710 and 1980ms
+ * and Demolition's eight 0, 180, 450, 720, 900, 990, 1080 and 1170ms, at the attack's speed (scale).
  */
 export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   if (skillId === 14101006) return Math.round([0, 60, 420, 660][Math.min(line, 3)] * scale);
-  if ([5101004, 15101003, 5121007, 15111004].includes(skillId)) return 0;   // these all show at once
+  if (skillId === 5121007 || skillId === 15111004) return Math.round([450, 720, 990, 1260, 1710, 1980][Math.min(line, 5)] * scale);
+  if (skillId === 5121004) return Math.round([0, 180, 450, 720, 900, 990, 1080, 1170][Math.min(line, 7)] * scale);
+  if ([5101004, 15101003].includes(skillId)) return 0;   // these all show at once
   if ([3111006, 3211006, 13111001].includes(skillId)) return line * 60;   // Strafe and the like run faster
   const brandish = skillId === 1121008 || skillId === 11111004;
   if (brandish || skillId === 4221001 || skillId === 4221007) {
