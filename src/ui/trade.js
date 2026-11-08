@@ -34,7 +34,7 @@ export class TradeWin extends Win {
     this.closeBtn = null;
     this.coin = this.button(T.BtCoin, 170, 244, () => this.offerMesos());   // over the art's own coin
     this.tradeBtn = this.button(T.BtTrade, 114, 47, () => this.confirm());
-    this.cancelBtn = this.button(T.BtCancel, 114, 70, () => this.cancel());
+    this.cancelBtn = this.button(T.BtReset, 114, 70, () => this.cancel());   // v83 draws BtReset here, not BtCancel
     this.chat = new TextField(mgr.game.statusBar.layer, 0, 0, 190, 14, { max: 70, color: '#000' });
     this.chat.el.addEventListener('keydown', (e) => {
       e.stopPropagation();
