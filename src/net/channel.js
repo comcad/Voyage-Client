@@ -939,8 +939,9 @@ export class ChannelSession {
       const infusion = [5121009, 15111005, 5221010].includes(pSource);
       r.pos = start + 10 + (infusion ? 10 : 5);
       const pirate = { source: pSource, duration: r.short() * 1000 };
+      // Speed Infusion's value is negative, so it can't be told from an item's source: go by the skill instead
       const known = (id) => id < 0 || this.h.knowsSkill?.(id);
-      const pick = !known(normal.source) && known(pirate.source) ? pirate : normal;
+      const pick = infusion || [5001005, 15001003].includes(pSource) || (!known(normal.source) && known(pirate.source)) ? pirate : normal;
       // Hyper Body: HYPERBODYHP then HYPERBODYMP (second mask), each a percentage, in that order
       const b = { m1, m2, source: pick.source, duration: pick.duration };
       const hbHp = BigInt.asUintN(64, m2) & HB_HP, hbMp = BigInt.asUintN(64, m2) & HB_MP;
