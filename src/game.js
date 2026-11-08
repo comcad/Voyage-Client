@@ -2957,7 +2957,7 @@ export class Game {
         }
       },
       // the game's small box with its OK; back to the login screen once it is clicked (no leave-page warning now)
-      disconnected: () => { this.leaving = true; this.windows.okCancel('The connection to the server was closed.', 'ok').then(() => this.leave()); },
+      disconnected: () => { this.leaving = true; this.windows.okCancel('There was an update to the client. Press ok to reload.', 'ok').then(() => this.leave()); },
     });
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
