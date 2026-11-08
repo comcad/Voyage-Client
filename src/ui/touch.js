@@ -18,6 +18,15 @@ export class TouchControls {
     root.append(this.el);
     this.held = new Map();   // pointerId -> codes it holds
     this.stick = null;       // { pointerId, el, knob }
+    this.ends = new Map();   // pointerId -> what lets go of its control
+    // a finger lifted anywhere lets go of its control, even when the control didn't see it (the capture failed or
+    // was taken away, or the controls were rebuilt under it)
+    const end = (e) => this.ends.get(e.pointerId)?.(e);
+    for (const t of ['pointerup', 'pointercancel']) addEventListener(t, end, true);
+    // no finger left on the screen, or the game put away (another app, the screen locked): nothing is held
+    for (const t of ['touchend', 'touchcancel']) addEventListener(t, (e) => { if (!e.touches.length && this.ends.size) this.release(); }, true);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) this.release(); });
+    addEventListener('blur', () => this.release());
     new ResizeObserver(() => this.render()).observe(this.g.canvas);
     this.timer = setInterval(() => this.refreshIcons(), 1000);   // skill and item icons that load late
     this.render();
@@ -103,14 +112,17 @@ export class TouchControls {
     try { el.setPointerCapture(e.pointerId); } catch { /* a pointer the browser no longer tracks */ }
     this.held.set(e.pointerId, new Set([code]));
     el.style.background = 'rgba(70,110,210,0.8)';
+    // let go: lifted, cancelled, its capture lost, or ended from outside (no ev)
     const up = (ev) => {
-      if (ev.pointerId !== e.pointerId) return;
-      this.held.delete(e.pointerId);
+      if (ev && ev.pointerId !== e.pointerId) return;
+      this.held.delete(e.pointerId); this.ends.delete(e.pointerId);
       el.style.background = 'rgba(0,0,64,0.627)';
-      el.removeEventListener('pointerup', up); el.removeEventListener('pointercancel', up);
+      for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.removeEventListener(t, up);
       this.sync();
     };
-    el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+    this.ends.get(e.pointerId)?.();
+    this.ends.set(e.pointerId, up);
+    for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) el.addEventListener(t, up);
     this.sync();
   }
 
@@ -135,14 +147,19 @@ export class TouchControls {
       this.held.set(e.pointerId, codes);
       this.sync();
     };
+    // let go: lifted, cancelled, its capture lost, or ended from outside (no ev)
     const up = (ev) => {
-      if (ev.pointerId !== e.pointerId) return;
+      if (ev && ev.pointerId !== e.pointerId) return;
       knob.style.transform = '';
-      this.held.delete(e.pointerId);
-      base.removeEventListener('pointermove', move); base.removeEventListener('pointerup', up); base.removeEventListener('pointercancel', up);
+      this.held.delete(e.pointerId); this.ends.delete(e.pointerId);
+      base.removeEventListener('pointermove', move);
+      for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) base.removeEventListener(t, up);
       this.sync();
     };
-    base.addEventListener('pointermove', move); base.addEventListener('pointerup', up); base.addEventListener('pointercancel', up);
+    this.ends.get(e.pointerId)?.();
+    this.ends.set(e.pointerId, up);
+    base.addEventListener('pointermove', move);
+    for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) base.addEventListener(t, up);
     move(e);
   }
 
@@ -154,7 +171,10 @@ export class TouchControls {
   }
   /** Hidden while Key Setting is open (the layout is edited there, and the buttons would cover the window). */
   suspend(on) { this.suspended = on; this.el.style.visibility = on ? 'hidden' : ''; if (on) this.release(); }
-  release() { this.held.clear(); this.g.input?.setHeld('touch', new Set()); }
+  release() {
+    for (const end of [...this.ends.values()]) end();
+    this.held.clear(); this.g.input?.setHeld('touch', new Set());
+  }
   /** A new map: up from the stick stops until the stick leaves up. */
   mapChanged() {
     let had = false;
