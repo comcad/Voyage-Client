@@ -468,8 +468,14 @@ const RUSH_DASH = new Set([1121006, 1221007, 1321003]), RUSH_LOCK = 1770, DASH_T
 /** Backspin Blow and Corkscrew Blow lock themselves and Rush for 1.96s / 1.45s once they strike (see blowMoves). */
 const BACKSPIN = 5101002, BACKSPIN_LOCK = 1960, CORKSCREW_LOCK = 1450, DASH_LOCKED = new Set([...RUSH_DASH, BACKSPIN, 5101004, 15101003]);
 const SHOCKWAVES = new Set([5111006, 15111003]);
+/** Energy Blast and Energy Drain (Marauder, Thunder Breaker) need a full Energy Charge, as Energy Orb does. */
+const ENERGY_BLOWS = new Set([5111002, 5111004, 15101005, 15111001]);
+/** Demolition and Snatch only go in Super Transformation. */
+const SUPER_ONLY = new Set([5121004, 5121005]), SUPER_TRANSFORMATION = 5121003;
 /** Flamethrower's and Ice Splitter's capsules (2331xxx, 2332xxx). */
 const CAPSULES = { 5211004: 2331, 5211005: 2332 };
+/** Elemental Boost (Corsair): its damage % adds to Flamethrower's and Ice Splitter's. */
+const ELEMENTAL_BOOST = 5220001;
 const SNATCH = 5121005, RECOIL_SHOT = 5201006, BARRAGE_PUSH = [17, 6, 6, 6, 6, 27], WINGS = 5201005;
 /** Skills a map that forbids movement skills (fieldLimit 0x2) refuses: Rush, Assaulter, Assassinate, Ninja Storm, the Brawler / Thunder Breaker dashes, Snatch, Recoil Shot and the Aran's. */
 const MOVE_LIMITED = new Set([1121006, 1221007, 1321003, 4211002, 4221001, 4121008, 5101002, 5101004, 15101003, 5121005,
@@ -481,9 +487,9 @@ const MOVE_LIMITED = new Set([1121006, 1221007, 1321003, 4211002, 4221001, 41210
  */
 const FINAL_POSES = { 1: ['swingOF', 'stabOF'], 2: ['swingPF', 'stabTF'], 3: ['shootF'], 5: ['swingTF', 'stabOF'] };
 const BUFFED_FINALS = new Set([11101002, 13101002]);
-/** White Knight / Paladin / Dawn Warrior charges and their element: the charge's damage %, then its element at z%. */
+/** White Knight / Paladin / Dawn Warrior charges and Thunder Breaker's Lightning Charge, and their element: the charge's damage %, then its element at z%. */
 const CHARGES = { 1211003: 'F', 1211004: 'F', 1211005: 'I', 1211006: 'I', 1211007: 'L', 1211008: 'L', 1221003: 'H', 1221004: 'H',
-  11111007: 'H' };
+  11111007: 'H', 15101006: 'L' };
 const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 1221011;
 /**
  * Skills that shake the screen when they land (with the SHAKE UP option on): Shout by 400/15 px, easing by 15% each
@@ -936,7 +942,7 @@ export class Game {
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
-    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
+    if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
     this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
     this.raiseKept = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);   // back up on the next map
     for (const id of this.raiseKept) this.closeRaise(id);
@@ -972,7 +978,7 @@ export class Game {
       this.channel = entered.channel;
       this.setServerTime(entered.serverTime);
       const info = entered.info;
-      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); }
+      if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
@@ -2578,6 +2584,7 @@ export class Game {
     this.statusBar.layout(UI_W, UI_H);
     await this.statusBar.load();
     this.windows = new WindowManager(this, this.statusBar);
+    this.warmAmmoInfo();   // your ammo's attack counts from the first shot
     await this.windows.load();
     this.vfx = new WorldFx(this);
     await this.vfx.load();
@@ -2991,7 +2998,7 @@ export class Game {
       blocked: (kind, type) => this.blocked(kind, type),
       drop: later((d) => this.spawnDrop(d)),
       removeDrop: later((oid, anim, chr, petSlot, delay) => this.removeDrop(oid, anim, chr, petSlot, delay)),
-      inventory: (ops, unlock) => { if (unlock) this.cashBusy = false; this.onInventory(ops); },
+      inventory: (ops, unlock) => { if (unlock) this.cashBusy = false; this.onInventory(ops); this.warmAmmoInfo(); },
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s), null); },
       shopResult: (code, extra) => this.shopWin?.result(code, extra),
@@ -4343,6 +4350,16 @@ export class Game {
    * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
    * damage (5.4% from 438 up). Rolled at most 95% of that.
    */
+  /**
+   * A physical summon's blow (Octopus, Gaviota, Wrath of the Octopi): a miss by your accuracy as for your own blows,
+   * else (DEX x 0.7-1.0 x 2.5 + STR) x the skill's pad %. No weapon attack, defence, level gap or critical.
+   */
+  summonHitDamage(id, lv, m) {
+    const info = m.src?.info || {}, over = Math.max(0, (info.level || 0) - (this.stats?.level || 1));
+    if (this.accuracyMiss(info, over)) return 0;
+    const pad = Number(this.skills.levelData(id, lv)?.pad) || 0;
+    return Math.trunc(((this.totalStat('dex') * (0.7 + Math.random() * 0.3) * 2.5 + this.totalStat('str')) * pad) / 100);
+  }
   summonMaxDamage(id, lv) {
     const ld = this.skills.levelData(id, lv) || {}, s = this.stats;
     let max;
@@ -5575,7 +5592,11 @@ export class Game {
       const now = Date.now();
       this.net?.cancelBuff(this.buffs.find((b) => DASHES.includes(b.source) && b.until > now).source);
     }
-    if (id === ENERGY_ORB && (this.energy || 0) < FULL_ENERGY) { this.notice('This skill is available only when your energy is fully charged.'); return false; }
+    if ((id === ENERGY_ORB || ENERGY_BLOWS.has(id)) && (this.energy || 0) < FULL_ENERGY) { this.notice('This skill is available only when your energy is fully charged.'); return false; }
+    // Shockwave only while transformed; Demolition and Snatch only in Super Transformation
+    if ((SHOCKWAVES.has(id) && !this.player.morph) || (SUPER_ONLY.has(id) && !(this.player.morph && this.morphReason === SUPER_TRANSFORMATION))) {
+      this.notice('This skill is available only during transformation.'); return false;
+    }
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION || CHARGE_BLOWS.has(id)) return this.holdCharge(id, lv);
     if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
     if (id === CHAKRA) return this.castChakra(id, lv);
@@ -5656,7 +5677,10 @@ export class Game {
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
     if (p.ladder && kind !== 'special') return false;   // no attacks of any kind on a ladder or rope
-    if (skillId && this.net && !sb.weaponOk(skillId, weapon)) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+    if (skillId && this.net && !sb.weaponOk(skillId, weapon)) {
+      this.notice(kind === 'melee' ? 'This skill cannot be used with the equipped item.' : "You cannot use this skill with the weapon you're equipped with.");
+      return false;
+    }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.swimming(p.x, p.y)) return false;
     // a plain attack in Dark Sight (without Vanish) only brings you out of it
@@ -6139,7 +6163,10 @@ export class Game {
     if ((!p.fh && id !== GRENADE) || p.attack) return false;
     if (MONSTER_MAGNETS.has(id) && (this.map.info?.fieldLimit || 0) & FIELD_NO_MOVEMENT_SKILLS) return false;
     if (CORKSCREWS.has(id) && ((this.map.info?.fieldLimit || 0) & FIELD_NO_MOVEMENT_SKILLS || performance.now() < (this.rushLock || 0))) return false;
-    if (this.net && id === GRENADE && !this.skills.weaponOk(id, this.weaponId())) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+    if (this.net && CHARGE_BLOWS.has(id) && !this.skills.weaponOk(id, this.weaponId())) {
+      this.notice(id === GRENADE ? "You cannot use this skill with the weapon you're equipped with." : 'This skill cannot be used with the equipped item.');
+      return false;
+    }
     if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
     // a prepare pose the client has no action for ("dash") goes out as none: you stand (or fall) as you are
     const act = node?.prepare?.action, known = !act || ACTIONS.includes(act);
@@ -6827,8 +6854,12 @@ export class Game {
     this.fx.push({ anim, x, y, flip: false });
   }
 
+  /** Load the item data of every arrow, star, bullet and capsule you carry, so a shot counts its attack from the first. */
+  warmAmmoInfo() {
+    for (const it of Object.values(this.inventory?.[2] || {})) if ([206, 207, 233].includes(Math.floor(it.id / 10000))) this.windows?.info(it.id);
+  }
   /**
-   * The first ammo in USE for the weapon with at least `count` left. Flamethrower and Ice Splitter take their own
+   * The first ammo in USE for the weapon with at least `count` left, within your level. Flamethrower and Ice Splitter take their own
    * capsule (2331xxx / 2332xxx) first and any bullet otherwise; nothing else ever takes a capsule.
    */
   ammoItem(count = 1, skillId = 0) {
@@ -6838,8 +6869,10 @@ export class Game {
     if (!ok) return 0;
     const use = this.inventory?.[2] || {}, slots = Object.keys(use).map(Number).sort((a, b) => a - b);
     const capsule = CAPSULES[skillId];
-    if (cat === 149 && capsule) for (const k of slots) if (Math.floor(use[k].id / 1000) === capsule && use[k].quantity >= count) return use[k].id;
-    for (const k of slots) if (ok(use[k].id) && use[k].quantity >= count) return use[k].id;
+    // and none above your level
+    const usable = (id) => { const info = this.windows?.info(id); return !info || (Number(info.reqLevel) || 0) <= (this.stats?.level || 0); };
+    if (cat === 149 && capsule) for (const k of slots) if (Math.floor(use[k].id / 1000) === capsule && use[k].quantity >= count && usable(use[k].id)) return use[k].id;
+    for (const k of slots) if (ok(use[k].id) && use[k].quantity >= count && usable(use[k].id)) return use[k].id;
     return 0;
   }
   /**
@@ -7089,11 +7122,12 @@ export class Game {
    *    crit. Barrage's 5th line does double and its 6th four times; a charged skill (Piercing Arrow) does
    *    (charge ms x 90 / its longest charge + 10)%.
    */
-  physicalHit(m, cat, skillId, ld, shot, pose, ammoId, crit, charge = 0, line = 0) {
+  physicalHit(m, cat, skillId, ld, shot, pose, ammoId, crit, charge = 0, line = 0, touch = false) {
     const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now(), job = this.stats?.job || 0;
     // Ninja Storm's blows land only at its prop chance
     if (skillId === NINJA_STORM && Math.random() * 100 >= (ld?.prop ?? 100)) return { d: 0, c: false };
-    const exempt = !shot && Math.floor((job % 1000) / 100) === 9;
+    // a GM's swings never miss and ignore the level gap (not a touch attack's)
+    const exempt = !shot && !touch && Math.floor((job % 1000) / 100) === 9;
     const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
     if (!exempt && this.accuracyMiss(info, over)) return { d: 0, c: false };
     if (skillId === SHADOW_MESO) return this.shadowMesoHit(info, ld, over);
@@ -7103,7 +7137,7 @@ export class Game {
     const f = weaponDamage(cat, shot, pose, skillId, job, asSwing);
     let mastery = f.mastery;
     if (mastery === undefined) {
-      const ms = masterySkills(cat, shot, skillId, job), val = (id) => (this.skills.level(id) ? this.skills.levelData(id)?.mastery || 0 : 0);
+      const ms = touch ? null : masterySkills(cat, shot, skillId, job), val = (id) => (this.skills.level(id) ? this.skills.levelData(id)?.mastery || 0 : 0);
       const over = (ms?.over || []).map(val).find((v) => v) || 0;
       const first = (ms?.first || []).map(val).find((v) => v) || 0;
       const v = over || first + (ms?.plus || []).reduce((a, id) => a + val(id), 0);
@@ -7128,7 +7162,10 @@ export class Game {
     }
     const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
     const base = Math.trunc(d - rand(pdd * 0.5, pdd * 0.6));
-    d = ld?.damage ? (base * ld.damage) / 100 : base;
+    // Flamethrower and Ice Splitter add Elemental Boost's damage % to their own once it is learned
+    let pct = Number(ld?.damage) || 0;
+    if (pct && CAPSULES[skillId] && this.skills.level(ELEMENTAL_BOOST)) pct += Number(this.skills.levelData(ELEMENTAL_BOOST)?.damage) || 0;
+    d = pct ? (base * pct) / 100 : base;
     const combo = this.comboPercent(skillId);
     if (combo > 0) d = (d * combo) / 100;
     // a critical: Critical Shot / Throw, Sharp Eyes, and Stun Mastery on a stunned monster (+its prop and damage)
@@ -7148,7 +7185,7 @@ export class Game {
     const berserk = !shot && job === 132 && this.skills.level(BERSERK) && this.skills.levelData(BERSERK);
     if (berserk && (this.stats?.hp || 0) <= ((berserk.x || 0) * this.maxHpShown()) / 100) d = (d * ((berserk.damage || 0) + 100)) / 100;
     if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
-    return { d: Math.max(1, Math.trunc(d)), c };
+    return { d: Math.min(199999, Math.max(1, Math.trunc(d))), c };
   }
   /** Your accuracy x 100 / (255 + 10 a level the monster has over you), x 0.7-1.3, under its avoid: a miss. */
   accuracyMiss(info, over) {
@@ -7187,7 +7224,11 @@ export class Game {
   /** Weapon attack: equipment, attack buffs, Bow Expert / Marksman Boost and a shot's ammo, at most 1999. */
   attackWatk(ammoId) {
     const now = Date.now();
-    let w = this.watk() + Math.max(0, ...(this.buffs || []).filter((b) => b.watk && b.until > now).map((b) => b.watk));
+    // a full Energy Charge's pad counts as the attack buff when it is higher
+    const ec = Math.floor((this.stats?.job || 0) / 1000) === 1 ? THUNDER_ENERGY_CHARGE : ENERGY_CHARGE;
+    const ecPad = (this.energy || 0) >= FULL_ENERGY && this.skills.level(ec) ? Number(this.skills.levelData(ec)?.pad) || 0 : 0;
+    // equipment plus Blessing of the Fairy's x (your base attack), then the attack buff
+    let w = this.watk() + this.passive(this.blessingId(), 'x') + Math.max(0, ecPad, ...(this.buffs || []).filter((b) => b.watk && b.until > now).map((b) => b.watk));
     for (const id of [3120005, 3220004]) if (this.skills.owns(id)) w += this.skills.levelData(id)?.x || 0;
     if (ammoId) w += this.windows?.info(ammoId)?.incPAD || 0;
     return Math.min(1999, w);
@@ -7895,7 +7936,7 @@ export class Game {
       if (t < (at[skill] ?? 0)) continue;
       at[skill] = t + 1000;
       const p = this.player, ld = this.skills.levelData(skill, level(skill)), wcat = Math.floor(this.weaponId() / 10000);
-      const h = this.physicalHit(m, wcat % 100, skill, ld, false, null, 0, critical(this, wcat, false));
+      const h = this.physicalHit(m, wcat % 100, skill, ld, false, null, 0, critical(this, wcat, false), 0, 0, true);
       this.net?.touchAttack({ skill, mob: m, dmg: h.d, facingLeft: !p.facingRight, speed: this.attackSpeed(skill), pos: p });
       m.hit(h.d, !p.facingRight, false);
       this.damageNumbers(m, [h.d], true, skill, [h.c]);

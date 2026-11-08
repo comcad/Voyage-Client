@@ -127,14 +127,15 @@ export class Summon {
     if ((this.attackT -= dt) > 0) return;
     const which = this.skill === WRATH && this.node.attack2 && Math.random() < 0.5 ? 'attack2' : 'attack1';
     const info = this.node[which].info, ld = this.g.skills.levelData(this.skill, this.level) || {};
-    const mobs = this.targets(info, ld.mobCount || 1);
+    const mobs = this.targets(info, info?.mobCount || ld.mobCount || 1);   // the attack's own mobCount (Gaviota 3)
     if (!mobs.length) { this.attackT = 0.25; return; }
     const len = this.anim(which).reduce((t, f) => t + (f.delay || 100), 0) / 1000;
     this.attackT = PIRATE_EVERY[this.skill] ?? Math.max(ATTACK_EVERY, len + 0.3);
     this.facingRight = mobs[0].x > this.x;
     this.play(which);
     const max = this.g.summonMaxDamage(this.skill, this.level);
-    const hits = mobs.map((m) => ({ mob: m, dmg: Math.max(1, Math.round(max * (0.5 + Math.random() * 0.45))) }));
+    const hits = mobs.map((m) => ({ mob: m, dmg: PIRATE_EVERY[this.skill] ? this.g.summonHitDamage(this.skill, this.level, m)
+      : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.45))) }));
     const delay = info?.attackAfter || 300;
     this.g.net?.summonAttack(this, hits, delay, SUMMON_ACTIONS[which]);
     for (const h of hits) h.mob.pendingHits = (h.mob.pendingHits || 0) + 1;
