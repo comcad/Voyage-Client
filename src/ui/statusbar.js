@@ -264,7 +264,7 @@ export class StatusBar {
       const t = this.chat.value.replace(/[^\x20-\x7e]/g, ' ').trim();
       this.chat.value = '';
       this.remember(t);
-      if (this.canSay(t)) g.sendChat(t);
+      this.say(t);
     } else if (e.key === 'Escape') { this.chat.value = ''; this.closeChat(); }
     else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && empty) {
       // the arrows go back to moving you
@@ -284,6 +284,18 @@ export class StatusBar {
     if (this.history[this.history.length - 1] !== t) this.history.push(t);
     if (this.history.length > 8) this.history.shift();
     this.historyAt = this.history.length;
+  }
+  /**
+   * Sends a chat line if the client's checks pass, in its order: the quiet time after a warning, then cursing
+   * ("Cursing is not allowed.", nothing sent), then the repeat and flood checks. Commands are not checked.
+   */
+  async say(t) {
+    const command = t.startsWith('/') || t.startsWith('!');
+    if (!command && performance.now() - (this.spamAt ?? -Infinity) >= 2800 && await this.game.cursed?.(t)) {
+      this.game.windows?.notice('Cursing is not allowed.');
+      return;
+    }
+    if (this.canSay(t)) this.game.sendChat(t);
   }
   /**
    * The client's chat checks: after a warning nothing goes for 2.8s; the same line 4 times in a row, or 4 lines in
