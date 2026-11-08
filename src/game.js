@@ -2711,6 +2711,7 @@ export class Game {
       }),
       weather: later((type, id, text) => { if (id) this.weather.start(id, text); else this.weather.stop(); }),
       // 4: a sound from Sound/Field.img; 6: the map's music changes until the next map
+      police: (text) => this.windows.notice(text),
       fieldEffect: later((type, str) => {
         if (type === 3 && str) this.vfx.screen(str);   // 3: Map/Effect.img/<str> on the screen
         if (type === 4 && str) sfx.play(`Field/${str}`);
