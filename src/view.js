@@ -24,12 +24,17 @@ export function resolutionIndex() {
   return i < 0 ? 0 : i;
 }
 const PHONE_UI_H = 400;
+const windowSize = () => [innerWidth || BASE_W, globalThis.visualViewport?.height || innerHeight || BASE_H];
+/** A window taller than it is wide (a phone held upright). */
+const portrait = () => { const [w, h] = windowSize(); return h > w; };
 /**
- * FIT TO SCREEN: the game takes the window's own size in game pixels (nothing stretched), made just big enough to be
- * 800x600 or more at the same shape (a phone's 852x393 is 1301x600).
+ * FIT TO SCREEN: in a wide window the game takes the window's own size in game pixels (nothing stretched), made just
+ * big enough to be 800x600 or more at the same shape (a phone's 852x393 is 1301x600). In a tall one (a phone held
+ * upright) it stays 800x600, 4:3 across the screen with bars above and below.
  */
 export function fitSize() {
-  const w = innerWidth || BASE_W, h = globalThis.visualViewport?.height || innerHeight || BASE_H;
+  if (portrait()) return [BASE_W, BASE_H];
+  const [w, h] = windowSize();
   const k = Math.max(1, BASE_W / w, BASE_H / h);
   return [Math.round(w * k), Math.round(h * k)];
 }
@@ -46,6 +51,6 @@ export function applyResolution() {
   UI_SCALE = Math.min(maxUiScale(), Math.max(1, Math.round((Number(settings.uiScale) || 1) * 10) / 10));
   UI_W = VIEW_W / UI_SCALE; UI_H = VIEW_H / UI_SCALE;
   document.documentElement.style.setProperty('--view-ar', String(VIEW_W / VIEW_H));
-  document.body?.classList.toggle('fit-screen', !!settings.fit);   // System Option FIT TO SCREEN
+  document.body?.classList.toggle('fit-screen', !!settings.fit && !portrait());   // System Option FIT TO SCREEN (4:3 upright)
 }
 applyResolution();
