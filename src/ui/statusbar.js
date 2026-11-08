@@ -418,8 +418,8 @@ export class StatusBar {
       const k = g.keymap?.[sc];
       if (!k) return null;
       // skills, items and macros by their own icons; menus, actions and faces by the key setting's
-      const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? g.windows.W.SkillMacro?.Macroicon?.[k.action]?.icon
-        : [2, 3, 7].includes(k.type) ? await itemIcon(this.assets, k.action) : g.windows.W.KeyConfig?.icon?.[k.action];
+      const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? this.W.SkillMacro?.Macroicon?.[k.action]?.icon
+        : [2, 3, 7].includes(k.type) ? await itemIcon(this.assets, k.action) : this.W.KeyConfig?.icon?.[k.action];
       if (node) await this.assets.preload([node]);
       return { node, skill: k.type === 1 ? k.action : 0, item: k.type === 2 ? k.action : 0 };
     }));
