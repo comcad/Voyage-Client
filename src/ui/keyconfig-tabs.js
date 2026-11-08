@@ -163,6 +163,8 @@ const SHOW = [['auto', 'Auto'], ['on', 'On'], ['off', 'Off']];
 const SIZES = [[0.8, 'Small'], [1, 'Medium'], [1.25, 'Large'], [1.5, 'X-Large'], [1.8, 'Huge']];
 const OPACITY = [[0.5, '50%'], [0.75, '75%'], [1, '100%']];
 const BUTTON = 58, STICK = 120;
+/** How far past its edge (interface px) a finger still takes a control in the preview: they are small there. */
+const TOUCH_GRAB = 16;
 
 export class ControlTabs {
   /** win: the Key Setting window (its draft controls, icons, carry and binding conversion). */
@@ -353,12 +355,17 @@ export class ControlTabs {
     if (fill !== '#ffffff') { ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke(); }
     ctx.restore();
   }
-  /** The touch control under a preview point: a button's id, 'stick', or null. */
-  touchAt(lx, ly) {
+  /**
+   * The touch control under a preview point: a button's id, 'stick', or null. `slack` reaches past the edges (a
+   * finger, see TOUCH_GRAB); where several are in reach, the one whose edge is nearest.
+   */
+  touchAt(lx, ly, slack = 2) {
     const t = this.draft.touch, P = preview(), k = P.w / UI_W * (t.size || 1);
-    for (const b of [...t.buttons].reverse()) if (Math.hypot(lx - (P.x + b.x * P.w), ly - (P.y + b.y * P.h)) <= BUTTON * k / 2 + 2) return b.id;
-    if (Math.hypot(lx - (P.x + t.stick.x * P.w), ly - (P.y + t.stick.y * P.h)) <= STICK * k / 2) return 'stick';
-    return null;
+    let best = null, gap = Infinity;
+    const near = (id, x, y, r) => { const d = Math.hypot(lx - (P.x + x * P.w), ly - (P.y + y * P.h)) - r; if (d <= slack && d < gap) { best = id; gap = d; } };
+    for (const b of [...t.buttons].reverse()) near(b.id, b.x, b.y, BUTTON * k / 2);
+    near('stick', t.stick.x, t.stick.y, STICK * k / 2);
+    return best;
   }
   inPreview(lx, ly) { const P = preview(); return lx >= P.x && lx < P.x + P.w && ly >= P.y && ly < P.y + P.h; }
 
@@ -392,7 +399,7 @@ export class ControlTabs {
       if (this.picked !== null) { t.buttons = t.buttons.filter((b) => b.id !== this.picked); this.picked = null; }
       return true;
     }
-    const at = this.touchAt(lx, ly);
+    const at = this.touchAt(lx, ly, this.mgr.touch ? TOUCH_GRAB : 2);
     if (at !== null) { if (at !== 'stick') this.picked = at; this.dragging = at; return true; }
     return false;
   }

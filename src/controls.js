@@ -1,9 +1,10 @@
 /**
- * Controller and touch-screen layouts. They live in this browser (localStorage), not on the server: a phone's
+ * Controller and touch-screen layouts. They live on this device (storage and a cookie, see kept.js), not on the server: a phone's
  * touch buttons and a PC's controller differ per device. Each slot holds a binding like the server key map's,
  * {type, action}: 1 skill, 2 item, 3 face item, 4 window, 5 basic action, 6 face, 7 effect item, 8 macro.
  */
 import { ACTION, MENU } from './keymap.js';
+import { readKept, writeKept } from './kept.js';
 
 const STORE = 'voyage.controls';
 
@@ -64,14 +65,14 @@ export function bindingLabel(b) {
 
 export function loadControls() {
   try {
-    const c = JSON.parse(localStorage.getItem(STORE) || 'null');
+    const c = JSON.parse(readKept(STORE) || 'null');
     if (c) return { pad: c.pad || defaultPad(), padMove: c.padMove === 'dpad' ? 'dpad' : 'ls', touch: { ...defaultTouch(), ...c.touch } };
   } catch { /* storage blocked or bad data: the defaults */ }
   return { pad: defaultPad(), padMove: 'ls', touch: defaultTouch() };
 }
 
 export function saveControls(c) {
-  try { localStorage.setItem(STORE, JSON.stringify(c)); } catch { /* storage blocked: this session only */ }
+  writeKept(STORE, JSON.stringify(c));
 }
 
 export const cloneControls = (c) => JSON.parse(JSON.stringify(c));
