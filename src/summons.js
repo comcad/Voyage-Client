@@ -15,6 +15,12 @@ const ATTACK_EVERY = 1.6;     // seconds between a summon's attacks (at least it
 const SYNC_EVERY = 0.4;
 /** Octopus, Wrath of the Octopi and Gaviota: the summons that still attack while you are on a ladder or rope. */
 const LADDER_ATTACKERS = new Set([5211001, 5220002, 5211002]);
+/** Seconds from one attack to the next for the Octopus (3) and for Gaviota and Wrath of the Octopi (1.5). */
+const PIRATE_EVERY = { 5211001: 3, 5211002: 1.5, 5220002: 1.5 };
+/** Wrath of the Octopi picks attack1 or attack2 at random each time. */
+const WRATH = 5220002;
+/** A summon attack's action (attack1 is 4, attack2 5), sent with facing left in the top bit. */
+export const SUMMON_ACTIONS = { attack1: 4, attack2: 5 };
 
 export class Summon {
   constructor(game, d) {
@@ -119,19 +125,21 @@ export class Summon {
     if (!this.canAttack || !this.node?.attack1 || this.state === 'summoned') return;
     if (this.g.player?.ladder && !LADDER_ATTACKERS.has(this.skill)) return;
     if ((this.attackT -= dt) > 0) return;
-    const info = this.node.attack1.info, ld = this.g.skills.levelData(this.skill, this.level) || {};
-    const mobs = this.targets(info, ld.mobCount || 1);
+    const which = this.skill === WRATH && this.node.attack2 && Math.random() < 0.5 ? 'attack2' : 'attack1';
+    const info = this.node[which].info, ld = this.g.skills.levelData(this.skill, this.level) || {};
+    const mobs = this.targets(info, info?.mobCount || ld.mobCount || 1);   // the attack's own mobCount (Gaviota 3)
     if (!mobs.length) { this.attackT = 0.25; return; }
-    const len = this.anim('attack1').reduce((t, f) => t + (f.delay || 100), 0) / 1000;
-    this.attackT = Math.max(ATTACK_EVERY, len + 0.3);
+    const len = this.anim(which).reduce((t, f) => t + (f.delay || 100), 0) / 1000;
+    this.attackT = PIRATE_EVERY[this.skill] ?? Math.max(ATTACK_EVERY, len + 0.3);
     this.facingRight = mobs[0].x > this.x;
-    this.play('attack1');
+    this.play(which);
     const max = this.g.summonMaxDamage(this.skill, this.level);
-    const hits = mobs.map((m) => ({ mob: m, dmg: Math.max(1, Math.round(max * (0.5 + Math.random() * 0.45))) }));
+    const hits = mobs.map((m) => ({ mob: m, dmg: PIRATE_EVERY[this.skill] ? this.g.summonHitDamage(this.skill, this.level, m)
+      : Math.max(1, Math.round(max * (0.5 + Math.random() * 0.45))) }));
     const delay = info?.attackAfter || 300;
-    this.g.net?.summonAttack(this, hits, delay);
+    this.g.net?.summonAttack(this, hits, delay, SUMMON_ACTIONS[which]);
     for (const h of hits) h.mob.pendingHits = (h.mob.pendingHits || 0) + 1;
-    this.g.after(delay, () => { for (const h of hits) this.g.summonHit(this, h.mob, [h.dmg], true); });
+    this.g.after(delay, () => { for (const h of hits) this.g.summonHit(this, h.mob, [h.dmg], true, which); });
   }
 
   draw(ctx, cam) {

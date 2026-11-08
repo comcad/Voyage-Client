@@ -2026,16 +2026,20 @@ function tipFrame(ctx, x, y, w, h) {
   ctx.fillRect(x + 1, y + 2, 1, h - 4); ctx.fillRect(x + w - 2, y + 2, 1, h - 4);
   ctx.fillRect(x + 2, y + 1, w - 4, 1); ctx.fillRect(x + 2, y + h - 2, w - 4, 1);
 }
-/** A one-line tooltip (button hints, the EXP figures): text width + 8 by the line + 6, (dx, dy) from where tips go. */
+/**
+ * A plain tooltip (button hints, the EXP figures): the widest line + 8 wide, 20 high and 15 more for each line after
+ * the first ("\n" breaks), (dx, dy) from where tips go.
+ */
 export function lineTip(text, dx = 0, dy = 0) {
+  const lines = String(text).split('\n');
   return {
     draw(ctx, x, y) {
       ctx.save();
       ctx.font = '12px Arial, sans-serif';
-      const w = Math.ceil(ctx.measureText(text).width) + 8, h = 20;
+      const w = Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) + 8, h = 20 + 15 * (lines.length - 1);
       x = Math.max(0, Math.min(x + dx, UI_W - w)); y = Math.max(0, Math.min(y + dy, UI_H - h));
       tipFrame(ctx, x, y, w, h);
-      uiText(ctx, text, x + 4, y + 3, { color: '#fff', size: 12 });
+      lines.forEach((l, i) => uiText(ctx, l, x + 4, y + 3 + 15 * i, { color: '#fff', size: 12 }));
       ctx.restore();
     },
   };

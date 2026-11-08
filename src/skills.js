@@ -24,6 +24,13 @@ const NOT_ATTACKS = new Set([1211003, 1211004, 1211005, 1211006, 1211007, 121100
 const PROCS = new Set([1000002, 1100002, 1100003, 1200002, 1200003, 1300002, 1300003, 1120003, 11110005, 1120005, 1220006,
   1220010, 1320006, 1320009, 3000001, 13000000, 3100001, 3200001, 13101002, 3110001, 3210001, 4120005, 4220005, 14110004,
   4100001, 14100001, 4100002, 4200001, 14100005]);
+/**
+ * Shots whatever their data says: Energy Orb, Invisible Shot, Recoil Shot, Flamethrower, Ice Splitter, Rapid Fire and
+ * Hypnotize.
+ */
+const PIRATE_SHOTS = new Set([5121002, 5201001, 5201006, 5211004, 5211005, 5221004, 5221009]);
+/** Passives whose data looks castable: Stun Mastery, Energy Charge, Elemental Boost, Critical Punch. */
+const PASSIVES = new Set([5110000, 5110001, 5220001, 15110000]);
 /** Close-range attacks whatever their data says: Panic, Disorder, Ninja Storm. */
 const MELEE_SKILLS = new Set([1111003, 1111004, 11111002, 4001002, 14001002, 4121008]);
 /** Spells that look like buffs in their data: Cold Beam, Paralyze, Poison Mist, Flame Gear. */
@@ -32,11 +39,11 @@ const MAGIC_SKILLS = new Set([2201004, 2121006, 2111003, 12111005]);
 const isBowman = (id) => Math.floor(id / 1000000) % 10 === 3;
 const BOW_SWINGS = new Set([3101003, 3201003]);
 const SNIPE = 3221007;
-/** Shots that need no ammo: Soul Blade, Shark Wave, Taunt, Shadow Meso, Vampire. */
-export const NO_AMMO_SHOTS = new Set([11101004, 15111007, 4121003, 4221003, 4111004, 14101006]);
+/** Shots that need no ammo: Soul Blade, Shark Wave, Taunt, Shadow Meso, Vampire, Energy Orb. */
+export const NO_AMMO_SHOTS = new Set([11101004, 15111007, 4121003, 4221003, 4111004, 14101006, 5121002]);
 /**
  * Weapons (category % 100) a skill needs where its data doesn't say: 30/40 swords, 31/41 axes, 32/42 blunt, 43 spear,
- * 44 polearm, 37 wand, 38 staff, 47 claw.
+ * 44 polearm, 37 wand, 38 staff, 47 claw, 48 knuckle, 49 gun. No weapon is type 0, which none of these take.
  */
 const SKILL_WEAPONS = {
   1101004: [30, 40], 1101005: [31, 41], 1201004: [30, 40], 1201005: [32, 42], 1301004: [43], 1301005: [44], 11101001: [30, 40],
@@ -45,6 +52,11 @@ const SKILL_WEAPONS = {
   1321003: [43, 44], 1311005: [43, 44], 1311006: [43, 44],
   1211003: [30, 40], 1211005: [30, 40], 1211007: [30, 40], 1221003: [30, 40], 11101002: [30, 40], 11111007: [30, 40],
   1211004: [32, 42], 1211006: [32, 42], 1211008: [32, 42], 1221004: [32, 42], 14101006: [47],
+  5101006: [48], 15101002: [48], 5201003: [49], 5201002: [49],
+  // the knuckle blows (weapon type 39 counts too, though no item has it); Flash Fist / Straight also with a gun
+  5101002: [48, 39], 5101003: [48, 39], 5101004: [48, 39], 5111002: [48, 39], 5111006: [48, 39], 5121001: [48, 39],
+  5121002: [48, 39], 5121004: [48, 39], 5121005: [48, 39], 5121007: [48, 39], 15101003: [48, 39], 15101005: [48, 39],
+  15111003: [48, 39], 15111004: [48, 39], 5001001: [48, 49, 39], 15001001: [48, 49, 39],
   2111005: [37, 38], 2211005: [37, 38], 12101004: [37, 38], 12101005: [37, 38],
 };
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
@@ -155,7 +167,8 @@ export class SkillBook {
 
   kind(id, weaponId) {
     const n = this.node(id), ld = n?.level?.[1];
-    if (!n || !ld || PROCS.has(id)) return 'passive';
+    if (!n || !ld || PROCS.has(id) || PASSIVES.has(id)) return 'passive';
+    if (PIRATE_SHOTS.has(id)) return 'ranged';
     if (MELEE_SKILLS.has(id)) return 'melee';
     if (MAGIC_SKILLS.has(id)) return 'magic';
     if (NO_AMMO_SHOTS.has(id) || id === SNIPE) return 'ranged';
@@ -224,11 +237,12 @@ const CRIT_SKILLS = { 145: [3000001, 13000000], 146: [3000001, 13000000], 147: [
 export function critical(game, weaponCat, shot = true) {
   const sb = game.skills;
   let rate = 0, dmg = 0;
-  // Critical Shot and Critical Throw only count for a shot; Critical Punch for any knuckle blow
-  for (const id of shot || weaponCat === 148 ? CRIT_SKILLS[weaponCat] || [] : []) {
-    const ld = sb.owns(id) && sb.levelData(id);
-    if (ld) { rate += ld.prop || 0; dmg += (ld.damage || 100) - 100; }
-  }
+  // Critical Shot and Critical Throw only count for a shot (the Explorer's, or a Cygnus job's own); Critical Punch for
+  // any knuckle blow. Whoever has a level in it gets it, whatever their job.
+  const list = CRIT_SKILLS[weaponCat], cygnus = Math.floor((game.stats?.job || 0) / 1000) === 1;
+  const id = (shot || weaponCat === 148) && (list?.[cygnus ? 1 : 0] ?? list?.[0]);   // knuckles: Critical Punch for all
+  const ld = id && sb.level(id) && sb.levelData(id);
+  if (ld) { rate += ld.prop || 0; dmg += (ld.damage || 100) - 100; }
   const se = game.buffs?.find((b) => b.sharpEyes && b.until > Date.now())?.sharpEyes;
   if (se) { rate += se.rate; dmg += se.dmg; }
   return rate > 0 ? { rate, dmg } : null;
