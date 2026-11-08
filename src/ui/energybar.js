@@ -2,8 +2,8 @@
  * The Energy Charge gauge (UI/UIWindow.img/EnergyBar): an 82x10 bar that shows while you have any energy and goes
  * when it is spent. Its frame (w, c, e) is drawn at 180/255; the gauge fills trunc(energy / 10000 x 78) columns from
  * x 2 - Gage/1/0 (4px, y 3) at its first and last columns, Gage/1/1 (6px, y 2) between. Full, it plays its effect
- * instead. It is dragged from anywhere on it and stays where it was put (x from 20 less its width to 20 short of the
- * screen's right edge, y likewise).
+ * instead. It starts in the middle of the screen, is dragged from anywhere on it and stays where it was put (x from 20
+ * less its width to 20 short of the screen's right edge, y likewise).
  */
 import { Win, lineTip } from './windows.js';
 import { Anim } from '../map.js';
@@ -20,7 +20,7 @@ export class EnergyBarWin extends Win {
     super(mgr, null, 0, 0);
     this.buttons = []; this.closeBtn = null;
     const s = load();
-    this.x = s.x ?? 20; this.y = s.y ?? 20;
+    this.x = s.x ?? Math.round((UI_W - W) / 2); this.y = s.y ?? Math.round((UI_H - H) / 2);
     this.w = W; this.h = H; this.dragH = H;
     this.keepOnEscape = true; this.closeSound = null;
     this.value = 0; this.full = null; this.t = 0;
