@@ -2241,13 +2241,15 @@ export class Game {
     if (!w || !c || !e) { nameTag(ctx, pet.name, x, y + 2, '#fff'); return; }
     ctx.save();
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
-    const tw = Math.ceil(ctx.measureText(pet.name).width), x0 = Math.round(x - tw / 2), top = y + 2 + 5;
+    // the middle piece is tiled (whole pieces, wide enough for the name), not stretched; the name centred on it
+    const tw = Math.ceil(ctx.measureText(pet.name).width), mid = Math.max(1, Math.ceil(tw / c.width)) * c.width;
+    const x0 = Math.round(x - mid / 2), top = y + 2 + 5;
     ctx.drawImage(w, x0 - (N.w.origin?.[0] ?? w.width), top - (N.w.origin?.[1] ?? 0));
-    ctx.drawImage(c, x0, top - (N.c.origin?.[1] ?? 0), tw, c.height);
-    ctx.drawImage(e, x0 + tw - (N.e.origin?.[0] ?? 0), top - (N.e.origin?.[1] ?? 0));
+    for (let k = 0; k < mid; k += c.width) ctx.drawImage(c, x0 + k, top - (N.c.origin?.[1] ?? 0));
+    ctx.drawImage(e, x0 + mid - (N.e.origin?.[0] ?? 0), top - (N.e.origin?.[1] ?? 0));
     ctx.fillStyle = `#${((N.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
     ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.fillText(pet.name, x0, top - 3);
+    ctx.fillText(pet.name, x0 + Math.floor((mid - tw) / 2), top - 3);
     ctx.restore();
   }
   /** Its accessory, from Character/PetEquip/<id>.img/<pet id>/<action>/<frame>, over the pet's frame. */
