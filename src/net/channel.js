@@ -1135,6 +1135,12 @@ export class ChannelSession {
     // a catch item that didn't work: 0 the monster is too strong, 1 used again too soon; then the item
     // a notice the server sends before it cuts you off (an autoban, a GM's ban): its text in a dialog, unless empty
     on(S.DATA_CRC_CHECK_FAILED, (r) => { const text = r.string(); if (text) this.emit('police', text); });
+    // guild alliances: mode 3 an invitation (the alliance's id, who sent it, their guild's name)
+    on(S.ALLIANCE_OPERATION, (r) => {
+      if (r.ubyte() !== 3) return;
+      const id = r.int(), from = r.string(), guildName = r.available >= 2 ? r.string() : '';
+      this.emit('allianceInvite', id, from, guildName);
+    });
     on(S.BRIDLE_MOB_CATCH_FAIL, (r) => { const type = r.ubyte(); this.emit('catchFail', type, r.int()); });
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
     // damage (negative: healed), then - for one other monsters can hurt - its HP and max HP
@@ -1714,6 +1720,10 @@ export class ChannelSession {
   guildRank(cid, rank) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0E).int(cid).byte(rank)); }
   guildEmblem(e) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0F).short(e.bg).byte(e.bgColor).short(e.logo).byte(e.logoColor)); }
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
+  /** ALLIANCE_OPERATION 4: take a guild alliance's invitation (its id, and the inviter's guild name). */
+  allianceAccept(id, guildName = '') { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(4).int(id).string(guildName)); }
+  /** DENY_ALLIANCE_REQUEST 0x16: turn a guild alliance's invitation down (the inviter, your guild's name). */
+  allianceDeny(from, guildName = '') { this.send(new PacketWriter(C.DENY_ALLIANCE_REQUEST).byte(0x16).string(from).string(guildName)); }
   /** DENY_GUILD_REQUEST: 0x37 refused, 0x36 busy with another invitation, 0x35 not taking invitations. */
   guildDeny(from, code = 0x37, me = '') { this.send(new PacketWriter(C.DENY_GUILD_REQUEST).byte(code).string(from).string(me)); }
   /** PARTY_SEARCH_START: level range, how many members, the job bits; PARTY_SEARCH_UPDATE ends the search */
