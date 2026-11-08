@@ -2679,9 +2679,8 @@ export class Game {
         this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt();
       }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
-      ship: later((here) => this.moveShip(here)),
+      ship: later((move) => this.shipMove(move)),
       // the Balrog's ship comes alongside: its music cuts in, for the rest of the voyage
-      shipAttack: later(() => { if (this.ship) music.play('Bgm04/ArabPirate', { fadeOut: 0, fadeIn: 0 }); }),
       mistSpawn: later((d) => this.addMist(d)),
       mistRemove: later((oid) => this.mists?.delete(oid)),
       doorSpawn: later((d) => {
@@ -6136,7 +6135,7 @@ export class Game {
     this.ship = null;
     if (!o?.shipObj) return;
     const map = this.map, x0 = o.x0 ?? o.x + (o.f ? -800 : 800);
-    const ship = { x: o.x, y: o.y, x0, flip: !!o.f, tMove: (o.tMove || 1) * 1000, state: 'gone', from: x0, to: x0, t0: 0, node: null };
+    const ship = { kind: Number(o.shipKind) || 0, x: o.x, y: o.y, x0, flip: !!o.f, tMove: (o.tMove || 1) * 1000, state: 'gone', from: x0, to: x0, t0: 0, node: null };
     this.ship = ship;
     // Map/Obj/<image>[.img]/<path...>: usually vehicle.img (written with or without .img), the Genie's in acc8.img
     const [, img, path] = String(o.shipObj).match(/^Map\/Obj\/([^/]+?)(?:\.img)?\/(.+)$/) || [];
@@ -6148,14 +6147,28 @@ export class Game {
     await this.assets.preload([node]);
     if (this.map === map) ship.node = node;
   }
-  /** The server says the ship is in (true) or gone; on arriving at the map that is how it already is, no sailing. */
-  moveShip(here) {
+  /**
+   * The server moves the map's ship. A ship (shipKind 0) comes in ('in': from x0 to x) or goes ('out': from x to x0)
+   * over tMove, sounding its whistle (Sound/Object.img/Whistle) either way. The Balrog's ship (shipKind 1) comes
+   * ('enemyIn', with Bgm04/ArabPirate) or goes ('enemyOut'); on arriving at the map it is already where it is.
+   */
+  shipMove(move) {
     const s = this.ship;
     if (!s) return;
-    const now = performance.now(), entering = now - (this.mapEnteredAt || 0) < 1500;
-    const at = this.shipX();
+    const now = performance.now();
+    if (s.kind === 1) {
+      if (move !== 'enemyIn' && move !== 'enemyOut') return;
+      const here = move === 'enemyIn', entering = now - (this.mapEnteredAt || 0) < 1500, at = this.shipX();
+      s.state = here ? 'in' : 'gone';
+      s.from = entering ? (here ? s.x : s.x0) : at; s.to = here ? s.x : s.x0; s.t0 = entering ? now - s.tMove : now;
+      if (here) music.play('Bgm04/ArabPirate', { fadeOut: 0, fadeIn: 0 });
+      return;
+    }
+    if (move !== 'in' && move !== 'out') return;
+    const here = move === 'in';
     s.state = here ? 'in' : 'gone';
-    s.from = entering ? (here ? s.x : s.x0) : at; s.to = here ? s.x : s.x0; s.t0 = entering ? now - s.tMove : now;
+    s.from = here ? s.x0 : s.x; s.to = here ? s.x : s.x0; s.t0 = now;
+    sfx.play('Object/Whistle');
   }
   shipX() {
     const s = this.ship;

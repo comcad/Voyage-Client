@@ -803,10 +803,21 @@ export class ChannelSession {
       if (type === 2) this.emit('clock', r.int());
       else if (type === 1) this.emit('fieldClock', r.ubyte(), r.ubyte(), r.ubyte());   // a station's time of day
     });
-    // ships: at a station 1 = it is in (docked), 2 = it has gone; on a voyage 10 then 4 / 5 = the Balrog's ship
-    // comes / goes
-    on(S.CONTI_STATE, (r) => this.emit('ship', r.ubyte() === 1));
-    on(S.CONTI_MOVE, (r) => { if (r.ubyte() !== 10) return; const b = r.ubyte(); this.emit('ship', b === 4); if (b === 4) this.emit('shipAttack'); });
+    // the map's ship. CONTI_STATE (state, flag): 0, 1 or 6 a ship comes in; 2 to 5 it goes, and on 3 or 4 with the
+    // flag set the Balrog's ship comes. CONTI_MOVE: 8 then 2 a ship goes, 12 then 6 it comes in, 10 then 4 the
+    // Balrog's ship comes and 10 then 5 it goes. Which of these a map's ship takes is up to its kind (Game.shipMove).
+    on(S.CONTI_STATE, (r) => {
+      const s = r.ubyte(), f = r.available ? r.ubyte() : 0;
+      if (s < 2 || s === 6) this.emit('ship', 'in');
+      else if (s <= 5) { if ((s === 3 || s === 4) && f === 1) this.emit('ship', 'enemyIn'); this.emit('ship', 'out'); }
+    });
+    on(S.CONTI_MOVE, (r) => {
+      const a = r.ubyte(), b = r.available ? r.ubyte() : 0;
+      if (a === 8 && b === 2) this.emit('ship', 'out');
+      else if (a === 12 && b === 6) this.emit('ship', 'in');
+      else if (a === 10 && b === 4) this.emit('ship', 'enemyIn');
+      else if (a === 10 && b === 5) this.emit('ship', 'enemyOut');
+    });
     on(S.STOP_CLOCK, () => this.emit('clock', null));
     on(S.REMOVE_DOOR, (r) => { r.ubyte(); this.emit('doorRemove', r.int()); });
     on(S.SPAWN_PORTAL, (r) => { const from = r.int(), to = r.int(); this.emit('townPortal', from, to, r.available >= 4 ? { x: r.short(), y: r.short() } : null); });
