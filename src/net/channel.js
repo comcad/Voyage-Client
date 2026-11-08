@@ -1133,6 +1133,8 @@ export class ChannelSession {
     // another player's Monster Magnet pulled (or failed to pull) a monster: mob, success
     on(S.CATCH_MONSTER, (r) => { const oid = r.int(); this.emit('magnetCatch', oid, r.ubyte() !== 0); });
     // a catch item that didn't work: 0 the monster is too strong, 1 used again too soon; then the item
+    // a notice the server sends before it cuts you off (an autoban, a GM's ban): its text in a dialog, unless empty
+    on(S.DATA_CRC_CHECK_FAILED, (r) => { const text = r.string(); if (text) this.emit('police', text); });
     on(S.BRIDLE_MOB_CATCH_FAIL, (r) => { const type = r.ubyte(); this.emit('catchFail', type, r.int()); });
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
     // damage (negative: healed), then - for one other monsters can hurt - its HP and max HP
