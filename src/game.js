@@ -133,6 +133,8 @@ const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST
 
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2', 'stabT2'];
+/** How far a finger may move during a tap and it still counts as one (a mouse click: 4px). */
+const TOUCH_SLOP = 12;
 /** An Aran's basic attacks with a polearm. */
 const POLEARM_SWINGS = ['swingT2PoleArm', 'swingP1PoleArm', 'swingP2PoleArm'];
 /** The arrows' scancodes, for the key commands. */
@@ -732,11 +734,13 @@ export class Game {
     const wm = this.windows;
     // windows sit above the bar: they see the event first, the bar only gets what they leave
     // in the Cash Shop only its windows take the mouse (the bar is hidden, and the shop may not cover the screen)
-    const route = (type, e) => this.uiLocked || (this.inCashShop ? (wm.pointer(type, ...at(e)), true)
-      : wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e)));
+    // a finger is less exact than a mouse: a tap may move 12px and still be a tap (a click, 4px)
+    const route = (type, e) => { wm.slop = e.pointerType === 'touch' ? TOUCH_SLOP : 4; return this.uiLocked || (this.inCashShop ? (wm.pointer(type, ...at(e)), true)
+      : wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e))); };
     c.addEventListener('pointermove', (e) => route('move', e));
     c.addEventListener('pointerdown', (e) => { if (route('down', e)) e.stopImmediatePropagation(); }, true);
     addEventListener('pointerup', (e) => route('up', e));
+    addEventListener('pointercancel', (e) => route('up', e));   // a touch the browser took back ends a drag where it is
     c.addEventListener('click', (e) => { const p = at(e); if (wm.top(...p) || sb.contains(...p)) e.stopImmediatePropagation(); }, true);
     c.addEventListener('contextmenu', (e) => {
       e.preventDefault();

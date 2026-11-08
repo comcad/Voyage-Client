@@ -1,4 +1,8 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
+/* phones and tablets: every finger goes to the game (no page zoom, scroll, selection or long-press menu) */
+html.touch-device, html.touch-device body { touch-action: none; overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+html.touch-device input, html.touch-device textarea { touch-action: manipulation; -webkit-user-select: text; user-select: text; }
 html, body { height: 100%; background: #000; color: #eee; font: 13px 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
 button { font: inherit; cursor: pointer; background: linear-gradient(#5a6b8c, #3d4a66); color: #fff; border: 1px solid #22293a; border-radius: 4px; padding: 4px 10px; }
 button:hover { filter: brightness(1.15); }

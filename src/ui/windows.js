@@ -22,6 +22,7 @@ export class WindowManager {
     this.game = game; this.assets = game.assets; this.bar = statusBar;
     this.wins = {}; this.order = [];
     this.mouse = { x: -1, y: -1 }; this.drag = null; this.carry = null; this.tip = null;
+    this.slop = 4;   // how far a press may move and still be a click: 4px for a mouse, more for a finger (see pointer)
     this.icons = new Map(); this.names = new Map(); this.infos = new Map(); this.descs = new Map(); this.lastDown = null; this.namesVersion = 0;
     this.strings = {};
     // modal dialogs take the keyboard: Enter / Escape go to them and the game's keys are held back
@@ -218,7 +219,7 @@ export class WindowManager {
       // menus close on any click outside them
       for (const o of [...this.order]) if (o.transient && o !== w) this.close(o);
       // anything held by a click goes where the next click is (a quick second click on it is a double-click)
-      const held = this.carry?.sticky ? this.carry : null, quick = held && performance.now() - held.at < 350 && Math.abs(held.x - x) < 4 && Math.abs(held.y - y) < 4;
+      const held = this.carry?.sticky ? this.carry : null, quick = held && performance.now() - held.at < 350 && Math.abs(held.x - x) < this.slop && Math.abs(held.y - y) < this.slop;
       if (held && !quick) { this.lastDown = null; if (!modal || w === modal) this.placeCarry(x, y); return true; }
       if (!w) return !!modal;
       this.raise(w);
@@ -227,7 +228,7 @@ export class WindowManager {
       if (!over && ly < (w.dragH ?? 20) && !w.fixed) { this.drag = { win: w, dx: lx, dy: ly }; return true; }
       const now = performance.now(), last = this.lastDown;
       this.lastDown = { w, x, y, t: now };
-      if (last && last.w === w && now - last.t < 350 && Math.abs(last.x - x) < 4 && Math.abs(last.y - y) < 4) {
+      if (last && last.w === w && now - last.t < 350 && Math.abs(last.x - x) < this.slop && Math.abs(last.y - y) < this.slop) {
         this.lastDown = null; this.carry = null; w.dblclick?.(lx, ly); return true;
       }
       if (!over) {
@@ -242,7 +243,7 @@ export class WindowManager {
         const c = this.carry;
         if (c.sticky) return !!w;
         // released where it was picked up: a click, not a drag - keep holding it until the next click
-        if (Math.abs(c.x - x) < 4 && Math.abs(c.y - y) < 4) { c.sticky = true; return true; }
+        if (Math.abs(c.x - x) < this.slop && Math.abs(c.y - y) < this.slop) { c.sticky = true; return true; }
         return this.placeCarry(x, y);
       }
       if (!w) return false;
