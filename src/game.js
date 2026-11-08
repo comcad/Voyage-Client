@@ -2598,6 +2598,12 @@ export class Game {
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         this.windows.open('inventory');
       },
+      // a guild alliance's invitation: refused at once without a guild or while another is up; O takes it
+      allianceInvite: later((id, from, guildName) => {
+        const mine = this.guild?.name || '';
+        if (!this.guild || this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine); return; }
+        notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, guildName) : this.net.allianceDeny(from, mine)));
+      }),
       tradeInvite: (name) => notify(this.windows, 'trade', name)
         .then((ok) => (ok ? this.net.tradeAccept() : this.net.tradeDecline())),
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
