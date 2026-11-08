@@ -1,7 +1,12 @@
 import { settings } from './settings.js';
 
-/** The game's screen size in game pixels, set by the System Option SCREEN SIZE (800x600 by default). */
-export const RESOLUTIONS = [[800, 600], [1024, 768], [1280, 720], [1280, 960], [1366, 768], [1600, 900], [1920, 1080]];
+/**
+ * The game's screen size in game pixels, set by the System Option SCREEN SIZE (800x600 by default). The phone sizes
+ * are a phone's shape at 600 game pixels tall (the interface needs 800x600), so the game fills its screen without
+ * black bars: the iPhone 15 (and every iPhone 14 Pro, 15 and 16, 19.5:9), most Androids now (20:9) and older ones (18:9).
+ */
+export const RESOLUTIONS = [[800, 600], [1024, 768], [1280, 720], [1280, 960], [1366, 768], [1600, 900], [1920, 1080],
+  [1300, 600, 'iPhone 15'], [1333, 600, 'Android'], [1200, 600, 'Android 18:9']];
 export const BASE_W = 800, BASE_H = 600;
 export let VIEW_W = BASE_W, VIEW_H = BASE_H;
 /**
@@ -10,7 +15,7 @@ export let VIEW_W = BASE_W, VIEW_H = BASE_H;
  */
 export let UI_SCALE = 1, UI_W = BASE_W, UI_H = BASE_H;
 
-export const resolutionName = ([w, h]) => `${w} x ${h}`;
+export const resolutionName = ([w, h, label]) => `${w} x ${h}${label ? `  ${label}` : ''}`;
 export function resolutionIndex() {
   const i = RESOLUTIONS.findIndex(([w, h]) => `${w}x${h}` === settings.resolution);
   return i < 0 ? 0 : i;
