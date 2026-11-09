@@ -4241,12 +4241,16 @@ export class Game {
     if (!this.look.has(action)) return;
     p.attack = action; p.action = action; p.frame = 0; p.frameT = 0; p.seat = null;
   }
-  /** LOCK_UI: the windows close and the status bar and minimap are gone until it is unlocked. */
+  /**
+   * LOCK_UI: the windows close and the status bar and minimap are gone until it is unlocked. Notification balloons
+   * are kept, held back until then.
+   */
   setUiLock(on) {
     this.uiLocked = on;
     const wm = this.windows;
     if (on && wm) {
-      const keep = (w) => w === wm.wins.minimap || w === wm.wins.questalarm;
+      const keep = (w) => w === wm.wins.minimap || w === wm.wins.questalarm || typeof w.holdOnLock === 'function';
+      for (const w of wm.order) w.holdOnLock?.();
       for (const w of wm.order) if (!keep(w)) w.onClose?.();
       wm.order = wm.order.filter(keep); wm.drag = null; wm.carry = null; wm.tip = null;
     }
