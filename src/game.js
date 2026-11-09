@@ -5,6 +5,7 @@ import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemI
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
+import { MedalWin } from './ui/medal.js';
 import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
@@ -2224,6 +2225,7 @@ export class Game {
     // the Quest Helper, when it is open: minimised or back
     else if (m === MENU.QUEST_HELPER) { const q = this.windows.wins.questalarm; if (q && this.windows.isOpen('questalarm')) { q.state.min = !q.state.min; q.save(); } }
     else if (m === MENU.CASHSHOP) this.enterCashShop();
+    else if (m === MENU.MEDAL) { if (this.quests) this.windows.toggle('medal'); }
   }
 
   toggleSkills() {
@@ -2749,9 +2751,9 @@ export class Game {
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));
     // a name or a line: the small UtilDlg box with a white field, opened without a sound
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
-    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
+    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), medal: new MedalWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
       energybar: new EnergyBarWin(wm) });
-    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
+    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook', 'medal'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
@@ -3625,13 +3627,13 @@ export class Game {
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
    * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, the Energy
-   * Charge gauge, Ranking, GM Board, Title, Maple Event) do nothing; 0x17 is the Maker.
+   * Charge gauge, Ranking, GM Board, Maple Event) do nothing; 0x17 is the Maker, 0x1F the Medal window.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
-    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x21: 'skill' }[type];
-    if (!name || (name === 'skill' && !this.skills) || (name === 'quest' && !this.quests) || this.windows.isOpen(name)) return;
+    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
+    if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
     if (name === 'familytree') w?.load(this.player.name);
   }
