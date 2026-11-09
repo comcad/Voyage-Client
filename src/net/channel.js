@@ -162,7 +162,8 @@ function readRemoteStats(r, m1, m2) {
   const out = { diseases: [] }, can = (n) => r.available >= n;
   const disease = (name, i, src) => {
     const skill = src & 0xffff, level = src >>> 16, [d1, d2] = bit(i);
-    if (DISEASE_STATS.has(name) && skill >= 100 && skill <= 200 && level > 0 && level < 256) out.diseases.push({ m1: d1, m2: d2, skill, level });
+    // a named curse, or an unnamed status a monster skill put on them (Slow comes this way)
+    if ((!name || DISEASE_STATS.has(name)) && skill >= 100 && skill <= 200 && level > 0 && level < 256) out.diseases.push({ m1: d1, m2: d2, skill, level });
   };
   for (const [i, size, name] of REMOTE_STATS) {
     if (!bit(i)) continue;
@@ -172,7 +173,7 @@ function readRemoteStats(r, m1, m2) {
     else if (size === 4) v = can(4) ? r.int() : 0;
     else if (size === 'poison') { v = can(2) ? r.short() : 0; const src = can(4) ? r.int() : 0; disease(name, i, src); continue; }
     if (name) out[name] = v;
-    if (size === 4 && name) disease(name, i, v);
+    if (size === 4) disease(name, i, v);
   }
   if (can(2)) r.skip(2);
   TWO_STATE_NAMES.forEach((name, k) => {
@@ -1178,7 +1179,7 @@ export class ChannelSession {
       const id = r.int(), m1 = r.long(), m2 = r.long(), st = readRemoteStats(r, m1, m2);
       if (st.ride) { this.emit('foreignMount', id, st.ride.value); return; }
       if (st.morph !== undefined) { this.emit('foreignMorph', id, st.morph); return; }
-      // Dark Sight (or Wind Walk, where Cosmic puts it): drawn see-through
+      // Dark Sight (or Wind Walk, when its bit comes in the first long): drawn see-through
       if (st.darkSight || BigInt.asUintN(64, m1) & 0x400000000n) this.emit('foreignHidden', id);
       if (st.shadowPartner) this.emit('foreignPartner', id);
       if (st.combo !== undefined) this.emit('foreignCombo', id, st.combo);

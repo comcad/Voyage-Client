@@ -1245,9 +1245,19 @@ export class Life {
    */
   /** Which way its art and reach face: right, unless it is noFlip (Horntail's and Zakum's parts never turn). */
   get facesRight() { return this.facingRight && !Number(this.src?.info?.noFlip); }
+  /** Whether this frame has a body (lt/rb): one without (Papulatus pulling itself in, an invisible part) can't be struck or touch you. */
+  get hasBody() { return !!(this.node?.lt && this.node?.rb); }
+  /** Its body for what shows over it (damage numbers): this frame's lt/rb, or the last frame's that had one (a death pose has none). */
+  bodyBox() {
+    const n = this.node?.lt && this.node?.rb ? (this.lastBody = this.node) : this.lastBody;
+    if (!n) return null;
+    return this.facesRight ? { left: this.x - n.rb[0], right: this.x - n.lt[0], top: this.y + n.lt[1], bottom: this.y + n.rb[1] }
+      : { left: this.x + n.lt[0], right: this.x + n.rb[0], top: this.y + n.lt[1], bottom: this.y + n.rb[1] };
+  }
   hitBox(withPrevious = false) {
     const n = this.node;
     if (!n?.lt || !n?.rb) return this.box();
+    this.lastBody = n;
     const at = (x, y) => (this.facesRight
       ? { left: x - n.rb[0], right: x - n.lt[0], top: y + n.lt[1], bottom: y + n.rb[1] }
       : { left: x + n.lt[0], right: x + n.rb[0], top: y + n.lt[1], bottom: y + n.rb[1] });

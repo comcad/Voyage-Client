@@ -2,6 +2,8 @@ import { isCanvas, frames } from './assets.js';
 import { Anim } from './map.js';
 import { itemIcon } from './data.js';
 import { uiText } from './ui/wzui.js';
+import { richText } from './ui/richtext.js';
+import { textRef } from './ui/dialogs.js';
 import { settings } from './settings.js';
 import { UI_W, VIEW_W, VIEW_H } from './view.js';
 
@@ -214,7 +216,7 @@ export class WorldFx {
     for (const n of this.nums) this.drawNumber(ctx, n, cam);
     if (this.hints?.length) {
       this.hints = this.hints.filter((h) => performance.now() < h.until);
-      for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24 });
+      for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24, rich: true });
     }
   }
   /** Tombstones, drawn behind the characters so the ghost floats in front. */
@@ -247,7 +249,7 @@ export class WorldFx {
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
     // over the body it struck: a monster's own lt/rb (a boss part's, not the whole boss's), else its picture
-    const body = n.target.node?.lt && typeof n.target.hitBox === 'function' ? n.target.hitBox() : null;
+    const body = typeof n.target.bodyBox === 'function' ? n.target.bodyBox() : null;
     const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
     n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
     if (!n.v) {
@@ -274,7 +276,7 @@ export class WorldFx {
   }
 
   /** ChatBalloon.img/0 (or /npc, /pet/<n>): a 9-slice around the text with the arrow under it, pointing at the speaker. */
-  drawBalloon(ctx, cam, ent, text, style = '0', { node = null, wrap = 89, width = 0, arrowDx = null } = {}) {
+  drawBalloon(ctx, cam, ent, text, style = '0', { node = null, wrap = 89, width = 0, arrowDx = null, rich = false } = {}) {
     if (!node && String(style).startsWith('pet/') && !this.CB?.pet?.[style.slice(4)]) style = 'pet/0';
     const B = node || String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
     if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
@@ -287,8 +289,19 @@ export class WorldFx {
     // laid over the bottom edge at the centre so the tail grows out of it
     // width: a fixed outer width (the server's hint width), the text wrapped inside the 9px sides
     const inner = width ? width - 18 : 0;
-    const lh = 14, lines = balloonLines(ctx, text, inner || wrap);
-    const W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
+    const color = B.clr === undefined ? '#000' : `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+    // rich: the text's # codes (#b blue, #e bold, #k / #n back...) laid out as the client's text does, each line centred
+    let lines, W, H;
+    const lh = 14;
+    if (rich) {
+      lines = richText(ctx, text, inner || wrap, textRef(this.game.windows), { base: color, size: 12, lineH: lh }).lines;
+      for (const l of lines) l.w = Math.max(0, ...l.runs.map((r) => { ctx.font = `${r.bold ? 'bold ' : ''}12px Arial, sans-serif`; return r.x + (r.t ? ctx.measureText(r.t).width : 0); }));
+      ctx.font = '12px Arial, sans-serif';
+      W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => l.w))) - 2); H = lines.length * lh;
+    } else {
+      lines = balloonLines(ctx, text, inner || wrap);
+      W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2); H = lines.length * lh;
+    }
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
     // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
     const o = (k) => B[k]?.origin || [0, 0];
@@ -318,8 +331,8 @@ export class WorldFx {
       ctx.drawImage(tail, ax, ay);
     } else ctx.drawImage(p.arrow, ax, ay);
     if (off) { screen.drawImage(off, x0 - 30, y0 - 30); ctx = screen; }
-    const color = B.clr === undefined ? '#000' : `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
-    lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
+    if (rich) lines.forEach((l, i) => { const lx = cx - Math.round(l.w / 2); for (const r of l.runs) if (r.t) uiText(ctx, r.t, lx + r.x, y0 + i * lh, { color: r.color, bold: r.bold, size: 12 }); });
+    else lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
     ctx.restore();
     return true;
   }

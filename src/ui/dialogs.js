@@ -1024,7 +1024,7 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
   const info = mgr.info(it.id) || {};
   ctx.save();
   ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  if (it.slots) slotItemTip(ctx, mgr, it, mx, my);
+  if (it.slots && typeof it.slots === 'object') slotItemTip(ctx, mgr, it, mx, my);   // an equip's slots is its upgrade count
   else if (invType(it.id) === 1) equipTip(ctx, mgr, it, info, mx, my);
   else itemTip(ctx, mgr, it, info, mx, my);
   ctx.restore();

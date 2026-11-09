@@ -6045,8 +6045,13 @@ export class Game {
     const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
     let targets = mx?.mobs || opts.mobs || kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
-    // a single-target shot doesn't go through the ground or a wall between you and the monster
-    if (kind === 'ranged' && mobCount === 1 && !plan && targets.length === 1) {
+    // a shot that stops at the first monster on its line doesn't go through the ground or a wall on the way there
+    // (nor do the blast or the orb's hops that start from it)
+    const lineShot = plan && !opts.mobs && !RAIN_SHOTS.has(skillId) && !PIERCING_SHOTS.has(skillId) && !BOX_LINE_SHOTS.has(skillId);
+    if (lineShot && plan.targets.length) {
+      const h = plan.targets[0];
+      if (this.shotBlocked(plan.sx, plan.sy, h.hx ?? h.x, h.hy ?? h.y)) { plan.targets = []; plan.orb = null; plan.blast = null; targets = []; }
+    } else if (kind === 'ranged' && mobCount === 1 && !plan && targets.length === 1) {
       const b = targets[0].hitBox();
       if (this.shotBlocked(p.x, p.y - 28, (b.left + b.right) / 2, (b.top + b.bottom) / 2)) targets = [];
     }
@@ -6118,11 +6123,15 @@ export class Game {
     // a spell without a projectile takes its monsters in a random order (Chain Lightning: along its chain)
     if (kind === 'magic' && !projectile && skillId !== CHAIN_LIGHTNING) for (let i = 0; i < out.length; i++) { const j = Math.floor(Math.random() * out.length); [out[i], out[j]] = [out[j], out[i]]; }
     // where each blow strikes its monster's body: along the shot's line, or within the swing's reach
-    const reachBox = !plan && kind === 'melee' ? this.attackBox(kind, skillId, lv, pose, charge) : null;
+    // (a blast placed elsewhere - a grenade - by its own box; a swing that reached out to its range, by that range)
+    const reach0 = opts.area ? null : !plan && kind === 'melee' && !opts.mobs ? this.attackBox(kind, skillId, lv, pose, charge) : null;
+    const reachBox = opts.area || (reach0 && { left: reach0.x1, right: reach0.x2, top: reach0.top, bottom: reach0.bottom });
+    const swingRange = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
+    if (reachBox && !opts.area && swingRange) { if (p.facingRight) reachBox.right = Math.max(reachBox.right, p.x + swingRange); else reachBox.left = Math.min(reachBox.left, p.x - swingRange); }
     const hitAt = (i, m) => {
       const pt = plan?.targets[i];
       if (pt?.hx !== undefined) return { x: pt.hx, y: pt.hy };
-      return reachBox && typeof m.hitBox === 'function' ? this.hitPoint(m, { left: reachBox.x1, right: reachBox.x2, top: reachBox.top, bottom: reachBox.bottom }) : null;
+      return reachBox && typeof m.hitBox === 'function' ? this.hitPoint(m, reachBox) : null;
     };
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
@@ -6543,7 +6552,7 @@ export class Game {
       const box = this.skillBox({ x, y, facingRight: right }, c.id, c.lv);
       const mobs = this.mobsIn(box, x, y).slice(0, this.skills.levelData(c.id, c.lv)?.mobCount || 1);
       // the blast's attack carries no held time (its damage isn't scaled by it); its blows land 120ms in
-      this.attack(c.id, 'melee', { held: true, quiet: true, launch: GRENADE_HIT, pose: p.action, mobs });
+      this.attack(c.id, 'melee', { held: true, quiet: true, launch: GRENADE_HIT, pose: p.action, mobs, area: box });
     });
   }
   /** A grenade's flight from `at` (its ball art), then `land(x, y)` and its special art where it lands. */
@@ -7632,7 +7641,7 @@ export class Game {
    * one side to the other, its ends on either side of the shot's line (touching an end doesn't stop it here).
    */
   shotBlocked(sx, sy, ex, ey) {
-    const layer = this.player.fh?.layer ?? 0;
+    const layer = this.player.fh?.layer ?? (Number(this.player.ladder?.page) || 0);
     for (const f of this.map.fh.all) {
       if (f.layer !== 0 && f.layer !== layer) continue;
       const dx = f.x2 - f.x1, dy = f.y2 - f.y1;
@@ -7644,7 +7653,7 @@ export class Game {
     return false;
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined); }
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
   closeReach(action) {
     const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
@@ -7952,7 +7961,7 @@ export class Game {
    */
   spellTargets(skillId, count) {
     const p = this.player, dir = p.facingRight ? 1 : -1, y = p.y - 28;
-    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
+    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined && m.hasBody);
     const meets = (m, x1, x2, top, bottom) => { const h = m.hitBox(true); return h.right > x1 && h.left < x2 && h.bottom > top && h.top < bottom; };
     let first = null;
     for (let d = 50; d < 300 && !first; d += 20) {
@@ -8255,7 +8264,7 @@ export class Game {
     if (!pp || (pp.hitT -= dt) > 0) return;
     const box = { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
     for (const m of this.map.life) {
-      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || m.src.info?.bodyAttack === 0) continue;
+      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       const b = m.hitBox();
       if (b.right < box.left || b.left > box.right || b.bottom < box.top || b.top > box.bottom) continue;
       const pad = m.src.info?.PADamage || 1, damage = Math.max(1, Math.round(pad * (0.85 + Math.random() * 0.15)));
@@ -8281,7 +8290,7 @@ export class Game {
     if (this.obstacleHurt(pb, dx, dy)) return;
     if (isHideMorph(this.morphTpl())) return;   // in the Oak Barrel monsters walk past without touching you
     for (const m of this.map.life) {
-      if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
+      if (m.kind !== 'Mob' || !m.alive || m.dying || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
       const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
