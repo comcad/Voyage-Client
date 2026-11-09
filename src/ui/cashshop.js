@@ -369,6 +369,15 @@ export class CashShopWin extends Win {
   }
 
   // ---------------------------------------------------------------- catalogue
+  /** Item/Special/MaplePoint.img/<points>/icon (null until loaded). */
+  maplePointIcon(points) {
+    if (this.mpImg === undefined) {
+      this.mpImg = null;
+      const a = this.g.assets;
+      a.json('Item/Special/MaplePoint.img').then(async (j) => { await a.preload(Object.values(j || {}).map((e) => e?.icon).filter(Boolean)); this.mpImg = j || {}; }).catch(() => {});
+    }
+    return this.mpImg?.[points]?.icon || null;
+  }
   /** A package's contents (from the server's change, or Etc/CashPackage.img), by SN. */
   contents(c) { return (c.Package || Object.values(this.pkg[c.ItemId]?.SN || {})).map((sn) => this.bySN.get(sn) || { SN: sn, ItemId: 0 }); }
   isPackage(c) { return Math.floor(c.ItemId / 10000) === 910; }
@@ -1311,14 +1320,15 @@ export class CashShopWin extends Win {
       const cx = i < rows ? 0 : col2, right = i < rows ? col2 : w, ry = top + (i < rows ? i : i - rows) * 53, tx = cx + 55;
       const orig = this.regularPrice(c), now = Math.floor(((100 - rate) * c.Price) / 100), days = c.Period > 0 ? c.Period : 0;
       origTotal += orig; newTotal += now;
-      const bg = im(D.backgrnd), line = im(D.Line);
+      const bg = im(D.backgrnd), line = im(D.Line), mp = c.ItemId >= 90000000 && c.ItemId <= 90999999;
       if (bg) ctx.drawImage(bg, x + cx + 13, y + ry + 13);
-      m.drawIcon(ctx, m.icon(c.ItemId), x + cx + 14, y + ry + 14, c.ItemId);
+      m.drawIcon(ctx, mp ? this.maplePointIcon(c.Count) : m.icon(c.ItemId), x + cx + 14, y + ry + 14, c.ItemId);
       if (line) ctx.drawImage(line, x + cx + 13, y + ry + 53);
       const nameY = ry + (days ? 9 : 18), priceY = ry + (days ? 25 : 34);
       ctx.font = '12px Arial, sans-serif';
-      text(m.itemName(c.ItemId) || '', tx, nameY);
-      const fmtNX = (v) => (c.Count > 1 ? `${c.Count} ${v} NX` : `${v} NX`);
+      text(mp ? 'MaplePoint' : m.itemName(c.ItemId) || '', tx, nameY);
+      // Maple Points in a package (90000000-90999999): their own icon, "MaplePoint" and the points
+      const fmtNX = (v) => (mp ? `${c.Count} Point` : c.Count > 1 ? `${c.Count} ${v} NX` : `${v} NX`);
       if (orig === now) text(fmtNX(now), tx, priceY);
       else {
         const ow = struck(fmtNX(orig), tx, priceY, '#fff');
