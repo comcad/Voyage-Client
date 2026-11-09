@@ -3,6 +3,8 @@ assets/
 test/
 notes/
 public/Voyage.js
+# local settings: server.js makes conf/client.conf from the tracked conf/client.conf.dist
+conf/*.conf
 **/node_modules/
 **/*.pid
 **/*.log

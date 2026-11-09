@@ -72,6 +72,7 @@ import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings } from './settings.js';
 import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution } from './view.js';
+import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
 import { EnergyBarWin } from './ui/energybar.js';
@@ -1906,7 +1907,7 @@ export class Game {
         break;
       case 17: {
         if (!(await this.windows.confirm("You can't sell items while managing the store.\r\nWould you like to start managing the store?"))) break;
-        const b = await this.windows.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
+        const b = config.skipBirthday ? String(config.birthdayCode) : await this.windows.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
         if (/^\d{8}$/.test(b || '')) this.net?.manageStore(Number(b), e.a, e.b, e.c);
         break;
       }
@@ -5486,7 +5487,7 @@ export class Game {
       const skill = this.pressedSkill();   // only buffs go here (useSkill turns the rest down)
       if (skill && this.skills && performance.now() >= (this.attackLock || 0) && this.useSkill(skill)) return;
       const v = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
-      p.vx = 0; p.vy = v * PHYS.climb;   // the speed sent while climbing
+      p.vx = 0; p.vy = v * PHYS.climb * config.climbSpeed;   // the speed sent while climbing
       const y0 = p.y;
       p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
@@ -5503,7 +5504,7 @@ export class Game {
         this.moveEvent = { kind: 'leave', leave: leaving() };
         p.ladder = null; p.vx = 0; p.vy = 0; p.y = l.y2 + 1;
       }
-      this.advanceFrame(action, p.y !== y0 ? dt : 0);   // the frames only run while you move
+      this.advanceFrame(action, p.y !== y0 ? dt * config.climbSpeed : 0);   // the frames only run while you move
       this.touchPortal();
       return;
     }
@@ -5988,12 +5989,14 @@ export class Game {
     if (kind === 'ranged') {
       const s = this.look.attackAction(), empty = this.net && !this.hasAmmo(skillId);
       if (empty && skillId) this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]);
-      const close = !NO_CLOSE_SWING.has(skillId);
-      if (empty || (close && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length)) {
-        const mb = !empty && MORTAL_BLOWS.find((id) => sb.owns(id) && sb.level(id));
-        if (mb && Math.random() * 100 < (sb.levelData(mb)?.prop || 0)) skillId = mb;
+      const close = !NO_CLOSE_SWING.has(skillId), near = !empty && close && this.findTargets('melee', 0, 0, 1, s, CLOSE_REACH).length;
+      const mortalBlow = () => { const mb = MORTAL_BLOWS.find((id) => sb.owns(id) && sb.level(id)); return mb && Math.random() * 100 < (sb.levelData(mb)?.prop || 0) ? mb : 0; };
+      if (empty || (near && !config.noWhack)) {
+        const mb = !empty && mortalBlow();
+        if (mb) skillId = mb;
         else { if (opts.held) return false; kind = 'melee'; swing = s; reach = empty ? Infinity : CLOSE_REACH; skillId = 0; }
-      } else if (close) from = this.closeReach(s);
+      } else if (near) skillId ||= mortalBlow();   // NoWhack: the shot starts at your body, so the close monster is hit
+      else if (close) from = this.closeReach(s);
     }
     if (opts.from !== undefined) from = opts.from;
     const lv = skillId ? sb.level(skillId) : 0;
@@ -6696,7 +6699,7 @@ export class Game {
       if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
     }
     // a monster within the weapon's swing gets the swing (or a Mortal Blow) and Hurricane / Rapid Fire doesn't start
-    if (HELD_SHOTS.has(id) && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length) return this.attack(0);
+    if (HELD_SHOTS.has(id) && this.swingsClose()) return this.attack(0);
     const action = sb.node(id)?.prepare?.action;
     const pose = action && this.look.has(action) ? action : this.defaultAttackAction('ranged');
     // Rapid Fire's last shot is remembered between holds: a new hold fires at once unless one went under 101ms ago
@@ -6746,7 +6749,7 @@ export class Game {
     // running out mid-hold reads the arrows notice, a gun's too
     if (this.net && !this.hasAmmo(k.id)) { this.notice(AMMO_OUT[145]); this.endKeydown(); return; }
     if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice("You don't have enough MP to use this skill."); this.endKeydown(); return; }
-    if (this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length) { this.endKeydown(); this.attack(0); return; }
+    if (this.swingsClose()) { this.endKeydown(); this.attack(0); return; }
     const rapid = k.id === RAPID_FIRE;
     this.attack(k.id, 'ranged', { held: true, pose: k.pose, quiet: rapid, stance: rapid ? 'shot' : undefined });
   }
@@ -6761,7 +6764,7 @@ export class Game {
     this.fx = this.fx.filter((f) => !(k.art || []).includes(f));
     p.frame = 0; p.frameT = 0;
     if (k.id === PIERCING_ARROW && !this.dead) {
-      const close = this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length;
+      const close = this.swingsClose();
       const charge = Math.min(PIERCE_HOLD, Math.max(30, Math.round(k.t * 1000)));
       if (!close && this.attack(k.id, 'ranged', { charge })) return;
       this.net?.cancelBuff(k.id);
@@ -7654,6 +7657,8 @@ export class Game {
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
   liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
+  /** A monster within a ranged weapon's swing, so a held shot gives way to the swing (never with Combat.NoWhack). */
+  swingsClose() { return !config.noWhack && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length > 0; }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
   closeReach(action) {
     const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;

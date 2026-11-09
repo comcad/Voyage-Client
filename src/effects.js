@@ -1,11 +1,12 @@
 import { isCanvas, frames } from './assets.js';
 import { Anim } from './map.js';
 import { itemIcon } from './data.js';
-import { uiText } from './ui/wzui.js';
+import { uiText, timeLeft, overlayText } from './ui/wzui.js';
 import { richText } from './ui/richtext.js';
 import { textRef } from './ui/dialogs.js';
 import { settings } from './settings.js';
 import { UI_W, VIEW_W, VIEW_H } from './view.js';
+import { config } from './config.js';
 
 /**
  * World-space effects from the original art:
@@ -359,6 +360,7 @@ export class WorldFx {
     if (cap) ctx.drawImage(cap, x + 3, y + 4);
     if (on && n > 0) ctx.drawImage(on, x + l.width, y + 4, n, on.height);
     if (off && n < inner) ctx.drawImage(off, x + l.width + n, y + 4, inner - n, off.height);
+    if (config.bossHpPercent) overlayText(ctx, `${(k * 100).toFixed(2)}%`, x + w / 2, y + 10, 'middle');
   }
 
   /** Buff icons, newest on the left of the row, at the top right. */
@@ -396,6 +398,7 @@ export class WorldFx {
       const step = Math.max(0, Math.min(15, Math.floor(left / (total / 16)))), cool = this.W?.Skill?.CoolTime?.[step], cim = cool && this.assets.image(cool);
       if (cim) ctx.drawImage(cim, x, y);
       ctx.restore();
+      if (config.buffTimeLeft && !ship) overlayText(ctx, timeLeft(left), x + 16, y + 33, 'bottom');
     });
   }
   itemIcon(id) {

@@ -3,5 +3,6 @@ assets/
 .git/
 node_modules/
 public/Voyage.js
+conf/*.conf
 *.log
 .DS_Store

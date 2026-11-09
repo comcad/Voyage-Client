@@ -5,6 +5,7 @@ import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
 import { UI_W } from '../view.js';
+import { config } from '../config.js';
 
 /**
  * A player's personal shop (UIWindow.img/PersonalShop/backgrnd, 525 wide; its lower-left fee table hangs
@@ -119,7 +120,7 @@ export class PlayerShopWin extends Win {
     // with a cash item up for sale it opens on your birthday code; the server answers
     const infos = await Promise.all(this.items.map((it) => itemInfo(this.g.assets, it.item.id)));
     if (infos.some((i) => Number(i?.cash))) {
-      const b = await this.mgr.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
+      const b = config.skipBirthday ? String(config.birthdayCode) : await this.mgr.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
       if (/^\d{8}$/.test(b || '')) this.g.net?.pshopOpenCash(this.merchant ? 5 : 4, Number(b));
       return;
     }

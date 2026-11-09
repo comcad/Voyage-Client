@@ -10,16 +10,17 @@ RUN npm ci --omit=dev
 # Copy the client source
 COPY . .
 
-# Build the client bundle (respects OBFUSCATE). Fails the image build if the
-# bundle can't be built. OBFUSCATE=1 (or true/yes/on) minifies + obfuscates.
-ARG OBFUSCATE=0
-ENV OBFUSCATE=$OBFUSCATE
+# Build the client bundle. Fails the image build if the bundle can't be built.
+# The server builds it again on start, with Build.Obfuscate from client.conf.
 RUN node build.mjs
 
-# The server listens on 3000 by default (overridable via PORT)
+# Run as uid 1000, which rebuilds public/Voyage.js on start and writes /conf/client.conf
+RUN mkdir -p /conf && chown -R 1000:1000 /conf public
+USER 1000:1000
+
+# The server listens on 3000 by default (Server.Port in client.conf)
 EXPOSE 3000
 
-# Assets are mounted at runtime (see docker-compose.yml) — 5.6G, not baked in
-ENV ASSETS_DIR=/app/assets
-
-CMD ["node", "server.js"]
+# Assets are mounted at runtime (see docker-compose.yml) — 5.6G, not baked in.
+# Settings are /conf/client.conf, made from the template on the first start.
+CMD ["node", "server.js", "--conf", "/conf"]

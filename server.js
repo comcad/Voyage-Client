@@ -7,25 +7,40 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import { build as buildClient } from './build.mjs';
+import { ConfigMgr, ConfigException, confDir } from './configmgr.mjs';
+import { ServerConfigs } from './serverconfigs.mjs';
+import { clientConfigs } from './src/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Build the client bundle on boot (respects OBFUSCATE). Fail-fast on error.
 try {
-  await buildClient();
+  ConfigMgr.load(confDir(process.argv.slice(2)));
+} catch (e) {
+  if (!(e instanceof ConfigException)) throw e;
+  console.error(`Can't start: ${e.message}`);
+  process.exit(1);
+}
+if (ConfigMgr.created) console.log(`Created ${ConfigMgr.files[0]} from ${ConfigMgr.DIST_FILE}`);
+for (const f of ConfigMgr.files) console.log(`Loaded config file ${f}`);
+
+// Build the client bundle on boot (respects Build.Obfuscate). Fail-fast on error.
+try {
+  await buildClient(ServerConfigs.OBFUSCATE);
 } catch (err) {
   console.error('CRITICAL BUILD ERROR:', err);
 }
 
-const PORT = Number(process.env.PORT) || 3000;
-const ASSETS_DIR = process.env.ASSETS_DIR || path.resolve(__dirname, 'assets');
-const SERVERS = Object.fromEntries((process.env.COSMIC_SERVERS || 'cosmic=192.168.2.2')
-  .split(',').map((s) => s.split('=').map((x) => x.trim())));
+const HOST = ServerConfigs.HOST;
+const PORT = ServerConfigs.PORT;
+const ASSETS_DIR = ServerConfigs.ASSETS_DIR;
+const SERVERS = ServerConfigs.SERVERS;
+const CLIENT_CONFIG = clientConfigs(ConfigMgr);
 const portAllowed = (p) => p === 8484 || (p >= 7575 && p <= 7699);
 
 const app = express();
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
+app.get('/config.json', (req, res) => res.json(CLIENT_CONFIG));
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 
 const server = http.createServer(app);
@@ -58,7 +73,7 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => sock.destroy());
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Voyage client on http://0.0.0.0:${PORT} (assets: ${ASSETS_DIR})`);
+server.listen(PORT, HOST, () => {
+  console.log(`Voyage client on http://${HOST}:${PORT} (assets: ${ASSETS_DIR})`);
   console.log('Cosmic servers:', SERVERS);
 });

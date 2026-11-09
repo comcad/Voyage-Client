@@ -10,6 +10,7 @@ import { EMOTES, setExpression, stepExpression } from '../game.js';
 import { uiText, TextField, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
 import { UI_W, UI_H } from '../view.js';
+import { config } from '../config.js';
 
 /**
  * The Cash Shop (UI/CashShop.img), a full 800x600 screen. Its parts, by their top-left corner:
@@ -536,6 +537,7 @@ export class CashShopWin extends Win {
   }
   /** The birthday code (8 digits), or null when cancelled or mistyped (a mistype says so). */
   async askBirthday() {
+    if (config.skipBirthday) return config.birthdayCode;
     const b = await this.mgr.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
     if (!b) return null;
     if (!/^\d{8}$/.test(b)) { this.alert(ERRORS[0xC4]); return null; }

@@ -130,6 +130,17 @@ export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'le
   ctx.restore();
 }
 
+/** Seconds under a minute, m:ss under an hour, then hours. */
+export function timeLeft(ms) {
+  const s = Math.ceil(ms / 1000);
+  if (s >= 3600) return `${Math.floor(s / 3600)}h`;
+  return s >= 60 ? `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` : String(s);
+}
+/** A number over an icon or a bar: bold white with a black outline, centred on x. */
+export function overlayText(ctx, text, x, y, base) {
+  uiText(ctx, text, x, y, { bold: true, size: 11, align: 'center', base, outline: '#000' });
+}
+
 /** Word-wrap helper for dialog text. */
 export function wrapText(ctx, text, width, size = 12) {
   ctx.save(); ctx.font = `${size}px Arial`;
