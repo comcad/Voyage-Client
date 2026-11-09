@@ -13,9 +13,9 @@
 ## What works
 
 - **Login and account** — v83 login scene, PIN, PIC soft keyboard, world/channel/character select, server-ban and client-update notices
-- **Maps** — full map rendering from the WZ, NPCs, portals, ladders and ropes, reactors, weather, imitated NPCs (ranking statues), forced map equipment, obstacles and traps
+- **Maps** — full map rendering from the extracted WZ, NPCs, portals, ladders and ropes, reactors, weather, imitated NPCs (ranking statues), forced map equipment, obstacles and traps
 - **Combat** — monster spawns, deaths, statuses and immunities, auto-aggro and banishing monsters, damage and hit rules, multi-line attacks, buffs and curses
-- **Skills** — every class line, including the full Pirate line (Pirate → Corsair, Brawler → Outlaw, Marauder → Gunslinger, and the Thunder Breaker skills), the skill macro editor and quick slots
+- **Skills** — every class line, including the full Pirate line (Pirate → Corsair, Brawler → Outlaw, Marauder → Gunslinger, and the Thunder Breaker skills), the skill macro editor and quick slots (Some classes are still being worked on)
 - **Bosses** — the boss HP bar, and Horntail's and Zakum's parts (their order, boxes, icons, and hits landing on the part struck)
 - **Windows** — inventory, stats, trade, the Maker, the Dojo, the Pyramid, Transform, Cash Shop, Player Shop (MTS), guild (alliance invitations), party, messenger and the world map
 - **Fame** — give and take fame from other players
@@ -46,6 +46,7 @@ Voyage-Client/
 │   └── ui/             # v83 login scene, shop, minimap, status bar, dialogs, HUD
 ├── conf/
 │   └── client.conf.dist  # settings template; server.js makes client.conf from it (gitignored)
+│   └── client.conf     #config file
 ├── server.js           # Express server + WS↔TCP relay to the Cosmic v83 server
 ├── build.mjs           # bundles src/ → public/Voyage.js (esbuild, optional obfuscation)
 ├── configmgr.mjs       # reads conf/*.conf (TOML)
