@@ -2540,7 +2540,7 @@ export class Game {
       if (d.pickedBy || !d.landed || d.petOk === false) return false;
       if (d.meso ? !f.pickupMeso : (!f.pickupItem && !(f.sweep && f.pickupOthers)) || Number(this.windows.info(d.id)?.pickUpBlock)) return false;
       const me = this.player.id;
-      const ours = (f.pickupOthers && now - (d.born || 0) > 15000) || !d.dropper || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || d.type >= 2;
+      const ours = (f.pickupOthers && now - (d.freeAt ?? d.born ?? 0) > 15000) || !d.dropper || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || d.type >= 2;
       return ours && now - (d.petTry || -Infinity) >= 3000 && !this.petIgnores(d);
     };
     for (const pet of mine) {
@@ -4111,7 +4111,8 @@ export class Game {
     // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
     const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
-    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
+    // freeAt: when anyone may take it after 15s counts from (its arrival plus the packet's delay, as the client)
+    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), freeAt: performance.now() + (d.delay || 0), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
       spin: !d.meso && !reward, angle: 0, speed, flight });
   }
 
@@ -8983,7 +8984,7 @@ export class Game {
       if (d.x < p.x - 25 || d.x >= p.x + 25 || d.y < p.y - 50 || d.y >= p.y + 10) continue;
       if (now - (d.tryAt || -Infinity) < 3000) continue;
       if (!d.meso && Number(this.windows.info(d.id)?.pickUpBlock)) continue;
-      const ours = !d.dropper || d.type >= 2 || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || now - (d.born || 0) > 15000;
+      const ours = !d.dropper || d.type >= 2 || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || now - (d.freeAt ?? d.born ?? 0) > 15000;
       if (!ours) continue;
       d.tryAt = now; this.pickupBusy = now;
       this.net.pickup(oid, { x: Math.round(p.x), y: Math.round(p.y) });
