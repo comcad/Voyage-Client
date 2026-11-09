@@ -2832,7 +2832,8 @@ export class Game {
       avatarMegaResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
       spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
       groupChat: (c) => {
-        if (!this.chatAllowed(c.mode) || (c.mode === 0 && this.windows.wins.userlist?.blockedName(c.name))) return;
+        // off in the Game Option, or a buddy, guild or alliance line from someone on the Blacklist: not shown
+        if (!this.chatAllowed(c.mode) || (c.mode !== 1 && this.windows.wins.userlist?.blacklisted(c.name))) return;
         this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
       },
       whisper: (w) => this.onWhisper(w),
