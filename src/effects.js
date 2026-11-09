@@ -2,6 +2,8 @@ import { isCanvas, frames } from './assets.js';
 import { Anim } from './map.js';
 import { itemIcon } from './data.js';
 import { uiText } from './ui/wzui.js';
+import { richText } from './ui/richtext.js';
+import { textRef } from './ui/dialogs.js';
 import { settings } from './settings.js';
 import { UI_W, VIEW_W, VIEW_H } from './view.js';
 
@@ -38,7 +40,7 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
   }
   return line * 120;
 }
-const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook', 0x0f: 'ItemLevelUp' };
+const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook/cardGet', 0x0f: 'ItemLevelUp' };
 
 /** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
 function balloonLines(ctx, text, max) {
@@ -90,7 +92,7 @@ export class WorldFx {
   foreign(effect) { return FOREIGN[effect]; }
   /** BasicEff animation that follows an entity (player or remote player). */
   play(name, ent) {
-    const node = this.E?.[name];
+    const node = name.split('/').reduce((n, k) => n?.[k], this.E);   // a name, or a path under BasicEff
     if (!node) return;
     const anim = new Anim(node, false);
     this.assets.preload(anim.frames);
@@ -131,9 +133,8 @@ export class WorldFx {
   clearTombs() { this.tombs.length = 0; }
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
   /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin (as on 800x600). */
-  async screen(name) {
-    this.mapFx ??= await this.assets.json('Map/Effect.img');
-    const node = name.split('/').reduce((n, k) => n?.[k], this.mapFx);
+  async screen(name, node = null) {
+    if (!node) { this.mapFx ??= await this.assets.json('Map/Effect.img'); node = name.split('/').reduce((n, k) => n?.[k], this.mapFx); }
     if (!node) return;
     const anim = new Anim(node, false);
     await this.assets.preload(anim.frames);
@@ -215,7 +216,7 @@ export class WorldFx {
     for (const n of this.nums) this.drawNumber(ctx, n, cam);
     if (this.hints?.length) {
       this.hints = this.hints.filter((h) => performance.now() < h.until);
-      for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24 });
+      for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24, rich: true });
     }
   }
   /** Tombstones, drawn behind the characters so the ghost floats in front. */
@@ -247,8 +248,10 @@ export class WorldFx {
    */
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
-    const top = typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
-    n.x = n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    // over the body it struck: a monster's own lt/rb (a boss part's, not the whole boss's), else its picture
+    const body = typeof n.target.bodyBox === 'function' ? n.target.bodyBox() : null;
+    const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
+    n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
     if (!n.v) {
       const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
       if (!img) return false;
@@ -273,7 +276,7 @@ export class WorldFx {
   }
 
   /** ChatBalloon.img/0 (or /npc, /pet/<n>): a 9-slice around the text with the arrow under it, pointing at the speaker. */
-  drawBalloon(ctx, cam, ent, text, style = '0', { node = null, wrap = 89, width = 0, arrowDx = null } = {}) {
+  drawBalloon(ctx, cam, ent, text, style = '0', { node = null, wrap = 89, width = 0, arrowDx = null, rich = false } = {}) {
     if (!node && String(style).startsWith('pet/') && !this.CB?.pet?.[style.slice(4)]) style = 'pet/0';
     const B = node || String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
     if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
@@ -286,8 +289,19 @@ export class WorldFx {
     // laid over the bottom edge at the centre so the tail grows out of it
     // width: a fixed outer width (the server's hint width), the text wrapped inside the 9px sides
     const inner = width ? width - 18 : 0;
-    const lh = 14, lines = balloonLines(ctx, text, inner || wrap);
-    const W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2), H = lines.length * lh;
+    const color = B.clr === undefined ? '#000' : `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
+    // rich: the text's # codes (#b blue, #e bold, #k / #n back...) laid out as the client's text does, each line centred
+    let lines, W, H;
+    const lh = 14;
+    if (rich) {
+      lines = richText(ctx, text, inner || wrap, textRef(this.game.windows), { base: color, size: 12, lineH: lh }).lines;
+      for (const l of lines) l.w = Math.max(0, ...l.runs.map((r) => { ctx.font = `${r.bold ? 'bold ' : ''}12px Arial, sans-serif`; return r.x + (r.t ? ctx.measureText(r.t).width : 0); }));
+      ctx.font = '12px Arial, sans-serif';
+      W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => l.w))) - 2); H = lines.length * lh;
+    } else {
+      lines = balloonLines(ctx, text, inner || wrap);
+      W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2); H = lines.length * lh;
+    }
     const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
     // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
     const o = (k) => B[k]?.origin || [0, 0];
@@ -317,8 +331,8 @@ export class WorldFx {
       ctx.drawImage(tail, ax, ay);
     } else ctx.drawImage(p.arrow, ax, ay);
     if (off) { screen.drawImage(off, x0 - 30, y0 - 30); ctx = screen; }
-    const color = B.clr === undefined ? '#000' : `#${((B.clr >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
-    lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
+    if (rich) lines.forEach((l, i) => { const lx = cx - Math.round(l.w / 2); for (const r of l.runs) if (r.t) uiText(ctx, r.t, lx + r.x, y0 + i * lh, { color: r.color, bold: r.bold, size: 12 }); });
+    else lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
     ctx.restore();
     return true;
   }
@@ -338,9 +352,13 @@ export class WorldFx {
     if (icon) ctx.drawImage(icon, 4 + 5, 4 + 6);
     const x = 42, y = 12, w = UI_W - x - 12;
     ctx.drawImage(l, x, y); ctx.drawImage(tile, x + l.width, y, w - l.width - r.width, tile.height); ctx.drawImage(r, x + w - r.width, y);
-    const fill = im(G.Gage?.[String(Math.min(7, Math.max(1, d.tag || 1)))]?.[0]);
-    const inner = w - l.width - r.width, k = Math.max(0, Math.min(1, d.hp / Math.max(1, d.maxHp)));
-    if (fill) ctx.drawImage(fill, x + l.width, y + 5, Math.round(inner * k), fill.height);
+    // the filled part in Gage/<tag colour>, the rest in Gage/<background colour>; /0 is the 1px cap before it
+    const gage = (c) => G.Gage?.[String(Math.min(7, Math.max(1, c || 1)))], fg = gage(d.tag), bg = gage(d.bg);
+    const inner = w - l.width - r.width, k = Math.max(0, Math.min(1, d.hp / Math.max(1, d.maxHp))), n = Math.round(inner * k);
+    const cap = im((n > 0 ? fg : bg)?.[0]), on = im(fg?.[1]), off = im(bg?.[1]);
+    if (cap) ctx.drawImage(cap, x + 3, y + 4);
+    if (on && n > 0) ctx.drawImage(on, x + l.width, y + 4, n, on.height);
+    if (off && n < inner) ctx.drawImage(off, x + l.width + n, y + 4, inner - n, off.height);
   }
 
   /** Buff icons, newest on the left of the row, at the top right. */
@@ -484,7 +502,7 @@ function mobHpBar(ctx, e, cam, pct, color) {
   ctx.fillStyle = color; ctx.fillRect(x + 3, y + 3, w, 3);
   ctx.fillStyle = '#a00300'; ctx.fillRect(x + 3, y + 6, w, 1);
 }
-/** Its level and name under its feet, each in its own see-through dark tag: the name centred, its level just left of it. */
+/** Its level and name in yellow under its feet, each in its own see-through dark tag: the name centred, its level left of it. */
 function mobNameTag(ctx, e, cam, info) {
   const x = Math.round(e.x - cam.x), y = Math.round(e.y - cam.y) + 2;
   ctx.save();
@@ -494,7 +512,7 @@ function mobNameTag(ctx, e, cam, info) {
   const tag = (text, left, w) => {
     ctx.fillStyle = 'rgba(0,0,0,0.67)';
     ctx.fillRect(left + 1, y, w - 2, 13); ctx.fillRect(left, y + 1, w, 11);   // its corners rounded off
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = '#ff0';
     ctx.fillText(text, left + w / 2, y);
   };
   const nw = width(e.name), left = x - Math.floor(nw / 2);

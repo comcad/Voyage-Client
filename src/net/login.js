@@ -236,6 +236,8 @@ export class LoginSession {
     const result = r.ubyte(), sub = r.ubyte();
     if (result !== 0) return { code: result, sub };
     const ip = Array.from(r.bytes(4)).join('.');
-    return { ip, port: r.ushort(), charId: r.int() };
+    // then a byte whose bit 1 says you play from an Internet café
+    const port = r.ushort(), charId = r.int(), cafe = r.available ? (r.ubyte() >> 1) & 1 : 0;
+    return { ip, port, charId, cafe };
   }
 }

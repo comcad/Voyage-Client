@@ -58,12 +58,14 @@ import { RemoteGachaponWin, KarmaWin, HammerWin, VegaWin } from './ui/cashwins2.
 import { permanent } from './ui/itemguard.js';
 import { MapleLifeWin } from './ui/maplelife.js';
 import { OwlWin, OwlResultWin } from './ui/owl.js';
+import { openMaker, makerOutcome } from './ui/maker.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
 import { Pet, pickReaction, NO_LOOT_MAP } from './pets.js';
 import { Summon, PUPPET_RANGE, PUPPETS } from './summons.js';
+import { Dragon } from './dragon.js';
 import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
@@ -296,7 +298,8 @@ class RemotePlayer {
     }
     const look = this.look;
     if (this.charge && (this.attack || performance.now() > this.charge.until)) this.charge = null;
-    let action = this.attack || this.charge?.pose || {
+    const ready = this.state === 'stand' && performance.now() < (this.alertUntil || 0);
+    let action = this.attack || this.charge?.pose || (ready ? 'alert' : null) || {
       walk: look.walkAction(), stand: look.standAction(), jump: 'jump', prone: 'prone', ladder: 'ladder', rope: 'rope',
       alert: 'alert', sit: 'sit', dead: 'dead', fly: 'fly',
     }[this.state] || look.standAction();
@@ -304,7 +307,7 @@ class RemotePlayer {
     if (this.action !== action) { this.action = action; this.frame = 0; this.frameT = 0; this.back = false; }
     const moving = !(action === 'ladder' || action === 'rope') || this.path;
     if (moving) this.frameT += dt * 1000;
-    const k = this.attack && action === this.attack ? this.attackScale || 1 : 1;   // their weapon's speed
+    const k = (this.attack && action === this.attack) || (this.charge && action === this.charge.pose) ? this.attackScale || 1 : 1;   // their weapon's speed
     while (this.frameT >= look.delay(action, this.frame) * k) {
       this.frameT -= look.delay(action, this.frame) * k;
       const nx = look.nextFrame(action, this.frame, this.back);
@@ -349,7 +352,7 @@ const EXPLOSION = 2111002;
  * Corkscrew Blow (Brawler, Thunder Breaker) and Grenade charge while held (30ms to 1s counts) and go off when let go.
  * Corkscrew needs the ground; Grenade can be thrown in the air. They hold no pose, so you can move while charging.
  */
-const CORKSCREWS = new Set([5101004, 15101003]), CHARGE_BLOWS = new Set([...CORKSCREWS, 5201002]);
+const CORKSCREWS = new Set([5101004, 15101003]), CHARGE_BLOWS = new Set([...CORKSCREWS, 5201002, 14111006]);
 /**
  * A thrown grenade flies at 0.6 x the ms it was held px/s both ahead and up, falls (2000px/s², 670px/s at most) and
  * goes off where it lands, striking what is in the skill's box around it. It is refused again for 1s after the throw.
@@ -477,7 +480,8 @@ const SUPER_ONLY = new Set([5121004, 5121005]), SUPER_TRANSFORMATION = 5121003;
 const CAPSULES = { 5211004: 2331, 5211005: 2332 };
 /** Elemental Boost (Corsair): its damage % adds to Flamethrower's and Ice Splitter's. */
 const ELEMENTAL_BOOST = 5220001;
-const SNATCH = 5121005, DEMOLITION = 5121004, RECOIL_SHOT = 5201006, BARRAGE_PUSH = [17, 6, 6, 6, 6, 27], WINGS = 5201005;
+const BAMBOO_RAINS = new Set([1009, 10001009, 20001009, 20011009]), PHARAOHS = new Set([1020, 10001020, 20001020, 20011020]), COMBO_TEMPEST = 21120006;
+const SHADOW_STARS = 4121006, BULLSEYE = 5220011, SNATCH = 5121005, DEMOLITION = 5121004, RECOIL_SHOT = 5201006, BARRAGE_PUSH = [17, 6, 6, 6, 6, 27], WINGS = 5201005;
 /** Skills a map that forbids movement skills (fieldLimit 0x2) refuses: Rush, Assaulter, Assassinate, Ninja Storm, the Brawler / Thunder Breaker dashes, Snatch, Recoil Shot and the Aran's. */
 const MOVE_LIMITED = new Set([1121006, 1221007, 1321003, 4211002, 4221001, 4121008, 5101002, 5101004, 15101003, 5121005,
   5201006, 21100002, 21110003, 21110006]);
@@ -524,16 +528,30 @@ const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
 // a monster's blow on a player sounds only for its first two attacks and attackF
 const CHAR_DAM = { 0: 'CharDam1', 1: 'CharDam2', 8: 'CharDamF' };
+// other players' buff bits: Soul Arrow, Weapon Charge (second long); Energy Charge, Dash, Speed Infusion (first long)
+const SOUL_ARROW_MASK = 0x1000000000000n, WEAPON_CHARGE_MASK = 0x40000000000000n;
+const ENERGY_MASK = 1n << 50n, DASH_MASK = 3n << 51n, INFUSION_MASK = 1n << 54n;
+// Barrier (the Ariant PQ shield, item 2022269): second long 0x40000
+const BARRIER_MASK = 0x40000n;
+// Hypnotize (monster status bit 28): the monster is on the other side
+const HYPNOTIZE = 0x10000000, hypnotized = (m) => !!(m?.status?.second & HYPNOTIZE);
+// Weapon / Magic Immunity (bits 18 / 19): a blow of that kind does 1, unless its roll (0-99) comes up 0
+const WEAPON_IMMUNE = 0x40000, MAGIC_IMMUNE = 0x80000, immuneTo = (m, bit) => !!(m?.status?.second & bit) && Math.floor(Math.random() * 100) > 0;
+// Hard Skin (bit 21): only a critical line does damage; bit 31's guard: no blow does any; bit 34: magic takes value% more
+const HARD_SKIN = 0x200000, guarded = (m) => !!(m?.status?.second & 0x80000000) && !!m.guardValue;
+const takenPct = (m) => (m?.status?.first & 0x4 ? Number(m.takenPct) || 0 : 0);
 // another player's level up, job change, quest clear, monster card and item level up, heard in full
 const FOREIGN_SOUND = { 0: 'Game/LevelUp', 8: 'Game/JobChanged', 9: 'Game/QuestClear', 0x0d: 'Game/mCardGet', 0x0f: 'Game/ItemLevelUp' };
 // Grenade and Poison Bomb make no weapon swing; Grenade's throw is Use2; Blast's cast follows the charge on the weapon
-const GRENADE = 5201002, BLAST = 1221009, NO_SWING = new Set([GRENADE, 14111006]);
+const GRENADE = 5201002, POISON_BOMB = 14111006, BLAST = 1221009, NO_SWING = new Set([GRENADE, POISON_BOMB]);
+// thrown and charged as Grenade (Poison Bomb's reuse is 1.5s)
+const GRENADES = new Set([GRENADE, POISON_BOMB]), GRENADE_REUSES = { [GRENADE]: 1000, [POISON_BOMB]: 1500 };
 /**
  * The gauge over you while a skill charges (not Hurricane or Rapid Fire): UI/Basic.img KeyDownBar (KeyDownBar1 for
  * Monster Magnet and Corkscrew Blow), 72x12 with its top left 36px left of you and 100px up. Its gauge fills a column
  * every 15ms held, from x 2 up to 69 (a full second).
  */
-const GAUGE1 = new Set([...MONSTER_MAGNETS, ...CORKSCREWS]), GAUGED = new Set([...GAUGE1, ...BIG_BANGS, PIERCING_ARROW, GRENADE]);
+const GAUGE1 = new Set([...MONSTER_MAGNETS, ...CORKSCREWS]), GAUGED = new Set([...GAUGE1, ...BIG_BANGS, PIERCING_ARROW, GRENADE, 14111006]);
 const BLAST_USE = { 1211003: 'Use2', 1211004: 'Use2', 1211005: 'Use3', 1211006: 'Use3', 21111005: 'Use3', 1211007: 'Use4', 1211008: 'Use4',
   15101006: 'Use4', 1221003: 'Use5', 1221004: 'Use5', 11111007: 'Use5' };
 // a held Big Bang, Piercing Arrow or Corkscrew Blow loops its Loop sound
@@ -683,8 +701,22 @@ function mesoTiming(node, amount) {
   return out;
 }
 // monster curses (Skill/MobSkill.img ids), as the server sends them
-const SEAL = 120, WEAKEN = 122, STUN = 123, SLOW = 126, REVERSE = 132;
+const SEAL = 120, WEAKEN = 122, STUN = 123, SLOW = 126, SEDUCE = 128, REVERSE = 132;
 const MOB_DOOM = 0x10000;   // MonsterStatus.DOOM
+// what a curse says in the chat log as it takes you
+const CURSE_TEXT = {
+  120: 'You skill has been sealed up, making you unable to use it.',
+  121: 'You are in a state of darkness, so your accuracy will be decreased.',
+  122: "You've been weakened, making you unable to jump.",
+  123: "You've been stunned, making you unable to move.",
+  124: "You've been cursed, so the amount of EXP you'll receive will decrease.",
+  125: 'You have been poisoned, so your HP will slowly decrease.',
+  128: 'You have been seduced, which disables you from moving.',
+  133: 'You will become an Undead and the effects of your Recovery will diminish by 50%.',
+  134: 'Your current condition will not permit you to use a potion.',
+  135: 'You will receive damage if you become covered with the Shadow of Darkness and cannot move.',
+  136: 'The fear of darkness has overtaken you! Your range of vision has been narrowed.',
+};
 const FADE_MS = 600;   // map changes: the old map dims to black over this, the new one lights up over it
 /**
  * Skills that reach out to their range once the swing has a target: Slash Blast, Coma (sword, axe, Dawn Warrior's)
@@ -764,6 +796,27 @@ function snapToPixels(ctx) {
 /** This computer's wall-clock time, as ms whose UTC fields read as the local time. */
 const localWallMs = () => Date.now() - new Date().getTimezoneOffset() * 60000;
 
+/**
+ * A monster's place among the monsters of its page: a lower zMass in front; the parts of Zakum, Horntail and Balrog
+ * each in their set place (Horntail's Head B over Heads A and C, then hands, legs, wings and tails).
+ */
+const MOB_DEPTH = new Map([
+  ...[8800000, 8800001, 8800002, 8810018].map((id) => [id, -2]),
+  ...[8800009, 8800010, 8810003, 8810011].map((id) => [id, -3]),
+  ...[8800007, 8800008, 8810002, 8810010, 8810004, 8810012].map((id) => [id, -4]),
+  ...[8800005, 8800006, 8810005, 8810013, 8810006, 8810014].map((id) => [id, -5]),
+  ...[8800003, 8800004, 8810008, 8810016].map((id) => [id, -6]),
+  ...[8810007, 8810015].map((id) => [id, -7]),
+  ...[8810009, 8810017].map((id) => [id, -8]),
+]);
+const BALROG_BACK = [new Set([8830001, 8830002, 8830004, 8830005, 8830006, 8830008, 8830009, 8830011, 8830012, 8830013]), new Set([8830000, 8830003, 8830007, 8830010])];
+const mobDepth = (e) => {
+  const id = Number(e.spawn?.id);
+  if (BALROG_BACK[0].has(id)) return -1e6;
+  if (BALROG_BACK[1].has(id)) return -1e6 - 1;
+  return -10 * (e.fh?.zMass || 0) + (MOB_DEPTH.get(id) || 0);
+};
+
 export class Game {
   /** net: ChannelSession when playing online, null for the offline map viewer. */
   constructor(canvas, assets, look, hooks = {}, net = null) {
@@ -783,6 +836,7 @@ export class Game {
     this.effects = [];
     this.weather = new Weather(this); this.avatarBanner = new AvatarBanner(this); this.mapleTV = new MapleTVScreen(this);
     this.others = new Map(); this.drops = new Map(); this.pendingDrops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
+    this.dragons = new Map();   // an Evan's dragon, by owner
     this.boards = new ShopBoards(this);
     this.kites = new Kites(this);
     this.queue = []; this.loading = false;
@@ -931,7 +985,7 @@ export class Game {
   }
   /** Back to the login screen, without the leave-page warning. */
   leave() { this.leaving = true; location.reload(); }
-  enterCashShop() { if (this.net && !this.inCashShop && !this.dead) this.net.enterCashShop(); }
+  enterCashShop() { if (this.net && !this.inCashShop) this.net.enterCashShop(); }
   /**
    * The status bar's MTS button: ENTER_MTS, one request at a time (500ms apart, none waiting for its answer), and not
    * where the map forbids it (fieldLimit 0x10). Cosmic with the MTS off answers with enableActions.
@@ -947,10 +1001,13 @@ export class Game {
     this.inCashShop = true;
     const info = d.info;
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
-    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
+    this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
     this.raiseKept = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);   // back up on the next map
     for (const id of this.raiseKept) this.closeRaise(id);
     for (const w of [...this.windows.order]) this.windows.close(w);
+    // dead: the death notice goes with the map (or never comes up), and is asked again once back on the map
+    const death = this.death;
+    if (death) { this.death = null; if (death.notice) death.notice.answered = true; death.cancel?.(); }
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
     music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
@@ -992,7 +1049,7 @@ export class Game {
       const fx = this.player.itemFxId;
       if (fx) { if (this.itemCount(fx)) net.useItemEffect(fx); else this.setItemEffect(this.player, 0); }
       if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
-      if (this.stats.hp <= 0 && !this.dead) this.die(false);   // still dead after the switch
+      if (this.stats.hp <= 0 && (!this.dead || !this.death)) this.die(false);   // still dead after the switch (or the Cash Shop)
     } catch (e) {
       console.error(e);
       this.hooks.onLoading?.(false);
@@ -1935,6 +1992,52 @@ export class Game {
    * named after the character's action when it has `action`), up to five trailing ones (`follow`), or fading copies
    * of the character (`spectrum`).
    */
+  /** A consumable's effect (Effect/ItemEff.img/<item>) loops on them until another (or 0) comes; not while morphed. */
+  async setConsumeEffect(ent, id) {
+    ent.consumeFxId = id;
+    if (!id) return;
+    const node = (await this.assets.json('Effect/ItemEff.img'))?.[id], fx = Game.fxNode(node);
+    if (!fx || ent.consumeFxId !== id) return;
+    const anim = new Anim(fx, true);
+    await this.assets.preload(anim.frames);
+    const here = () => ent === this.player || this.others.get(ent.id) === ent;
+    this.fx.push({ anim, follow: ent, keep: () => ent.consumeFxId === id && here() && !ent.morph });
+  }
+  /**
+   * Heart-Shaped Chocolates (5110000): n % 10 small hearts (ItemEff.img/5110000/0) and n / 10 big ones (/1) over their
+   * head, the small ones in rows of five 10px apart, the big ones above them 15px apart, each circling its place 5px
+   * out from a random start. Not while morphed.
+   */
+  async setHearts(ent, n) {
+    ent.hearts = null;
+    if (!n) return;
+    const node = (await this.assets.json('Effect/ItemEff.img'))?.[5110000];
+    if (!node?.[0] || !node?.[1]) return;
+    await this.assets.preload([node[0], node[1]]);
+    const small = n % 10, big = Math.floor(n / 10), list = [];
+    for (let i = 0; i < small + big; i++) {
+      let x, y;
+      if (i < small) {
+        x = small % 10 < 6 ? ((i % 5) * 2 - small + 1) * 5 : i % 10 > 4 ? ((i % 5) * 2 - (small % 5) + 1) * 5 : ((i % 5) - 2) * 10;
+        y = (-2 - Math.floor(i / 5)) * 10;
+      } else {
+        x = ((i - small) % 5) * 15 + (big % 5) * -7 + 7;
+        y = Math.floor((small - 1) / 5) * -10 + Math.floor((i - small) / 5) * -15 - 35;
+      }
+      list.push({ node: i < small ? node[0] : node[1], x, y, a: Math.random() * Math.PI * 2 });
+    }
+    ent.hearts = list;
+  }
+  drawHearts(ctx, cam, ent, dt) {
+    if (!ent.hearts || ent.morph) return;
+    for (const h of ent.hearts) {
+      h.a += (dt || 0) * Math.PI;   // (how fast they go round isn't read from the client yet)
+      const img = this.assets.image(h.node);
+      if (!img) continue;
+      const o = h.node.origin || [0, 0], x = ent.x + h.x + Math.cos(h.a) * 5, y = ent.y - 65 + h.y + Math.sin(h.a) * 5;
+      ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+    }
+  }
   async setItemEffect(ent, id) {
     ent.itemFxId = id; ent.itemFx = null;
     if (!id) return;
@@ -2761,6 +2864,7 @@ export class Game {
       duey: later((e) => this.onDuey(e)),
       accountGender: (g) => { this.accountGender = g; },
       incubated: later((id, count) => this.onIncubated(id, count)),
+      makerOutcome: later((d) => makerOutcome(this, d)),
       hammer: (e) => { if (this.hammerWin && this.windows.order.includes(this.hammerWin)) this.hammerWin.onResult(e); else this.releaseExclusive(); },
       gameRoom: later((room) => this.openGameRoom(room)),
       gameOp: (e) => this.onGameOp(e),
@@ -2841,7 +2945,9 @@ export class Game {
       }),
       showChair: later((id, itemId) => { const rp = this.others.get(id); if (rp) rp.chair = itemId; if (itemId) this.chairArt(itemId); }),
       cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
-      removePlayer: later((id) => { this.vfx?.untomb(this.others.get(id)); this.others.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
+      removePlayer: later((id) => { this.vfx?.untomb(this.others.get(id)); this.others.delete(id); this.dragons.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
+      spawnDragon: later((d) => this.dragons.set(d.owner, new Dragon(d))),
+      moveDragon: later((owner, start, moves) => this.dragons.get(owner)?.move(start, moves)),
       petSpawn: later((d) => this.addPet(d)),
       petRemove: later((owner, slot, reason) => this.removePet(owner, slot, reason)),
       petMove: later((owner, slot, moves) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.applyMovement(moves); }),
@@ -2881,6 +2987,8 @@ export class Game {
       attack: later((a) => this.onRemoteAttack(a)),
       expression: later((id, emote) => { const rp = this.others.get(id); if (rp) { setExpression(rp, emote); this.emotionEffect(rp, emote); } }),
       itemEffect: later((id, item) => { const rp = this.others.get(id); if (rp) this.setItemEffect(rp, item); }),
+      consumeEffect: later((id, item) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) this.setConsumeEffect(ent, item); }),
+      playerHearts: later((id, n) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) this.setHearts(ent, n); }),
       scrollEffect: later((e) => this.onScrollEffect(e)),
       bookCard: later((id, count) => {
         const b = this.monsterBook;
@@ -2901,7 +3009,20 @@ export class Game {
           for (const h of hits) { const m = this.lifeByOid.get(h.mob); if (m) this.summonHit(sm, m, [h.dmg], false, which); }
         });
       }),
-      summonDamaged: later((owner, oid) => this.summons.get(oid)?.play('hit')),
+      // a struck summon: the attack's hit art on it (and its CharDam sound), and when it was hurt its hit pose for 1.5s
+      summonDamaged: later(async (owner, oid, damage, attack, mobId, dir) => {
+        const sm = this.summons.get(oid);
+        if (!sm) return;
+        if (damage > 0) { sm.hitUntil = performance.now() + 1500; sm.play('hit'); }
+        if (!mobId || attack < 0) return;
+        if (CHAR_DAM[attack]) sfx.play(`Mob/${pad(mobId, 7)}/${CHAR_DAM[attack]}`, { volume: this.volumeAt(sm.x, sm.y) });
+        const hit = (await this.assets.json(`Mob/${pad(mobId, 7)}.img`))?.[`attack${attack + 1}`]?.info?.hit, fx = hit && Game.fxNode(hit);
+        if (!fx) return;
+        const anim = new Anim(fx, false);
+        await this.assets.preload(anim.frames);
+        if (Number(hit.attach)) this.fx.push({ anim, follow: sm, flip: !!sm.facingRight });
+        else this.fx.push({ anim, x: sm.x - 15 + Math.random() * 30, y: sm.y - 40 + Math.random() * 40, flip: !!dir });
+      }),
       summonSkill: later((owner, skill, stance) => {
         for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
       }),
@@ -2919,6 +3040,39 @@ export class Game {
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
       reactorSpawn: later((d) => this.spawnReactor(d)),
+      mobMoveResponse: later((oid, r) => {
+        const e = this.lifeByOid.get(oid);
+        if (!e || e.pending || e.kind !== 'Mob') return;
+        e.mp = r.mp;
+        if (r.stale || !e.controlled) return;
+        if (r.aggro && e.aggro !== this.player) e.chase(this.player);   // (a struck monster already gives chase on its own)
+      }),
+      mobResetAnim: later((oid) => {
+        const e = this.lifeByOid.get(oid);
+        if (!e || e.pending) return;
+        e.appearing = false; delete e.fadeInAt; e.state = ''; e.setState(e.flying ? 'fly' : 'stand');
+      }),
+      carnivalTeam: (team) => { this.carnivalTeam = team; },
+      // LEFT_KNOCK_BACK (the Snowball event): 300 left and 300 up, as a blow's impact
+      leftKnockBack: later(() => {
+        const p = this.player, impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+        if (this.dead) return;
+        if (p.fh) p.y = Math.floor(p.y - 1);
+        p.fh = null; p.ladder = null;
+        p.vx = impact(p.vx || 0, -300); p.vy = impact(p.vy || 0, -300);
+      }),
+      // Homing Beacon / Bullseye marks the monster it goes after with the skill's mob art; a new mark (or none) ends the last
+      homingBeacon: later(async (skill, oid) => {
+        if (this.beaconMob) this.beaconMob.beaconMark = null;
+        const m = oid ? this.lifeByOid.get(oid) : null;
+        this.beaconMob = m && !m.pending ? m : null;
+        if (!this.beaconMob) return;
+        const fx = Game.fxNode((await this.skills?.ensure(skill))?.mob);
+        if (!fx || this.beaconMob !== m) return;
+        const anim = new Anim(fx, true);
+        await this.assets.preload(anim.frames);
+        if (this.beaconMob === m) m.beaconMark = anim;
+      }),
       mobSkillOffer: later((oid, skill, level) => { const e = this.lifeByOid.get(oid); if (e && !e.pending && e.controlled && skill) e.nextSkill = { skill, level }; }),
       disease: later((d) => this.onDisease(d)),
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
@@ -2931,6 +3085,13 @@ export class Game {
         if (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK) rp.hidden = false;
         if (BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
         if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(rp, 0);
+        const lo = BigInt.asUintN(64, BigInt(m2)), hi = BigInt.asUintN(64, BigInt(m1));
+        if (lo & SOUL_ARROW_MASK) rp.soulArrow = false;
+        if (lo & WEAPON_CHARGE_MASK) rp.weaponCharge = 0;
+        if (hi & ENERGY_MASK) rp.energy = 0;
+        if (hi & DASH_MASK) rp.dash = 0;
+        if (hi & INFUSION_MASK) rp.speedInfusion = 0;
+        if (lo & BARRIER_MASK) rp.barrier = false;
       })),
       // a mount's level / exp / tiredness; levelling up plays the pet level-up effect on its rider (the client's)
       mountInfo: later(async (id, level, exp, tired, up) => {
@@ -2948,6 +3109,16 @@ export class Game {
       foreignPartner: later((id) => this.onOther(id, (rp) => { rp.partner = true; })),
       foreignHidden: later((id) => this.onOther(id, (rp) => { rp.hidden = true; })),
       foreignCombo: later((id, value) => { const rp = this.others.get(id); if (rp) rp.combo = value; }),
+      // the rest of another player's buffs: Soul Arrow (their shots), Weapon Charge, a full Energy Charge's aura, Dash,
+      // Speed Infusion
+      foreignBuffs: later((id, st) => this.onOther(id, (rp) => {
+        if (st.soulArrow) rp.soulArrow = true;
+        if (st.weaponCharge) rp.weaponCharge = st.weaponCharge;
+        if (st.dashSpeed || st.dashJump) rp.dash = (st.dashSpeed || st.dashJump).reason;
+        if (st.partyBooster) rp.speedInfusion = st.partyBooster.value;
+        if (st.energyCharged) { rp.energy = st.energyCharged.value; this.energyAura(rp, st.energyCharged.reason); }
+        if (st.barrier) { rp.barrier = true; this.barrierShield(rp); }
+      })),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.block); }),
@@ -3040,6 +3211,7 @@ export class Game {
         if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); if (b.source === 5221006) this.battleshipHp = undefined; }
         if (b.morph) { this.morphReason = b.morphSource; this.setMorph(this.player, b.morph); }
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
+        if (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & BARRIER_MASK) this.after(0, () => this.barrierShield(this.player));
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
           watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
       },
@@ -3049,27 +3221,41 @@ export class Game {
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
         this.diseases = (this.diseases || []).filter((d) => !((d.m1 & m1) || (d.m2 & m2)));
       },
-      affected: later((chrId, skillId) => {
+      // a buff's affected art on them; one with repeat (Wind Walk, the beginners' 1010 / 1011) loops while it lasts on you
+      affected: later(async (chrId, skillId) => {
         const ent = chrId === null ? this.player : this.others.get(chrId);
-        if (ent) this.playSkillEffect(skillId, ent, false, 'affected');
+        if (!ent) return;
+        const node = this.byCharLevel(await this.skills?.ensure(skillId), ent);
+        if (ent === this.player && Number(node?.affected?.repeat)) {
+          const keep = () => this.buffs.some((b) => b.source === skillId && b.until > Date.now());
+          this.after(0, () => this.loopSkillEffect(skillId, ent, 'affected', keep));
+          return;
+        }
+        this.playSkillEffect(skillId, ent, false, 'affected');
       }),
       skillSpecial: later((chrId, skillId) => { const ent = chrId === null ? this.player : this.others.get(chrId); if (ent) this.playSkillEffect(skillId, ent, false, 'special'); }),
       berserk: later((chrId, on) => this.setBerserk(chrId === null ? this.player : this.others.get(chrId), on)),
-      foreignSkill: later((chrId, skillId, level) => {
+      foreignSkill: later((chrId, skillId, level, skillLevel) => {
         const rp = this.others.get(chrId);
         if (!rp) return;
         rp.charge = null;
         if (level) rp.level = level;
-        // another player's skill art isn't drawn; only the teleport flash is
+        // another player's skill art isn't drawn (only the teleport flash), but they take its pose
         if (TELEPORTS.has(skillId)) this.playTeleportEffect(rp.x, rp.y);
+        this.skillPose(rp, skillId, skillLevel);
       }),
+      skillPose: later((chrId, skillId, level) => this.skillPose(this.player, skillId, level)),
       // a skill being charged or wound up: they stand in its prepare pose (or as they are, for a pose the client
       // doesn't know), with its prepare art, then its keydown art from its prepare time on, until it goes off
-      foreignCharge: later(async (chrId, skillId) => {
+      // the action the packet names (facing as it says, at its speed), held - a keydown skill's until it's let go
+      foreignCharge: later(async (chrId, skillId, how = {}) => {
         const rp = this.others.get(chrId), node = await this.skills?.ensure(skillId);
         if (!rp || !node) return;
-        const act = node.prepare?.action, pose = !act ? 'alert' : ACTIONS.includes(act) ? act : null;
-        const charge = { id: skillId, pose, until: performance.now() + 2000 };
+        const named = how.action !== undefined && how.action !== 0x7fff ? ACTIONS[how.action] : null;
+        const act = node.prepare?.action, pose = named || (!act ? 'alert' : ACTIONS.includes(act) ? act : null);
+        if (named) rp.facingRight = !how.left;
+        rp.attackScale = this.attackScale(Math.max(2, Math.min(10, how.speed ?? 6)));
+        const charge = { id: skillId, pose, until: performance.now() + (node.keydown ? Infinity : 2000) };
         rp.charge = charge;
         const keep = () => rp.charge === charge && this.others.get(chrId) === rp;
         if (frames(node.prepare).length) this.playSkillEffect(skillId, rp, false, 'prepare');
@@ -3081,6 +3267,7 @@ export class Game {
         const rp = this.others.get(chrId);
         if (!rp) return;
         rp.charge = null;
+        rp.alertUntil = performance.now() + 5000;   // then they stand ready (alert) for 5s
         if (HELD_SHOTS.has(skillId)) this.playSkillEffect(skillId, rp, false, 'keydownend');
       }),
       // another player's Grenade: its flight and where it goes off (their attack brings the damage)
@@ -3098,7 +3285,14 @@ export class Game {
       npcScripts: (list) => { this.npcScripts = new Map(list.map((e) => [e.id, e.name])); },
       questClearEffect: () => { this.vfx?.play('QuestClear', this.player); sfx.play('Game/QuestClear'); },
       wheelsLeft: (n) => this.hud.message(`You have used 1 Wheel of Destiny in order to revive at the current map. (${n} left)`, CHAT_COLOR.grey),
-      avatarPicture: (path) => { this.vfx?.playPath(path, this.player); },
+      avatarPicture: later((path, id) => { const ent = id == null ? this.player : this.others.get(id); if (ent) this.vfx?.playPath(path, ent); }),
+      // the Maker's result on someone: ItemMake/Success or Failure over them, with the enchant sound
+      makerResult: later((id, result) => {
+        const ent = id === null ? this.player : this.others.get(id);
+        if (!ent || (result !== 0 && result !== 1)) return;
+        this.vfx?.play(`ItemMake/${result ? 'Failure' : 'Success'}`, ent);
+        sfx.play(`Game/${result ? 'EnchantFailure' : 'EnchantSuccess'}`);
+      }),
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
       objectStates: later((list) => { for (const { name, state } of list) this.setObjectState(name, state); }),
@@ -3342,10 +3536,11 @@ export class Game {
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
    * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, the Energy
-   * Charge gauge, Maker, Ranking, GM Board, Title, Maple Event) do nothing.
+   * Charge gauge, Ranking, GM Board, Title, Maple Event) do nothing; 0x17 is the Maker.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
+    if (type === 0x17) { openMaker(this); return; }
     const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x21: 'skill' }[type];
     if (!name || (name === 'skill' && !this.skills) || (name === 'quest' && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
@@ -3440,9 +3635,10 @@ export class Game {
     if (fresh) sfx.play('Game/Tombstone');
     await new Promise((r) => setTimeout(r, 2200));
     if (this.death !== death) return;   // brought back meanwhile
+    // a Wheel of Destiny asks to use it (Notice/2); playing from an Internet café asks to revive here (Notice/1)
     const wheel = this.wheelRevivable();
     const answer = await new Promise((done) => {
-      const w = death.notice = new DeathNotice(this.windows, wheel ? 'wheel' : 'ok', (yes) => done({ yes }));
+      const w = death.notice = new DeathNotice(this.windows, wheel ? 'wheel' : this.cafe ? 'cafe' : 'ok', (yes) => done({ yes }));
       death.cancel = () => done(null);
       this.assets.preload(w.frames()).then(() => {
         if (this.death !== death) return;
@@ -3522,7 +3718,7 @@ export class Game {
       if (this.player.chalk && Number(map.info?.personalShop)) this.closeChalkboard('You cannot use the chalkboard here.');
       this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
-      this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
+      this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip();
@@ -3566,7 +3762,9 @@ export class Game {
   async spawnLife(kind, d, controlled) {
     const map = this.map;
     // a new spawn is followed straight away by its control packet (not marked new): keep the mark across both
-    const entry = { pending: true, newSpawn: d.newSpawn || !!this.lifeByOid.get(d.oid)?.newSpawn };
+    const prev = this.lifeByOid.get(d.oid);
+    const entry = { pending: true, newSpawn: d.newSpawn || !!prev?.newSpawn,
+      appearAs: d.appear >= 0 || d.appear === -3 ? { type: d.appear, option: d.option || 0 } : prev?.pending ? prev.appearAs : null };
     this.lifeByOid.set(d.oid, entry);
     const spawn = kind === 'Npc'
       ? { id: d.id, oid: d.oid, x: d.x, cy: d.y, f: d.facingRight ? 1 : 0, fh: d.fh, rx0: d.rx0, rx1: d.rx1 }
@@ -3584,12 +3782,40 @@ export class Game {
     // an NPC we control asks the server what it does next, and does what comes back
     if (kind === 'Npc' && controlled) e.onNpcAction = (n, action, chat) => this.net?.npcAction(n.oid, action, chat);
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`, { volume: this.volumeAt(e.x, e.y) }); }
+    if (kind === 'Mob') {
+      e.team = d.team || 0;
+      const ap = entry.appearAs;
+      if (ap?.type >= 0) this.summonAppear(e, ap.type, ap.option);
+      // -3: hidden until its parent (a part of the same boss) has finished dying
+      else if (ap?.type === -3) { const parent = this.lifeByOid.get(ap.option); if (parent && !parent.pending) { e.appearing = true; e.parentMob = parent; } }
+    }
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
     if (kind === 'Npc' && this.vfx) this.vfx.questT = 0;   // its quest icon at once
     if (kind === 'Npc') this.imitate(e);
     // a monster others can hurt (info/damagedByMob: the Watch Hog, Moon Bunny, Tylus...) is the field's friendly one
     if (kind === 'Mob' && Number(e.src?.info?.damagedByMob)) { this.friendlyMob = e; this.friendlyHitAt = performance.now(); }
+  }
+
+  /**
+   * A monster brought in by a summon effect (appear 0 and up): Effect/Summon.img/<type> plays where it stands `option`
+   * ms from now, and the monster shows the effect's delay after that, unseen and untouchable until then.
+   */
+  async summonAppear(e, type, option) {
+    const now = performance.now();
+    e.appearing = true;
+    const node = (this.summonEff ??= await this.assets.json('Effect/Summon.img'))?.[type];
+    const showAt = now + (Number(node?.delay) || 0) + option;
+    this.after(Math.max(0, showAt - performance.now()), () => { e.appearing = false; });
+    const fx = Game.fxNode(node);
+    if (!fx) return;
+    const anim = new Anim(fx, false);
+    await this.assets.preload(anim.frames);
+    this.after(Math.max(0, now + option - performance.now()), () => { if (this.map.life.includes(e)) this.fx.push({ anim, x: e.x, y: e.y, flip: false }); });
+  }
+  /** Monsters waiting on a parent (appear -3) show once the parent is gone. */
+  revealChildren() {
+    for (const m of this.map.life) if (m.parentMob && (m.parentMob.removed || !this.map.life.includes(m.parentMob))) { m.parentMob = null; m.appearing = false; }
   }
 
   /**
@@ -3660,22 +3886,32 @@ export class Game {
     const e = this.lifeByOid.get(oid);
     this.lifeByOid.delete(oid);
     if (!e || e.pending) return;
-    // the server says it died the moment our attack went out; let the swing (or shot) land first
+    // the server says it died the moment our attack went out; let the swing (or shot) land first, and every line of
+    // it show, so a blow of several lines that kills on its first still plays out before the monster dies
     if (e.pendingHits > 0) {
       e.queuedKill = { anim };
       (this.dying ??= new Map()).set(oid, e);
-      this.after(1500, () => { if (e.queuedKill) this.finishKill(e); });   // in case a shot never arrives
+      this.after(1500, () => { if (e.queuedKill && e.pendingHits > 0) this.finishKill(e); });   // in case a shot never arrives
+      return;
+    }
+    const wait = (e.linesUntil || 0) - performance.now();
+    if (wait > 0) {
+      e.queuedKill = { anim };
+      (this.dying ??= new Map()).set(oid, e);
+      this.after(wait, () => { if (e.queuedKill) this.finishKill(e); });
       return;
     }
     this.finishKill(e, anim);
   }
+  /** A blow landing on e: its last line shows `last` ms from now, and e can't die before then. */
+  linesLanded(e, last) { e.linesUntil = Math.max(e.linesUntil || 0, performance.now() + last); }
   finishKill(e, anim = e.queuedKill?.anim) {
     e.queuedKill = null;
     this.dying?.delete(e.oid);
     this.releaseDrops(e);
     if (anim && e.kind === 'Mob') sfx.play(`Mob/${pad(Number(e.spawn.id), 7)}/Die`, { volume: this.volumeAt(e.x, e.y) });
     if (e.kind === 'Mob' && Number(e.spawn.id) === this.vfx?.boss?.oid) this.vfx.boss = null; // the gauge goes with its boss
-    if (anim && e.anims.die1) e.kill(); else e.removed = true;
+    if (anim) e.kill(anim); else e.removed = true;
   }
 
   /** Run fn on another player now, or once their spawn (still loading their look) is done. */
@@ -3701,6 +3937,7 @@ export class Game {
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
     if (rp.chair) this.chairArt(rp.chair);
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
+    if (d.hearts) this.setHearts(rp, d.hearts);
     this.others.set(d.id, rp);
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
@@ -3779,7 +4016,9 @@ export class Game {
           e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
           this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
           this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null, a.kind === 'ranged' && [5020, 5021].includes(Math.floor(a.projectile / 1000)) ? a.projectile : 0);
-          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp)), () => this.finishKill(e)); else this.releaseDrops(e); }
+          const last = lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp));
+          this.linesLanded(e, last);
+          if (--e.pendingHits <= 0) { if (e.queuedKill) this.after(last, () => { if (e.queuedKill) this.finishKill(e); }); else this.releaseDrops(e); }
         };
         const planned = plan?.targets.find((p) => p.mob === e);
         if (planned) this.after(delay + planned.delay, land);
@@ -3796,6 +4035,21 @@ export class Game {
     if (rp && d.damage > 0) setExpression(rp, 1, HIT_FACE_TIME);
     const dam = rp && d.mobId && CHAR_DAM[d.from];
     if (dam) sfx.play(`Mob/${pad(d.mobId, 7)}/${dam}`, { volume: this.volumeAt(rp.x, rp.y) });
+    if (rp && d.mobId && d.from >= 0) this.remoteHitArt(rp, d);
+  }
+  /**
+   * A monster's attack hit another player: the attack's hit art, at a random point of their body (turned the way the
+   * blow came), or on them, turned as they face, when it is attach.
+   */
+  async remoteHitArt(rp, d) {
+    const mob = await this.assets.json(`Mob/${pad(d.mobId, 7)}.img`), hit = mob?.[`attack${d.from + 1}`]?.info?.hit;
+    const fx = hit && Game.fxNode(hit);
+    if (!fx || this.others.get(rp.id) !== rp) return;
+    const anim = new Anim(fx, false);
+    await this.assets.preload(anim.frames);
+    if (Number(hit.attach)) { this.fx.push({ anim, follow: rp, flip: !!rp.facingRight }); return; }
+    const x = rp.x - 22 + Math.random() * 44, y = rp.y - 65 + Math.random() * 65;
+    this.fx.push({ anim, x, y, flip: !!d.direction });
   }
 
   /** Drops a monster let go of while our blow was still on its way: they come out as it dies. */
@@ -4385,10 +4639,11 @@ export class Game {
   async summonHit(sm, mob, dmgs, mine, which = 'attack1') {
     if (mine) {
       if (--mob.pendingHits <= 0 && !mob.queuedKill) this.releaseDrops(mob);
-      const kill = mob.pendingHits <= 0 && mob.queuedKill;
+      const kill = mob.pendingHits <= 0 && mob.queuedKill, last = lineDelay(0, dmgs.length - 1);
+      this.linesLanded(mob, last);
       mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x);
       this.damageNumbers(mob, dmgs, true);
-      if (kill) this.finishKill(mob);
+      if (kill) this.after(last, () => { if (mob.queuedKill) this.finishKill(mob); });
     } else { mob.hit(dmgs.reduce((a, b) => a + b, 0), sm.x > mob.x); this.damageNumbers(mob, dmgs, false); }
     dmgs.forEach((d, line) => this.hitSound(sm.skill, mob, d, line));
     const node = sm.node?.[which]?.info?.hit || sm.node?.attack1?.info?.hit;
@@ -4399,20 +4654,34 @@ export class Game {
   }
 
   /** SHOW_SCROLL_EFFECT: BasicEff Enchant Success / Failure over whoever scrolled, with its sound. */
+  /**
+   * SHOW_SCROLL_EFFECT. Yours says how it went in the chat log; with Legendary Spirit the client shows it in its
+   * window instead (the Enchant sound, the line once its art is done) and nothing plays on you. Anyone else's (and
+   * your own otherwise): Enchant Success / Failure on them with its sound.
+   */
   async onScrollEffect(e) {
     const ent = e.id === this.player.id ? this.player : this.others.get(e.id);
     if (!ent) return;
-    sfx.play(e.success ? 'Game/EnchantSuccess' : 'Game/EnchantFailure');
     const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Enchant?.[e.success ? 'Success' : 'Failure'];
+    const mine = ent === this.player, line = !mine ? null
+      : e.success ? (e.white ? ' The item was successfully upgraded, and the white scroll was used in the process.'
+        : 'The scroll lights up, and then its mysterious power has been transferred to the item.')
+        : e.cursed ? 'The item is destroyed due to the overwhelming power of the scroll.'
+          : e.white ? 'The item upgrade failed, but since the White Scroll was used, the number of item upgrade slots remained in tact.'
+            : 'The scroll lights up, but the item winds up as if nothing happened';
+    if (mine && e.legendary) {
+      sfx.play('Game/Enchant');
+      const len = node ? new Anim(node, false).frames.reduce((t, f) => t + (Number(f.delay) || 100), 0) : 0;
+      this.after(len, () => this.hud.message(line, CHAT_COLOR.error));
+      return;
+    }
+    if (line) this.hud.message(line, CHAT_COLOR.error);
+    sfx.play(e.success ? 'Game/EnchantSuccess' : 'Game/EnchantFailure');
     if (node) {
       const anim = new Anim(node, false);
       await this.assets.preload(anim.frames);
       this.fx.push({ anim, follow: ent, flip: false });
     }
-    if (ent !== this.player) return;
-    this.hud.message(e.success ? 'The scroll lights up, and its mysterious power has been transferred to the item.'
-      : e.cursed ? 'The scroll lights up, but the item has been destroyed due to its overwhelming power.'
-        : 'The scroll lights up, but it seems the item has failed to be upgraded.', e.success ? '#9fe07a' : '#ff9e9e');
   }
 
   unequip(slot) {
@@ -4983,6 +5252,7 @@ export class Game {
   }
 
   update(dt) {
+    this.frameDt = dt;
     this.padInput?.poll();
     if (this.inCashShop) { this.windows?.update(dt); return; }   // the shop screen is all there is
     if (this.uiLocked || this.uiDisabled) { const i = this.input; i.down.clear(); i.pressed.clear(); i.repeats.clear(); i.clicks.length = 0; }
@@ -5006,6 +5276,8 @@ export class Game {
     (this.dojo ??= new DojoWindow(this)).update(dt);
     (this.pyramid ??= new PyramidWindow(this)).update(dt);
     if (this.net) this.autoAggro();
+    if (this.net) this.monsterBombs();
+    this.revealChildren();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
@@ -5148,8 +5420,11 @@ export class Game {
       const sc = COMMAND_SC[e.k] ?? CODE_TO_SC[e.k];
       if (sc !== undefined && this.commands.key(sc, e.down) && e.down) inp.pressed.delete(e.k);
     }
-    let dir = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
-    if (this.hasDisease(REVERSE)) dir = -dir;
+    // Seduce: your movement keys do nothing; you walk, look down and jump the way its value says
+    const sd = this.seduceInput(), held = (k) => (sd ? (k === 'down' ? sd.y > 0 : k === 'up' ? sd.y < 0 : false) : inp.is(k));
+    const jumpHit = () => (sd ? sd.jump : this.hitAction(ACTION.JUMP)), jumpHeld = () => (sd ? sd.jump : this.holdAction(ACTION.JUMP));
+    let dir = sd ? sd.x : (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
+    if (!sd && this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
       const hw = this.pressedSkill();   // Hero's Will still goes
@@ -5161,7 +5436,7 @@ export class Game {
     }
     const ms = this.moveStats(), JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
     const swim = map.swimming(p.x, p.y), WALK = PHYS.walk * ms.speed * (swim ? PHYS.swimDec : 1);
-    const inY = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
+    const inY = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
     if (p.fh || p.ladder) this.fjUsed = false;   // Flash Jump comes back once you land
@@ -5210,13 +5485,13 @@ export class Game {
       if (p.attack) { if (this.advanceFrame(p.attack, dt)) p.attack = null; return; }
       const skill = this.pressedSkill();   // only buffs go here (useSkill turns the rest down)
       if (skill && this.skills && performance.now() >= (this.attackLock || 0) && this.useSkill(skill)) return;
-      const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
+      const v = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
       p.vx = 0; p.vy = v * PHYS.climb;   // the speed sent while climbing
       const y0 = p.y;
       p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
       const leaving = () => ({ fh: -(l.id || 0), stance: this.currentStance() });   // how you were on it, for those watching
-      if (this.hitAction(ACTION.JUMP) && dir && !this.hasDisease(WEAKEN)) {
+      if (jumpHit() && dir && !this.hasDisease(WEAKEN)) {
         const leave = leaving();
         p.ladder = null; p.vy = -JUMP * (swim ? 0.3 : 0.5); p.vx = dir * PHYS.walk * ms.speed * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
         this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy, leave };
@@ -5242,7 +5517,7 @@ export class Game {
 
     // seated (a map seat or a chair): moving, jumping, attacking or a skill stands you up; otherwise you stay put
     if (p.seat) {
-      if (dir || this.holdAction(ACTION.JUMP) || this.holdAction(ACTION.ATTACK) || this.pressedSkill() || this.macroQueue?.length) this.standUp();
+      if (dir || jumpHeld() || this.holdAction(ACTION.ATTACK) || this.pressedSkill() || this.macroQueue?.length) this.standUp();
       else {
         this.advanceFrame('sit', dt);
         return;
@@ -5282,10 +5557,10 @@ export class Game {
     // down one whose top is at most 10px below them; left / right may be held too
     if (p.fh && this.canClimb()) {
       const x = Math.round(p.x), y = Math.round(p.y);
-      if (inp.is('up')) {
+      if (held('up')) {
         const l = map.ladderIn(x, y - 20, x, y);
         if (l) { this.grab(l); p.y = Math.min(y, l.y2); return; }
-      } else if (inp.is('down')) {
+      } else if (held('down')) {
         const l = map.ladderIn(x, y, x, y + 10);
         if (l && l.y1 >= y && l.y1 <= y + 10) { this.grab(l); p.y = l.y1; return; }
       }
@@ -5295,8 +5570,8 @@ export class Game {
       if (dir) p.facingRight = dir > 0;
       // holding jump keeps jumping: each landing jumps again (a down-jump still needs its own press); in water a jump
       // goes at most every 300ms
-      if (!this.hasDisease(WEAKEN) && (this.hitAction(ACTION.JUMP) || (this.holdAction(ACTION.JUMP) && !inp.is('down'))) && this.swimJumpReady(swim)) {   // Weakness: no jumping
-        if (inp.is('down')) {
+      if (!this.hasDisease(WEAKEN) && (jumpHit() || (jumpHeld() && !held('down'))) && this.swimJumpReady(swim)) {   // Weakness: no jumping
+        if (held('down')) {
           const below = fh.below(p.x, p.y + 1, Infinity, p.fh);   // any floor under us, however far down
           // a little hop first, then down through the floor: it stays ignored until we are well past it
           if (below) {
@@ -5320,7 +5595,7 @@ export class Game {
         p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel * (swim ? PHYS.swimDec : 1), WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
         const dx = ((v0 + p.vx) / 2) * dt;
         if (dx) { const r = fh.walk(p, dx); if (r === 'edge') p.vy = 0; else if (r === 'wall') p.vx = 0; }
-        if (inp.is('down') && !dir) action = 'prone';
+        if (held('down') && !dir) action = 'prone';
         else if (dir) action = look.walkAction();
       }
     }
@@ -5342,7 +5617,7 @@ export class Game {
         this.playerFall(dt, dir, inY, ms);
       }
       // falling or sinking (not on the way up) with up held catches a ladder / rope the step passed within 10px of
-      if (!p.fh && p.vy > 0 && inp.is('up') && this.canClimb()) {
+      if (!p.fh && p.vy > 0 && held('up') && this.canClimb()) {
         const l = map.ladderIn(Math.round(x0), Math.round(y0), Math.round(p.x), Math.round(p.y));
         if (l) { this.grab(l); this.advanceFrame(l.l ? 'ladder' : 'rope', 0); return; }
       }
@@ -5587,6 +5862,7 @@ export class Game {
     if (mt?.superman && SUPERMAN_BLOCKED.has(id)) return false;
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
+    if ([1007, 10001007, 20001007, 20011007].includes(id)) { openMaker(this); return true; }   // the Maker opens its window
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
     if (this.riding && !this.skillKeyPressed) return false;   // a key held down on a mount doesn't repeat
@@ -5769,6 +6045,16 @@ export class Game {
     const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
     let targets = mx?.mobs || opts.mobs || kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
+    // a shot that stops at the first monster on its line doesn't go through the ground or a wall on the way there
+    // (nor do the blast or the orb's hops that start from it)
+    const lineShot = plan && !opts.mobs && !RAIN_SHOTS.has(skillId) && !PIERCING_SHOTS.has(skillId) && !BOX_LINE_SHOTS.has(skillId);
+    if (lineShot && plan.targets.length) {
+      const h = plan.targets[0];
+      if (this.shotBlocked(plan.sx, plan.sy, h.hx ?? h.x, h.hy ?? h.y)) { plan.targets = []; plan.orb = null; plan.blast = null; targets = []; }
+    } else if (kind === 'ranged' && mobCount === 1 && !plan && targets.length === 1) {
+      const b = targets[0].hitBox();
+      if (this.shotBlocked(p.x, p.y - 28, (b.left + b.right) / 2, (b.top + b.bottom) / 2)) targets = [];
+    }
     // Band of Thieves: a monster in reach of your plain swing first, then the rest of its box
     if (skillId === BAND_OF_THIEVES) {
       const first = this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH)[0];
@@ -5809,10 +6095,21 @@ export class Game {
         }
         // Heaven's Hammer strikes for 1: the server does its real damage a moment later
         if (skillId === HEAVENS_HAMMER) { dmg.push(1); crits.push(false); continue; }
+        // Bamboo Rain: the monster's max HP (30% of it on a boss); Rage of Pharaoh: its max HP; Combo Tempest: 1 on
+        // anything but a boss (the server finishes it)
+        const maxHp = Number(m.src?.info?.maxHP) || 0, boss = !!Number(m.src?.info?.boss);
+        if (BAMBOO_RAINS.has(skillId)) { dmg.push(boss ? Math.trunc(maxHp * 0.3) : maxHp); crits.push(false); continue; }
+        if (PHARAOHS.has(skillId)) { dmg.push(maxHp); crits.push(false); continue; }
+        if (skillId === COMBO_TEMPEST && !boss) { dmg.push(1); crits.push(false); continue; }
         if (mx) { dmg.push(...mx.damage(m)); crits.push(...dmg.map(() => false)); break; }
         if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, cbLd || ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
         if (fixedPhys) { dmg.push(this.fixedMiss(m) ? 0 : ld.fixdamage); crits.push(false); continue; }
-        const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate), d = roll();
+        if (kind === 'magic' && !ld?.fixdamage && guarded(m)) { dmg.push(0); crits.push(false); continue; }
+        if (kind === 'magic' && !ld?.fixdamage && immuneTo(m, MAGIC_IMMUNE)) { dmg.push(1); crits.push(false); continue; }
+        if (kind === 'magic' && !ld?.fixdamage && m.status?.second & HARD_SKIN) { dmg.push(0); crits.push(false); continue; }
+        const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate);
+        let d = roll();
+        if (kind === 'magic' && !ld?.fixdamage && takenPct(m)) d = Math.trunc((d * (takenPct(m) + 100)) / 100);
         dmg.push(c && skillId !== SNIPE ? Math.round((d * (pct + crit.dmg)) / pct) : d); crits.push(c);
       }
       const scale = skillId === ARROW_BOMB ? (ld?.x || 100) / 100 : PIERCE_SCALE[skillId] ? PIERCE_SCALE[skillId] ** place : 1;
@@ -5825,17 +6122,29 @@ export class Game {
       skillId % 10000000 === 1000;
     // a spell without a projectile takes its monsters in a random order (Chain Lightning: along its chain)
     if (kind === 'magic' && !projectile && skillId !== CHAIN_LIGHTNING) for (let i = 0; i < out.length; i++) { const j = Math.floor(Math.random() * out.length); [out[i], out[j]] = [out[j], out[i]]; }
+    // where each blow strikes its monster's body: along the shot's line, or within the swing's reach
+    // (a blast placed elsewhere - a grenade - by its own box; a swing that reached out to its range, by that range)
+    const reach0 = opts.area ? null : !plan && kind === 'melee' && !opts.mobs ? this.attackBox(kind, skillId, lv, pose, charge) : null;
+    const reachBox = opts.area || (reach0 && { left: reach0.x1, right: reach0.x2, top: reach0.top, bottom: reach0.bottom });
+    const swingRange = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
+    if (reachBox && !opts.area && swingRange) { if (p.facingRight) reachBox.right = Math.max(reachBox.right, p.x + swingRange); else reachBox.left = Math.min(reachBox.left, p.x - swingRange); }
+    const hitAt = (i, m) => {
+      const pt = plan?.targets[i];
+      if (pt?.hx !== undefined) return { x: pt.hx, y: pt.hy };
+      return reachBox && typeof m.hitBox === 'function' ? this.hitPoint(m, reachBox) : null;
+    };
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
-        const strong = Math.random() * 100 < knockback;
+        const strong = Math.random() * 100 < knockback, last = lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p));
+        this.linesLanded(t.mob, last);
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
-          this.after(lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p)), () => this.finishKill(t.mob));   // it dies after its last line lands
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob)); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
+          this.after(last, () => { if (t.mob.queuedKill) this.finishKill(t.mob); });   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash);
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob));
         this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
         if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
       };
@@ -5982,6 +6291,17 @@ export class Game {
       throwTo(-(15 + (ld?.rb?.[0] || 0)));
     } else if (skillId === SNATCH) {
       onLanding((m) => m.startPull({ x: x0, stop: 0 }));
+    } else if (skillId === NINJA_STORM) {
+      // pushed out to its range (and 0-19px more, less 5, plus half its width) on its own side of you, when struck
+      for (const t of targets) {
+        if (!(t.dmg?.[0] > 0)) continue;
+        this.after((t.delay ?? hitDelay) + 1, () => {
+          const m = t.mob;
+          if (!standing(m)) return;
+          const b = m.hitBox(), side = m.x < x0 ? -1 : 1, out = (Number(ld?.range) || 0) + Math.floor(Math.random() * 20) - 5 + (b.right - b.left) / 2;
+          m.startPull({ x: Math.round(x0 + side * out), stop: 0 });
+        });
+      }
     } else if (BARRAGES.has(skillId)) {
       const m = mobs[0], timing = this.lineTiming(p), at = targets[0].delay ?? hitDelay;
       BARRAGE_PUSH.forEach((px, i) => this.after(at + lineDelay(skillId, i, ...timing), () => {
@@ -6180,11 +6500,11 @@ export class Game {
     if (this.charging) return true;
     const p = this.player, node = this.skills.node(id), ld = this.skills.levelData(id, lv);
     if (id !== EXPLOSION && !this.skillKeyPressed) return false;
-    if ((!p.fh && id !== GRENADE) || p.attack) return false;
+    if ((!p.fh && !GRENADES.has(id)) || p.attack) return false;
     if (MONSTER_MAGNETS.has(id) && (this.map.info?.fieldLimit || 0) & FIELD_NO_MOVEMENT_SKILLS) return false;
     if (CORKSCREWS.has(id) && ((this.map.info?.fieldLimit || 0) & FIELD_NO_MOVEMENT_SKILLS || performance.now() < (this.rushLock || 0))) return false;
     if (this.net && CHARGE_BLOWS.has(id) && !this.skills.weaponOk(id, this.weaponId())) {
-      this.notice(id === GRENADE ? "You cannot use this skill with the weapon you're equipped with." : 'This skill cannot be used with the equipped item.');
+      this.notice(GRENADES.has(id) ? "You cannot use this skill with the weapon you're equipped with." : 'This skill cannot be used with the equipped item.');
       return false;
     }
     if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
@@ -6194,7 +6514,7 @@ export class Game {
     p.attackScale = this.attackScale();
     const prepare = id === EXPLOSION ? (this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale) / 1000 : 0;
     this.charging = { id, lv, t: 0, pose, prepare };
-    if (id === GRENADE) this.reuseAt = { ...this.reuseAt, [id]: performance.now() + GRENADE_REUSE };
+    if (GRENADES.has(id)) this.reuseAt = { ...this.reuseAt, [id]: performance.now() + GRENADE_REUSES[id] };
     this.net?.skillEffect(id, lv, known ? this.actionId(pose) : 0x7fff, !p.facingRight, this.attackSpeed());
     if (node?.keydown) this.loopSkillEffect(id, p, 'keydown', () => this.charging?.id === id);
     if (frames(node?.prepare).length) this.playSkillEffect(id, p, false, 'prepare');
@@ -6216,7 +6536,7 @@ export class Game {
     this.charging = null;
     if (MONSTER_MAGNETS.has(c.id)) return this.releaseMagnet(c);
     const charge = Math.round(Math.min(c.t, CHARGE_HOLD) * 1000);
-    if (c.id === GRENADE) return this.throwGrenade(c, Math.max(30, charge));
+    if (GRENADES.has(c.id)) return this.throwGrenade(c, Math.max(30, charge));
     if (CORKSCREWS.has(c.id)) return this.attack(c.id, 'melee', { charge: Math.max(30, charge) });
     this.attack(c.id, 'magic', { charge });
   }
@@ -6232,7 +6552,7 @@ export class Game {
       const box = this.skillBox({ x, y, facingRight: right }, c.id, c.lv);
       const mobs = this.mobsIn(box, x, y).slice(0, this.skills.levelData(c.id, c.lv)?.mobCount || 1);
       // the blast's attack carries no held time (its damage isn't scaled by it); its blows land 120ms in
-      this.attack(c.id, 'melee', { held: true, quiet: true, launch: GRENADE_HIT, pose: p.action, mobs });
+      this.attack(c.id, 'melee', { held: true, quiet: true, launch: GRENADE_HIT, pose: p.action, mobs, area: box });
     });
   }
   /** A grenade's flight from `at` (its ball art), then `land(x, y)` and its special art where it lands. */
@@ -6270,8 +6590,46 @@ export class Game {
     if (!on || ent.berserkFx === 'pending' || this.fx.includes(ent.berserkFx)) return;
     // (started again when a map change cleared it while it is still on)
     ent.berserkFx = 'pending';
-    const keep = () => !!ent.berserk && (ent === this.player || this.others.get(ent.id) === ent);
+    const keep = () => !!ent.berserk && (ent === this.player ? !this.dead : this.others.get(ent.id) === ent);   // death ends it
     this.loopSkillEffect(BERSERK, ent, 'effect', keep).then((f) => { ent.berserkFx = f || null; });
+  }
+  /** Barrier (the Ariant PQ shield): Effect/ItemEff.img/2022269 loops on them while it lasts. */
+  async barrierShield(ent) {
+    if (ent.barrierFx) return;
+    ent.barrierFx = true;
+    const keep = () => (ent === this.player ? this.buffs.some((b) => BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & BARRIER_MASK && b.until > Date.now())
+      : !!ent.barrier && this.others.get(ent.id) === ent);
+    const node = (await this.assets.json('Effect/ItemEff.img'))?.[2022269];
+    if (!node || !keep()) { ent.barrierFx = null; return; }
+    const anim = new Anim(node, true);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, follow: ent, keep: () => keep() || (ent.barrierFx = null) });
+  }
+  /**
+   * A skill used (SHOW_FOREIGN_EFFECT / your own effect 1): standing on the ground, they take its pose - the level's
+   * own action, else one of the skill's actions at random - as a one-off.
+   */
+  async skillPose(ent, id, level) {
+    const node = await this.skills?.ensure(id);
+    const ground = ent === this.player ? !!ent.fh : !['jump', 'ladder', 'rope'].includes(ent?.state);
+    if (!node || !ent || !ground) return;
+    const ld = level ? this.skills.levelData(id, level) : null;
+    const acts = Object.entries(node.action || {}).filter(([k]) => /^\d+$/.test(k)).map(([, v]) => v);
+    const act = ld?.action || acts[Math.floor(Math.random() * acts.length)];
+    if (!act || !ACTIONS.includes(act)) return;
+    if (ent === this.player) { if (ent.attack || this.dead || !this.look.has(act)) return; ent.attack = act; ent.action = act; ent.frame = 0; ent.frameT = 0; return; }
+    ent.attack = act; ent.action = act; ent.frame = 0; ent.frameT = 0;
+  }
+  /** Another player's full Energy Charge: its effect/1 on them, looping, until it's spent. */
+  async energyAura(rp, id) {
+    if ((rp.energy || 0) < FULL_ENERGY || rp.energyFx) return;
+    rp.energyFx = true;
+    const keep = () => (rp.energy || 0) >= FULL_ENERGY && this.others.get(rp.id) === rp;
+    const fx = Game.fxNode((await this.skills?.ensure(id))?.effect?.[1]);
+    if (!fx || !keep()) { rp.energyFx = null; return; }
+    const anim = new Anim(fx, true);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, follow: rp, keep: () => keep() || (rp.energyFx = null) });
   }
   /** A full Energy Charge shows its effect/1 on you, looping, until the charge is spent. */
   async energyOrb() {
@@ -6419,16 +6777,36 @@ export class Game {
     });
   }
 
+  /**
+   * Shadow Stars' star (with a claw): going through the Use tab in slot order, the first throwing star whose count
+   * here and in the slots after it adds up to the level's bulletConsume; 0 when there is none.
+   */
+  shadowStarsPick(lv) {
+    if (Math.floor(this.weaponId() / 10000) !== 147) return 0;
+    const need = Number(this.skills.levelData(SHADOW_STARS, lv)?.bulletConsume) || 0, use = this.inventory?.[2] || {};
+    if (need <= 0) return 0;
+    const slots = Object.keys(use).map(Number).sort((a, b) => a - b);
+    for (const [i, s] of slots.entries()) {
+      const it = use[s];
+      if (!it || Math.floor(it.id / 10000) !== 207 || !((it.quantity ?? 1) > 0)) continue;
+      const total = slots.slice(i).reduce((t, k) => t + (use[k]?.id === it.id ? use[k].quantity ?? 1 : 0), 0);
+      if (total >= need) return it.id;
+    }
+    return 0;
+  }
   /** Buffs and other SPECIAL_MOVE skills. */
   castSpecial(id, lv) {
     if (TELEPORTS.has(id)) return this.teleport(id, lv);
     if (id === HEAL) return this.castHeal(id, lv);
+    // Shadow Stars takes its bulletConsume of one kind of star, the first in the Use tab that has enough
+    const star = id === SHADOW_STARS ? this.shadowStarsPick(lv) : 0;
+    if (id === SHADOW_STARS && !star) { this.hud.message('You do not have enough throwing stars to use this skill.', CHAT_COLOR.error); return false; }
     const p = this.player, node = this.skills.node(id);
     const action = p.ladder ? (p.ladder.l ? 'ladder2' : 'rope2') : this.skills.action(id) || 'alert2';
     if (this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
     this.playSkillEffect(id, p);
     const needsPos = node?.summon || id === 2311002; // summons and Mystic Door are placed at the caster
-    this.net?.specialMove(id, lv, needsPos ? { x: Math.round(p.x), y: Math.round(p.y) } : null);
+    this.net?.specialMove(id, lv, needsPos ? { x: Math.round(p.x), y: Math.round(p.y) } : null, star);
     if (id === WINGS) this.startWings(id, lv);
     return true;
   }
@@ -7146,6 +7524,8 @@ export class Game {
     const info = m.src?.info || {}, rand = (lo, hi) => lo + Math.random() * (hi - lo), now = Date.now(), job = this.stats?.job || 0;
     // Ninja Storm's blows land only at its prop chance
     if (skillId === NINJA_STORM && Math.random() * 100 >= (ld?.prop ?? 100)) return { d: 0, c: false };
+    if (guarded(m)) return { d: 0, c: false };
+    if (immuneTo(m, WEAPON_IMMUNE)) return { d: 1, c: false };
     // a GM's swings never miss and ignore the level gap (not a touch attack's)
     const exempt = !shot && !touch && Math.floor((job % 1000) / 100) === 9;
     const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
@@ -7205,6 +7585,9 @@ export class Game {
     const berserk = !shot && job === 132 && this.skills.level(BERSERK) && this.skills.levelData(BERSERK);
     if (berserk && (this.stats?.hp || 0) <= ((berserk.x || 0) * this.maxHpShown()) / 100) d = (d * ((berserk.damage || 0) + 100)) / 100;
     if (BARRAGES.has(skillId)) d *= line === 4 ? 2 : line === 5 ? 4 : 1;
+    if (!c && m.status?.second & HARD_SKIN) return { d: 0, c: false };   // Hard Skin: only criticals get through
+    // Bullseye: x% more on the monster Homing Beacon marked, once it is learned
+    if (m === this.beaconMob && this.skills.level(BULLSEYE)) d = (d * ((Number(this.skills.levelData(BULLSEYE)?.x) || 0) + 100)) / 100;
     return { d: Math.min(199999, Math.max(1, Math.trunc(d))), c };
   }
   /** Your accuracy x 100 / (255 + 10 a level the monster has over you), x 0.7-1.3, under its avoid: a miss. */
@@ -7253,8 +7636,24 @@ export class Game {
     if (ammoId) w += this.windows?.info(ammoId)?.incPAD || 0;
     return Math.min(1999, w);
   }
+  /**
+   * Whether a shot from (sx, sy) to (ex, ey) is stopped by a foothold (on layer 0 or yours): one it crosses from its
+   * one side to the other, its ends on either side of the shot's line (touching an end doesn't stop it here).
+   */
+  shotBlocked(sx, sy, ex, ey) {
+    const layer = this.player.fh?.layer ?? (Number(this.player.ladder?.page) || 0);
+    for (const f of this.map.fh.all) {
+      if (f.layer !== 0 && f.layer !== layer) continue;
+      const dx = f.x2 - f.x1, dy = f.y2 - f.y1;
+      const cs = (sy - f.y1) * dx - (sx - f.x1) * dy, ce = (ey - f.y1) * dx - (ex - f.x1) * dy;
+      if (!(cs <= 0 && ce >= 0 && (cs !== 0 || ce !== 0))) continue;
+      const d1 = (f.y1 - sy) * (ex - sx) - (f.x1 - sx) * (ey - sy), d2 = (f.y2 - sy) * (ex - sx) - (f.x2 - sx) * (ey - sy);
+      if (d1 !== 0 && d2 !== 0 && (d1 > 0) !== (d2 > 0)) return true;
+    }
+    return false;
+  }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined); }
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
   closeReach(action) {
     const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
@@ -7286,6 +7685,19 @@ export class Game {
       if (hit.length) return hit.sort((p, q) => Math.abs(p.x - ent.x) - Math.abs(q.x - ent.x))[0];
     }
     return null;
+  }
+  /**
+   * Where an attack's area strikes a monster: the area pulled onto its body (at least a pixel in), then the middle
+   * of where the two meet - on a boss, the part of it the blow reaches.
+   */
+  hitPoint(m, area) {
+    const b = m.hitBox();
+    if (!area) return { x: Math.trunc((b.left + b.right) / 2), y: Math.trunc((b.top + b.bottom) / 2) };
+    let { left, right, top, bottom } = area;
+    if (left >= b.right) left = b.right - 1; else if (right <= b.left) right = b.left + 1;
+    if (top >= b.bottom) top = b.bottom - 1; else if (bottom <= b.top) bottom = b.top + 1;
+    const l = Math.max(left, b.left), r = Math.min(right, b.right), t = Math.max(top, b.top), u = Math.min(bottom, b.bottom);
+    return { x: Math.trunc((l + r) / 2), y: Math.trunc((t + u) / 2) };
   }
   /** A skill's lt/rb box around someone, turned the way they face. */
   skillBox(ent, skillId, lv) {
@@ -7320,7 +7732,9 @@ export class Game {
     const plan = { lv, sx, sy: y, ex: ent.x + dir * range, ey: y, targets: [], arrows: !RAIN_SHOTS.has(skillId) };
     // where the arrow meets a body, and the time it takes to get there
     const at = (m) => { const h = m.hitBox(true); return { x: dir > 0 ? Math.max(h.left, sx) : Math.min(h.right, sx), y: Math.max(h.top, Math.min(h.bottom, y)) }; };
-    const strike = (m, delay) => { const h = at(m); return { mob: m, x: h.x, y: h.y, delay: delay ?? flightMs(h.x - sx) }; };
+    // where on the body it strikes (its art goes there): the middle of the shot's line across it
+    const line = { left: Math.min(sx, plan.ex), right: Math.max(sx, plan.ex), top: y, bottom: y + 1 };
+    const strike = (m, delay, area = line) => { const h = at(m), hp = this.hitPoint(m, area); return { mob: m, x: h.x, y: h.y, hx: hp.x, hy: hp.y, delay: delay ?? flightMs(h.x - sx) }; };
     if (BOX_LINE_SHOTS.has(skillId)) {
       const box = this.skillBox(ent, skillId, lv);
       plan.targets = (mobs || this.mobsIn(box, ent.x, ent.y).slice(0, count)).map((m) => ({ mob: m, x: m.x, y: m.y, delay: flightMs(m.x - sx) }));
@@ -7342,7 +7756,8 @@ export class Game {
       return plan;
     }
     if (RAIN_SHOTS.has(skillId)) {
-      plan.targets = (mobs || this.mobsIn(this.skillBox(ent, skillId, lv), ent.x, ent.y).slice(0, count)).map((m) => strike(m, RAIN_DELAY));
+      const box = this.skillBox(ent, skillId, lv);
+      plan.targets = (mobs || this.mobsIn(box, ent.x, ent.y).slice(0, count)).map((m) => strike(m, RAIN_DELAY, box || line));
       return plan;
     }
     const spread = PIERCING_SHOTS.get(skillId);
@@ -7360,9 +7775,10 @@ export class Game {
     const blast = BLAST_SHOTS.get(skillId);
     if (blast) {
       const r = this.skills.range(skillId, lv);
-      const box = r && { left: hit.x + r.lt[0], right: hit.x + r.rb[0], top: hit.y + r.lt[1], bottom: hit.y + r.rb[1] };
-      const others = mobs ? mobs.slice(1) : this.mobsIn(box, hit.x, hit.y, first).slice(0, count - 1);
-      others.forEach((m, i) => plan.targets.push({ mob: m, x: m.x, y: m.y, delay: hit.delay + blast(i + 1) }));
+      // the blast goes off around where the shot struck the body
+      const box = r && { left: hit.hx + r.lt[0], right: hit.hx + r.rb[0], top: hit.hy + r.lt[1], bottom: hit.hy + r.rb[1] };
+      const others = mobs ? mobs.slice(1) : this.mobsIn(box, hit.hx, hit.hy, first).slice(0, count - 1);
+      others.forEach((m, i) => { const hp = this.hitPoint(m, box); plan.targets.push({ mob: m, x: m.x, y: m.y, hx: hp.x, hy: hp.y, delay: hit.delay + blast(i + 1) }); });
       plan.blast = box;
     } else if (mobs) for (const m of mobs.slice(1)) plan.targets.push(strike(m));
     return plan;
@@ -7430,7 +7846,8 @@ export class Game {
     // a level can name its own ball (Shadow Meso's coins grow every 10 levels)
     const sn = skillId ? await this.skills?.ensure(skillId) : null, own = ent === this.player && this.skills.levelData(skillId)?.ball?._uol;
     let node = sn ? Game.fxNode((own && sn[own.split('/').pop()]) || sn.ball) : null;
-    const soul = ent === this.player ? this.buffs.find((b) => SOUL_ARROWS.includes(b.source) && b.until > Date.now())?.source : 0;
+    const soul = ent === this.player ? this.buffs.find((b) => SOUL_ARROWS.includes(b.source) && b.until > Date.now())?.source
+      : ent?.soulArrow ? SOUL_ARROWS[Math.floor((ent.job || 0) / 1000) === 1 ? 2 : Math.floor((ent.job || 0) / 10) === 32 ? 1 : 0] : 0;
     if (!node && soul) node = Game.fxNode((await this.skills?.ensure(soul))?.ball);
     if (!node && ammoId) {
       const img = await this.assets.json(`Item/Consume/${pad(Math.floor(ammoId / 10000), 4)}.img`);
@@ -7544,7 +7961,7 @@ export class Game {
    */
   spellTargets(skillId, count) {
     const p = this.player, dir = p.facingRight ? 1 : -1, y = p.y - 28;
-    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined);
+    const mobs = this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && m.oid !== undefined && m.hasBody);
     const meets = (m, x1, x2, top, bottom) => { const h = m.hitBox(true); return h.right > x1 && h.left < x2 && h.bottom > top && h.top < bottom; };
     let first = null;
     for (let d = 50; d < 300 && !first; d += 20) {
@@ -7630,6 +8047,8 @@ export class Game {
       sfx.play(`Skill/${pad(id, 7)}/${use}`);
     }
     const node = this.byCharLevel(await this.skills?.ensure(id), ent);
+    // a skill with screen art (Bamboo Rain, Rage of Pharaoh...) plays it once over the whole view as its effect shows
+    if (branch === 'effect' && node?.screen) this.vfx?.screen('', Game.fxNode(node.screen));
     // a held skill's art plays with its numbered layers (keydownend, keydownend0...), behind the character when z < 0
     if (HOLD_ART.has(branch)) {
       for (const { fx, under } of Game.fxLayers(node, branch)) {
@@ -7680,7 +8099,9 @@ export class Game {
     const from = (muzzle && this.muzzlePoint(ent)) || ent;
     const anim = new Anim(node, false), at = stay ? { x: from.x, y: from.y, flip: !node.fixed && !!ent.facingRight } : null;
     await this.assets.preload(anim.frames);
-    this.fx.push(at ? { anim, ...at, rate } : { anim, follow: ent, rate, fixed: !!node.fixed, muzzle: muzzle === 'follow' });
+    // art with z below 0 goes behind the character it plays on
+    const under = Number(node.z ?? frames(node)[0]?.z ?? 0) < 0;
+    this.fx.push(at ? { anim, ...at, rate } : { anim, follow: ent, rate, fixed: !!node.fixed, muzzle: muzzle === 'follow', under });
   }
 
   /**
@@ -7704,7 +8125,7 @@ export class Game {
     if (hit) hitOr(`Skill/${pad(id, 7)}/Hit`); // 7-digit keys (0001000); Cygnus/Aran ids are 8
     else damage();
   }
-  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0) {
+  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0, at = null) {
     const node = id ? this.byCharLevel(await this.skills?.ensure(id), by) : null;
     const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
     // Corkscrew Blow and Double Uppercut: hit/0 on the first line, hit/1 on the rest; Barrage, Demolition and a few
@@ -7718,12 +8139,14 @@ export class Game {
       this.hitSound(id, mob, d, line, cash);
       const art = line ? later : fx;
       if (!art || (line && HIT_ART_ONCE.has(id))) return;
-      // the art's pos: 1 at the monster's feet, 3 at the middle of its body, otherwise at its head
+      // the art's pos: 1 at the monster's feet, 2 at its head, 3 at the middle of its body, none where the blow struck
+      // its body (the head when that isn't known)
       const pos = Number(art.pos ?? node?.hit?.pos), head = mob.node?.head;
-      let x = head ? mob.x + (mob.facingRight ? -head[0] : head[0]) : mob.x;
+      let x = head ? mob.x + ((mob.facesRight ?? mob.facingRight) ? -head[0] : head[0]) : mob.x;
       let y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
       if (pos === 1) { x = mob.x; y = mob.y; }
       else if (pos === 3 && typeof mob.hitBox === 'function') { const b = mob.hitBox(); x = (b.left + b.right) / 2; y = (b.top + b.bottom) / 2; }
+      else if (pos !== 2 && at) { x = at.x; y = at.y; }
       this.fx.push({ anim: new Anim(art, false), x, y, flip: !!by?.facingRight });
     }));
   }
@@ -7739,7 +8162,10 @@ export class Game {
     const anim = node ? new Anim(node, true) : null;
     if (anim) await this.assets.preload(anim.frames);
     const sx = from.x + (from.facingRight ? 20 : -20), sy = from.y - 30;
-    const tx = to ? to.x : from.x + (from.facingRight ? 400 : -400), ty = to ? to.y - (to.node?._h || 40) / 2 : sy;
+    // it flies to the middle of the target's body (a boss part's own, not the whole boss's)
+    const body = to?.node?.lt && typeof to.hitBox === 'function' ? to.hitBox() : null;
+    const tx = body ? (body.left + body.right) / 2 : to ? to.x : from.x + (from.facingRight ? 400 : -400);
+    const ty = body ? (body.top + body.bottom) / 2 : to ? to.y - (to.node?._h || 40) / 2 : sy;
     const dur = Math.min(0.45, Math.max(0.12, Math.abs(tx - sx) / 1200));
     this.shotSound(from, skillId, ammoId, sx, sy);
     this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur, flip: tx > sx, onHit });
@@ -7786,8 +8212,8 @@ export class Game {
     const node = f.anim.node;
     if (!node) return;
     const at = f.follow && f.muzzle ? this.muzzlePoint(f.follow) || f.follow : f.follow;
-    if (at) this.drawFxNode(ctx, cam, node, at.x, at.y, f.fixed ? false : f.follow.facingRight, f.anim.alpha, f.anim.zoom);
-    else this.drawFxNode(ctx, cam, node, f.x, f.y, f.flip, f.anim.alpha, f.anim.zoom);
+    if (at) this.drawFxNode(ctx, cam, node, at.x, at.y, f.fixed ? false : (f.follow.facesRight ?? f.follow.facingRight), f.anim.alpha, f.anim.zoom);
+    else this.drawFxNode(ctx, cam, node, f.x, f.y, f.flip, (f.alpha ?? 1) * f.anim.alpha, f.anim.zoom);
   }
   drawKeyGauge(ctx, cam) {
     const c = this.charging || this.keydown;
@@ -7838,7 +8264,7 @@ export class Game {
     if (!pp || (pp.hitT -= dt) > 0) return;
     const box = { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
     for (const m of this.map.life) {
-      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || m.src.info?.bodyAttack === 0) continue;
+      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       const b = m.hitBox();
       if (b.right < box.left || b.left > box.right || b.bottom < box.top || b.top > box.bottom) continue;
       const pad = m.src.info?.PADamage || 1, damage = Math.max(1, Math.round(pad * (0.85 + Math.random() * 0.15)));
@@ -7862,8 +8288,9 @@ export class Game {
     const prone = p.action === 'prone' || p.action === 'proneStab';
     const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
     if (this.obstacleHurt(pb, dx, dy)) return;
+    if (isHideMorph(this.morphTpl())) return;   // in the Oak Barrel monsters walk past without touching you
     for (const m of this.map.life) {
-      if (m.kind !== 'Mob' || !m.alive || m.dying || m.src.info?.bodyAttack === 0) continue;
+      if (m.kind !== 'Mob' || !m.alive || m.dying || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
       const b = m.hitBox();
       if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
@@ -7898,6 +8325,27 @@ export class Game {
         this.net.mobDamageMobFriendly(m.oid, this.player.id, f.oid);
         this.friendlyHitAt = now;
         return;
+      }
+    }
+  }
+  /**
+   * A self-destructing monster (info/selfDestruction/action 3, the Darkstars) whose plain attack's box, around where
+   * it stands, takes you in: it tells the server (MONSTER_BOMB), which blows it up. Not while it appears or dies, nor
+   * with notAttack, nor once you are dead; once per monster.
+   */
+  monsterBombs() {
+    if (this.dead) return;
+    const p = this.playerBody();
+    for (const m of this.map.life) {
+      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid == null || m.bombSent) continue;
+      const info = m.src?.info || {};
+      if ((Number(info.selfDestruction?.action) & 3) !== 3 || Number(info.notAttack)) continue;
+      for (const a of m.attacks || []) {
+        const r = a.info?.range;
+        if (a.type || !r?.lt || !r?.rb) continue;
+        if (m.x + r.lt[0] > p.right || m.x + r.rb[0] < p.left || m.y + r.lt[1] > p.bottom || m.y + r.rb[1] < p.top) continue;
+        m.bombSent = true; this.net.monsterBomb(m.oid);
+        break;
       }
     }
   }
@@ -8199,6 +8647,7 @@ export class Game {
    */
   hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1, attack = null) {
     const p = this.player;
+    if (this.friendlyToYou(m)) return;
     if (performance.now() < (this.boomerangUntil || 0)) return;   // mid Boomerang Step
     let damage = this.damageTaken(m, power, magic);
     // a deadly attack leaves you 1 HP
@@ -8260,11 +8709,20 @@ export class Game {
    * bubbles, a stun's stars), or a monster skill's `mob` animation and `icon` (its own attack / defence up...).
    */
   async applyMobStatus(m, s) {
+    // values the damage rolls read: bit 31's guard, bit 34's damage taken (%)
+    if (s.second & 0x80000000) m.guardValue = s.value;
+    if (s.first & 0x4) m.takenPct = s.value;
     const low = s.source & 0xffff, high = s.source >>> 16, mobSkill = s.source > 0 && low >= 100 && low <= 200 && high > 0 && high < 256;
     let node = null, icon = null, doom = null;
-    const frames = (n) => n && Object.keys(n).some((k) => /^\d+$/.test(k));
-    if (mobSkill) { const lv = await this.mobSkillLevel(low, high); node = lv?.mob; icon = lv?.mob?.icon || null; }
-    else if (s.source > 0) {
+    const hasFrames = (n) => n && Object.keys(n).some((k) => /^\d+$/.test(k));
+    // a monster skill's art doesn't show on Zakum's arms or Horntail's parts other than its heads
+    const id = Number(m.spawn?.id), bare = (id % 8800000 > 2 && id % 8800000 < 11) || (id % 8810000 > 4 && id % 8810000 < 21);
+    if (mobSkill && !bare) {
+      // a mob node flagged icon is the skill's icon (its first frame), set in the row over the head; otherwise it plays there
+      const lv = await this.mobSkillLevel(low, high);
+      if (Number(lv?.mob?.icon)) icon = frames(lv.mob)[0] || null; else node = lv?.mob;
+    }
+    else if (s.source > 0 && !mobSkill) {
       const sk = await this.skills?.ensure(s.source);
       node = sk?.mob;
       // Doom: the puff (mob) plays once at its feet, then it is the Blue Snail (Mob 0100101 - the client's
@@ -8272,10 +8730,10 @@ export class Game {
       if (s.second & MOB_DOOM) {
         const snail = await this.assets.json('Mob/0100101.img');
         if (snail) doom = { stand: new Anim(snail.stand, true), move: new Anim(snail.move, true), speed: Number(snail.info?.speed) || 0,
-          mark: frames(sk?.mob0) ? new Anim(sk.mob0, true) : null };
+          mark: hasFrames(sk?.mob0) ? new Anim(sk.mob0, true) : null };
       }
     }
-    const anim = frames(node) ? new Anim(node, !doom) : null;
+    const anim = hasFrames(node) ? new Anim(node, !doom) : null;
     if (anim) await this.assets.preload(anim.frames);
     if (doom) await this.assets.preload([doom.stand, doom.move, doom.mark].filter(Boolean).flatMap((a) => a.frames));
     if (icon) await this.assets.preload([icon]);
@@ -8309,6 +8767,7 @@ export class Game {
    * swaps left and right.
    */
   async onDisease(d) {
+    if (CURSE_TEXT[d.skill]) this.hud.message(CURSE_TEXT[d.skill], CHAT_COLOR.grey);
     const lv = await this.mobSkillLevel(d.skill, d.level), node = lv?.affected;
     const anim = node ? new Anim(node, true) : null;
     if (anim) await this.assets.preload(anim.frames);
@@ -8326,6 +8785,16 @@ export class Game {
     rp.diseases.push({ ...d, until: Date.now() + (Number(lv?.time) || 30) * 1000, anim, head: Number(node?.pos) === 1 });
   }
   hasDisease(skill) { return (this.diseases || []).some((d) => d.skill === skill); }
+  /**
+   * Seduce's pull on you (its value): 1 walk left, 2 right and jump, 3 jump, 4 down and jump, 6 left and jump, 7
+   * right and jump, anything else stand; null when not seduced.
+   */
+  seduceInput() {
+    const d = (this.diseases || []).find((x) => x.skill === SEDUCE);
+    if (!d) return null;
+    const v = Number(d.value) || 0;
+    return { x: v === 1 || v === 6 ? -1 : v === 2 || v === 7 ? 1 : 0, y: v === 4 ? 1 : 0, jump: [2, 3, 4, 6, 7].includes(v) };
+  }
   /**
    * Your curses last until the server lifts them (CANCEL_BUFF); while one of Stun, Poison, Seal, Darkness,
    * Weakness, Curse, Slow, Reverse and the few other stats in EXPIRY_CHECKED is within 100ms of its end or past
@@ -8345,8 +8814,10 @@ export class Game {
     for (const d of list || []) {
       const n = d.anim?.node, img = n && this.assets.image(n);
       if (!img) continue;
-      const o = n.origin || [0, 0], y = d.head ? p.y - 65 : p.y;
-      ctx.drawImage(img, Math.round(p.x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+      // on a ghost, it goes round with the ghost over its tombstone
+      const g = this.ghostAt(p), px = g ? g.x : p.x, py = g ? g.y : p.y;
+      const o = n.origin || [0, 0], y = d.head ? py - 65 : py;
+      ctx.drawImage(img, Math.round(px - o[0] - cam.x), Math.round(y - o[1] - cam.y));
     }
   }
 
@@ -8359,21 +8830,86 @@ export class Game {
       const frames = new Anim(warn, false).frames;
       this.assets.preload(frames).then(() => { for (const q of spots) this.fx.push({ anim: new Anim(warn, false), x: q.x, y: q.y, flip: false }); });
     }
-    const fx = a.info.effect && Game.fxNode(a.info.effect);
-    if (fx) this.after(Number(a.info.effectAfter) || 0, async () => {
-      const anim = new Anim(fx, false); await this.assets.preload(anim.frames); this.fx.push({ anim, follow: m });
+    // effect, then effect0, effect1... up to the first missing one, all at effectAfter: effectType 1 strikes the floors
+    this.after(Number(a.info.effectAfter) || 0, () => {
+      for (let i = -1; ; i++) {
+        const e = a.info[i < 0 ? 'effect' : `effect${i}`], fx = e && Game.fxNode(e);
+        if (!fx) break;
+        if (Number(e.effectType) === 1) { this.mobBolts(m, e); continue; }
+        const anim = new Anim(fx, false);
+        this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: m }));
+      }
     });
-    if (!m.controlled || !this.net || m.oid == null) return;
+    if (!m.controlled || !this.net || m.oid == null || m.deathAttack) return;
     const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
     this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing);
+  }
+  /**
+   * effect0 of effectType 1 (Papulatus's lightning): across the lt/rb box around the monster, every effectDistance
+   * (randomPos: plus up to a third of it), one of its variants on each floor crossing the box; after its delay each
+   * starts 100-500ms in, at 50-100% alpha.
+   */
+  mobBolts(m, e) {
+    const vars = Object.keys(e).filter((k) => /^\d+$/.test(k)).map((k) => Game.fxNode(e[k])).filter(Boolean);
+    const lt = e.lt || [0, 0], rb = e.rb || [0, 0], step = Number(e.effectDistance) || 0;
+    if (!vars.length || step <= 0) return;
+    const left = m.x + lt[0], right = m.x + rb[0], top = m.y + lt[1], bottom = m.y + rb[1], rnd = (n) => Math.floor(Math.random() * n);
+    const spots = [];
+    for (let x0 = left; x0 < right; x0 += step) {
+      const x = Number(e.randomPos) ? x0 + rnd(Math.max(1, Math.trunc(step / 3))) : x0;
+      for (const f of this.map.fh.floors) {
+        if (x < f.x1 || x > f.x2) continue;
+        const y = Math.trunc((f.y2 - f.y1) * (x - f.x1) / (f.x2 - f.x1)) + f.y1;
+        if (y >= top && y <= bottom) spots.push({ x, y: y + rnd(5) - 2, node: vars[rnd(vars.length)] });
+      }
+    }
+    const delay = Number(e.delay) || 0;
+    for (const q of spots) this.after(delay + (rnd(5) + 1) * 100, async () => {
+      const anim = new Anim(q.node, false); await this.assets.preload(anim.frames);
+      this.fx.push({ anim, x: q.x, y: q.y, flip: false, alpha: (0x80 + rnd(0x80)) / 255 });
+    });
   }
   /**
    * Its attack lands (attackAfter into it): if you are in reach then, it hurts you - straight away, or for a ball
    * (type 2) when the ball, flying from its start point, reaches you. Whoever controls the monster, each client
    * checks itself, as in the original.
    */
+  /** A Hypnotized monster, or in a Monster Carnival one on your team: it doesn't hurt you. */
+  friendlyToYou(m) {
+    if (hypnotized(m)) return true;
+    const type = Number(this.map?.info?.fieldType);
+    return (type === 10 || type === 15) && this.carnivalTeam !== undefined && m.team === this.carnivalTeam;
+  }
+  /**
+   * A monster's attack landing on the monsters of the other side (one Hypnotized, the other not; a Hypnotized one's
+   * only when we control it): each it reaches, at most once in 2s, takes its attack x 0.8-0.85 (magic 0.75-0.8) less
+   * its defence x 0.5-0.6, shown with the attack's hit art and CharDam sound, and the server hears it (MOB_DAMAGE_MOB).
+   */
+  mobAttackMobs(m, a, spots) {
+    if (!this.net || this.player?.id == null || (hypnotized(m) && !m.controlled)) return;
+    const now = performance.now(), magic = !!a.info.magic, roll = (lo, hi) => lo + Math.random() * (hi - lo);
+    const atk = Number(m.src.info?.[magic ? 'MADamage' : 'PADamage']) || 0;
+    for (const v of this.map.life) {
+      if (v === m || v.kind !== 'Mob' || !v.alive || v.dying || v.oid == null || hypnotized(v) === hypnotized(m)) continue;
+      if (now - (v.mobHitAt ?? -Infinity) < 2000 || !m.reaches(a, v.hitBox(), spots)) continue;
+      v.mobHitAt = now;
+      const def = Number(v.src.info?.[magic ? 'MDDamage' : 'PDDamage']) || 0;
+      const dmg = Math.max(1, Math.trunc(atk * (magic ? roll(0.75, 0.8) : roll(0.8, 0.85)) - (def > 0 ? def * roll(0.5, 0.6) : 0)));
+      const b = v.hitBox(), cx = Math.round((b.left + b.right) / 2), cy = Math.round((b.top + b.bottom) / 2);
+      const hit = a.info.hit && Game.fxNode(a.info.hit);
+      if (hit) {
+        const anim = new Anim(hit, false), x = b.left + Math.random() * (b.right - b.left), y = b.top + Math.random() * (b.bottom - b.top);
+        this.assets.preload(anim.frames).then(() => this.fx.push({ anim, x, y, flip: m.facingRight }));
+      }
+      if (CHAR_DAM[a.index]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[a.index]}`, { volume: this.volumeAt(v.x, v.y) });
+      v.hit(dmg, m.x > v.x);
+      this.damageNumbers(v, [dmg], false);
+      this.net.mobDamageMob(m.oid, this.player.id, v.oid, a.index, dmg, !m.facingRight, cx, cy);
+    }
+  }
   mobAttackLand(m, a, spots) {
     const p = this.player;
+    this.mobAttackMobs(m, a, spots);
     if (!this.net || this.dead || !this.stats || !m.alive || this.invincible > 0 || !m.reaches(a, this.playerBody(), spots)) return;
     const magic = !!a.info.magic;
     const power = Number(magic ? a.info.MADamage ?? m.src.info?.MADamage : a.info.PADamage ?? m.src.info?.PADamage) || 1;
@@ -8650,9 +9186,10 @@ export class Game {
     // shop owners and their booths go down first: everyone else walks in front of a shop
     const inShop = (e) => e.box?.type === 4;
     const chars = this.drawOrder(ctx, cam, inShop), playerLayer = this.playerZ.page;
+    const mobs = map.life.filter((e) => e.kind !== 'Npc').map((e) => ({ e, k: mobDepth(e) })).sort((a, b) => a.k - b.k).map((x) => x.e);
     for (let l = 0; l < 8; l++) {
       map.drawLayer(ctx, cam, l);
-      for (const e of map.life) if (e.kind !== 'Npc' && (e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
+      for (const e of mobs) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.drawDoors(ctx, cam);
@@ -8745,7 +9282,7 @@ export class Game {
     const onBack = (owner) => { for (const pet of this.pets.values()) if (pet.onBack && pet.owner === owner) pet.draw(ctx, cam); };
     for (const rp of this.others.values()) {
       rp.z = this.zFrom(rp.fhId, rp.z);
-      if (!inShop(rp)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); onBack(rp.id); });
+      if (!inShop(rp)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); this.drawHearts(ctx, cam, rp, this.frameDt); onBack(rp.id); });
     }
     for (const pet of this.pets.values()) {
       pet.z = pet.mine ? (pet.fh ? { page: pet.fh.layer, zMass: pet.fh.zMass } : pet.z || { page: 7, zMass: 0 }) : this.zFrom(pet.fhId, pet.z);
@@ -8753,7 +9290,7 @@ export class Game {
     }
     this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
       : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
-    if (!inShop(p)) put(this.playerZ, 7, () => { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); this.questAlert?.draw(ctx, cam); onBack(p.id); });
+    if (!inShop(p)) put(this.playerZ, 7, () => { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); this.drawHearts(ctx, cam, p, this.frameDt); this.questAlert?.draw(ctx, cam); onBack(p.id); });
     return list.sort((a, b) => a.k - b.k);
   }
 

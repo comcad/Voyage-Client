@@ -21,6 +21,7 @@ const PIRATE_EVERY = { 5211001: 3, 5211002: 1.5, 5220002: 1.5 };
 const WRATH = 5220002;
 /** A summon attack's action (attack1 is 4, attack2 5), sent with facing left in the top bit. */
 export const SUMMON_ACTIONS = { attack1: 4, attack2: 5 };
+const BEHOLDER = 1321007, AURA = 1320008, BERSERK = 1320006;
 
 export class Summon {
   constructor(game, d) {
@@ -63,12 +64,14 @@ export class Summon {
         this.frameT -= fr[this.frame]?.delay || 100;
         if (++this.frame >= fr.length) {
           if (this.state === 'die') { this.gone = true; this.frame = fr.length - 1; return; }
+          // a struck summon keeps its hit pose for 1.5s (it loops till then)
+          if (this.state === 'hit' && performance.now() < (this.hitUntil || 0)) { this.frame = 0; continue; }
           if (this.state !== 'idle') this.state = 'idle';
           this.frame = 0;
         }
       }
     }
-    if (this.mine && !this.dying) { this.tryAttack(dt); this.sync(dt); }
+    if (this.mine && !this.dying) { this.tryAttack(dt); this.beholderHeal(); this.sync(dt); }
   }
 
   /**
@@ -118,8 +121,23 @@ export class Summon {
     const r = info?.range || {}, lt = r.lt || [-200, -150], rb = r.rb || [200, 150];
     const x1 = this.facingRight ? -rb[0] : lt[0], x2 = this.facingRight ? -lt[0] : rb[0];
     const inBox = (m) => m.x >= this.x + x1 && m.x <= this.x + x2 && m.y >= this.y + lt[1] && m.y - 30 <= this.y + rb[1];
-    return this.g.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== null && inBox(m))
+    return this.g.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== null && m.hasBody && inBox(m))
       .sort((a, b) => Math.abs(a.x - this.x) - Math.abs(b.x - this.x)).slice(0, count);
+  }
+  /**
+   * The Beholder's Aura (1320008): while your HP is under the most, it heals you - its skill1 pose and BEHOLDER -
+   * then waits the aura's x seconds. Not while Berserk is on, if the heal would take you over Berserk's x% of the most.
+   */
+  beholderHeal() {
+    const g = this.g, sb = g.skills;
+    if (this.skill !== BEHOLDER || this.state !== 'idle' || performance.now() < (this.healAt || 0)) return;
+    const aura = sb?.level(AURA) && sb.levelData(AURA), hp = g.stats?.hp || 0, max = g.maxHpShown?.() || 0;
+    if (!aura || !(hp < max)) return;
+    const berserk = sb.level(BERSERK) && sb.levelData(BERSERK);
+    if (berserk && g.player?.berserk && hp + (Number(aura.hp) || 0) > (max * (Number(berserk.x) || 0)) / 100) return;
+    g.net?.beholder(this.oid, AURA, (this.facingRight ? 0 : 0x80) | 6);
+    this.healAt = performance.now() + (Number(aura.x) || 0) * 1000;
+    this.play('skill1');
   }
   tryAttack(dt) {
     if (!this.canAttack || !this.node?.attack1 || this.state === 'summoned') return;

@@ -245,6 +245,14 @@ export function critical(game, weaponCat, shot = true) {
   if (ld) { rate += ld.prop || 0; dmg += (ld.damage || 100) - 100; }
   const se = game.buffs?.find((b) => b.sharpEyes && b.until > Date.now())?.sharpEyes;
   if (se) { rate += se.rate; dmg += se.dmg; }
+  // Combo Critical (Aran) with a combo going: n = combo / 10, at most its x; +(y x n + 10)% chance (0-100), and
+  // 100 + damage x n points more
+  const combo = game.aranCombo || 0, cc = combo > 0 && sb.level(21110000) && sb.levelData(21110000);
+  if (cc) {
+    const n = Math.min(Number(cc.x) || 0, Math.floor(combo / 10));
+    rate += Math.max(0, Math.min(100, (Number(cc.y) || 0) * n + 10));
+    dmg += 100 + (Number(cc.damage) || 0) * n;
+  }
   return rate > 0 ? { rate, dmg } : null;
 }
 

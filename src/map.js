@@ -659,14 +659,23 @@ export class Life {
     this.onPath?.(this, start, moves);
   }
 
-  /** KILL_MONSTER: its statuses end (a frozen one thaws) and it plays its death animation, then disappears. */
-  kill() {
+  /**
+   * KILL_MONSTER: its statuses end (a frozen one thaws) and it dies as `type` says (1 and up). 2, 4 and up: it goes
+   * off in its attack1, which hurts like the attack does, and is gone when that ends. Otherwise its death pose: 3 is
+   * skill1, the rest one of its die nodes at random (die1, die2, dieF, as many as it has nodes starting with "die").
+   */
+  kill(type = 1) {
     this.status = { first: 0, second: 0 }; this.statusArt.clear();
-    this.setState('die1'); this.dying = true; if (!this.anims.die1) this.removed = true;
+    this.dying = true;
+    if (type !== 1 && type !== 3 && this.anims.attack1) { this.deathAttack = true; this.attacking = null; this.playAttack(0); return; }
+    const dies = Object.keys(this.src).filter((k) => k.startsWith('die')).length;
+    const name = type === 3 ? 'skill1' : ['die1', 'die2', 'dieF'][Math.floor(Math.random() * dies)];
+    if (name && name !== 'die1' && this.src[name]) this.anims.die1 = new Anim(this.src[name], false);
+    this.state = ''; this.setState('die1'); if (!this.anims.die1) this.removed = true;
   }
 
   allFrames() { return [...Object.values(this.anims), ...(this.tv ? [this.tv.msg.anim, this.tv.ad.anim] : [])].flatMap((a) => a.frames); }
-  get alive() { return this.state !== 'die1' && this.respawnTimer <= 0; }
+  get alive() { return this.state !== 'die1' && this.respawnTimer <= 0 && !this.appearing; }
   get node() { return this.anims[this.state]?.node; }
 
   setState(s) {
@@ -693,7 +702,8 @@ export class Life {
     if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.controlled) this.path = null;
-    if (!this.flying && (this.controlled || !this.online)) {
+    // one that can't move (no move, jump or fly: Horntail's and Zakum's parts) isn't pushed
+    if (!this.flying && this.canMove && (this.controlled || !this.online)) {
       const push = (fromRight ? -1 : 1) * (strong ? 300 : 130);
       // on the ground it slides back; in the air the blow sets its sideways speed, stops its rise and it falls on
       this.hitBrake = strong ? 200 : 400; this.hitLanded = false;
@@ -791,18 +801,21 @@ export class Life {
     if (this.tv) { this.tv.msg.anim.update(dt * 1000); this.tv.ad.anim.update(dt * 1000); }
     const anim = this.anims[this.state];
     if (!this.frozen || this.state === 'die1') anim?.update(dt * 1000);   // frozen solid: its picture stops too
+    this.beaconMark?.update(dt * 1000);
     for (const e of this.statusArt.values()) {
       e.anim?.update(dt * 1000);
       if (e.doom) for (const a of [e.doom.stand, e.doom.move, e.doom.mark]) a?.update(dt * 1000);
     }
     if (this.state === 'regen') { if (anim.done) this.setState(this.flying ? 'fly' : 'stand'); return; }
     if (this.kind === 'Npc') { this.npcStep(dt); return; }
+    if (this.appearing) return;   // still being summoned in: unseen, and it doesn't act
     if (this.attacking) {
       const at = this.attacking;
       at.t += dt * 1000;
       if (!at.landed && at.t >= (Number(at.a.info.attackAfter) || 0)) { at.landed = true; this.onAttackLand?.(this, at.a, at.spots); }
       const posing = this.state.startsWith('attack') || this.state.startsWith('skill');
       if (posing && (!anim || anim.done)) {
+        if (this.deathAttack) { if (!at.landed) this.onAttackLand?.(this, at.a, at.spots); this.removed = true; return; }
         this.setState(this.flying ? 'fly' : 'stand');
         // an area attack's spots erupt on its own clock (attackAfter), even after the monster has finished its pose
         if (at.a.type >= 3 && !at.landed) return;
@@ -865,7 +878,7 @@ export class Life {
 
   /** Where attack `a` reaches, facing as it does now: its box, or (types 1 and 2) its start point and radius. */
   attackReach(a) {
-    const r = a.info.range, s = this.facingRight ? -1 : 1;
+    const r = a.info.range, s = this.facesRight ? -1 : 1;
     if (a.type === 0) {
       const x1 = this.x + s * r.lt[0], x2 = this.x + s * r.rb[0];
       return { box: { left: Math.min(x1, x2), right: Math.max(x1, x2), top: this.y + r.lt[1], bottom: this.y + r.rb[1] } };
@@ -878,7 +891,7 @@ export class Life {
    * the ground under them, type 4 at its own height. `pick` of them (attackCount, chosen at random) erupt, or all.
    */
   areaSpots(a, pick = false) {
-    const r = a.info.range, w = r.rb[0] - r.lt[0], s = this.facingRight ? -1 : 1, spots = [];
+    const r = a.info.range, w = r.rb[0] - r.lt[0], s = this.facesRight ? -1 : 1, spots = [];
     for (let i = 0; i < (r.areaCount || 1); i++) {
       const col = (r.start || 0) + i;
       const x1 = this.x + s * (r.lt[0] + col * w), x2 = this.x + s * (r.rb[0] + col * w);
@@ -896,7 +909,7 @@ export class Life {
     const q = this.attackReach(a);
     if (q.box) return q.box.right >= body.left && q.box.left <= body.right && q.box.bottom >= body.top && q.box.top <= body.bottom;
     const cx = (body.left + body.right) / 2, cy = (body.top + body.bottom) / 2;
-    return (cx - this.x) * (this.facingRight ? 1 : -1) >= -10 && Math.hypot(cx - q.sx, cy - q.sy) <= q.r;
+    return (cx - this.x) * (this.facesRight ? 1 : -1) >= -10 && Math.hypot(cx - q.sx, cy - q.sy) <= q.r;
   }
   /**
    * Statuses (CMob's temporary stats): `first` / `second` are MonsterStatus mask bits, all from skill `source`,
@@ -904,6 +917,8 @@ export class Life {
    */
   addStatus(first, second, source, art = {}) {
     if (this.state === 'die1') return;   // a status that arrives after it died doesn't take
+    // a status set again replaces what it had: its old art goes, and the new art goes in last (the icon row's end)
+    for (const [src, o] of this.statusArt) { o.first &= ~first; o.second &= ~second; if (!o.first && !o.second) this.statusArt.delete(src); }
     this.status.first |= first; this.status.second |= second;
     const e = this.statusArt.get(source) || { first: 0, second: 0 };
     e.first |= first; e.second |= second;
@@ -917,10 +932,14 @@ export class Life {
   }
   /** Its statuses' art over its head (poison bubbles, stun stars...), and its own buffs' icons in a row above. */
   drawStatus(ctx, cam, assets, node) {
-    if (!this.statusArt.size) return;
-    const head = node?.head, o = node?.origin || [0, 0];
-    const hx = this.x + (head ? (this.facingRight ? -head[0] : head[0]) : 0) - cam.x;
-    const hy = this.y + (head ? head[1] : -o[1]) - cam.y;
+    if (!this.statusArt.size && !this.beaconMark) return;
+    const head = node?.head;
+    const right = this.facesRight;
+    const hx = this.x + (head ? (right ? -head[0] : head[0]) : 0) - cam.x;
+    const hy = this.y + (head ? head[1] : 0) - cam.y;   // a frame without a head point: at the feet
+    // Homing Beacon's mark, over its head
+    const bm = this.beaconMark?.node, bimg = bm && assets.image(bm);
+    if (bimg) { const bo = bm.origin || [0, 0]; ctx.drawImage(bimg, Math.round(hx - bo[0]), Math.round(hy - bo[1])); }
     const icons = [];
     for (const e of this.statusArt.values()) {
       // a one-shot animation (Doom's puff) is gone once played; Doom's puff is at the feet, everything else over the head
@@ -935,11 +954,15 @@ export class Life {
         ctx.restore();
       }
       const icon = e.icon && assets.image(e.icon);
-      if (icon) icons.push(icon);
+      if (icon) icons.push([e.icon, icon]);
     }
-    let x = Math.round(this.x - cam.x - (icons.length * 26) / 2);
-    const y = Math.round(this.y - cam.y - o[1] - 34);
-    for (const icon of icons) { ctx.drawImage(icon, x, y); x += 26; }
+    // icons four to a row, 16px apart and centred on the head; each further row 16px higher
+    const n = icons.length, full = n - (n % 4);
+    icons.forEach(([node, img], i) => {
+      const row = Math.floor(i / 4), inRow = i < full ? 4 : n % 4, io = node.origin || [0, 0];
+      const dx = Math.trunc(((i % 4) - (inRow - 1) * 0.5) * 16), dy = 16 - row * 16;
+      ctx.drawImage(img, Math.round(hx + dx - io[0]), Math.round(hy + dy - io[1]));
+    });
   }
   /** Its speed now: a Speed status (Slow's negative value) is added to its own speed stat before the conversion. */
   /**
@@ -1177,6 +1200,7 @@ export class Life {
       if (this.name && !this.hideName) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
       return;
     }
+    if (this.appearing) return;
     const doomArt = this.doomArt, doom = doomArt?.[this.state === 'move' ? 'move' : 'stand']?.node;
     const node = doom && assets.image(doom) ? doom : this.node;
     const img = assets.image(node);
@@ -1190,7 +1214,7 @@ export class Life {
     }
     ctx.translate(sx, sy);
     // info/noFlip art (e.g. a tutorial monster carrying a key sign) is never mirrored
-    if (this.facingRight && !Number(this.src?.info?.noFlip)) ctx.scale(-1, 1);
+    if (this.facesRight) ctx.scale(-1, 1);
     if (this.frozen) ctx.filter = 'sepia(1) hue-rotate(170deg) saturate(2.5) brightness(1.05)';   // iced over
     ctx.drawImage(img, -o[0], -o[1]);
     ctx.restore();
@@ -1211,7 +1235,7 @@ export class Life {
   box() {
     const n = this.node; const o = n?.origin || [0, 0];
     const w = n?._w || 40, h = n?._h || 40;
-    const left = this.facingRight ? this.x + o[0] - w : this.x - o[0];
+    const left = this.facesRight ? this.x + o[0] - w : this.x - o[0];
     return { left, right: left + w, top: this.y - o[1], bottom: this.y - o[1] + h };
   }
   /**
@@ -1219,10 +1243,22 @@ export class Life {
    * far from the picture's size, mirrored when it faces right; a frame without one falls back to the picture.
    * withPrevious adds where it stood last frame, as target selection does, so one step can't carry it out of a swing.
    */
+  /** Which way its art and reach face: right, unless it is noFlip (Horntail's and Zakum's parts never turn). */
+  get facesRight() { return this.facingRight && !Number(this.src?.info?.noFlip); }
+  /** Whether this frame has a body (lt/rb): one without (Papulatus pulling itself in, an invisible part) can't be struck or touch you. */
+  get hasBody() { return !!(this.node?.lt && this.node?.rb); }
+  /** Its body for what shows over it (damage numbers): this frame's lt/rb, or the last frame's that had one (a death pose has none). */
+  bodyBox() {
+    const n = this.node?.lt && this.node?.rb ? (this.lastBody = this.node) : this.lastBody;
+    if (!n) return null;
+    return this.facesRight ? { left: this.x - n.rb[0], right: this.x - n.lt[0], top: this.y + n.lt[1], bottom: this.y + n.rb[1] }
+      : { left: this.x + n.lt[0], right: this.x + n.rb[0], top: this.y + n.lt[1], bottom: this.y + n.rb[1] };
+  }
   hitBox(withPrevious = false) {
     const n = this.node;
     if (!n?.lt || !n?.rb) return this.box();
-    const at = (x, y) => (this.facingRight
+    this.lastBody = n;
+    const at = (x, y) => (this.facesRight
       ? { left: x - n.rb[0], right: x - n.lt[0], top: y + n.lt[1], bottom: y + n.rb[1] }
       : { left: x + n.lt[0], right: x + n.rb[0], top: y + n.lt[1], bottom: y + n.rb[1] });
     const b = at(this.x, this.y);

@@ -351,14 +351,16 @@ export class PetSelectDialog extends Win {
  * The death notice at (257, 97), its words in the art. 'ok' (UIWindow.img/Notice/0): "PRESS OK TO BE REVIVED. Once
  * you have revived, you will be sent to a safe town nearby." with Basic BtOK2 at (124, 115). 'wheel' (Notice/2): "The
  * power from the Wheel of Destiny can revive you in your current map." with BtYes2 at (92, 115) and BtNo2 at
- * (148, 115). done(wheel): Yes is true (revive here), OK and No false (the town). It takes no keys: the mouse answers.
+ * (148, 115). 'cafe' (Notice/1): playing from an Internet café, revive here, with the same Yes and No. done(yes): Yes
+ * is true (revive here), OK and No false (the town). It takes no keys: the mouse answers.
  */
 export class DeathNotice extends Win {
   constructor(mgr, kind, done) {
-    super(mgr, mgr.W.Notice[kind === 'wheel' ? 2 : 0], 257 + ((UI_W - 800) >> 1), 97 + ((UI_H - 600) >> 1));
-    this.modal = true; this.done = done;
+    super(mgr, mgr.W.Notice[kind === 'wheel' ? 2 : kind === 'cafe' ? 1 : 0], 257 + ((UI_W - 800) >> 1), 97 + ((UI_H - 600) >> 1));
+    // an ordinary window: the rest of the screen (chat, windows) still works while you're dead; Esc leaves it
+    this.done = done; this.keepOnEscape = true;
     this.closeBtn.visible = false;
-    if (kind === 'wheel') {
+    if (kind === 'wheel' || kind === 'cafe') {
       this.button(mgr.B.BtYes2, 92, 115, () => this.finish(true));
       this.button(mgr.B.BtNo2, 148, 115, () => this.finish(false));
     } else this.button(mgr.B.BtOK2, 124, 115, () => this.finish(false));
@@ -820,7 +822,7 @@ const FT_MIN = 94354848000000000n, FT_MAX = 150842304000000000n, FT_EPOCH = 1164
 const tipNum = (v) => Number(v) || 0;
 const p2 = (n) => String(n).padStart(2, '0');
 
-function equipCategory(id) {
+export function equipCategory(id) {
   const cat = Math.floor(id / 10000);
   if (cat >= 130 && cat < 150) return WEAPON_CATEGORY[cat % 100] || null;
   if (id === 1802100) return 'PET RING';
@@ -1022,7 +1024,7 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
   const info = mgr.info(it.id) || {};
   ctx.save();
   ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  if (it.slots) slotItemTip(ctx, mgr, it, mx, my);
+  if (it.slots && typeof it.slots === 'object') slotItemTip(ctx, mgr, it, mx, my);   // an equip's slots is its upgrade count
   else if (invType(it.id) === 1) equipTip(ctx, mgr, it, info, mx, my);
   else itemTip(ctx, mgr, it, info, mx, my);
   ctx.restore();

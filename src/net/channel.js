@@ -137,7 +137,54 @@ function readMobStats(r, has) {
   if (has(29)) r.int();
   if (has(30)) r.int();
   if (has(29) || has(30)) r.int();
-  if (has(31)) { r.ubyte(); r.ubyte(); }
+  // bit 31: two bytes; while the first isn't 0 blows do nothing to it
+  if (has(31)) { const a = r.ubyte(); r.ubyte(); out.push({ first: 0, second: 0x80000000, source: 0, value: a }); }
+  return out;
+}
+
+/**
+ * Another player's buffs (GIVE_FOREIGN_BUFF), read as the client reads them: the statuses it shows on others, each in
+ * its own size and a fixed order, two bytes, then the two-state ones (Energy Charge, Dash, riding, Speed Infusion,
+ * Homing Beacon, Undead), each a value, a reason (the skill), a time (byte + int) and a little more for some.
+ * Index i of the 128-bit mask: 0-31 the second long's high half, 32-63 its low half, 64-95 / 96-127 the first long's.
+ */
+const REMOTE_STATS = [[7, 1, 'speed'], [21, 1, 'combo'], [22, 4, 'weaponCharge'], [17, 4, 'stun'], [20, 4, 'darkness'],
+  [19, 4, 'seal'], [30, 4, 'weakness'], [31, 4, 'curse'], [18, 'poison', 'poison'], [26, 0, 'shadowPartner'],
+  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [34, 2, 'ghost'], [39, 4, 'attract'], [41, 4, 'spiritJavelin'],
+  [47, 4], [49, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
+  [71, 4], [75, 4], [76, 4], [77, 4]];
+const TWO_STATE_NAMES = ['energyCharged', 'dashSpeed', 'dashJump', 'ride', 'partyBooster', 'guidedBullet', 'undead'];
+const remoteBit = (i) => (i < 32 ? [1, i + 32] : i < 64 ? [1, i - 32] : i < 96 ? [0, i - 32] : [0, i - 96]);
+const DISEASE_STATS = new Set(['stun', 'darkness', 'seal', 'weakness', 'curse', 'poison', 'attract', 'reverseInput', 'undead']);
+function readRemoteStats(r, m1, m2) {
+  const masks = [BigInt.asUintN(64, m1), BigInt.asUintN(64, m2)];
+  const bit = (i) => { const [w, b] = remoteBit(i); return 1n << BigInt(b) & masks[w] ? (w ? [0n, 1n << BigInt(b)] : [1n << BigInt(b), 0n]) : null; };
+  const out = { diseases: [] }, can = (n) => r.available >= n;
+  const disease = (name, i, src) => {
+    const skill = src & 0xffff, level = src >>> 16, [d1, d2] = bit(i);
+    // a named curse, or an unnamed status a monster skill put on them (Slow comes this way)
+    if ((!name || DISEASE_STATS.has(name)) && skill >= 100 && skill <= 200 && level > 0 && level < 256) out.diseases.push({ m1: d1, m2: d2, skill, level });
+  };
+  for (const [i, size, name] of REMOTE_STATS) {
+    if (!bit(i)) continue;
+    let v = true;
+    if (size === 1) v = can(1) ? r.ubyte() : 0;
+    else if (size === 2) v = can(2) ? r.short() : 0;
+    else if (size === 4) v = can(4) ? r.int() : 0;
+    else if (size === 'poison') { v = can(2) ? r.short() : 0; const src = can(4) ? r.int() : 0; disease(name, i, src); continue; }
+    if (name) out[name] = v;
+    if (size === 4) disease(name, i, v);
+  }
+  if (can(2)) r.skip(2);
+  TWO_STATE_NAMES.forEach((name, k) => {
+    if (!bit(82 + k) || !can(13)) return;
+    const t = { value: r.int(), reason: r.int() }; r.skip(5);
+    if (k === 4) r.skip(5);
+    if (k === 5) t.mob = can(4) ? r.int() : 0;
+    else if (k !== 3 && can(2)) r.short();
+    out[name] = t;
+    if (name === 'undead') disease(name, 82 + k, t.reason);
+  });
   return out;
 }
 
@@ -439,6 +486,22 @@ export class ChannelSession {
     // what hatched from a Pigmy Egg (item, count; no item: the inventory was full); a Gold / Silver box opened
     on(S.INCUBATOR_RESULT, (r) => { const id = r.int(); this.emit('incubated', id, r.short()); });
     on(S.SUCCESS_IN_USE_GACHAPON_BOX, (r) => this.emit('treasureBoxOpened', r.int()));
+    // the Maker's answer: result; when 0 or 1 the kind and what was gained and lost (items, gems, Stimulator, mesos)
+    on(S.MAKER_RESULT, (r) => {
+      const d = { result: r.int(), lost: [], gems: [], gained: [] }, pairs = (out) => { for (let n = r.int(); n > 0; n--) out.push({ id: r.int(), count: r.int() }); };
+      if (d.result === 0 || d.result === 1) {
+        d.type = r.int();
+        if (d.type === 1 || d.type === 2) {
+          if (!r.byte()) d.made = { id: r.int(), count: r.int() };
+          pairs(d.lost);
+          for (let n = r.int(); n > 0; n--) d.gems.push(r.int());
+          if (r.byte()) d.catalyst = r.int();
+          d.meso = r.int();
+        } else if (d.type === 3) { d.made = { id: r.int(), count: 1 }; d.leftover = r.int(); }
+        else if (d.type === 4) { d.equip = r.int(); pairs(d.gained); d.meso = r.int(); }
+      }
+      this.emit('makerOutcome', d);
+    });
     // your account's gender (only 0 may propose)
     on(S.SET_GENDER, (r) => this.emit('accountGender', r.ubyte()));
     // a proposal to you (0: who, their id); 9 the wedding wish list
@@ -763,7 +826,7 @@ export class ChannelSession {
       r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
       const job = r.short();
       const look = readCharLook(r);
-      r.int(); const itemEffect = r.int(), chair = r.int();
+      const hearts = r.int(), itemEffect = r.int(), chair = r.int();   // Heart-Shaped Chocolates: n / 10 big, n % 10 small
       const pos = r.pos2(); const stance = r.ubyte(), fh = r.short();
       r.ubyte();
       const pets = [];
@@ -782,7 +845,7 @@ export class ChannelSession {
           berserk = r.available > 0 && r.ubyte() !== 0;
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -851,7 +914,15 @@ export class ChannelSession {
     on(S.AUTO_HP_POT, (r) => this.emit('petPotion', 'hp', r.int()));
     on(S.AUTO_MP_POT, (r) => this.emit('petPotion', 'mp', r.int()));
     on(S.MOVE_PLAYER, (r) => { const id = r.int(); r.int(); this.emit('movePlayer', id, readMovement(r)); });
-    on(S.UPDATE_CHAR_LOOK, (r) => { const id = r.int(); r.ubyte(); const look = readCharLook(r); this.emit('playerLook', id, look, r.available >= 3 ? readRingLook(r) : null); });
+    // what changed: 1 the look, 2 a byte, 4 the Heart-Shaped Chocolate count; then the rings
+    on(S.UPDATE_CHAR_LOOK, (r) => {
+      const id = r.int(), flags = r.ubyte(), look = flags & 1 ? readCharLook(r) : null;
+      if (flags & 2) r.ubyte();
+      if (flags & 4) this.emit('playerHearts', id, r.ubyte());
+      if (look) this.emit('playerLook', id, look, r.available >= 3 ? readRingLook(r) : null);
+    });
+    // a consumable's effect on someone (Effect/ItemEff.img/<item>), kept until 0 comes
+    on(S.SHOW_CONSUME_EFFECT, (r) => this.emit('consumeEffect', r.int(), r.int()));
     on(S.FACIAL_EXPRESSION, (r) => this.emit('expression', r.int(), r.int()));
     on(S.SHOW_ITEM_EFFECT, (r) => this.emit('itemEffect', r.int(), r.int()));
 
@@ -902,6 +973,7 @@ export class ChannelSession {
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
     const WATK = 0x100000000n, WDEF = 0x200000000n, MATK = 0x400000000n, MDEF = 0x800000000n, HANDS = 0x4000000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
     const RIDING = 0x20000000000000n;   // BuffStat.MONSTER_RIDING, in the first mask
+    const HOMING = 0x80000000000000n;   // Homing Beacon, in the first mask
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
@@ -914,6 +986,13 @@ export class ChannelSession {
       // Monster Riding (first mask): short 0, then the mount's item id where the source goes and the skill (Monster
       // Rider, Battleship...) where the duration goes; it lasts until cancelled
       // A refresh of a ride already on (another buff ending) comes as a plain buff: the skill, then the time left
+      // Homing Beacon / Bullseye (two-state, first long bit 55): two bytes, then its value, the skill, a time (byte +
+      // int) and the monster it marks
+      if (BigInt.asUintN(64, m1) & HOMING && r.available >= 19) {
+        r.skip(2); r.int(); const skill = r.int(); r.skip(5);
+        this.emit('homingBeacon', skill, r.int());
+        return;
+      }
       if (BigInt.asUintN(64, m1) & RIDING) {
         r.short(); const a = r.int(), b = r.int(), k = Math.floor(a / 10000);
         if (k === 190 || k === 193) this.emit('buff', { m1, m2, source: b, duration: 2 ** 31, mount: a });
@@ -997,6 +1076,7 @@ export class ChannelSession {
     });
     on(S.CANCEL_BUFF, (r) => {
       const m1 = r.long(), m2 = r.long();
+      if (BigInt.asUintN(64, m1) & 0x80000000000000n) this.emit('homingBeacon', 0, 0);
       this.emit('cancelBuff', m1, m2);
       if (movesBuff(m1, m2) && r.available) this.emit('moveElement', r.ubyte());
     });
@@ -1015,13 +1095,22 @@ export class ChannelSession {
     });
     on(S.REMOVE_SPECIAL_MAPOBJECT, (r) => this.emit('summonRemove', r.int(), r.int(), r.ubyte() === 4));
     on(S.MOVE_SUMMON, (r) => { const owner = r.int(), oid = r.int(); r.pos2(); this.emit('summonMove', owner, oid, readMovement(r)); });
+    // an Evan's dragon: its owner, x and y as ints, its move action and an unused short; then its moves
+    on(S.SPAWN_DRAGON, (r) => { const owner = r.int(), x = r.int(), y = r.int(), stance = r.available ? r.ubyte() : 0; this.emit('spawnDragon', { owner, x, y, stance }); });
+    on(S.MOVE_DRAGON, (r) => { const owner = r.int(), start = r.pos2(); this.emit('moveDragon', owner, start, readMovement(r)); });
     on(S.SUMMON_ATTACK, (r) => {
       const owner = r.int(), oid = r.int(); r.ubyte();
       const dir = r.ubyte(), n = r.ubyte();
       const hits = Array.from({ length: n }, () => { const mob = r.int(); r.ubyte(); return { mob, dmg: r.int() }; });
       this.emit('summonAttack', owner, oid, dir, hits);
     });
-    on(S.DAMAGE_SUMMON, (r) => { const owner = r.int(), oid = r.int(); r.ubyte(); this.emit('summonDamaged', owner, oid, r.int()); });
+    // a summon struck: its owner, oid, the attack index (-2 and down: no monster), the damage, then the monster and
+    // which way it was hit
+    on(S.DAMAGE_SUMMON, (r) => {
+      const owner = r.int(), oid = r.int(), attack = r.byte(), damage = r.int();
+      const mobId = attack > -2 && r.available >= 4 ? r.int() : 0, dir = mobId && r.available ? r.ubyte() : 0;
+      this.emit('summonDamaged', owner, oid, damage, attack, mobId, dir);
+    });
     on(S.SUMMON_SKILL, (r) => this.emit('summonSkill', r.int(), r.int(), r.ubyte()));
     // SHOW_SCROLL_EFFECT: who, success, cursed (the item was destroyed), Legendary Spirit, White Scroll
     on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.bool(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
@@ -1031,15 +1120,24 @@ export class ChannelSession {
         const skill = r.int();
         // Berserk: level, then whether it is on (its aura stays while it is)
         if (skill === 1320006 && r.available >= 3) { r.ubyte(); r.ubyte(); this.emit('berserk', id, r.ubyte() !== 0); return; }
-        this.emit('foreignSkill', id, skill, r.available >= 1 ? r.ubyte() : 0);   // then the user's level
+        const level = r.available >= 1 ? r.ubyte() : 0;   // then the user's level and the skill's
+        this.emit('foreignSkill', id, skill, level, r.available >= 1 ? r.ubyte() : 0);
       }
       else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
       else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
       else if ([0, 8, 9, 0x0d, 0x0f].includes(effect)) this.emit('foreignEffect', id, effect); // level up / job change / quest clear / card / item level up
+      else if (effect === 0x10 && r.available >= 4) this.emit('makerResult', id, r.int());   // the Maker: 0 made, 1 failed
+      else if (effect === 0x17 && r.available >= 2) this.emit('avatarPicture', r.string(), id);   // a picture on them (fishing)
     });
-    on(S.SKILL_EFFECT, (r) => this.emit('foreignCharge', r.int(), r.int()));   // charging / winding up a skill
+    // charging / winding up a skill: who, the skill, its level, the action (0x7fff: none) with facing left in the top
+    // bit, and the attack speed
+    on(S.SKILL_EFFECT, (r) => {
+      const id = r.int(), skill = r.int(); r.ubyte();
+      const raw = r.available >= 2 ? r.ushort() : 0x7fff, speed = r.available ? r.ubyte() : 6;
+      this.emit('foreignCharge', id, skill, { action: raw & 0x7fff, left: !!(raw >> 15), speed });
+    });
     // your own effects; 2 = a party member's buff (Bless, Haste, Holy Symbol...) reached you
     // and 0x0a = HP you recovered (a blue number over you)
     // PLAYER_HINT: text, width, seconds, then 1 (over your head) or 0 with a map point
@@ -1052,12 +1150,18 @@ export class ChannelSession {
       const type = r.ubyte();
       if (type === 2 && r.available >= 4) this.emit('affected', null, r.int());
       else if (type === 5 && r.available >= 4) this.emit('skillSpecial', null, r.int());
-      else if (type === 1 && r.available >= 7) { if (r.int() === 1320006) { r.ubyte(); r.ubyte(); this.emit('berserk', null, r.ubyte() !== 0); } }
+      else if (type === 1 && r.available >= 6) {
+        // a skill of yours went off (MP Eater, a dying monster's buff): its pose; Berserk: whether its aura is on
+        const skill = r.int(); r.ubyte(); const level = r.ubyte();
+        if (skill === 1320006) { if (r.available) this.emit('berserk', null, r.ubyte() !== 0); } else this.emit('skillPose', null, skill, level);
+      }
       else if (type === 0x0a && r.available >= 1) this.emit('healNumber', null, r.ubyte());
       else if (type === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', null, r.ubyte(), e); }
       else if (type === 9) this.emit('questClearEffect');
       else if (type === 7) this.emit('portalSound');
       else if (type === 0x0f) this.emit('foreignEffect', null, 0x0f);   // an item of yours levelled up
+      else if (type === 0x0d) this.emit('foreignEffect', null, 0x0d);   // you got a monster card
+      else if (type === 0x10 && r.available >= 4) this.emit('makerResult', null, r.int());
       else if (type === 0x15 && r.available >= 1) this.emit('wheelsLeft', r.ubyte());   // a Wheel of Destiny revived you
       // 0x17: a picture on your character, e.g. a tutorial hint (UI/tutorial.img/<n>)
       else if (type === 0x17 && r.available >= 2) this.emit('avatarPicture', r.string());
@@ -1070,28 +1174,17 @@ export class ChannelSession {
         else this.emit('questItems', Array.from({ length: n }, () => ({ id: r.int(), qty: r.int() })));
       }
     });
-    // another player's curse (giveForeignDebuff): the masks, then per stat (Poison's value first) the mob skill as
-    // short id + short level; an ordinary foreign buff has values and zeros there instead, so the id tells them apart
+    // another player's buffs and curses, read as the client reads them (readRemoteStats)
     on(S.GIVE_FOREIGN_BUFF, (r) => {
-      const id = r.int(), m1 = r.long(), m2 = r.long();
-      // another player gets on a mount (showMonsterRiding): short 0, the mount's item id, the skill
-      if (BigInt.asUintN(64, m1) & RIDING && r.available >= 10) { r.short(); this.emit('foreignMount', id, r.int()); return; }
-      // a morph: its id is the last short (the one before last with GHOST_MORPH)
-      if (BigInt.asUintN(64, m2) & 0x2n) {
-        const n = popcount(BigInt.asUintN(64, m1)) + popcount(BigInt.asUintN(64, m2)), v = [];
-        for (let i = 0; i < n && r.available >= 2; i++) v.push(r.short());
-        this.emit('foreignMorph', id, v[n - 1 - (BigInt.asUintN(64, m2) & 0x20000n ? 1 : 0)] || 0);
-        return;
-      }
-      // Dark Sight or Wind Walk: drawn see-through
-      if (BigInt.asUintN(64, m2) & 0x40000000000n || BigInt.asUintN(64, m1) & 0x400000000n) { this.emit('foreignHidden', id); return; }
-      if (BigInt.asUintN(64, m2) & 0x400000000000000n) { this.emit('foreignPartner', id); return; }   // Shadow Partner
-      // Combo Attack alone: its value is 1 + the orbs held
-      if (BigInt.asUintN(64, m2) === 0x20000000000000n && BigInt.asUintN(64, m1) === 0n && r.available >= 2) { this.emit('foreignCombo', id, r.short()); return; }
-      if (BigInt.asUintN(64, m2) & 0x4000000000000n && r.available >= 2) r.short();   // Disease.POISON's value
-      if (r.available < 4) return;
-      const src = r.int(), skill = src & 0xffff, level = src >>> 16;
-      if (skill >= 100 && skill <= 200 && level > 0 && level < 256) this.emit('foreignDisease', id, { m1, m2, skill, level });
+      const id = r.int(), m1 = r.long(), m2 = r.long(), st = readRemoteStats(r, m1, m2);
+      if (st.ride) { this.emit('foreignMount', id, st.ride.value); return; }
+      if (st.morph !== undefined) { this.emit('foreignMorph', id, st.morph); return; }
+      // Dark Sight (or Wind Walk, when its bit comes in the first long): drawn see-through
+      if (st.darkSight || BigInt.asUintN(64, m1) & 0x400000000n) this.emit('foreignHidden', id);
+      if (st.shadowPartner) this.emit('foreignPartner', id);
+      if (st.combo !== undefined) this.emit('foreignCombo', id, st.combo);
+      for (const d of st.diseases) this.emit('foreignDisease', id, d);
+      this.emit('foreignBuffs', id, st);
     });
     // a mount's level, exp and tiredness (its rider, then a byte: it just levelled up)
     on(S.SET_TAMING_MOB_INFO, (r) => this.emit('mountInfo', r.int(), r.int(), r.int(), r.int(), r.ubyte() === 1));
@@ -1114,10 +1207,11 @@ export class ChannelSession {
       const oid = r.int(); r.ubyte(); const id = r.int();
       const statuses = readMobStats(r, readMobMask(r));
       const pos = r.pos2(); const stance = r.ubyte(); r.short(); const fh = r.short();
-      // the appearance: an optional summon effect (id, 0, short, +1 byte for 15), then -2 a new spawn / -1 already here
-      let appear = r.available ? r.byte() : -1;
-      if (appear > 0) { r.byte(); r.short(); if (appear === 15) r.byte(); appear = r.available ? r.byte() : -1; }
-      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, statuses };
+      // how it appears: -1 already here, -2 a new spawn, -3 (with its parent's oid) once its parent has died, 0 and up
+      // with Effect/Summon.img/<n> (and an option, ms added to the effect's delay); then its Monster Carnival team
+      const appear = r.available ? r.byte() : -1, option = appear === -3 || appear >= 0 ? (r.available >= 4 ? r.int() : 0) : 0;
+      const team = r.available ? r.ubyte() : 0;
+      return { oid, id, x: pos.x, y: pos.y, stance, fh, newSpawn: appear === -2, appear, option, team, statuses };
     };
     on(S.SPAWN_MONSTER, (r) => this.emit('spawnMob', readMob(r)));
     on(S.SPAWN_MONSTER_CONTROL, (r) => {
@@ -1157,10 +1251,19 @@ export class ChannelSession {
       for (const s of readMobStats(r, readMobMask(r))) this.emit('mobStatus', oid, s);
     });
     on(S.CANCEL_MONSTER_STATUS, (r) => { const oid = r.int(); r.long(); this.emit('mobStatusCancel', oid, r.uint(), r.uint()); });
+    // the answer to one of its moves: the move id, whether it is after you, its MP and a skill it may use next; an
+    // answer to an older move than the last one sent doesn't change whether it is after you
     on(S.MOVE_MONSTER_RESPONSE, (r) => {
-      const oid = r.int(); r.short(); r.bool(); r.short(); const skill = r.ubyte(), level = r.ubyte();   // the flag is aggro, not skills
+      const oid = r.int(), moveId = r.short(), aggro = r.bool(), mp = r.ushort(), skill = r.ubyte(), level = r.ubyte();
+      const last = this.mobMoveIds?.get(oid), stale = last !== undefined && ((moveId - last) << 16 >> 16) < 0;
+      this.emit('mobMoveResponse', oid, { aggro, mp, stale });
       this.emit('mobSkillOffer', oid, skill, level);
     });
+    // the Snowball event's wall: thrown back left (and up)
+    on(S.LEFT_KNOCK_BACK, () => this.emit('leftKnockBack'));
+    on(S.RESET_MONSTER_ANIMATION, (r) => { const oid = r.int(); if (r.ubyte()) this.emit('mobResetAnim', oid); });
+    // a Monster Carnival starts: your team (the CP counts after it aren't shown yet)
+    on(S.MONSTER_CARNIVAL_START, (r) => this.emit('carnivalTeam', r.ubyte()));
 
     // a move or a door turned down (BLOCKED_MAP), or a channel / shop the server won't let you into (BLOCKED_SERVER):
     // both answer the request, and say why
@@ -1364,7 +1467,9 @@ export class ChannelSession {
   /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
   npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
   moveMob(oid, start, moves, activity = -1, skill = 0, level = 0) {
-    const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(this.moveId++ & 0x7fff)
+    const id = this.moveId++ & 0x7fff;
+    (this.mobMoveIds ??= new Map()).set(oid, id);
+    const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
       .byte(0).byte(activity).byte(skill).byte(level).short(0).zero(8).byte(0).int(0).pos(start);
     writeMovement(w, moves);
     this.send(w);
@@ -1407,6 +1512,18 @@ export class ChannelSession {
   /** A monster that seeks you out (firstAttack / pickUp): its object id and how far you are from it. */
   /** A monster ran into the escorted (friendly) one: the attacker, your character id and the friendly one. */
   mobDamageMobFriendly(attacker, charId, friendly) { this.send(new PacketWriter(C.MOB_DAMAGE_MOB_FRIENDLY).int(attacker).int(charId).int(friendly)); }
+  /** A monster's attack struck another (one of them Hypnotized): attacker, you, the struck one, which attack, the damage. */
+  mobDamageMob(attacker, charId, victim, attack, damage, facingLeft, x, y) {
+    this.send(new PacketWriter(C.MOB_DAMAGE_MOB).int(attacker).int(charId).int(victim).byte(attack).int(damage).byte(facingLeft ? 1 : 0).short(x).short(y));
+  }
+  /** The Beholder's own skill: its oid, the skill (Aura / Hex of the Beholder), its action (facing left in bit 7). */
+  beholder(oid, skill, action, extra = null) {
+    const w = new PacketWriter(C.BEHOLDER).int(oid).int(skill).byte(action);
+    if (extra !== null) w.byte(extra);
+    this.send(w);
+  }
+  /** A self-destructing monster reached you with its attack: it goes off. */
+  monsterBomb(oid) { this.send(new PacketWriter(C.MONSTER_BOMB).int(oid)); }
   autoAggro(oid, distance) { this.send(new PacketWriter(C.AUTO_AGGRO).int(oid).int(distance)); }
   /** A map obstacle struck a monster: its object id and the damage. */
   fieldDamageMob(oid, damage) { this.send(new PacketWriter(C.FIELD_DAMAGE_MOB).int(oid).int(damage)); }
@@ -1424,9 +1541,10 @@ export class ChannelSession {
   }
 
   /** SPECIAL_MOVE: buffs and other non-attack skills. pos is sent for summons / doors. */
-  specialMove(skillId, level, pos) {
+  specialMove(skillId, level, pos, star = 0) {
     const w = new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level);
     if (pos) w.pos(pos).byte(0);
+    if (star) w.int(star);   // Shadow Stars: the star it takes
     // the client ends every SPECIAL_MOVE with a short; Cosmic reads it only for Monster Rider (and would take it for a
     // position on the others), so it goes on that one alone
     if (skillId % 10000000 === 1004) w.short(0);
@@ -1514,6 +1632,13 @@ export class ChannelSession {
   useItemUi(tab, slot, itemId) { this.send(new PacketWriter(C.USE_ITEMUI).byte(tab).short(slot).int(itemId)); }
   /** A Gold / Silver box: its slot and item */
   useTreasureBox(slot, itemId) { this.send(new PacketWriter(C.USE_TREASURE_BOX).short(slot).int(itemId)); }
+  /** MAKER_SKILL: 1 / 2 an item (Stimulator put in, gems), 3 a Monster Crystal (the drop), 4 disassembling (the equip, tab, slot) */
+  makerSkill(type, itemId, { catalyst = false, gems = [], tab = 1, slot = 0 } = {}) {
+    const w = new PacketWriter(C.MAKER_SKILL).int(type).int(itemId);
+    if (type === 1 || type === 2) { w.byte(catalyst ? 1 : 0).int(gems.length); for (const g of gems) w.int(g); }
+    else if (type === 4) w.int(tab).int(slot);
+    this.send(w);
+  }
   /** RING_ACTION: 0 propose (partner, ring box), 1 withdraw, 2 answer (accepted, proposer, their id), 5 invite a guest (name, marriage, slot), 6 open an invitation (slot, item) */
   propose(name, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(0).string(name).int(itemId)); }
   withdrawProposal() { this.send(new PacketWriter(C.RING_ACTION).byte(1)); }
