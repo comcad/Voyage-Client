@@ -776,7 +776,7 @@ export class ChannelSession {
         if (me === 1) { r.ubyte(); look = readCharLook(r); partner = r.string(); }
         this.emit('tradeOpen', { slot: me, partner, look });
       } else if (op === 2) {                              // INVITE
-        if (r.ubyte() === 3) this.emit('tradeInvite', r.string());
+        if (r.ubyte() === 3) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0); }
       } else if (op === 4) {                              // VISIT: partner joined
         r.ubyte(); const look = readCharLook(r); this.emit('tradePartner', r.string(), look);
       } else if (op === 0x0F) {                           // SET_ITEMS: 0 yours, 1 partner's
@@ -1642,6 +1642,8 @@ export class ChannelSession {
     this.send(w.string(text));
   }
   whisper(name, text) { this.send(new PacketWriter(C.WHISPER).byte(0x06).string(name).string(text)); }
+  /** A whisper not taken (whispers off in the Game Option, or a Blacklisted sender): 0x22 and their name. */
+  whisperBlock(name) { this.send(new PacketWriter(C.WHISPER).byte(0x22).string(name)); }
   find(name) { this.send(new PacketWriter(C.WHISPER).byte(0x05).string(name)); }
   /** Where a buddy is, for the Buddy tab's location line (answered with flag 0x48). */
   findBuddy(name) { this.send(new PacketWriter(C.WHISPER).byte(0x44).string(name)); }
@@ -1822,7 +1824,8 @@ export class ChannelSession {
   messengerJoin(id = 0) { this.send(new PacketWriter(C.MESSENGER).byte(0).int(id)); }
   messengerLeave() { this.send(new PacketWriter(C.MESSENGER).byte(2)); }
   messengerInvite(name) { this.send(new PacketWriter(C.MESSENGER).byte(3).string(name)); }
-  messengerDecline(from) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from)); }
+  /** A Messenger invitation turned down; one refused by the Game Option or the Blacklist adds your name and 1. */
+  messengerDecline(from, me = null) { const w = new PacketWriter(C.MESSENGER).byte(5).string(from); if (me !== null) w.string(me).byte(1); this.send(w); }
   messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
   merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
   /** The Owl of Minerva: OWL_ACTION (5 when its search opens), OWL_WARP (a store's owner and map), the Use-tab owl's search */
@@ -1850,8 +1853,10 @@ export class ChannelSession {
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3));
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(2).int(cid));
   }
-  tradeAccept() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(0)); }
-  tradeDecline() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(3)); }
+  /** A trade invitation taken: visit (4) its room, then two zero bytes. */
+  tradeAccept(id = 0) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(id).byte(0).byte(0)); }
+  /** A trade invitation turned down (3): 3 declined, 4 not taking them (Game Option, Blacklist). */
+  tradeDecline(id = 0, reason = 3) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(3).int(id).byte(reason)); }
   tradeItem(tab, pos, qty, slot) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0F).byte(tab).short(pos).short(qty).byte(slot)); }
   tradeMeso(v) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x10).int(v)); }
   tradeConfirm() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x11)); }

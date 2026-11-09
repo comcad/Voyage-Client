@@ -1286,6 +1286,8 @@ export class Game {
     else if (e.op === 'chart') this.windows.wins.familytree.setChart(e);
     else if (e.op === 'result') { const t = familyResult(e.code, e.mesos); if (t) this.windows.notice(t); refresh(); }
     else if (e.op === 'invite') {
+      // Family invitations off in the Game Option, or from someone on the Blacklist: ignored
+      if (!this.optionAllowed('familyInvite') || this.windows.wins.userlist?.blacklisted(e.name)) return;
       const ok = await notify(this.windows, 'family', e.name);
       this.net?.familyAnswer(e.id, e.name, ok);
     } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
@@ -1306,6 +1308,8 @@ export class Game {
   async onMessenger(e) {
     const win = this.windows.wins.messenger;
     if (e.op === 'invite') {
+      // Messenger invitations off in the Game Option, or from someone on the Blacklist: turned down at once
+      if (!this.optionAllowed('chatInvite') || this.windows.wins.userlist?.blacklisted(e.from)) { this.net?.messengerDecline(e.from, this.player.name); return; }
       if (await notify(this.windows, 'messenger', e.from)) win.accept(e.id);
       else this.net?.messengerDecline(e.from);
       return;
@@ -2862,14 +2866,18 @@ export class Game {
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         this.windows.open('inventory');
       },
-      // a guild alliance's invitation: refused at once without a guild or while another is up; O takes it
+      // a guild alliance's invitation: refused at once with alliance invitations off in the Game Option or while
+      // another is up; O takes it
       allianceInvite: later((id, from, guildName) => {
         const mine = this.guild?.name || '';
-        if (!this.guild || this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine); return; }
+        if (!this.optionAllowed('allianceInvite') || this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine); return; }
         notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, guildName) : this.net.allianceDeny(from, mine)));
       }),
-      tradeInvite: (name) => notify(this.windows, 'trade', name)
-        .then((ok) => (ok ? this.net.tradeAccept() : this.net.tradeDecline())),
+      // trade requests off in the Game Option, or from someone on the Blacklist: turned down at once (reason 4)
+      tradeInvite: (name, id) => {
+        if (!this.optionAllowed('tradeRequest') || this.windows.wins.userlist?.blacklisted(name)) { this.net.tradeDecline(id, 4); return; }
+        notify(this.windows, 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
+      },
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
       tradeMeso: (side, v) => this.tradeWin?.setMeso(side, v),
@@ -2942,7 +2950,8 @@ export class Game {
       // an auto-join one (Party Search) joins straight away
       partyInvite: (p) => {
         const from = p.name.startsWith('PS: ') ? p.name.slice(4) : p.name;
-        if (p.autoJoin) { this.net.partyOp(3, p.id); return; }
+        // a Party Search one is ignored with party or Party Search invitations off, or from someone on the Blacklist
+        if (p.autoJoin) { if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net.partyOp(3, p.id); return; }
         if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
         (from !== p.name ? notify(this.windows, 'partySearch', from) : notify(this.windows, 'party', p.name))
           .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
@@ -5063,11 +5072,12 @@ export class Game {
     if (/haha|hoho|hehe|harhar|wahaha/.test(t)) this.emote(2);
     else if (/sob|tears|cry|sniff/.test(t)) this.emote(4);
   }
-  /** The Game Option switches for buddy and guild chat. */
+  /** The Game Option switches for buddy, guild and alliance chat. */
   chatAllowed(mode) {
     let allow = {};
     try { allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { allow = {}; }
-    return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false);
+    // (the Game Option row stored as allianceTournament is the alliance chat switch)
+    return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false) && !(mode === 3 && allow.allianceTournament === false);
   }
   /** A Game Option switch (on unless turned off). */
   optionAllowed(key) {
@@ -5216,6 +5226,8 @@ export class Game {
     this.net.whisper(name, text);
   }
   onWhisper(w) {
+    // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so
+    if (!this.optionAllowed('whisper') || this.windows.wins.userlist?.blacklisted(w.from)) { this.net?.whisperBlock(w.from); return; }
     this.lastWhisperFrom = w.from;
     const ch = w.channel === this.channel ? '' : `[${this.channelNames?.[w.channel] || `Ch. ${w.channel + 1}`}]`;
     this.hud.message(`${w.from}${ch}>> ${w.text}`, CHAT_COLORS.whisper);

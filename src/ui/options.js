@@ -78,7 +78,9 @@ export class ChannelWin extends Win {
 /**
  * GameOpt backgrnd 158x284: 12 rows (WHISPER .. FAMILY INVITE) whose ALLOW column is x 88-150,
  * row centres every 18.2px from y 40. Each row gets a Basic.img/CheckBox at its right end.
- * The choices are kept in this browser; they take effect as those features are added.
+ * The choices are kept in this browser; they take effect as those features are added. A click applies at once;
+ * OK (Basic.img/BtOK2 at 34, 262) keeps them, Cancel (BtCancel2 at 84, 262) or Escape puts back what they were
+ * when the window opened.
  */
 const GAME_ROWS = ['whisper', 'friends', 'chatInvite', 'tradeRequest', 'partyInvite', 'partySearch', 'gameInvite',
   'guildChat', 'guildInvite', 'allianceTournament', 'allianceInvite', 'familyInvite'];
@@ -86,7 +88,17 @@ export class GameOptWin extends Win {
   constructor(mgr) {
     super(mgr, mgr.W.GameOpt.backgrnd, 470, 70);
     try { this.allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { this.allow = {}; }
+    this.button(mgr.B.BtOK2, 34, 262, () => this.mgr.close(this));
+    this.button(mgr.B.BtCancel2, 84, 262, () => this.cancel());
   }
+  onOpen() { this.before = { ...this.allow }; }
+  /** Cancel: the switches as they were when the window opened. */
+  cancel() {
+    this.allow = { ...(this.before || this.allow) };
+    try { localStorage.setItem('maple.gameopt', JSON.stringify(this.allow)); } catch { /* storage off */ }
+    this.mgr.close(this);
+  }
+  key(e) { if (e.key === 'Escape') this.cancel(); }
   frames() { return [...super.frames(), ...allCanvases(this.mgr.B.CheckBox)]; }
   rowAt(lx, ly) {
     if (lx < 88 || lx > 156) return -1;
