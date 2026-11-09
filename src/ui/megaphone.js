@@ -1,6 +1,7 @@
 import { sfx } from '../audio.js';
 import { TextField, uiText } from './wzui.js';
-import { Win } from './windows.js';
+import { Win, allCanvases } from './windows.js';
+import { pad } from '../assets.js';
 import { CHAT_COLOR } from './statusbar.js';
 import { UI_W, UI_H } from '../view.js';
 
@@ -52,6 +53,7 @@ export class MegaphoneWin extends Win {
     this.button(avatar ? W.AvatarMegaphone.BtOk : B.BtOK2, ...spec.ok, () => this.send());
     this.button(avatar ? W.AvatarMegaphone.BtCancel : B.BtCancel2, ...spec.cancel, () => this.close());
     if (kind === 7) this.button(W.ArtMegaphone.BtPreView, 277, 152, () => this.preview());
+    if (kind === 7) this.button(W.ArtMegaphone.BtEx, 350, 33, () => this.examples());
     this.fields = spec.fields.map(([x, y, w, h]) => {
       const f = new TextField(mgr.game.statusBar.layer, x, y, w, h, { max: spec.box ? 400 : 60, color: '#000' });
       f.rect.x0 = x; f.rect.y0 = y;
@@ -75,6 +77,23 @@ export class MegaphoneWin extends Win {
   }
   frames() { return [...super.frames(), this.mgr.B.CheckBox?.[0], this.mgr.B.CheckBox?.[1]].filter(Boolean); }
 
+  /**
+   * Triple Megaphone: BtEx opens the item's examples beside it (at its corner + (407, 30)); a pick puts
+   * Item/Cash/0507.img/<id>/sample/<n>/0-2 in the three lines. While the list is up it alone takes the clicks.
+   */
+  async examples() {
+    if (this.picking) return;
+    const d = (await this.g.assets.json('Item/Cash/0507.img'))?.[pad(this.itemId, 8)];
+    if (!d?.ui) return;
+    await this.g.assets.preload(allCanvases(d.ui));
+    const keep = { modal: this.modal, transient: this.transient };
+    this.modal = false; this.transient = false; this.picking = true;
+    this.mgr.show(new ExamplePicker(this.mgr, d.ui, this.x + 407, this.y + 30, (i) => {
+      Object.assign(this, keep); this.picking = false;
+      const s = i === null ? null : d.sample?.[i];
+      if (s) this.fields.forEach((f, k) => { f.value = String(s[k] ?? ''); });
+    }));
+  }
   /** Triple Megaphone: how it will look, in your chat only. */
   preview() {
     const hud = this.g.hud, name = this.g.player?.name || '';
@@ -139,5 +158,33 @@ export class MegaphoneWin extends Win {
   drop(lx, ly, c) {
     if (this.kind !== 6 || c.kind !== 'item' || typeof c.tab !== 'number') return;
     this.item = { tab: c.tab, slot: c.slot };
+  }
+}
+
+/**
+ * The Triple Megaphone's examples (Item/Cash/0507.img/<id>/ui), 100 wide and (n + 2) * 15 tall (n: its children but
+ * t, c and s): t, a c row every 15px from y 23, then s; ui/<i> at (9, 24 + 15i). It opens where asked, kept on an
+ * 800x600 screen (x 700 at most, the bottom at 600). done(i) with the pick, or null for a click outside it or on its
+ * title (11-77, 10-22).
+ */
+class ExamplePicker extends Win {
+  constructor(mgr, ui, x, y, done) {
+    super(mgr, null, 0, 0);
+    this.buttons = [];
+    this.ui = ui; this.done = done; this.transient = true;
+    this.n = Math.max(0, Object.keys(ui).filter((k) => k !== '_order').length - 3);
+    this.w = 100; this.h = (this.n + 2) * 15;
+    this.x = x + 100 > UI_W ? UI_W - 100 : x; this.y = y + this.h > UI_H ? UI_H - this.h : y;
+    for (let i = 0; i < this.n; i++) this.button(ui[i], 9, 24 + i * 15, () => this.finish(i));
+  }
+  frames() { return allCanvases(this.ui); }
+  finish(i) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(i); }
+  onClose() { if (!this.answered) { this.answered = true; this.done(null); } }
+  down(lx, ly) { if (lx >= 11 && lx < 77 && ly >= 10 && ly < 22) this.finish(null); }
+  body(ctx) {
+    const im = (n) => this.mgr.image(n), t = im(this.ui.t), c = im(this.ui.c), s = im(this.ui.s);
+    if (t) ctx.drawImage(t, 0, 0);
+    if (c) for (let i = 0; i < this.n; i++) ctx.drawImage(c, 0, 23 + i * 15);
+    if (s) ctx.drawImage(s, 0, 23 + this.n * 15);
   }
 }
