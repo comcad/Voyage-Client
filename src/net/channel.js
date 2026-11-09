@@ -1367,7 +1367,10 @@ export class ChannelSession {
       let npc = r.int();
       const type = r.ubyte(), speaker = r.ubyte();
       if (type === 0 && speaker & 4) npc = r.int();
+      // a slide menu (0x0E) names its art set (UIWindow.img/SlideMenu/<n>) before the text
+      const slide = type === 0x0E ? r.int() : null;
       const d = { npc, type, speaker, text: r.string() };
+      if (slide !== null) d.slide = slide;
       if (type === 0) { d.prev = r.ubyte() === 1; d.next = r.ubyte() === 1; }
       else if (type === 2) { d.def = r.string(); d.min = r.available >= 2 ? r.short() : 0; d.max = r.available >= 2 ? r.short() : 0; }
       else if (type === 3) { d.def = r.int(); d.min = r.int(); d.max = r.int(); }

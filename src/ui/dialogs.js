@@ -278,7 +278,72 @@ export class NpcDialog extends Win {
 
 /** Shows a server NPC_TALK and resolves with { action, sel } once the player answers. */
 export function npcTalk(mgr, d) {
+  if (d.type === 0x0E) return new Promise((resolve) => mgr.show(new SlideMenu(mgr, d, resolve), null));
   return new Promise((resolve) => mgr.show(new NpcDialog(mgr, d, resolve), null));   // opens without the dialog alert
+}
+
+/**
+ * The slide menu (NPC_TALK 0x0E, the Dimensional Mirror's): UIWindow.img/SlideMenu/<n>, 235x165 centred, its backgrd
+ * looping (IsAniBackgrd). The text lists "#id# name" entries; one at a time sits in the middle as its BtMain/<id>
+ * at (97, 58), with the ones either side, disabled, at (45, 58) and (149, 58), Cover over them at (45, 58) and
+ * Choice at (97, 58); its name in white Arial 12 centred on x 117 at y 107. BtArrow left (11, 67) / right (200, 67)
+ * step to the one before / after; BtMove (69, 134) or a click on the middle one answers with its id, BtCancle
+ * (128, 134) answers no. An entry with id -1 is only its text: no pictures, BtMove off.
+ */
+export class SlideMenu extends Win {
+  constructor(mgr, d, done) {
+    super(mgr, null, (UI_W - 235) >> 1, (UI_H - 165) >> 1);
+    this.buttons = [];
+    this.w = 235; this.h = 165; this.modal = true; this.done = done; this.t0 = performance.now();
+    this.S = mgr.W.SlideMenu?.[d.slide ?? 0] || mgr.W.SlideMenu?.[0] || {};
+    this.entries = [...String(d.text || '').matchAll(/#(-?\d+)#([^#]*)/g)].map((m) => ({ id: Number(m[1]), text: m[2] }));
+    this.cur = 0;
+    this.build();
+  }
+  frames() { return [...allCanvases(this.S)]; }
+  build() {
+    const S = this.S, e = this.entries[this.cur], n = this.entries.length;
+    this.buttons = [];
+    const left = this.button(S.BtArrow?.left, 11, 67, () => this.step(-1)), right = this.button(S.BtArrow?.right, 200, 67, () => this.step(1));
+    const move = this.button(S.BtMove, 69, 134, () => this.finish(true));
+    this.button(S.BtCancle, 128, 134, () => this.finish(false));
+    left.enabled = false; right.enabled = false; move.enabled = false;
+    this.layers = !!e && e.id !== -1;
+    if (!this.layers) return;
+    move.enabled = true;
+    this.button(S.BtMain?.[e.id], 97, 58, () => this.finish(true));
+    if (this.cur > 0) { this.button(S.BtMain?.[this.entries[this.cur - 1].id], 45, 58, () => {}).enabled = false; left.enabled = true; }
+    if (this.cur < n - 1) { this.button(S.BtMain?.[this.entries[this.cur + 1].id], 149, 58, () => {}).enabled = false; right.enabled = true; }
+  }
+  step(d) {
+    const to = this.cur + d;
+    if (to < 0 || to >= this.entries.length) return;
+    this.cur = to; this.build();
+  }
+  finish(ok) {
+    if (this.answered) return;
+    this.answered = true; this.mgr.close(this);
+    const e = this.entries[this.cur];
+    this.done(ok && e ? { action: 1, sel: e.id } : { action: 0 });
+  }
+  draw(ctx) {
+    const m = this.mgr, bg = this.S.backgrd || {}, fr = Object.keys(bg).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => bg[k]);
+    const total = fr.reduce((t, f) => t + (Number(f.delay) || 100), 0);
+    let t = total ? (performance.now() - this.t0) % total : 0, f = fr[0];
+    for (const x of fr) { f = x; if ((t -= Number(x.delay) || 100) < 0) break; }
+    const img = f && m.image(f);
+    if (img) { const o = f.origin || [0, 0]; ctx.drawImage(img, this.x - o[0], this.y - o[1]); }
+    super.draw(ctx);
+    ctx.save(); ctx.translate(this.x, this.y);
+    if (this.layers) {
+      const cover = m.image(this.S.Cover), choice = m.image(this.S.Choice);
+      if (cover) ctx.drawImage(cover, 45, 58);
+      if (choice) ctx.drawImage(choice, 97, 58);
+    }
+    const e = this.entries[this.cur];
+    if (e) uiText(ctx, e.text, 117, 107, { color: '#fff', size: 12, align: 'center' });
+    ctx.restore();
+  }
 }
 
 /**
