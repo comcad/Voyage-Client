@@ -20,14 +20,6 @@ Pure JavaScript · Fully compatible with [Cosmic](https://github.com/P0nk/Cosmic
 [![Forks](https://img.shields.io/github/forks/comcad/Voyage-Client?style=flat-square&logo=github)](https://github.com/comcad/Voyage-Client/forks)
 [![Last commit](https://img.shields.io/github/last-commit/comcad/Voyage-Client?style=flat-square)](https://github.com/comcad/Voyage-Client/commits/main)
 
-[![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/SCVxm6tB4g)
-
-<br />
-
-[Features](#-features-of-the-maplestory-web-client) · [Quick Start](#-quick-start-run-the-maplestory-web-client) · [Settings](#%EF%B8%8F-settings) · [Project Layout](#-project-layout) · [FAQ](#-faq) · [Community](#-community)
-
-<br />
-
 <img width="1440" height="809" alt="MapleStory web client screenshot: Voyage Client running MapleStory v83 in a browser" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
 
 </div>
