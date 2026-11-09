@@ -3396,7 +3396,7 @@ export class Game {
     }
     const book = this.quests, old = book.started[id];
     book.update(id, status, data);
-    this.questLayerTags();
+    this.questLayerTags(); this.refreshQuestBlink();
     this.questAlert?.recordChanged(id, status);
     const alarm = this.windows.wins.questalarm, ctx = this.textCtx();
     if (status === 1) {
@@ -3643,7 +3643,7 @@ export class Game {
     if (s.level > before) {
       this.levelUpEffect(); sfx.play('Game/LevelUp');
       if (s.level < 11) this.statusBar?.blinkTab(2);   // the Stat tab blinks
-      this.partyQuestInvites(s.level);
+      this.partyQuestInvites(s.level); this.refreshQuestBlink();
     }
     if (s.level === 2 && before === 1) this.skillGuide();
     if (s.job !== undefined) {
@@ -3765,7 +3765,7 @@ export class Game {
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
-      this.mapEnteredAt = performance.now(); this.setupShip();
+      this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
@@ -5071,6 +5071,15 @@ export class Game {
     const t = text.toLowerCase();
     if (/haha|hoho|hehe|harhar|wahaha/.test(t)) this.emote(2);
     else if (/sob|tears|cry|sniff/.test(t)) this.emote(4);
+  }
+  /**
+   * The Quest Helper's BtQ blinks while there is a quest you could start (not begun, not done, its requirements met),
+   * as the client works it out on entering a map, on a quest's change and on a level-up.
+   */
+  refreshQuestBlink() {
+    const q = this.windows?.wins.questalarm;
+    if (!q || !this.quests) return;
+    try { q.blinkQ = !!q.state.opened && this.quests.available(this.textCtx()).length > 0; } catch { q.blinkQ = false; }
   }
   /** The Game Option switches for buddy, guild and alliance chat. */
   chatAllowed(mode) {

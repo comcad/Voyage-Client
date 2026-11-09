@@ -134,6 +134,14 @@ export class QuestAlarmWin extends Win {
     this.minBtn.visible = !this.state.min; this.maxBtn.visible = this.state.min;
     this.autoBtn.forceState = this.state.auto ? null : 'disabled';
     super.draw(ctx);
+    // BtQ blinks (its ani) while there is a quest you could start
+    const ani = this.blinkQ && this.Q.BtQ?.ani, frames = Object.keys(ani || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b);
+    if (frames.length && this.qBtn.visible) {
+      let t = performance.now() % frames.reduce((n, k) => n + (Number(ani[k].delay) || 100), 0), f = frames[0];
+      for (const k of frames) { f = k; t -= Number(ani[k].delay) || 100; if (t < 0) break; }
+      const im = this.mgr.image(ani[f]), o = ani[f].origin || [0, 0];
+      if (im) ctx.drawImage(im, this.x + this.qBtn.x - o[0], this.y + this.qBtn.y - o[1]);
+    }
   }
   /** Cut to fit with "..". */
   fit(ctx, text, width) {
