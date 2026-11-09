@@ -1,12 +1,12 @@
+# Voyage Client: Open-Source MapleStory Web Client (v83)
 
 <table>
   <tr>
     <td align="center"><img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="100" height="100" alt="Voyage Logo"></td>
-    <td><h2>Voyage Client</h2><p>A MapleStory <strong>v83</strong> (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)</p></td>
+    <td><h2>Voyage Client (ALPHA)</h2><p>A MapleStory <strong>v83</strong> (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)</p></td>
   </tr>
 </table>
 
-(ALPHA)
 
 <img width="1440" height="809" alt="Screenshot 2026-11-08 at 6 52 55 PM" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
 
