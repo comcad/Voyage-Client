@@ -274,9 +274,8 @@ Questions, feedback, or want to help test? Come hang out on Discord.
 
 ## 📄 License
 
-[MIT](LICENSE.txt) 
+- **License** [MIT](LICENSE.txt) 
 
-The WZ extractor is published separately as [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor).
 
 <div align="right">
 
