@@ -5,25 +5,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      # One shell var drives both the image build AND runtime:
-      #   OBFUSCATE=1 docker compose up --build
-      args:
-        OBFUSCATE: ${OBFUSCATE:-0}
     image: voyage-client:latest
     container_name: voyage-client
+    # uid 1000, so conf/client.conf is yours, not root's; ./conf must be writable by it
+    user: "1000:1000"
     # host networking so the container reaches the Cosmic server on the LAN
     # (192.168.2.2:8484 login, :7575-7699 channels) and binds :3000 directly
     network_mode: host
-    environment:
-      PORT: "3000"
-      # name=host pairs, comma-separated. First is the default.
-      COSMIC_SERVERS: "cosmic=192.168.2.2"
-      ASSETS_DIR: /app/assets
-      # Set to 1 (or true/yes/on) to minify + obfuscate the client bundle. Off by default.
-      OBFUSCATE: ${OBFUSCATE:-0}
     volumes:
       # The extracted WZ assets (JSON + PNG). 5.6G, kept out of the image.
       - ./assets:/app/assets:ro
+      # Settings: conf/client.conf (port, Cosmic servers, obfuscation, quality of life),
+      # made from conf/client.conf.dist on the first start. Restart after a change.
+      - ./conf:/conf
     # Restart unless killed
     restart: unless-stopped
     # The client is a long-running server; no healthcheck needed, but a

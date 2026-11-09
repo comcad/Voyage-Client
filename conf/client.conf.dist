@@ -1,0 +1,204 @@
+####################################
+# Voyage Client configuration file #
+####################################
+#
+# server.js reads conf/client.conf (TOML), creating it from this file on first start, then every
+# other conf/*.conf in the same folder. Each key may be defined in only one file. client.conf is
+# gitignored: change your settings there, not in this template. Restart the server after a change.
+# `node server.js --conf <dir>` reads another folder instead.
+[voyage]
+###################################################################################################
+# SECTION INDEX
+#
+#  CLIENT SYSTEM SETTINGS
+#    SERVER
+#    RELAY
+#    BUILD
+#
+#  QUALITY OF LIFE SETTINGS
+#    ACCOUNT
+#    BUFFS
+#    COMBAT
+#    LADDERS
+#    LOGIN
+#    MONSTERS
+#    SKILLS
+#
+###################################################################################################
+
+###################################################################################################
+#                                                                                                 #
+# CLIENT SYSTEM SETTINGS BEGIN                                                                    #
+#                                                                                                 #
+###################################################################################################
+
+###################################################################################################
+# SERVER
+#
+#     Server.Host
+#        Description: The address the web server listens on.
+#        Default:     "0.0.0.0" - every interface.
+
+Server.Host = "0.0.0.0"
+
+#
+#     Server.Port
+#        Description: The port for the page, the assets and the WebSocket relay (/ws).
+#        Default:     3000
+
+Server.Port = 3000
+
+#
+#     Server.AssetsDir
+#        Description: The folder holding the extracted WZ files (JSON + PNG), relative to the
+#                     folder server.js is in.
+#        Default:     "assets"
+
+Server.AssetsDir = "assets"
+
+#
+###################################################################################################
+
+###################################################################################################
+# RELAY
+#
+#     Relay.Servers
+#        Description: The Cosmic servers the relay connects players to, as name=host pairs
+#                     separated by commas, e.g. "cosmic=192.168.2.2,test=10.0.0.5". With more than
+#                     one, the login screen lets players pick; the first is the default. A host
+#                     on its own ("10.0.0.5") is named after itself. Only the login port (8484) and
+#                     the channel ports (7575-7699) are relayed.
+#        Default:     "cosmic=192.168.2.2"
+
+Relay.Servers = "cosmic=192.168.2.2"
+
+#
+###################################################################################################
+
+###################################################################################################
+# BUILD
+#
+#     Build.Obfuscate
+#        Description: Minifies and obfuscates the client bundle (public/Voyage.js) when server.js
+#                     builds it on start. `node build.mjs` reads it too.
+#        Default:     false
+
+Build.Obfuscate = false
+
+#
+###################################################################################################
+
+###################################################################################################
+#                                                                                                 #
+# QUALITY OF LIFE SETTINGS BEGIN                                                                  #
+#                                                                                                 #
+###################################################################################################
+
+###################################################################################################
+# ACCOUNT
+#
+#     Account.SkipBirthdayCode
+#        Description: Skips the 8-digit birthday code prompt everywhere: gifts, couple and
+#                     friendship rings, name changes and world transfers in the Cash Shop, opening
+#                     a shop with Cash items for sale, and managing your store.
+#                     Account.BirthdayCode is sent instead. The server still checks it against the
+#                     account's birthday, so a wrong one is turned down as usual.
+#        Default:     false - the client asks for the code.
+
+Account.SkipBirthdayCode = false
+
+#
+#     Account.BirthdayCode
+#        Description: The code sent when Account.SkipBirthdayCode is on, as YYYYMMDD. Cosmic
+#                     gives every account it creates the birthday 2005-05-11; change this if your
+#                     accounts have another. With the skip on, every player's browser is sent this
+#                     code, so don't use a birthday that should stay private.
+#        Default:     20050511
+
+Account.BirthdayCode = 20050511
+
+#
+###################################################################################################
+
+###################################################################################################
+# BUFFS
+#
+#     Buffs.ShowTimeLeft
+#        Description: Writes the time left under each buff icon at the top right: seconds under a
+#                     minute, minutes and seconds under an hour, then hours.
+#        Default:     false - the icons only shade over as they run out.
+
+Buffs.ShowTimeLeft = false
+
+#
+###################################################################################################
+
+###################################################################################################
+# COMBAT
+#
+#     Combat.NoWhack
+#        Description: With a bow, crossbow, claw or gun, attacks always shoot or throw, even with a
+#                     monster right in front. Normally a monster within the weapon's swing (65 px)
+#                     turns a plain attack and most shooting skills into a swing with the weapon,
+#                     and stops Hurricane, Rapid Fire and Piercing Arrow. Mortal Blow can still go
+#                     off close up. With no ammo left, or lying down, you still swing or stab.
+#        Default:     false - a monster that close gets the swing.
+
+Combat.NoWhack = false
+
+#
+###################################################################################################
+
+###################################################################################################
+# LADDERS
+#
+#     Ladders.ClimbSpeedMultiplier
+#        Description: Multiplies how fast you climb ladders and ropes, from 1.0 up to 3.0 (1.5 is
+#                     half as fast again). The climbing animation and your pets keep pace. Other
+#                     players see you climb at that speed too.
+#        Default:     1.0 - the normal climbing speed.
+
+Ladders.ClimbSpeedMultiplier = 1.0
+
+#
+###################################################################################################
+
+###################################################################################################
+# LOGIN
+#
+#     Login.TypePic
+#        Description: Lets you type your PIC on the keyboard while the PIC soft keyboard is open.
+#                     Letters and digits go in as if clicked; the on-screen keys still work.
+#        Default:     false - only the on-screen keys type.
+
+Login.TypePic = false
+
+#
+###################################################################################################
+
+###################################################################################################
+# MONSTERS
+#
+#     Monsters.BossHpPercent
+#        Description: Writes the boss's HP, as a percentage, on the boss HP bar at the top of the
+#                     screen.
+#        Default:     false - the bar alone.
+
+Monsters.BossHpPercent = false
+
+#
+###################################################################################################
+
+###################################################################################################
+# SKILLS
+#
+#     Skills.ShowCooldownTime
+#        Description: Writes the time left on a skill's cooldown under its quick slot icon, in the
+#                     same style as Buffs.ShowTimeLeft: seconds under a minute, minutes and seconds
+#                     under an hour, then hours.
+#        Default:     false - the icon only clears from the top as the cooldown runs out.
+
+Skills.ShowCooldownTime = false
+
+#
+###################################################################################################

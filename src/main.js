@@ -7,6 +7,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { modal } from './ui/dom.js';
 import { setupTouchDevice } from './touchdevice.js';
+import { loadConfig } from './config.js';
 
 setupTouchDevice();
 
@@ -92,7 +93,7 @@ async function offline(assets) {
 
 async function main() {
   const assets = new Assets('/assets');
-  await loadZmap(assets);
+  await Promise.all([loadZmap(assets), loadConfig()]);
   if (params.has('offline') || params.has('map')) await offline(assets);
   else await online(assets);
 }

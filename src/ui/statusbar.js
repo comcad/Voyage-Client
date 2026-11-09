@@ -2,10 +2,11 @@ import { isCanvas } from '../assets.js';
 import { Anim } from '../map.js';
 import { EXP, jobName, itemIcon, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
-import { WzButton, TextField, uiText } from './wzui.js';
+import { WzButton, TextField, uiText, timeLeft, overlayText } from './wzui.js';
 import { helpTip } from './windows.js';
 import { settings } from '../settings.js';
 import { DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2 } from '../keymap.js';
+import { config } from '../config.js';
 
 /**
  * The v83 status bar (UI/StatusBar.img), drawn on the game canvas across the bottom 71px,
@@ -780,6 +781,7 @@ export class StatusBar {
           const step = Math.max(0, Math.min(15, Math.floor((total - left) / (total / 16))));
           const cool = this.game.windows.W.Skill?.CoolTime?.[step], cim = cool && this.assets.image(cool);
           if (cim) ctx.drawImage(cim, ix, iy); else if (cool) this.assets.preload([cool]);
+          if (config.skillCooldownTime) overlayText(ctx, timeLeft(left), ix + 16, iy + 33, 'bottom');
         }
       }
       const label = this.assets.image(labels?.[sc]);

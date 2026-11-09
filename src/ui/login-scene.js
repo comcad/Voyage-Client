@@ -5,6 +5,7 @@ import { CharacterLook, drawParts, lookCanvases } from '../character.js';
 import { lookEquipIds } from '../net/proto.js';
 import { jobName } from '../data.js';
 import { WzSprite, WzButton, TextField, uiText, wrapText } from './wzui.js';
+import { config } from '../config.js';
 import { bridgeUrl } from './login-ui.js';
 import { music, sfx } from '../audio.js';
 
@@ -390,7 +391,8 @@ export class LoginScene {
    * Login.img/Common/SoftKey: the PIC keyboard. 148x278, centred, draggable by any empty spot. Ten keys are
    * shuffled once per opening and keep their places on the 1,2,3 / a,b,c / A,B,C tabs; a letter group cycles
    * its letters on repeated taps until another key (or the right arrow) commits it. Typed characters are
-   * refused; Backspace / Delete / arrows / Home / End edit, Enter is OK and Esc is CANCEL.
+   * refused (Login.TypePic lets letters and digits in); Backspace / Delete / arrows / Home / End edit, Enter is OK and
+   * Esc is CANCEL.
    * Resolves with the PIC (6-16 characters) or null.
    */
   async softKey({ tip = null } = {}) {
@@ -482,6 +484,7 @@ export class LoginScene {
         else if (e.key === 'ArrowRight') { caret = Math.min(text.length, caret + 1); commit(); }
         else if (e.key === 'Home') { caret = 0; commit(); }
         else if (e.key === 'End') { caret = text.length; commit(); }
+        else if (config.typePic && /^[0-9a-zA-Z]$/.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) { commit(); insert(e.key); commit(); }
         else if (e.key.length === 1) commit();   // typed characters are refused
         return true;
       };

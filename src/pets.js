@@ -2,6 +2,7 @@ import { frames } from './assets.js';
 import { sfx } from './audio.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { allCanvases } from './ui/windows.js';
+import { config } from './config.js';
 
 /**
  * Pets (Item/Pet/<id>.img). Your own run a small AI on the 30ms clock that feeds the same walk / jump
@@ -221,7 +222,7 @@ export class Pet {
     const l = this.ladder, inp = this.g.input;
     const v = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
     this.vx = 0; this.vy = 0; this.x = l.x;
-    this.y += v * 3;
+    this.y += v * 3 * config.climbSpeed;
     if (v < 0 && this.y < l.y1) {
       if (!l.uf) this.y = l.y1;
       else { this.y = l.y1 - 5; this.ladder = null; }

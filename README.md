@@ -31,7 +31,11 @@ Voyage-Client/
 │   ├── skills.js, quests.js, pets.js, physics.js, reactors.js, ...
 │   ├── net/            # crypto, packet framing, opcodes, login, channel
 │   └── ui/             # v83 login scene, shop, minimap, status bar, dialogs, HUD
+├── conf/
+│   └── client.conf.dist  # settings template; server.js makes client.conf from it (gitignored)
 ├── server.js           # Express server + WS↔TCP relay to the Cosmic v83 server
+├── configmgr.mjs       # reads conf/*.conf (TOML)
+├── serverconfigs.mjs   # server.js's settings
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
@@ -79,13 +83,6 @@ docker compose up --build -d
 # → http://<your-host-ip>:3000
 ```
 
-To build with **minify + obfuscation** enabled, set `OBFUSCATE=1` — one
-variable controls both, and it applies to the image build *and* runtime:
-
-```sh
-OBFUSCATE=1 docker compose up --build -d
-```
-
 Manage it with:
 
 ```sh
@@ -94,14 +91,8 @@ docker compose restart      # restart
 docker compose down         # stop
 ```
 
-Useful overrides (in `docker-compose.yml` or via env):
-
-| Variable         | Default           | Meaning                                            |
-|------------------|-------------------|----------------------------------------------------|
-| `COSMIC_SERVERS` | `cosmic=192.168.2.2` | `name=host` pairs, comma-separated. First is default. |
-| `PORT`           | `3000`            | Port the client listens on                          |
-| `ASSETS_DIR`     | `/app/assets`     | Where the assets are mounted inside the container   |
-| `OBFUSCATE`      | `0`               | `1` (or true/yes/on) minifies + obfuscates the bundle. Off by default. |
+The settings are in `conf/client.conf`, mounted into the container (see
+[Settings](#settings)).
 
 > The assets folder is **not** baked into the image — it's mounted read-only from
 > `./assets` at the repo root, so the image stays small and you can swap WZ freely.
@@ -116,15 +107,39 @@ node server.js
 ```
 
 The server bundles the client (`src/main.js` → `public/Voyage.js`) on boot via
-`build.mjs`. Point it at your Cosmic server with `COSMIC_SERVERS` (e.g.
-`COSMIC_SERVERS=cosmic=192.168.2.2 node server.js`) or edit the relay default in
-`server.js`. To minify + obfuscate: `OBFUSCATE=1 node server.js` (or
-`OBFUSCATE=1 node build.mjs` to just rebuild the bundle).
+`build.mjs`. Point it at your Cosmic server with `Relay.Servers` in
+`conf/client.conf` (see [Settings](#settings)). `node build.mjs` just rebuilds the
+bundle.
 
 ## 4. Play
 
 Open `http://<host>:3000`, log in, pick a channel, pick a character.
 
+
+## Settings
+
+`conf/client.conf` (TOML) holds every setting. The server creates it from the
+tracked `conf/client.conf.dist` on the first start; that template documents each
+key and its default. `client.conf` is gitignored, so your settings stay local.
+Other `conf/*.conf` files are read too (each key in only one file), and
+`node server.js --conf <dir>` reads another folder. Restart the server after a
+change.
+
+| Key                            | Default                | Meaning                                                             |
+|--------------------------------|------------------------|---------------------------------------------------------------------|
+| `Server.Host`                  | `"0.0.0.0"`            | Address the client listens on                                       |
+| `Server.Port`                  | `3000`                 | Port the client listens on                                          |
+| `Server.AssetsDir`             | `"assets"`             | The extracted WZ folder, relative to `server.js`                    |
+| `Relay.Servers`                | `"cosmic=192.168.2.2"` | `name=host` pairs, comma-separated. First is default.               |
+| `Build.Obfuscate`              | `false`                | Minify + obfuscate the bundle                                       |
+| `Account.SkipBirthdayCode`     | `false`                | Send `Account.BirthdayCode` instead of asking for the birthday code |
+| `Account.BirthdayCode`         | `20050511`             | The code sent when the prompt is skipped (YYYYMMDD)                 |
+| `Buffs.ShowTimeLeft`           | `false`                | Time left under each buff icon                                      |
+| `Combat.NoWhack`               | `false`                | Bows, crossbows, claws and guns never swing at close monsters       |
+| `Ladders.ClimbSpeedMultiplier` | `1.0`                  | Climbing speed on ladders and ropes, 1.0 to 3.0                     |
+| `Login.TypePic`                | `false`                | Type your PIC on the keyboard as well as clicking it                |
+| `Monsters.BossHpPercent`       | `false`                | The boss's HP % on the boss HP bar                                  |
+| `Skills.ShowCooldownTime`      | `false`                | Time left on quick slot skill cooldowns                             |
 
 ## Community
 
