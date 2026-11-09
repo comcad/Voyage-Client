@@ -1,84 +1,98 @@
-# Voyage Client: Open-Source MapleStory Web Client
+<div align="center">
 
-<table>
-  <tr>
-    <td align="center"><img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="100" height="100" alt="Voyage Logo"></td>
-    <td><h2>Voyage Client (ALPHA)</h2><p>A MapleStory <strong>v83</strong> (GMS) browser client. Pure JavaScript. (Fully compatible with cosmic server)</p></td>
-  </tr>
-</table>
+<img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="120" height="120" alt="Voyage MapleStory web client logo" />
 
+# Voyage Client: MapleStory Web Client
 
-<img width="1440" height="809" alt="Screenshot 2026-11-08 at 6 52 55 PM" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
+**An open-source MapleStory v83 (GMS) web client that runs in your browser.**
+Pure JavaScript · Fully compatible with [Cosmic](https://github.com/P0nk/Cosmic)
 
+<br />
 
-## What works
+![MapleStory v83](https://img.shields.io/badge/MapleStory-v83%20GMS-orange?style=for-the-badge)
+![Status](https://img.shields.io/badge/status-alpha-yellow?style=for-the-badge)
+![License](https://img.shields.io/github/license/comcad/Voyage-Client?style=for-the-badge)
 
-- **Login and account** — v83 login scene, PIN, PIC soft keyboard, world/channel/character select, server-ban and client-update notices
-- **Maps** — full map rendering from the extracted WZ, NPCs, portals, ladders and ropes, reactors, weather, imitated NPCs (ranking statues), forced map equipment, obstacles and traps
-- **Combat** — monster spawns, deaths, statuses and immunities, auto-aggro and banishing monsters, damage and hit rules, multi-line attacks, buffs and curses
-- **Skills** — every class line, including the full Pirate line (Pirate → Corsair, Brawler → Outlaw, Marauder → Gunslinger, and the Thunder Breaker skills), the skill macro editor and quick slots (Some classes are still being worked on)
-- **Bosses** — the boss HP bar, and Horntail's and Zakum's parts (their order, boxes, icons, and hits landing on the part struck)
-- **Windows** — inventory, stats, trade, the Maker, the Dojo, the Pyramid, Transform, Cash Shop, Player Shop (MTS), guild (alliance invitations), party, messenger and the world map
-- **Fame** — give and take fame from other players
-- **Aran** — the energy charge and the combo count
-- **Touch and gamepad** — play on phones and touch screens with drag-arrangeable touch controls, and gamepad support
-- **Settings** — server and quality-of-life options in `conf/client.conf` (see [Settings](#settings))
+![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2018-339933?style=flat-square&logo=nodedotjs&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)
+![Cosmic v83](https://img.shields.io/badge/Server-Cosmic%20v83-blue?style=flat-square)
+[![Stars](https://img.shields.io/github/stars/comcad/Voyage-Client?style=flat-square&logo=github)](https://github.com/comcad/Voyage-Client/stargazers)
+[![Forks](https://img.shields.io/github/forks/comcad/Voyage-Client?style=flat-square&logo=github)](https://github.com/comcad/Voyage-Client/forks)
+[![Last commit](https://img.shields.io/github/last-commit/comcad/Voyage-Client?style=flat-square)](https://github.com/comcad/Voyage-Client/commits/main)
 
+[![Discord](https://img.shields.io/badge/Discord-Join%20the%20community-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/SCVxm6tB4g)
 
-## Directories
+<br />
+
+[Features](#-features-of-the-maplestory-web-client) · [Quick Start](#-quick-start-run-the-maplestory-web-client) · [Settings](#%EF%B8%8F-settings) · [Project Layout](#-project-layout) · [FAQ](#-faq) · [Community](#-community)
+
+<br />
+
+<img width="1440" height="809" alt="MapleStory web client screenshot: Voyage Client running MapleStory v83 in a browser" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
+
+</div>
+
+<br />
+
+**Voyage Client** is an open-source **MapleStory web client** for **v83 (GMS)**. It brings the classic MapleStory client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop MapleStory client. It is designed to work with the **Cosmic** v83 server.
+
+The repository contains the Node.js build tools, the local web services used by the browser runtime, and Docker entrypoints for running the whole stack.
+
+> [!WARNING]
+> Voyage Client is in **alpha**. Expect rough edges, and some classes and skills are still being worked on.
+
+## ✨ Features of the MapleStory Web Client
+
+| | Area | What's included |
+|---|---|---|
+| 🔐 | **Login & account** | v83 login scene, PIN, PIC soft keyboard, world / channel / character select, server-ban and client-update notices |
+| 🗺️ | **Maps** | Full map rendering from extracted WZ, NPCs, portals, ladders and ropes, reactors, weather, ranking statues, forced map equipment, obstacles and traps |
+| ⚔️ | **Combat** | Monster spawns, deaths, statuses and immunities, auto-aggro and banishing monsters, damage and hit rules, multi-line attacks, buffs and curses |
+| 🪄 | **Skills** | Every class line, including the full Pirate line (Pirate → Corsair, Brawler → Outlaw, Marauder → Gunslinger) and Thunder Breaker skills, plus the skill macro editor and quick slots |
+| 👹 | **Bosses** | Boss HP bar, plus Horntail and Zakum parts (order, boxes, icons, and hits landing on the part struck) |
+| 🪟 | **Windows** | Inventory, stats, trade, Maker, Dojo, Pyramid, Transform, Cash Shop, Player Shop (MTS), guild (alliance invitations), party, messenger and world map |
+| 💬 | **Social** | Give and take fame from other players |
+| 🌊 | **Aran** | Energy charge and combo count |
+| 📱 | **Touch & gamepad** | Play on phones and touch screens with drag-arrangeable touch controls, plus gamepad support |
+| 🎛️ | **Settings** | Server and quality-of-life options in `conf/client.conf` (see [Settings](#%EF%B8%8F-settings)) |
+
+## 🧩 How the MapleStory Client Works in a Browser
 
 ```
-Voyage-Client/
-├── assets/             # extracted WZ (JSON + PNG) — gitignored, generated by the extractor
-├── public/
-│   ├── index.html
-│   ├── style.css
-│   └── Voyage.js       # built client bundle — gitignored, generated at build/boot
-├── src/
-│   ├── main.js         # entry point
-│   ├── game.js         # game loop, combat, mobs, portals, camera
-│   ├── map.js          # map rendering + physics
-│   ├── character.js    # look / equipment / animation
-│   ├── assets.js       # WZ JSON loader, UOL resolution, image cache
-│   ├── audio.js        # Sound.wz BGM
-│   ├── effects.js      # chat balloons, boss gage, quest icons
-│   ├── skills.js, quests.js, pets.js, physics.js, reactors.js, ...
-│   ├── net/            # crypto, packet framing, opcodes, login, channel
-│   └── ui/             # v83 login scene, shop, minimap, status bar, dialogs, HUD
-├── conf/
-│   └── client.conf.dist  # settings template; server.js makes client.conf from it (gitignored)
-│   └── client.conf     #config file
-├── server.js           # Express server + WS↔TCP relay to the Cosmic v83 server
-├── build.mjs           # bundles src/ → public/Voyage.js (esbuild, optional obfuscation)
-├── configmgr.mjs       # reads conf/*.conf (TOML)
-├── serverconfigs.mjs   # server.js's settings
-├── package.json        # Node dependencies
-├── LICENSE.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
-├── .gitignore          # assets/, test/, node_modules/ are excluded
-└── README.md
+┌──────────────────┐   WebSocket   ┌──────────────────┐     TCP     ┌──────────────────┐
+│     Browser      │ ◄───────────► │    server.js     │ ◄─────────► │   Cosmic v83     │
+│   (Voyage.js)    │               │  Express + relay │             │   game server    │
+└──────────────────┘               └────────▲─────────┘             └──────────────────┘
+                                            │
+                                   ┌────────┴─────────┐
+                                   │     assets/      │
+                                   │  (extracted WZ)  │
+                                   └──────────────────┘
 ```
 
-## Requirements
+The browser talks to `server.js` over WebSocket. The server relays that traffic over TCP to your Cosmic server and serves the extracted WZ assets.
 
-- A folder of MapleStory v83 GMS `*.wz` files (the Cosmic-provided WZ for full compatibility)
-- A Cosmic v83 server to log in and play against
-- **Either** Node.js ≥ 18 **or** Docker (see the two run options below)
+## 📋 Requirements
 
-## 1. Clone the repo
+- A folder of MapleStory v83 GMS `*.wz` files (use the Cosmic-provided WZ for full compatibility)
+- A **Cosmic v83** server to log in and play against
+- **Either** Node.js ≥ 18 **or** Docker
+
+## 🚀 Quick Start: Run the MapleStory Web Client
+
+### 1. Clone the repo
 
 ```sh
 git clone https://github.com/comcad/Voyage-Client.git
 cd Voyage-Client
 ```
 
-## 2. Extract assets
+### 2. Extract assets
 
-The WZ extractor lives in a separate repo: **[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero deps).
+The WZ extractor lives in its own repo: **[Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero dependencies).
 
-> Note: use the `.wz` files provided by Cosmic for full compatibility.
+> [!NOTE]
+> Use the `.wz` files provided by Cosmic for full compatibility.
 
 ```sh
 git clone https://github.com/comcad/Voyage-Wz-Extractor
@@ -87,13 +101,14 @@ node wz-extract.mjs <path-to-wz-folder> ./assets
 # then copy the ./assets folder into the root of Voyage-Client
 ```
 
-## 3. Run it
+### 3. Run it
 
-### Option A — Docker (recommended)
+<details>
+<summary><b>🐳 Option A: Docker (recommended)</b></summary>
 
-Builds the image (installs deps + bundles the client), then runs it with the
-assets folder mounted in. Uses **host networking** so it can reach the Cosmic
-server on your LAN and bind `:3000` directly.
+<br />
+
+Builds the image (installs dependencies and bundles the client), then runs it with the assets folder mounted in. It uses **host networking** so it can reach the Cosmic server on your LAN and bind `:3000` directly.
 
 ```sh
 cd Voyage-Client
@@ -109,13 +124,17 @@ docker compose restart      # restart
 docker compose down         # stop
 ```
 
-The settings are in `conf/client.conf`, mounted into the container (see
-[Settings](#settings)).
+Settings live in `conf/client.conf`, which is mounted into the container (see [Settings](#%EF%B8%8F-settings)).
 
-> The assets folder is **not** baked into the image — it's mounted read-only from
-> `./assets` at the repo root, so the image stays small and you can swap WZ freely.
+> [!TIP]
+> The assets folder is **not** baked into the image. It's mounted read-only from `./assets` at the repo root, so the image stays small and you can swap WZ files freely.
 
-### Option B — Node directly
+</details>
+
+<details>
+<summary><b>🟢 Option B: Node directly</b></summary>
+
+<br />
 
 ```sh
 cd Voyage-Client
@@ -124,50 +143,143 @@ node server.js
 # → http://localhost:3000
 ```
 
-The server bundles the client (`src/main.js` → `public/Voyage.js`) on boot via
-`build.mjs`. Point it at your Cosmic server with `Relay.Servers` in
-`conf/client.conf` (see [Settings](#settings)). `node build.mjs` just rebuilds the
-bundle.
+The server bundles the client (`src/main.js` → `public/Voyage.js`) on boot via `build.mjs`. Point it at your Cosmic server with `Relay.Servers` in `conf/client.conf` (see [Settings](#%EF%B8%8F-settings)). Run `node build.mjs` to rebuild the bundle on its own.
 
-## 4. Play
+</details>
 
-Open `http://<host>:3000`, log in, pick a channel, pick a character.
+### 4. Play
+
+Open `http://<host>:3000`, log in, pick a channel, pick a character. 🎮
+
+## ⚙️ Settings
+
+`conf/client.conf` (TOML) holds every setting. The server creates it from the tracked `conf/client.conf.dist` on first start; that template documents each key and its default. `client.conf` is gitignored, so your settings stay local.
+
+Other `conf/*.conf` files are read too (each key in only one file), and `node server.js --conf <dir>` reads another folder. **Restart the server after a change.**
+
+| Key | Default | Meaning |
+|---|---|---|
+| `Server.Host` | `"0.0.0.0"` | Address the client listens on |
+| `Server.Port` | `3000` | Port the client listens on |
+| `Server.AssetsDir` | `"assets"` | The extracted WZ folder, relative to `server.js` |
+| `Relay.Servers` | `"cosmic=192.168.2.2"` | `name=host` pairs, comma-separated. First is default |
+| `Build.Obfuscate` | `false` | Minify + obfuscate the bundle |
+| `Account.SkipBirthdayCode` | `false` | Send `Account.BirthdayCode` instead of asking for the birthday code |
+| `Account.BirthdayCode` | `20050511` | The code sent when the prompt is skipped (`YYYYMMDD`) |
+| `Buffs.ShowTimeLeft` | `false` | Show time left under each buff icon |
+| `Combat.NoWhack` | `false` | Bows, crossbows, claws and guns never swing at close monsters |
+| `Ladders.ClimbSpeedMultiplier` | `1.0` | Climbing speed on ladders and ropes, 1.0 to 3.0 |
+| `Login.TypePic` | `false` | Type your PIC on the keyboard as well as clicking it |
+| `Monsters.BossHpPercent` | `false` | Show the boss's HP % on the boss HP bar |
+| `Skills.ShowCooldownTime` | `false` | Show time left on quick slot skill cooldowns |
+
+## 📁 Project Layout
+
+<details>
+<summary><b>Click to expand the directory tree</b></summary>
+
+```
+Voyage-Client/
+├── assets/               # extracted WZ (JSON + PNG): gitignored, generated by the extractor
+├── public/
+│   ├── index.html
+│   ├── style.css
+│   └── Voyage.js         # built client bundle: gitignored, generated at build/boot
+├── src/
+│   ├── main.js           # entry point
+│   ├── game.js           # game loop, combat, mobs, portals, camera
+│   ├── map.js            # map rendering + physics
+│   ├── character.js      # look / equipment / animation
+│   ├── assets.js         # WZ JSON loader, UOL resolution, image cache
+│   ├── audio.js          # Sound.wz BGM
+│   ├── effects.js        # chat balloons, boss gage, quest icons
+│   ├── skills.js, quests.js, pets.js, physics.js, reactors.js, ...
+│   ├── net/              # crypto, packet framing, opcodes, login, channel
+│   └── ui/               # v83 login scene, shop, minimap, status bar, dialogs, HUD
+├── conf/
+│   ├── client.conf.dist  # settings template; server.js creates client.conf from it
+│   └── client.conf       # your local config (gitignored)
+├── server.js             # Express server + WS↔TCP relay to the Cosmic v83 server
+├── build.mjs             # bundles src/ → public/Voyage.js (esbuild, optional obfuscation)
+├── configmgr.mjs         # reads conf/*.conf (TOML)
+├── serverconfigs.mjs     # server.js's settings
+├── package.json          # Node dependencies
+├── LICENSE.txt
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── .gitignore            # assets/, test/, node_modules/ are excluded
+└── README.md
+```
+
+</details>
+
+## ❓ FAQ
+
+<details>
+<summary><b>What is a MapleStory web client?</b></summary>
+
+<br />
+
+A MapleStory web client is a version of the MapleStory game client that runs inside a web browser instead of as a downloaded desktop program. Voyage Client is a MapleStory v83 web client written in pure JavaScript.
+
+</details>
+
+<details>
+<summary><b>Can I play MapleStory in my browser?</b></summary>
+
+<br />
+
+Yes, with Voyage Client. It renders maps, characters, monsters, and the v83 UI in the browser and connects to a compatible server. You need a Cosmic v83 server to log in and play.
+
+</details>
+
+<details>
+<summary><b>Which MapleStory version and server does this client support?</b></summary>
+
+<br />
+
+Voyage Client targets **MapleStory v83 (GMS)** and is fully compatible with the **Cosmic** v83 server.
+
+</details>
 
 
-## Settings
+<details>
+<summary><b>Does it work on phones and tablets?</b></summary>
 
-`conf/client.conf` (TOML) holds every setting. The server creates it from the
-tracked `conf/client.conf.dist` on the first start; that template documents each
-key and its default. `client.conf` is gitignored, so your settings stay local.
-Other `conf/*.conf` files are read too (each key in only one file), and
-`node server.js --conf <dir>` reads another folder. Restart the server after a
-change.
+<br />
 
-| Key                            | Default                | Meaning                                                             |
-|--------------------------------|------------------------|---------------------------------------------------------------------|
-| `Server.Host`                  | `"0.0.0.0"`            | Address the client listens on                                       |
-| `Server.Port`                  | `3000`                 | Port the client listens on                                          |
-| `Server.AssetsDir`             | `"assets"`             | The extracted WZ folder, relative to `server.js`                    |
-| `Relay.Servers`                | `"cosmic=192.168.2.2"` | `name=host` pairs, comma-separated. First is default.               |
-| `Build.Obfuscate`              | `false`                | Minify + obfuscate the bundle                                       |
-| `Account.SkipBirthdayCode`     | `false`                | Send `Account.BirthdayCode` instead of asking for the birthday code |
-| `Account.BirthdayCode`         | `20050511`             | The code sent when the prompt is skipped (YYYYMMDD)                 |
-| `Buffs.ShowTimeLeft`           | `false`                | Time left under each buff icon                                      |
-| `Combat.NoWhack`               | `false`                | Bows, crossbows, claws and guns never swing at close monsters       |
-| `Ladders.ClimbSpeedMultiplier` | `1.0`                  | Climbing speed on ladders and ropes, 1.0 to 3.0                     |
-| `Login.TypePic`                | `false`                | Type your PIC on the keyboard as well as clicking it                |
-| `Monsters.BossHpPercent`       | `false`                | The boss's HP % on the boss HP bar                                  |
-| `Skills.ShowCooldownTime`      | `false`                | Time left on quick slot skill cooldowns                             |
+Yes. It includes drag-arrangeable touch controls for phones and touch screens, plus gamepad support.
 
-## Community
+</details>
 
-Join the Discord: [discord.gg/SCVxm6tB4g](https://discord.gg/SCVxm6tB4g)
+<details>
+<summary><b>Where do the game assets come from?</b></summary>
 
-## Credits
+<br />
 
-- **Server:** Cosmic v83
+You supply your own MapleStory v83 GMS `.wz` files (the Cosmic-provided WZ files are recommended). The [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) converts them to JSON and PNG for the web client.
 
-## License
+</details>
 
-MIT. The WZ extractor is published separately as
-[voyage-wz-extractor](https://github.com/comcad/Voyage-Wz-Extractor).
+## 💬 Community
+
+Questions, feedback, or want to help test? Come hang out on Discord.
+
+[![Discord](https://img.shields.io/badge/Discord-discord.gg%2FSCVxm6tB4g-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/SCVxm6tB4g)
+
+## 🙏 Credits
+
+- **Server:** [Cosmic v83](https://github.com/P0nk/Cosmic)
+
+## 📄 License
+
+[MIT](LICENSE.txt) 
+
+The WZ extractor is published separately as [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor).
+
+<div align="right">
+
+[⬆ Back to top](#voyage-client-maplestory-web-client)
+
+</div>
