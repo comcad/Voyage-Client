@@ -1,4 +1,4 @@
-# Voyage Client: Open-Source MapleStory Web Client (v83)
+# Voyage Client: Open-Source MapleStory Web Client
 
 <table>
   <tr>
