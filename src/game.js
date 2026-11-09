@@ -1231,11 +1231,20 @@ export class Game {
     if (changes.length) { this.net?.changeKeymap(changes); this.keyBar?.render(); }
   }
 
-  /** Window / skill / item keys pressed this frame (type 4, 1, 2). Basic actions are polled in updatePlayer. */
+  /**
+   * Window / skill / item keys pressed this frame (type 4, 1, 2). Basic actions are polled in updatePlayer. The chat
+   * target keys (all, whisper, party, buddy, guild, spouse, alliance) act when the key comes back up, as in the client;
+   * Chat+ when it goes down.
+   */
   handleHotkeys() {
+    for (const e of this.input.events) {
+      const k = !e.down && this.bindingOf(e.k);
+      if (k?.type === 4 && CHAT_KEYS[k.action] && CHAT_KEYS[k.action] !== 'toggle') this.toggleMenu(k.action);
+    }
     for (const code of this.input.pressed) {
       const k = this.bindingOf(code);
       if (!k) continue;
+      if (k.type === 4 && CHAT_KEYS[k.action] && CHAT_KEYS[k.action] !== 'toggle') continue;
       if (k.type === 4) this.toggleMenu(k.action);
       else if (k.type === 6) this.emote(k.action - 99);
       else if (k.type === 3) this.useFaceItem(k.action);
@@ -2205,6 +2214,12 @@ export class Game {
     else if (m === MENU.MESSENGER) this.windows.toggle('messenger');
     else if (m === MENU.PARTY_SEARCH) this.windows.toggle('partysearch');
     else if (m === MENU.FAMILY) this.windows.toggle('family');
+    // the ShortCut menu, as its status bar button; the quick slots shown / hidden, as their button
+    else if (m === MENU.SHORTCUT) this.statusBar?.toggleMenu('ShortCut', this.statusBar.shortBtn);
+    else if (m === MENU.QUICKSLOT) { const sb = this.statusBar; if (sb) sb.setQuickLevel(sb.quickLevel < 2 ? sb.quickLevel + 1 : 0); }
+    // the Quest Helper, when it is open: minimised or back
+    else if (m === MENU.QUEST_HELPER) { const q = this.windows.wins.questalarm; if (q && this.windows.isOpen('questalarm')) { q.state.min = !q.state.min; q.save(); } }
+    else if (m === MENU.CASHSHOP) this.enterCashShop();
   }
 
   toggleSkills() {
