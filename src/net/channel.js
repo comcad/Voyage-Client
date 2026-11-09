@@ -409,7 +409,8 @@ export class ChannelSession {
 
     // SERVERMESSAGE: 0 notice, 1 pop-up, 2 Megaphone, 3 Super Megaphone (+ channel, whisper ear), 4 the scrolling
     // header, 5 pink, 6 light blue, 7 an NPC's, 8 Item Megaphone (+ channel, ear, the item), 10 Triple Megaphone
-    // (+ more lines, channels, ear)
+    // (+ more lines, channels, ear), 11 a Gachapon prize ("name : got a(n)", the channel or -1 for the Cash Shop
+    // Surprise, the town, the item)
     on(S.SERVERMESSAGE, (r) => {
       const type = r.ubyte();
       if (type === 4) r.ubyte();
@@ -417,6 +418,7 @@ export class ChannelSession {
       try {
         if (type === 3) { n.channel = r.ubyte() + 1; n.ear = r.bool(); }
         else if (type === 8) { n.channel = r.ubyte() + 1; n.ear = r.bool(); if (r.ubyte()) n.item = readItem(r, false); }
+        else if (type === 0x0B) { n.channel = r.int(); n.town = r.string(); n.item = readItem(r, false); }
         else if (type === 10) {
           n.lines = [n.msg];
           for (let k = r.ubyte(); k > 1; k--) n.lines.push(r.string());
@@ -776,7 +778,7 @@ export class ChannelSession {
         if (me === 1) { r.ubyte(); look = readCharLook(r); partner = r.string(); }
         this.emit('tradeOpen', { slot: me, partner, look });
       } else if (op === 2) {                              // INVITE
-        if (r.ubyte() === 3) this.emit('tradeInvite', r.string());
+        if (r.ubyte() === 3) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0); }
       } else if (op === 4) {                              // VISIT: partner joined
         r.ubyte(); const look = readCharLook(r); this.emit('tradePartner', r.string(), look);
       } else if (op === 0x0F) {                           // SET_ITEMS: 0 yours, 1 partner's
@@ -1365,7 +1367,10 @@ export class ChannelSession {
       let npc = r.int();
       const type = r.ubyte(), speaker = r.ubyte();
       if (type === 0 && speaker & 4) npc = r.int();
+      // a slide menu (0x0E) names its art set (UIWindow.img/SlideMenu/<n>) before the text
+      const slide = type === 0x0E ? r.int() : null;
       const d = { npc, type, speaker, text: r.string() };
+      if (slide !== null) d.slide = slide;
       if (type === 0) { d.prev = r.ubyte() === 1; d.next = r.ubyte() === 1; }
       else if (type === 2) { d.def = r.string(); d.min = r.available >= 2 ? r.short() : 0; d.max = r.available >= 2 ? r.short() : 0; }
       else if (type === 3) { d.def = r.int(); d.min = r.int(); d.max = r.int(); }
@@ -1642,6 +1647,8 @@ export class ChannelSession {
     this.send(w.string(text));
   }
   whisper(name, text) { this.send(new PacketWriter(C.WHISPER).byte(0x06).string(name).string(text)); }
+  /** A whisper not taken (whispers off in the Game Option, or a Blacklisted sender): 0x22 and their name. */
+  whisperBlock(name) { this.send(new PacketWriter(C.WHISPER).byte(0x22).string(name)); }
   find(name) { this.send(new PacketWriter(C.WHISPER).byte(0x05).string(name)); }
   /** Where a buddy is, for the Buddy tab's location line (answered with flag 0x48). */
   findBuddy(name) { this.send(new PacketWriter(C.WHISPER).byte(0x44).string(name)); }
@@ -1822,7 +1829,8 @@ export class ChannelSession {
   messengerJoin(id = 0) { this.send(new PacketWriter(C.MESSENGER).byte(0).int(id)); }
   messengerLeave() { this.send(new PacketWriter(C.MESSENGER).byte(2)); }
   messengerInvite(name) { this.send(new PacketWriter(C.MESSENGER).byte(3).string(name)); }
-  messengerDecline(from) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from)); }
+  /** A Messenger invitation turned down; one refused by the Game Option or the Blacklist adds your name and 1. */
+  messengerDecline(from, me = null) { const w = new PacketWriter(C.MESSENGER).byte(5).string(from); if (me !== null) w.string(me).byte(1); this.send(w); }
   messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
   merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
   /** The Owl of Minerva: OWL_ACTION (5 when its search opens), OWL_WARP (a store's owner and map), the Use-tab owl's search */
@@ -1850,8 +1858,10 @@ export class ChannelSession {
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3));
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(2).int(cid));
   }
-  tradeAccept() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(0)); }
-  tradeDecline() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(3)); }
+  /** A trade invitation taken: visit (4) its room, then two zero bytes. */
+  tradeAccept(id = 0) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(id).byte(0).byte(0)); }
+  /** A trade invitation turned down (3): 3 declined, 4 not taking them (Game Option, Blacklist). */
+  tradeDecline(id = 0, reason = 3) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(3).int(id).byte(reason)); }
   tradeItem(tab, pos, qty, slot) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0F).byte(tab).short(pos).short(qty).byte(slot)); }
   tradeMeso(v) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x10).int(v)); }
   tradeConfirm() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x11)); }

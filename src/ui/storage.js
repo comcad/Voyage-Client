@@ -17,9 +17,10 @@ import { UI_W } from '../view.js';
  */
 const ROW_H = 40, LEFT = { rows: 5, y: 87, icon: 7, text: 43, bar: 211 }, RIGHT = { rows: 4, y: 127, icon: 237, text: 273, bar: 442 };
 const TABS = [1, 2, 3, 4, 5];
-/** StorageProcessor / getStorageError codes */
+/** The storage's result codes, in the client's words; any other is "Due to an error, the trade did not happen." */
 const ERRORS = { 0x0A: 'Please check if your inventory is full or not.', 0x0B: 'You do not have enough mesos.',
-  0x0C: 'You can only hold one of that item.', 0x11: 'The storage is full.' };
+  0x0C: 'Item could not be retrieved\r\nbecause there was an item that\r\ncould only be acquired once.',
+  0x10: 'You do not have enough mesos.', 0x11: 'The storage is full.' };
 
 export class StorageWin extends Win {
   constructor(mgr, s) {
@@ -61,7 +62,7 @@ export class StorageWin extends Win {
     this.sel[0] = Math.min(this.sel[0], this.items.length - 1);
     this.first[0] = Math.max(0, Math.min(this.first[0], this.items.length - LEFT.rows));
   }
-  error(code) { this.mgr.notice(ERRORS[code] || 'The storage request could not be completed.'); }
+  error(code) { this.mgr.notice(ERRORS[code] || 'Due to an error, the trade did not happen.'); }
 
   // ---------------------------------------------------------------- your actions
   mine() {

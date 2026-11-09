@@ -5,7 +5,8 @@ import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemI
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, localTalk, NpcDialog, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
+import { MedalWin } from './ui/medal.js';
+import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -30,7 +31,7 @@ import { ItemGuardWin } from './ui/itemguard.js';
 import { ApResetWin, ApConfirmWin, SpResetWin, SpConfirmWin, branchOf, advancement, spBook } from './ui/reset.js';
 /** ENABLE_TV's error codes. */
 const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
-import { WindowManager, allCanvases, drawTip } from './ui/windows.js';
+import { WindowManager, allCanvases, drawTip, lineTip } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
@@ -916,7 +917,7 @@ export class Game {
       if (b) { if (b.source < 0) this.cancelItemEffect(-b.source); else if (b.source > 0 && b.source !== DRAGON_ROAR) this.net?.cancelBuff(b.source); return; }
       const tw = wm.top(...p);
       if (tw?.rclick) { tw.rclick(p[0] - tw.x, p[1] - tw.y); return; }
-      // right-click another player: Personal Info / Whisper / Party Invite / Trade
+      // right-click another player: the ContextMenu (Info, Save, Trade, Whisper, Party, Guild, Report, Family)
       const rp = !wm.top(...p) && !sb.contains(...p) && this.playerAt(...field(e));
       if (rp && this.net) wm.show(new PlayerMenu(wm, rp, Math.round(p[0]), Math.round(p[1])));
     });
@@ -926,7 +927,7 @@ export class Game {
       if (wm.top(...u) || sb.contains(...u) || !this.net) return;
       const wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
       // the QuestAlert bulb: its list of quests
-      if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
+      if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog || w instanceof SlideMenu)) this.questAlert.open(); return; }
       // a shop sign takes you into the shop
       const game = this.gameSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
       if (game) { this.visitGame(game); return; }
@@ -1231,11 +1232,20 @@ export class Game {
     if (changes.length) { this.net?.changeKeymap(changes); this.keyBar?.render(); }
   }
 
-  /** Window / skill / item keys pressed this frame (type 4, 1, 2). Basic actions are polled in updatePlayer. */
+  /**
+   * Window / skill / item keys pressed this frame (type 4, 1, 2). Basic actions are polled in updatePlayer. The chat
+   * target keys (all, whisper, party, buddy, guild, spouse, alliance) act when the key comes back up, as in the client;
+   * Chat+ when it goes down.
+   */
   handleHotkeys() {
+    for (const e of this.input.events) {
+      const k = !e.down && this.bindingOf(e.k);
+      if (k?.type === 4 && CHAT_KEYS[k.action] && CHAT_KEYS[k.action] !== 'toggle') this.toggleMenu(k.action);
+    }
     for (const code of this.input.pressed) {
       const k = this.bindingOf(code);
       if (!k) continue;
+      if (k.type === 4 && CHAT_KEYS[k.action] && CHAT_KEYS[k.action] !== 'toggle') continue;
       if (k.type === 4) this.toggleMenu(k.action);
       else if (k.type === 6) this.emote(k.action - 99);
       else if (k.type === 3) this.useFaceItem(k.action);
@@ -1277,6 +1287,8 @@ export class Game {
     else if (e.op === 'chart') this.windows.wins.familytree.setChart(e);
     else if (e.op === 'result') { const t = familyResult(e.code, e.mesos); if (t) this.windows.notice(t); refresh(); }
     else if (e.op === 'invite') {
+      // Family invitations off in the Game Option, or from someone on the Blacklist: ignored
+      if (!this.optionAllowed('familyInvite') || this.windows.wins.userlist?.blacklisted(e.name)) return;
       const ok = await notify(this.windows, 'family', e.name);
       this.net?.familyAnswer(e.id, e.name, ok);
     } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
@@ -1297,6 +1309,8 @@ export class Game {
   async onMessenger(e) {
     const win = this.windows.wins.messenger;
     if (e.op === 'invite') {
+      // Messenger invitations off in the Game Option, or from someone on the Blacklist: turned down at once
+      if (!this.optionAllowed('chatInvite') || this.windows.wins.userlist?.blacklisted(e.from)) { this.net?.messengerDecline(e.from, this.player.name); return; }
       if (await notify(this.windows, 'messenger', e.from)) win.accept(e.id);
       else this.net?.messengerDecline(e.from);
       return;
@@ -2205,6 +2219,13 @@ export class Game {
     else if (m === MENU.MESSENGER) this.windows.toggle('messenger');
     else if (m === MENU.PARTY_SEARCH) this.windows.toggle('partysearch');
     else if (m === MENU.FAMILY) this.windows.toggle('family');
+    // the ShortCut menu, as its status bar button; the quick slots shown / hidden, as their button
+    else if (m === MENU.SHORTCUT) this.statusBar?.toggleMenu('ShortCut', this.statusBar.shortBtn);
+    else if (m === MENU.QUICKSLOT) { const sb = this.statusBar; if (sb) sb.setQuickLevel(sb.quickLevel < 2 ? sb.quickLevel + 1 : 0); }
+    // the Quest Helper, when it is open: minimised or back
+    else if (m === MENU.QUEST_HELPER) { const q = this.windows.wins.questalarm; if (q && this.windows.isOpen('questalarm')) { q.state.min = !q.state.min; q.save(); } }
+    else if (m === MENU.CASHSHOP) this.enterCashShop();
+    else if (m === MENU.MEDAL) { if (this.quests) this.windows.toggle('medal'); }
   }
 
   toggleSkills() {
@@ -2730,9 +2751,9 @@ export class Game {
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));
     // a name or a line: the small UtilDlg box with a white field, opened without a sound
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
-    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
+    Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), medal: new MedalWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
       energybar: new EnergyBarWin(wm) });
-    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook'].flatMap((k) => wm.wins[k].frames()));
+    await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook', 'medal'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
@@ -2813,7 +2834,8 @@ export class Game {
       avatarMegaResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
       spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
       groupChat: (c) => {
-        if (!this.chatAllowed(c.mode) || (c.mode === 0 && this.windows.wins.userlist?.blockedName(c.name))) return;
+        // off in the Game Option, or a buddy, guild or alliance line from someone on the Blacklist: not shown
+        if (!this.chatAllowed(c.mode) || (c.mode !== 1 && this.windows.wins.userlist?.blacklisted(c.name))) return;
         this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
       },
       whisper: (w) => this.onWhisper(w),
@@ -2847,14 +2869,18 @@ export class Game {
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         this.windows.open('inventory');
       },
-      // a guild alliance's invitation: refused at once without a guild or while another is up; O takes it
+      // a guild alliance's invitation: refused at once with alliance invitations off in the Game Option or while
+      // another is up; O takes it
       allianceInvite: later((id, from, guildName) => {
         const mine = this.guild?.name || '';
-        if (!this.guild || this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine); return; }
+        if (!this.optionAllowed('allianceInvite') || this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine); return; }
         notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, guildName) : this.net.allianceDeny(from, mine)));
       }),
-      tradeInvite: (name) => notify(this.windows, 'trade', name)
-        .then((ok) => (ok ? this.net.tradeAccept() : this.net.tradeDecline())),
+      // trade requests off in the Game Option, or from someone on the Blacklist: turned down at once (reason 4)
+      tradeInvite: (name, id) => {
+        if (!this.optionAllowed('tradeRequest') || this.windows.wins.userlist?.blacklisted(name)) { this.net.tradeDecline(id, 4); return; }
+        notify(this.windows, 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
+      },
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
       tradeMeso: (side, v) => this.tradeWin?.setMeso(side, v),
@@ -2927,7 +2953,8 @@ export class Game {
       // an auto-join one (Party Search) joins straight away
       partyInvite: (p) => {
         const from = p.name.startsWith('PS: ') ? p.name.slice(4) : p.name;
-        if (p.autoJoin) { this.net.partyOp(3, p.id); return; }
+        // a Party Search one is ignored with party or Party Search invitations off, or from someone on the Blacklist
+        if (p.autoJoin) { if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net.partyOp(3, p.id); return; }
         if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
         (from !== p.name ? notify(this.windows, 'partySearch', from) : notify(this.windows, 'party', p.name))
           .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
@@ -3372,7 +3399,7 @@ export class Game {
     }
     const book = this.quests, old = book.started[id];
     book.update(id, status, data);
-    this.questLayerTags();
+    this.questLayerTags(); this.refreshQuestBlink();
     this.questAlert?.recordChanged(id, status);
     const alarm = this.windows.wins.questalarm, ctx = this.textCtx();
     if (status === 1) {
@@ -3507,34 +3534,78 @@ export class Game {
     const text = `${tabs.join(' or')} item inventory is full.`;
     return Number(a.money) < 0 ? `Either you don't have enough Mesos or ${text}` : text;
   }
-  /** Time-limited quests: TimeQuest/TimeBar from (700, 50), 50px apart, its gauge in 48 steps and the alarm clock beside it. */
+  /**
+   * Time-limited quests: TimeQuest/TimeBar from (700, 50), 50px apart, its gauge in 48 steps, and the quest's alarm
+   * clock beside it (AlarmClock/<its QuestInfo timerUI, else default>), its top at the bar's y + 6 - half its first
+   * frame's height - 1. Of the clock's n states the last is its ring-out; the others step by as the time runs down
+   * (time gone / (total / (n - 1)), held at n - 2), each one's frames looping. A default clock loops
+   * Sound/Game.img/questCount from its last ticking state. When the timer goes the clock rings out once (a default
+   * one with clockBoom) while the bar fades away. Pointing at a bar shows the quest's name and "Time Left h:m:s".
+   */
   drawQuestTimers(ctx) {
     if (!this.questTimers?.size) return;
     const T = this.windows.W.Quest?.TimeQuest, im = (n) => this.windows.image(n), now = performance.now();
     if (!T) return;
-    let y = 50;
-    const x = UI_W - 100;
-    for (const t of this.questTimers.values()) {
+    const m = this.windows.mouse, x = UI_W - 100;
+    let y = 50, tip = null;
+    for (const [id, t] of this.questTimers) {
+      const set = this.clockSet(t.ui), n = set.length, left = t.boomAt ? 0 : Math.max(0, t.end - now);
+      let state = n - 1;
+      if (!t.boomAt) {
+        state = Math.max(0, Math.min(n - 2, Math.floor((t.total - left) / Math.max(1, Math.floor(t.total / Math.max(1, n - 1))))));
+        if (state !== t.state) {
+          t.state = state; t.stateAt = now;
+          if (t.ui === 'default' && state === n - 2 && !t.stopCount) t.stopCount = sfx.loop('Game/questCount');
+        }
+      }
+      ctx.save();
+      if (t.boomAt) ctx.globalAlpha = Math.max(0, 1 - (now - t.boomAt) / t.boomLen);
       const bg = im(T.TimeBar?.backgrnd), g = T.TimeBar?.TimeGage || {};
       if (bg) ctx.drawImage(bg, x, y);
-      const step = Math.min(48, Math.ceil((Math.max(0, t.end - now) / t.total) * 48));
-      const left = im(g[0]), mid = im(g[2]), right = im(g[1]);
+      const step = Math.min(48, Math.ceil((left / t.total) * 48));
+      const l = im(g[0]), mid = im(g[2]), r = im(g[1]);
       if (step > 0 && mid) {
-        if (left) ctx.drawImage(left, x + 2, y + 2);
+        if (l) ctx.drawImage(l, x + 2, y + 2);
         ctx.drawImage(mid, x + 4, y + 2, step - 1, mid.height);
-        if (right) ctx.drawImage(right, x + 3 + step, y + 2);
+        if (r) ctx.drawImage(r, x + 3 + step, y + 2);
       }
-      const clock = im(T.AlarmClock?.default?.[0]?.[0]);
-      if (clock) ctx.drawImage(clock, x + 52, y - 6);
+      ctx.restore();
+      const fr = set[state] || [], first = im(set[0]?.[0]), top = y + 6 - ((first?.height || 0) >> 1) - 1;
+      const delay = (f) => Number(f.delay) || 100, total = fr.reduce((s, f) => s + delay(f), 0);
+      let e = t.boomAt ? Math.min(now - t.boomAt, total - 1) : total ? (now - (t.stateAt ?? now)) % total : 0, f = fr[0];
+      for (const k of fr) { f = k; if ((e -= delay(k)) < 0) break; }
+      const ci = f && im(f), o = f?.origin || [0, 0];
+      if (ci) ctx.drawImage(ci, x + 52 - o[0], top - o[1]);
+      if (m && !t.boomAt && m.x >= x && m.x < x + 52 && m.y >= y && m.y < y + 12) {
+        const s = Math.trunc(left / 1000);
+        tip = `${this.quests?.name(id) ?? ''}\nTime Left ${Math.trunc(s / 3600)}:${Math.trunc((s % 3600) / 60)}:${(s % 3600) % 60}`;
+      }
+      if (t.boomAt && now - t.boomAt >= t.boomLen) this.questTimers.delete(id);
       y += 50;
     }
+    if (tip) lineTip(tip).draw(ctx, m.x + 20, m.y + 20);
   }
-  /** A quest's time limit (ms left; 0 removes it). */
+  /** A quest clock's states (AlarmClock/<ui>, else default), each its frames in order. */
+  clockSet(ui) {
+    const A = this.windows.W.Quest?.TimeQuest?.AlarmClock || {}, set = A[ui] || A.default || {};
+    const num = (o) => Object.keys(o || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b);
+    return num(set).map((k) => num(set[k]).map((j) => set[k][j]));
+  }
+  /** A quest's time limit (ms left; 0 ends it: the clock rings out and the bar fades). */
   questTimer(id, ms) {
-    const T = this.windows.W.Quest?.TimeQuest;
-    if (ms > 0 && T) this.assets.preload([...allCanvases(T.TimeBar), ...allCanvases(T.AlarmClock?.default?.[0])]);
-    if (ms > 0) this.questTimers.set(id, { end: performance.now() + ms, total: ms });
-    else this.questTimers.delete(id);
+    const T = this.windows.W.Quest?.TimeQuest, old = this.questTimers.get(id), now = performance.now();
+    if (ms > 0) {
+      const ui = String(this.quests?.info?.[id]?.timerUI || 'default');
+      if (T) this.assets.preload([...allCanvases(T.TimeBar), ...allCanvases(T.AlarmClock?.[ui] || T.AlarmClock?.default)]);
+      old?.stopCount?.then((stop) => stop?.());
+      this.questTimers.set(id, { end: now + ms, total: ms, ui, state: -1 });
+      return;
+    }
+    if (!old || old.boomAt) return;
+    old.stopCount?.then((stop) => stop?.()); old.stopCount = null;
+    const set = this.clockSet(old.ui), last = set[set.length - 1] || [];
+    old.boomAt = now; old.boomLen = Math.max(1, last.reduce((s, f) => s + (Number(f.delay) || 100), 0));
+    if (old.ui === 'default') sfx.play('Game/clockBoom');
   }
 
   toggleQuests() {
@@ -3556,13 +3627,13 @@ export class Game {
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
    * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, the Energy
-   * Charge gauge, Ranking, GM Board, Title, Maple Event) do nothing; 0x17 is the Maker.
+   * Charge gauge, Ranking, GM Board, Maple Event) do nothing; 0x17 is the Maker, 0x1F the Medal window.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
-    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x21: 'skill' }[type];
-    if (!name || (name === 'skill' && !this.skills) || (name === 'quest' && !this.quests) || this.windows.isOpen(name)) return;
+    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
+    if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
     if (name === 'familytree') w?.load(this.player.name);
   }
@@ -3600,7 +3671,7 @@ export class Game {
 
   /** Click on an NPC: its quests first when it has any, else run its script. */
   interactNpc(npc) {
-    if (this.windows.order.some((w) => w instanceof NpcDialog)) return;   // one conversation at a time: close it first
+    if (this.windows.order.some((w) => w instanceof NpcDialog || w instanceof SlideMenu)) return;   // one conversation at a time: close it first
     const q = this.quests?.npcQuests(Number(npc.spawn.id), this.textCtx());
     if (q?.all) npcQuestMenu(this, npc, q);
     else this.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
@@ -3619,7 +3690,7 @@ export class Game {
     if (s.level > before) {
       this.levelUpEffect(); sfx.play('Game/LevelUp');
       if (s.level < 11) this.statusBar?.blinkTab(2);   // the Stat tab blinks
-      this.partyQuestInvites(s.level);
+      this.partyQuestInvites(s.level); this.refreshQuestBlink();
     }
     if (s.level === 2 && before === 1) this.skillGuide();
     if (s.job !== undefined) {
@@ -3741,7 +3812,7 @@ export class Game {
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
-      this.mapEnteredAt = performance.now(); this.setupShip();
+      this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
@@ -4216,12 +4287,16 @@ export class Game {
     if (!this.look.has(action)) return;
     p.attack = action; p.action = action; p.frame = 0; p.frameT = 0; p.seat = null;
   }
-  /** LOCK_UI: the windows close and the status bar and minimap are gone until it is unlocked. */
+  /**
+   * LOCK_UI: the windows close and the status bar and minimap are gone until it is unlocked. Notification balloons
+   * are kept, held back until then.
+   */
   setUiLock(on) {
     this.uiLocked = on;
     const wm = this.windows;
     if (on && wm) {
-      const keep = (w) => w === wm.wins.minimap || w === wm.wins.questalarm;
+      const keep = (w) => w === wm.wins.minimap || w === wm.wins.questalarm || typeof w.holdOnLock === 'function';
+      for (const w of wm.order) w.holdOnLock?.();
       for (const w of wm.order) if (!keep(w)) w.onClose?.();
       wm.order = wm.order.filter(keep); wm.drag = null; wm.carry = null; wm.tip = null;
     }
@@ -5048,11 +5123,21 @@ export class Game {
     if (/haha|hoho|hehe|harhar|wahaha/.test(t)) this.emote(2);
     else if (/sob|tears|cry|sniff/.test(t)) this.emote(4);
   }
-  /** The Game Option switches for buddy and guild chat. */
+  /**
+   * The Quest Helper's BtQ blinks while there is a quest you could start (not begun, not done, its requirements met),
+   * as the client works it out on entering a map, on a quest's change and on a level-up.
+   */
+  refreshQuestBlink() {
+    const q = this.windows?.wins.questalarm;
+    if (!q || !this.quests) return;
+    try { q.blinkQ = !!q.state.opened && this.quests.available(this.textCtx()).length > 0; } catch { q.blinkQ = false; }
+  }
+  /** The Game Option switches for buddy, guild and alliance chat. */
   chatAllowed(mode) {
     let allow = {};
     try { allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { allow = {}; }
-    return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false);
+    // (the Game Option row stored as allianceTournament is the alliance chat switch)
+    return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false) && !(mode === 3 && allow.allianceTournament === false);
   }
   /** A Game Option switch (on unless turned off). */
   optionAllowed(key) {
@@ -5201,6 +5286,8 @@ export class Game {
     this.net.whisper(name, text);
   }
   onWhisper(w) {
+    // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so
+    if (!this.optionAllowed('whisper') || this.windows.wins.userlist?.blacklisted(w.from)) { this.net?.whisperBlock(w.from); return; }
     this.lastWhisperFrom = w.from;
     const ch = w.channel === this.channel ? '' : `[${this.channelNames?.[w.channel] || `Ch. ${w.channel + 1}`}]`;
     this.hud.message(`${w.from}${ch}>> ${w.text}`, CHAT_COLORS.whisper);
@@ -5211,18 +5298,26 @@ export class Game {
     else if (!r.ok) this.hud.message(`Unable to find '${r.to}'`, CHAT_COLORS.notice);
     this.pendingWhisper = null;
   }
+  /**
+   * A /find answer, in the client's words: a map is "'name' is currently at 'street : map'." in grey (a GM also sees
+   * the map's nine-digit id), an event map (millions mod 100 of 9, as 109xxxxxx) just "is at the event map." for
+   * anyone but a GM; the Cash Shop and another channel (by its name) say so; anything else is "Unable to find". All
+   * but the map line are in the error colour.
+   */
   async onFindResult(f) {
     if (f.buddy) { this.windows.wins.userlist?.located(f); return; }
-    let where;
-    if (f.type === 1) where = `is in ${await this.mapName(f.where)}`;
-    else if (f.type === 3) where = `is in channel ${f.where + 1}`;
-    else if (f.type === 2) where = 'is in the Cash Shop';
-    else where = 'is in the MTS';
-    this.hud.message(`'${f.name}' ${where}.`, CHAT_COLORS.find);
+    const say = (t, color = CHAT_COLOR.error) => this.hud.message(t, color);
+    if (f.type === 2) return say(`'${f.name}' is at the Cash Shop.`);
+    if (f.type === 3) { const ch = this.channelNames?.[f.where]; return say(ch ? `'${f.name}' is at '${ch}'.` : `Unable to find '${f.name}'`); }
+    if (f.type !== 1) return say(`Unable to find '${f.name}'`);
+    if (Math.floor(f.where / 1000000) % 100 === 9 && !this.gm) return say(`'${f.name}' is at the event map.`);
+    const id = this.gm ? ` (${String(f.where).padStart(9, '0')})` : '';
+    say(`'${f.name}' is currently at '${await this.mapName(f.where)}'.${id}`, CHAT_COLORS.find);
   }
+  /** A map's "street : map" name (just the street when it has no map name). */
   async mapName(id) {
     const s = await this.assets.json('String/Map.img');
-    for (const r of Object.values(s || {})) if (r?.[id]) return `${r[id].streetName} : ${r[id].mapName}`;
+    for (const r of Object.values(s || {})) if (r?.[id]) return r[id].mapName ? `${r[id].streetName} : ${r[id].mapName}` : String(r[id].streetName ?? id);
     return String(id);
   }
 

@@ -1516,10 +1516,11 @@ export class LoginScene {
   }
 
   /** 4-12 letters or digits, with no word from Etc/ForbiddenName.img or Etc/Curse.img in it. */
+  /** 4-12 letters and digits, fewer than four I / l in all, and no forbidden or curse word (a curse entry up to its ','). */
   async nameAllowed(name) {
-    if (!/^[a-zA-Z0-9]{4,12}$/.test(name)) return false;
+    if (!/^[a-zA-Z0-9]{4,12}$/.test(name) || (name.match(/[Il]/g) || []).length >= 4) return false;
     this.badWords ??= await Promise.all(['Etc/ForbiddenName.img', 'Etc/Curse.img'].map((p) => this.assets.json(p)))
-      .then((lists) => lists.flatMap((l) => Object.values(l || {})).filter((w) => typeof w === 'string' && w).map((w) => w.toLowerCase()));
+      .then((lists) => lists.flatMap((l) => Object.values(l || {})).filter((w) => typeof w === 'string' && w).map((w) => w.split(',')[0].toLowerCase()).filter(Boolean));
     const low = name.toLowerCase();
     return !this.badWords.some((w) => low.includes(w));
   }

@@ -63,7 +63,7 @@ const BAR_W = 800, QUICK_W = 151, QUICK_X = 153, QUICK_ICONS = [[7, 8], [42, 8],
 const QUICK_KEY = 'maple.quickslot';
 const MENU_ITEMS = {
   GameMenu: ['BtChannel', 'BtGameOpt', 'BtSysOpt', 'BtQuit'],             // "Change Skin" was never enabled
-  ShortCut: ['BtItem', 'BtEquip', 'BtStat', 'BtSkill', 'BtQuest', 'BtComm', 'BtMobbook', 'BtRanking'],
+  ShortCut: ['BtItem', 'BtEquip', 'BtStat', 'BtSkill', 'BtComm', 'BtQuest', 'BtMobbook', 'BtMessenger'],   // the client's eight, at (6, 24 + 26n)
 };
 
 export class StatusBar {
@@ -228,11 +228,11 @@ export class StatusBar {
    * kinds). Megaphones add a coloured bar (bg); the world ones (tag: { channel, ear }) put the channel tag after the
    * sender on the first line. The view jumps to the newest line unless you scrolled up in the last 5 seconds.
    */
-  message(text, color = '#fff', { bg = null, tag = null, item = null, flush = null } = {}) {
+  message(text, color = '#fff', { bg = null, tag = null, item = null, flush = null, inline = false } = {}) {
     const atBottom = this.scrollPos >= this.range() - 1;
     const indent = !(flush ?? FLUSH.has(String(color).toUpperCase()));
     const pieces = this.wrap(String(text), tag ? WRAP_MEGA : WRAP_W, WRAP_W);
-    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, tag: i ? null : tag, item: i ? null : item }));
+    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, tag: i ? null : tag, item: i ? null : item, inline }));
     let dropped = 0;
     while (this.lines.length > CHAT_MAX) { this.lines.shift(); dropped++; }
     if (this.range() < 3 || atBottom || performance.now() - this.scrolledAt > 5000) this.toBottom();
@@ -400,8 +400,8 @@ export class StatusBar {
     const W = this.W[name], bg = W.backgrnd;
     // the frame's pointer (bottom centre) touches the top of the button that opened it
     const x = Math.round(from.x + 27 - bg._w / 2), y = this.y + 36 - bg._h;
-    const inner = name === 'GameMenu' ? 5 : 4;
-    const buttons = MENU_ITEMS[name].map((b, i) => new WzButton(W[b], x + inner + 1, y + 23 + i * 26, () => {
+    const [bx, by] = name === 'GameMenu' ? [6, 23] : [6, 24];
+    const buttons = MENU_ITEMS[name].map((b, i) => new WzButton(W[b], x + bx, y + by + i * 26, () => {
       sfx.play('UI/BtMouseClick'); this.menu = null; this.menuAction(b);
     }));
     this.menu = { name, x, y, bg, buttons };
@@ -418,6 +418,8 @@ export class StatusBar {
       case 'BtQuest': g.windows.toggle('quest'); break;
       case 'BtChannel': g.windows.toggle('channel'); break;
       case 'BtComm': g.windows.toggle('userlist'); break;
+      case 'BtMobbook': g.windows.toggle('monsterbook'); break;
+      case 'BtMessenger': g.windows.toggle('messenger'); break;
       case 'BtGameOpt': g.windows.toggle('gameopt'); break;
       case 'BtSysOpt': g.windows.toggle('sysopt'); break;
       case 'BtQuit': g.windows.confirm('Are you sure you want to quit the game?').then((ok) => { if (ok) g.leave(); }); break;
@@ -740,7 +742,8 @@ export class StatusBar {
     if (d1) ctx.drawImage(d1, p + 15, y + 5);
     if (d2) ctx.drawImage(d2, p + 20, y + 5);
     // an Item Megaphone's item goes in brackets right after the ':' (its name looked up as it's drawn, so it is there once loaded)
-    const shown = l.item ? `: [${this.game.windows.itemName(l.item.id) || ''}]${rest.replace(/^:\s*/, '')}` : rest;
+    // (a Gachapon line already has the item's name in its text)
+    const shown = l.item && !l.inline ? `: [${this.game.windows.itemName(l.item.id) || ''}]${rest.replace(/^:\s*/, '')}` : rest;
     if (shown) uiText(ctx, shown, p + 36, y, { color: l.color, size: 12 });
     if (l.item) this.itemHits.push({ x: 0, y, w: SCROLL_X, h: LINE_H, item: l.item });
   }

@@ -41,6 +41,11 @@ class Balloon extends Win {
   }
   get F() { return this.mgr.W.FadeYesNo; }
   get balloons() { return balloonsOf(this.mgr); }
+  /**
+   * The UI locked: balloons stay (none is shown while it is locked). One that is up, and not closing, goes back to
+   * waiting with its time starting over from now; once unlocked, it fades in again. One that came meanwhile waits too.
+   */
+  holdOnLock() { if (!this.closing && this.shownAt !== null) { this.shownAt = null; this.deadline = performance.now() + this.hold; } }
   /** O / X: taken once the fade in is over; only the first counts. */
   press(ok) { if (!this.clicked && !this.closing) this.clicked = ok ? 'ok' : 'x'; }
   update(now) {
