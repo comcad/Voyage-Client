@@ -8771,7 +8771,9 @@ export class Game {
     if (anim) await this.assets.preload(anim.frames);
     if (doom) await this.assets.preload([doom.stand, doom.move, doom.mark].filter(Boolean).flatMap((a) => a.frames));
     if (icon) await this.assets.preload([icon]);
-    m.addStatus(s.first, s.second, s.source, { anim, icon, doom, value: s.value });
+    // looping art with repeat (Weapon / Magic Immunity) takes turns with the monster's others of its kind
+    const turn = !!anim && !doom && Number(node?.repeat) > 0;
+    m.addStatus(s.first, s.second, s.source, { anim, icon, doom, turn, value: s.value });
   }
 
   /** Skill/MobSkill.img/<skill>/level/<level>: a monster skill's art (effect on the caster, affected on the cursed). */
