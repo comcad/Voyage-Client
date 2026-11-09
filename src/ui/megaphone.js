@@ -11,16 +11,34 @@ import { UI_W, UI_H } from '../view.js';
  *     drag an item from your inventory onto the slot to show it off. It doesn't hold the game up.
  *   Triple (ArtMegaphone/backgrnd 435x182): three lines (19, 63 / 84 / 106) 395 wide, BtEx (350, 33),
  *     BtPreView (277, 152), BtOK2 (340, 152), BtCancel2 (381, 152), whisper (18, 153)
- *   Avatar (AvatarMegaphone/backgrnd 196x193): four lines from (48, 81) 107 wide, whisper (10, 147),
- *     its own BtOk (52, 170) and BtCancel (102, 170)
- * Every line takes up to 60 characters.
+ *   Avatar (AvatarMegaphone/backgrnd 196x193): one box (48, 81) 107x60 of four 15px lines, the text wrapping at its
+ *     width (each line goes as one of the four strings); whisper (10, 147), its own BtOk (52, 170) and BtCancel (102, 170)
+ * Every other line takes up to 60 characters.
  */
 const SPECS = {
   2: { bg: (W) => W.Megaphone.backgrnd, fields: [[19, 58, 226, 15]], ear: [14, 95], ok: [146, 126], cancel: [198, 126] },
   6: { bg: (W) => W.ItemMegaphone.backgrnd, fields: [[19, 129, 202, 16]], ear: [14, 161], ok: [145, 186], cancel: [186, 186] },
   7: { bg: (W) => W.ArtMegaphone.backgrnd, fields: [63, 84, 106].map((y) => [19, y, 395, 16]), ear: [18, 153], ok: [340, 152], cancel: [381, 152] },
-  avatar: { bg: (W) => W.AvatarMegaphone.backgrnd, fields: [0, 1, 2, 3].map((i) => [48, 81 + i * 15, 107, 15]), ear: [10, 147], ok: [52, 170], cancel: [102, 170] },
+  avatar: { bg: (W) => W.AvatarMegaphone.backgrnd, fields: [[48, 81, 107, 60]], box: 4, ear: [10, 147], ok: [52, 170], cancel: [102, 170] },
 };
+const BOX_PAD = 3;   // the field's side padding
+/** Text wrapped at w px in 12px Arial: by words, a word too long for a line by characters. */
+function wrapLines(text, w) {
+  const ctx = (wrapLines.ctx ??= document.createElement('canvas').getContext('2d'));
+  ctx.font = '12px Arial';
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const t = line ? `${line} ${word}` : word;
+      if (ctx.measureText(t).width <= w) { line = t; continue; }
+      if (line) { out.push(line); line = ''; }
+      for (const ch of word) { if (line && ctx.measureText(line + ch).width > w) { out.push(line); line = ''; } line += ch; }
+    }
+    out.push(line);
+  }
+  return out;
+}
 
 export class MegaphoneWin extends Win {
   constructor(mgr, slot, itemId) {
@@ -35,11 +53,20 @@ export class MegaphoneWin extends Win {
     this.button(avatar ? W.AvatarMegaphone.BtCancel : B.BtCancel2, ...spec.cancel, () => this.close());
     if (kind === 7) this.button(W.ArtMegaphone.BtPreView, 277, 152, () => this.preview());
     this.fields = spec.fields.map(([x, y, w, h]) => {
-      const f = new TextField(mgr.game.statusBar.layer, x, y, w, h, { max: 60, color: '#000' });
+      const f = new TextField(mgr.game.statusBar.layer, x, y, w, h, { max: spec.box ? 400 : 60, color: '#000' });
       f.rect.x0 = x; f.rect.y0 = y;
+      if (spec.box) {
+        // one wrapping box: no more than its four lines are taken
+        const ta = document.createElement('textarea');
+        ta.style.cssText = f.el.style.cssText; Object.assign(ta.style, { resize: 'none', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' });
+        ta.maxLength = f.el.maxLength; ta.spellcheck = false; ta.autocomplete = 'off';
+        f.el.replaceWith(ta); f.el = ta;
+        let last = '';
+        ta.addEventListener('input', () => { if (wrapLines(ta.value, w - 2 * BOX_PAD).length > spec.box) ta.value = last; else last = ta.value; });
+      }
       f.el.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') { const i = this.fields.indexOf(f); if (i < this.fields.length - 1) this.fields[i + 1].focus(); else this.send(); }
+        if (e.key === 'Enter') { e.preventDefault(); const i = this.fields.indexOf(f); if (i < this.fields.length - 1) this.fields[i + 1].focus(); else this.send(); }
         else if (e.key === 'Escape') this.close();
       });
       return f;
@@ -58,7 +85,9 @@ export class MegaphoneWin extends Win {
     if (this.sending) return;
     this.sending = true;
     try {
-      const lines = this.fields.map((f) => f.value.trim()), g = this.g;
+      const g = this.g, box = this.spec.box;
+      const lines = box ? Array.from({ length: box }, (_, i) => (wrapLines(this.fields[0].value, this.spec.fields[0][2] - 2 * BOX_PAD)[i] || '').trim())
+        : this.fields.map((f) => f.value.trim());
       if (this.kind === 7) {
         if (lines.some((l) => !l) && !(await this.mgr.confirm('One of the lines has not been applied.\r\nWould you still like to use it?'))) return;
         this.close();
@@ -86,7 +115,10 @@ export class MegaphoneWin extends Win {
   draw(ctx) {
     super.draw(ctx);
     const scale = this.g.canvas.clientWidth / UI_W;
-    for (const f of this.fields) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale); }
+    for (const f of this.fields) {
+      f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale);
+      if (this.spec.box) f.el.style.lineHeight = `${parseFloat(f.el.style.height) / this.spec.box}px`;
+    }
   }
   body(ctx) {
     const m = this.mgr, [ex, ey] = this.spec.ear, box = m.image(m.B.CheckBox?.[this.ear ? 1 : 0]);
