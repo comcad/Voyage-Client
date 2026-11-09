@@ -5390,7 +5390,9 @@ export class Game {
       d.age += dt;
       if (d.pickedBy) {
         const L = d.pickedBy, u = Math.min(PICKUP_TIME, d.age), k = u / PICKUP_TIME, ms = u * 1000;
-        const tx = L.x, ty = L.y - (L === this.player || this.others.has(L.id) ? 32 : 0);   // the middle of a character; a pet's feet
+        // a character: half its frame's height up (a morph's own frame; otherwise the 64px body box); a pet: its feet
+        const ch = L === this.player || this.others.has(L.id), box = ch && L.morphView?.box(L.x, L.y, drawnRight(L));
+        const tx = L.x, ty = !ch ? L.y : box ? L.y - Math.trunc((box.bottom - box.top) / 2) : L.y - 32;
         d.cx = d.sx + (tx - d.sx) * k;
         d.cy = d.sy + (ty - d.sy) * k - 40 + ((ms - 350) ** 2 * 160) / 490000;
         d.alpha = ms < 420 ? 1 : (255 - ((ms - 420) * 192) / 280) / 255;
