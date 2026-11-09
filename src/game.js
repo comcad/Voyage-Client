@@ -5,7 +5,7 @@ import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemI
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
-import { npcTalk, localTalk, NpcDialog, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
+import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -926,7 +926,7 @@ export class Game {
       if (wm.top(...u) || sb.contains(...u) || !this.net) return;
       const wx = p[0] + this.cam.x, wy = p[1] + this.cam.y;
       // the QuestAlert bulb: its list of quests
-      if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog)) this.questAlert.open(); return; }
+      if (this.questAlert?.hits(wx, wy)) { if (!this.windows.order.some((w) => w instanceof NpcDialog || w instanceof SlideMenu)) this.questAlert.open(); return; }
       // a shop sign takes you into the shop
       const game = this.gameSignAt(p[0] + this.cam.x, p[1] + this.cam.y);
       if (game) { this.visitGame(game); return; }
@@ -3625,7 +3625,7 @@ export class Game {
 
   /** Click on an NPC: its quests first when it has any, else run its script. */
   interactNpc(npc) {
-    if (this.windows.order.some((w) => w instanceof NpcDialog)) return;   // one conversation at a time: close it first
+    if (this.windows.order.some((w) => w instanceof NpcDialog || w instanceof SlideMenu)) return;   // one conversation at a time: close it first
     const q = this.quests?.npcQuests(Number(npc.spawn.id), this.textCtx());
     if (q?.all) npcQuestMenu(this, npc, q);
     else this.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
