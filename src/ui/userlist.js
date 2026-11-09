@@ -28,7 +28,9 @@ const GUILD_COLS = [[1, 96, 'Name'], [96, 165, 'Job'], [165, 205, 'Level'], [205
 // the Guild Information panel beside the window: Guild/backgrnd, sliding out 40px a tick
 const PANEL = { x: 311, y: 86, w: 233, h: 304 };
 const isBeginner = (job) => job === 0 || job === 1000 || job === 2000;
-const NAME_OK = /^[A-Za-z0-9]{4,12}$/;
+const NAME_RE = /^[A-Za-z0-9]{4,12}$/;
+// a name as the client takes one: 4-12 letters and digits, fewer than four I / l in all
+const NAME_OK = { test: (n) => NAME_RE.test(n) && (String(n).match(/[Il]/g) || []).length < 4 };
 
 let measureCtx = null;
 const textW = (s, bold = false) => {
