@@ -30,7 +30,7 @@ import { ItemGuardWin } from './ui/itemguard.js';
 import { ApResetWin, ApConfirmWin, SpResetWin, SpConfirmWin, branchOf, advancement, spBook } from './ui/reset.js';
 /** ENABLE_TV's error codes. */
 const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
-import { WindowManager, allCanvases, drawTip } from './ui/windows.js';
+import { WindowManager, allCanvases, drawTip, lineTip } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
@@ -3532,34 +3532,78 @@ export class Game {
     const text = `${tabs.join(' or')} item inventory is full.`;
     return Number(a.money) < 0 ? `Either you don't have enough Mesos or ${text}` : text;
   }
-  /** Time-limited quests: TimeQuest/TimeBar from (700, 50), 50px apart, its gauge in 48 steps and the alarm clock beside it. */
+  /**
+   * Time-limited quests: TimeQuest/TimeBar from (700, 50), 50px apart, its gauge in 48 steps, and the quest's alarm
+   * clock beside it (AlarmClock/<its QuestInfo timerUI, else default>), its top at the bar's y + 6 - half its first
+   * frame's height - 1. Of the clock's n states the last is its ring-out; the others step by as the time runs down
+   * (time gone / (total / (n - 1)), held at n - 2), each one's frames looping. A default clock loops
+   * Sound/Game.img/questCount from its last ticking state. When the timer goes the clock rings out once (a default
+   * one with clockBoom) while the bar fades away. Pointing at a bar shows the quest's name and "Time Left h:m:s".
+   */
   drawQuestTimers(ctx) {
     if (!this.questTimers?.size) return;
     const T = this.windows.W.Quest?.TimeQuest, im = (n) => this.windows.image(n), now = performance.now();
     if (!T) return;
-    let y = 50;
-    const x = UI_W - 100;
-    for (const t of this.questTimers.values()) {
+    const m = this.windows.mouse, x = UI_W - 100;
+    let y = 50, tip = null;
+    for (const [id, t] of this.questTimers) {
+      const set = this.clockSet(t.ui), n = set.length, left = t.boomAt ? 0 : Math.max(0, t.end - now);
+      let state = n - 1;
+      if (!t.boomAt) {
+        state = Math.max(0, Math.min(n - 2, Math.floor((t.total - left) / Math.max(1, Math.floor(t.total / Math.max(1, n - 1))))));
+        if (state !== t.state) {
+          t.state = state; t.stateAt = now;
+          if (t.ui === 'default' && state === n - 2 && !t.stopCount) t.stopCount = sfx.loop('Game/questCount');
+        }
+      }
+      ctx.save();
+      if (t.boomAt) ctx.globalAlpha = Math.max(0, 1 - (now - t.boomAt) / t.boomLen);
       const bg = im(T.TimeBar?.backgrnd), g = T.TimeBar?.TimeGage || {};
       if (bg) ctx.drawImage(bg, x, y);
-      const step = Math.min(48, Math.ceil((Math.max(0, t.end - now) / t.total) * 48));
-      const left = im(g[0]), mid = im(g[2]), right = im(g[1]);
+      const step = Math.min(48, Math.ceil((left / t.total) * 48));
+      const l = im(g[0]), mid = im(g[2]), r = im(g[1]);
       if (step > 0 && mid) {
-        if (left) ctx.drawImage(left, x + 2, y + 2);
+        if (l) ctx.drawImage(l, x + 2, y + 2);
         ctx.drawImage(mid, x + 4, y + 2, step - 1, mid.height);
-        if (right) ctx.drawImage(right, x + 3 + step, y + 2);
+        if (r) ctx.drawImage(r, x + 3 + step, y + 2);
       }
-      const clock = im(T.AlarmClock?.default?.[0]?.[0]);
-      if (clock) ctx.drawImage(clock, x + 52, y - 6);
+      ctx.restore();
+      const fr = set[state] || [], first = im(set[0]?.[0]), top = y + 6 - ((first?.height || 0) >> 1) - 1;
+      const delay = (f) => Number(f.delay) || 100, total = fr.reduce((s, f) => s + delay(f), 0);
+      let e = t.boomAt ? Math.min(now - t.boomAt, total - 1) : total ? (now - (t.stateAt ?? now)) % total : 0, f = fr[0];
+      for (const k of fr) { f = k; if ((e -= delay(k)) < 0) break; }
+      const ci = f && im(f), o = f?.origin || [0, 0];
+      if (ci) ctx.drawImage(ci, x + 52 - o[0], top - o[1]);
+      if (m && !t.boomAt && m.x >= x && m.x < x + 52 && m.y >= y && m.y < y + 12) {
+        const s = Math.trunc(left / 1000);
+        tip = `${this.quests?.name(id) ?? ''}\nTime Left ${Math.trunc(s / 3600)}:${Math.trunc((s % 3600) / 60)}:${(s % 3600) % 60}`;
+      }
+      if (t.boomAt && now - t.boomAt >= t.boomLen) this.questTimers.delete(id);
       y += 50;
     }
+    if (tip) lineTip(tip).draw(ctx, m.x + 20, m.y + 20);
   }
-  /** A quest's time limit (ms left; 0 removes it). */
+  /** A quest clock's states (AlarmClock/<ui>, else default), each its frames in order. */
+  clockSet(ui) {
+    const A = this.windows.W.Quest?.TimeQuest?.AlarmClock || {}, set = A[ui] || A.default || {};
+    const num = (o) => Object.keys(o || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b);
+    return num(set).map((k) => num(set[k]).map((j) => set[k][j]));
+  }
+  /** A quest's time limit (ms left; 0 ends it: the clock rings out and the bar fades). */
   questTimer(id, ms) {
-    const T = this.windows.W.Quest?.TimeQuest;
-    if (ms > 0 && T) this.assets.preload([...allCanvases(T.TimeBar), ...allCanvases(T.AlarmClock?.default?.[0])]);
-    if (ms > 0) this.questTimers.set(id, { end: performance.now() + ms, total: ms });
-    else this.questTimers.delete(id);
+    const T = this.windows.W.Quest?.TimeQuest, old = this.questTimers.get(id), now = performance.now();
+    if (ms > 0) {
+      const ui = String(this.quests?.info?.[id]?.timerUI || 'default');
+      if (T) this.assets.preload([...allCanvases(T.TimeBar), ...allCanvases(T.AlarmClock?.[ui] || T.AlarmClock?.default)]);
+      old?.stopCount?.then((stop) => stop?.());
+      this.questTimers.set(id, { end: now + ms, total: ms, ui, state: -1 });
+      return;
+    }
+    if (!old || old.boomAt) return;
+    old.stopCount?.then((stop) => stop?.()); old.stopCount = null;
+    const set = this.clockSet(old.ui), last = set[set.length - 1] || [];
+    old.boomAt = now; old.boomLen = Math.max(1, last.reduce((s, f) => s + (Number(f.delay) || 100), 0));
+    if (old.ui === 'default') sfx.play('Game/clockBoom');
   }
 
   toggleQuests() {
