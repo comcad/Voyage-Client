@@ -274,7 +274,7 @@ Questions, feedback, or want to help test? Come hang out on Discord.
 
 ## 📄 License
 
-- **License** [MIT](LICENSE.txt) 
+- **License:** [MIT](LICENSE.txt) 
 
 
 <div align="right">
