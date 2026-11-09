@@ -1835,9 +1835,13 @@ class CsRulesNotice extends Win {
   scrollTo(p) { this.pos = Math.max(0, Math.min(Math.max(0, this.steps - 1), p)); this.btOK.enabled = this.steps > 0 && this.last <= this.pos; }
   finish(ok) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(ok); }
   key() {}
+  /** The bar: an arrow moves a step; the track above or below the thumb pages by max(steps / 16, 16). */
   down(lx, ly) {
     const p = this.scrollClick(lx, ly, 384, 47, 324, this.pos, this.steps, 1);
-    if (p !== null && this.steps) this.scrollTo(p);
+    if (p === null || !this.steps) return;
+    const thumb = 47 + 12 + Math.round((324 - 36) * this.pos / Math.max(1, this.steps - 1));
+    if (ly < 47 + 12 || ly >= 47 + 324 - 12 || (ly >= thumb && ly < thumb + 12)) { this.scrollTo(p); return; }
+    this.scrollTo(this.pos + Math.max(Math.trunc(this.steps / 16), 16) * (ly < thumb ? -1 : 1));
   }
   body(ctx) {
     ctx.save(); ctx.beginPath(); ctx.rect(29, 51, 353, 315); ctx.clip();
