@@ -807,6 +807,10 @@ export class ChannelSession {
       i.medalQuests = Array.from({ length: r.short() }, () => r.short());
       this.emit('charInfo', i);
     });
+    // Report: whether it is open (sent at login), the hours it is open (0 and 0: always), the answer to one
+    on(S.CLAIM_STATUS_CHANGED, (r) => this.emit('claimStatus', r.ubyte() !== 0));
+    on(S.CLAIM_AVAILABLE_TIME, (r) => { const from = r.ubyte(); this.emit('claimHours', from, r.ubyte()); });
+    on(S.SUE_CHARACTER_RESULT, (r) => this.emit('sueResult', r.ubyte()));
     // MULTICHAT mode: 0 buddy, 1 party, 2 guild, 3 alliance
     on(S.MULTICHAT, (r) => this.emit('groupChat', { mode: r.ubyte(), name: r.string(), text: r.string() }));
     // WHISPER (CField::OnWhisper): flags LOCATION 1, WHISPER 2, RESULT 8, RECEIVE 0x10, LOCATION_FRIEND 0x40
@@ -1645,6 +1649,12 @@ export class ChannelSession {
     const w = new PacketWriter(C.MULTI_CHAT).byte(type).byte(recipients.length);
     for (const id of recipients) w.int(id);
     this.send(w.string(text));
+  }
+  /** REPORT: 0 an illegal program, 1 a conversation (with its chat lines); the name, the reason and the description. */
+  report(type, name, reason, text, chatLog = '') {
+    const w = new PacketWriter(C.REPORT).byte(type).string(name).byte(reason).string(text);
+    if (type) w.string(chatLog);
+    this.send(w);
   }
   whisper(name, text) { this.send(new PacketWriter(C.WHISPER).byte(0x06).string(name).string(text)); }
   /** A whisper not taken (whispers off in the Game Option, or a Blacklisted sender): 0x22 and their name. */

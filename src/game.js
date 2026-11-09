@@ -7,6 +7,7 @@ import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
 import { MedalWin } from './ui/medal.js';
 import { MemoWin } from './ui/memo.js';
+import { ClaimNotice, ClaimForm } from './ui/claim.js';
 import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
@@ -730,6 +731,9 @@ const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 121
 const PICKUP_TIME = 0.7;
 
 /** Chat line colours, as in the v83 chat log. */
+// SUE_CHARACTER_RESULT: the answer to a report, in the chat log
+const SUE_RESULTS = { 0: 'You have successfully reported the user.', 1: 'Unable to locate the user.', 2: 'You may only report users 10 times a day.',
+  3: "You have been reported to the GM's by a user.", other: 'Your request did not go through for unknown reasons. Please try again later.' };
 const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.error };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
 // keymap UI actions for the chat: open the input with a target, or toggle the log
@@ -976,6 +980,53 @@ export class Game {
     await this.hop((net) => net.leaveCashShop(), 'Returning to the game...', 'You cannot leave the Cash Shop right now.', true);
   }
   /** Notes (gift notices and the like): show each once, then let the server drop them. */
+  /**
+   * Report (the player menu's Report row; target: who it was opened on). It must be open (CLAIM_STATUS_CHANGED) and
+   * within its hours (CLAIM_AVAILABLE_TIME, local time; 0 and 0: always). The notice picks the kind: a conversation
+   * report lists who spoke in your chat log (newest first, you aside; with a target, only them if they did, else
+   * "This character is unable to report others."), a program report everyone on the map, by name (with a target, only
+   * them if they are here). Then the form; its answer goes as REPORT, a conversation one with its chat lines.
+   */
+  async openReport(target = '') {
+    const say = (t) => this.windows.notice(t);
+    if (!this.claimOn) { say('The reporting system is currently undergoing maintenence check.'); return; }
+    const [from, to] = this.claimHours || [0, 0], h = new Date().getHours();
+    if (!((from === 0 && to === 0) || (from < to && h >= from && h < to) || (to < from && (h >= from || h < to)))) {
+      if (from !== to) say(`You may only report from ${from} to ${to}.`);
+      return;
+    }
+    const kind = await new Promise((r) => { const w = new ClaimNotice(this.windows, r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); });
+    if (!kind) return;
+    const me = this.player.name;
+    let names;
+    if (kind === 'chat') {
+      const said = [];
+      for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) { const n = this.chatLog[i].name; if (n && n !== me && !said.includes(n)) said.push(n); }
+      if (target && !said.includes(target)) { say('This character is unable to report others.'); return; }
+      names = target ? [target] : said;
+    } else {
+      const here = [...this.others.values()].map((o) => o.name).filter(Boolean);
+      if (target && !here.includes(target)) return;
+      names = target ? [target] : here.sort();
+    }
+    if (!names.length) { say("There's no character can be reported in this map."); return; }
+    const res = await new Promise((r) => { const w = new ClaimForm(this.windows, names, kind === 'chat', r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); });
+    if (!res) return;
+    this.net?.report(kind === 'chat' ? 1 : 0, res.name, res.reason, res.text, kind === 'chat' ? this.reportLog(res.name) : '');
+  }
+  /** The chat lines a conversation report carries: theirs and yours, oldest first, up to 1600 characters. */
+  reportLog(name) {
+    const me = this.player.name;
+    let out = '', n = 0;
+    for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) {
+      const c = this.chatLog[i];
+      if (c.name !== name && c.name !== me) continue;
+      n += 1 + c.line.length;
+      if (n > 1600) break;
+      out = `${c.line}\n${out}`;
+    }
+    return out;
+  }
   /**
    * MEMO_RESULT 3: the notes waiting are kept (the last list replaces the one before) and, if there are any and no
    * new-note balloon is up, one comes. Its O opens the inbox with them; X leaves them waiting.
@@ -2850,6 +2901,9 @@ export class Game {
         this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
       },
       whisper: (w) => this.onWhisper(w),
+      claimStatus: (on) => { this.claimOn = on; },
+      claimHours: (from, to) => { this.claimHours = [from, to]; },
+      sueResult: (code) => this.hud.message(SUE_RESULTS[code] ?? SUE_RESULTS.other, CHAT_COLOR.error),
       whisperResult: (r) => this.onWhisperResult(r),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
@@ -4056,6 +4110,9 @@ export class Game {
     const ent = c.id === this.player.id ? this.player : this.others.get(c.id);
     const name = ent?.name || '?';
     if (ent) ent.chat = { text: c.text, t: 5 };
+    // kept for a conversation report: who said what, the last 64 lines
+    (this.chatLog ??= []).push({ name, line: `${name} : ${c.text}` });
+    if (this.chatLog.length > 64) this.chatLog.shift();
     if (c.show) return;   // a balloon only
     if (c.gm) this.statusBar?.message(`${name} : ${c.text}`, CHAT_BAR.gm.color, { bg: CHAT_BAR.gm.bg });
     else this.hud.message(`${name} : ${c.text}`, CHAT_COLOR.all);

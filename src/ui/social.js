@@ -52,7 +52,7 @@ export function drawPartyHp(ctx, game, cam) {
  * from y 23, then s. Its buttons sit at x 9 from y 24, 15px apart: Info, Save (the name to the clipboard, then the
  * chat box opens), Trade, Whisper, Party (only without a party or as its leader), Guild invite (only as the Guild
  * Master or a Jr. Master), Report, and Family (only with room for another junior). It opens at the click, kept
- * on an 800x600 screen (x 700 at most, the bottom at 600). Report stays off until the Report window exists.
+ * on an 800x600 screen (x 700 at most, the bottom at 600). Report opens the Report window on them.
  */
 export class PlayerMenu extends Win {
   constructor(mgr, target, x, y) {
@@ -68,7 +68,7 @@ export class PlayerMenu extends Win {
       [M.BtWhisper, () => g.statusBar.focusChat(`/w ${name} `)],
       (!g.party || g.party.leader === g.player.id) && [M.BtParty, () => { if (!g.party) g.net?.partyOp(1); g.net?.partyOp(4, name); }],
       g.guild && (guildRank === 1 || guildRank === 2) && [M.BtGuild, () => g.net?.guildOp(5, name)],
-      [M.BtClaim, () => {}, false],
+      [M.BtClaim, () => g.openReport(name)],
       g.family && g.family.juniors < g.family.maxJuniors && [M.BtFamily, () => g.net?.familyAdd(name)],
     ].filter(Boolean);
     this.rows = items.length;
