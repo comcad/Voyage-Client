@@ -154,6 +154,12 @@ const REMOTE_STATS = [[7, 1, 'speed'], [21, 1, 'combo'], [22, 4, 'weaponCharge']
   [47, 4], [49, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
   [71, 4], [75, 4], [76, 4], [77, 4]];
 const TWO_STATE_NAMES = ['energyCharged', 'dashSpeed', 'dashJump', 'ride', 'partyBooster', 'guidedBullet', 'undead'];
+/**
+ * Each two-state stat's size in a buff packet (first mask bits 50-56, after the plain stats and two bytes, in this order):
+ * an int value, an int reason and a time (byte + int); then Speed Infusion a second time and a short, Homing Beacon the
+ * monster (int), Monster Riding nothing more, the rest a short.
+ */
+const TWO_STATE_SIZES = [15, 15, 15, 13, 20, 17, 15];
 const remoteBit = (i) => (i < 32 ? [1, i + 32] : i < 64 ? [1, i - 32] : i < 96 ? [0, i - 32] : [0, i - 96]);
 const DISEASE_STATS = new Set(['stun', 'darkness', 'seal', 'weakness', 'curse', 'poison', 'attract', 'reverseInput', 'undead']);
 function readRemoteStats(r, m1, m2) {
@@ -856,8 +862,9 @@ export class ChannelSession {
     on(S.SPAWN_DOOR, (r) => { const launched = r.bool(), owner = r.int(); this.emit('doorSpawn', { owner, launched, x: r.short(), y: r.short() }); });
     // a mist (Poison Mist, Smokescreen, a monster's poison cloud...): kind 0 a monster's, 1 poison, 2 smoke, 4 recovery
     on(S.SPAWN_MIST, (r) => {
-      const oid = r.int(), kind = r.int(), owner = r.int(), skill = r.int(), level = r.ubyte(); r.short();
-      this.emit('mistSpawn', { oid, kind, owner, skill, level, left: r.int(), top: r.int(), right: r.int(), bottom: r.int() });
+      // the short is its delay: it acts from delay x 100ms after it came
+      const oid = r.int(), kind = r.int(), owner = r.int(), skill = r.int(), level = r.ubyte(), delay = r.short();
+      this.emit('mistSpawn', { oid, kind, owner, skill, level, delay, left: r.int(), top: r.int(), right: r.int(), bottom: r.int() });
     });
     on(S.REMOVE_MIST, (r) => this.emit('mistRemove', r.int()));
     // the field's timer: type 2 counts down from a number of seconds (a party quest, an event, a boat ride)
@@ -979,10 +986,12 @@ export class ChannelSession {
       const m1 = r.long(), m2 = r.long();
       const n = popcount(BigInt.asUintN(64, m1)) + popcount(BigInt.asUintN(64, m2));
       if (!n) return;
-      // after the stats, two bytes and a short delay; then, for a buff that changes how you move, a byte for the next
-      // movement packet (two-state buffs like riding and Dash are laid out differently and skipped here)
-      const tail = r.pos + n * 10 + 4;
-      if (movesBuff(m1, m2) && !(BigInt.asUintN(64, m1) & TWO_STATE) && r.v.byteLength > tail) this.emit('moveElement', r.v.getUint8(tail));
+      // after the plain stats (10 bytes each), two bytes, the two-state stats (TWO_STATE_SIZES) and a short delay; then,
+      // for a buff that changes how you move, a byte for the next movement packet
+      const two = BigInt.asUintN(64, m1) & TWO_STATE;
+      let tail = r.pos + (n - popcount(two)) * 10 + 4;
+      TWO_STATE_SIZES.forEach((size, k) => { if (two & (1n << BigInt(50 + k))) tail += size; });
+      if (movesBuff(m1, m2) && r.v.byteLength > tail) this.emit('moveElement', r.v.getUint8(tail));
       // Monster Riding (first mask): short 0, then the mount's item id where the source goes and the skill (Monster
       // Rider, Battleship...) where the duration goes; it lasts until cancelled
       // A refresh of a ride already on (another buff ending) comes as a plain buff: the skill, then the time left
@@ -1050,6 +1059,16 @@ export class ChannelSession {
       }
       // Speed Infusion: its value comes first, as an int
       if (pick === pirate && infusion) { r.pos = start + 2; b.infusion = r.int(); }
+      // Dash: its two-state values are the speed and jump it gives (the Stat window counts them)
+      if (two & (3n << 51n)) {
+        r.pos = start + (n - popcount(two)) * 10 + 2;
+        TWO_STATE_NAMES.forEach((name, k) => {
+          if (!(two & (1n << BigInt(50 + k))) || r.available < TWO_STATE_SIZES[k]) return;
+          const at = r.pos, value = r.int();
+          if (name === 'dashSpeed' || name === 'dashJump') b[name] = value;
+          r.pos = at + TWO_STATE_SIZES[k];
+        });
+      }
       // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
       if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
       // a morph (second mask 0x2): the last stat (the one before last with GHOST_MORPH 0x20000), and its source

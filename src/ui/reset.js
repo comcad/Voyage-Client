@@ -11,6 +11,49 @@ export const AP_ROWS = [
 const HP_LOSS = [12, 54, 10, 20, 20, 42], HP_GAIN = [8, 20, 6, 16, 16, 18], MP_GAIN = [6, 2, 18, 10, 10, 14];
 export const branchOf = (job) => Math.floor((job % 1000) / 100);
 
+/** Is g (job % 1000) one of the second / third / fourth jobs of branch base (base + 10..12, + 20..22, + 30..32)? */
+const inLine = (g, base, lines) => lines.some((l) => g >= base + l && g <= base + l + 2);
+/**
+ * The least max HP a job may keep at a level (AP Reset can't take HP off below it), or null for jobs the client
+ * doesn't check: L x 12 + 38 for a beginner; warriors L x 24 + 118 (fighters 110-112: + 418); magicians L x 10 + 54;
+ * the first bowman and thief jobs L x 20 + 58, the later ones + 358; pirates L x 22 + 38, the later ones + 338.
+ */
+function minMaxHp(job, L) {
+  const g = job % 1000;
+  if (g === 0) return L * 12 + 38;
+  if (g >= 110 && g <= 112) return L * 24 + 418;
+  if (g === 100 || inLine(g, 100, [20, 30])) return L * 24 + 118;
+  if (g === 200 || inLine(g, 200, [10, 20, 30])) return L * 10 + 54;
+  if (g === 300 || g === 400) return L * 20 + 58;
+  if (inLine(g, 300, [10, 20]) || inLine(g, 400, [10, 20])) return L * 20 + 358;
+  if (g === 500) return L * 22 + 38;
+  if (inLine(g, 500, [10, 20])) return L * 22 + 338;
+  return null;
+}
+/**
+ * The least max MP: L x 10 - 5 for a beginner; warriors L x 4 + 55 (pages and spearmen 120-132: + 155); magicians
+ * L x 22 - 1, the later ones + 449; the first bowman and thief jobs L x 14 - 15, the later ones + 135; pirates
+ * L x 18 - 55, the later ones + 95.
+ */
+function minMaxMp(job, L) {
+  const g = job % 1000;
+  if (g === 0) return L * 10 - 5;
+  if (g === 100 || (g >= 110 && g <= 112)) return L * 4 + 55;
+  if (inLine(g, 100, [20, 30])) return L * 4 + 155;
+  if (g === 200) return L * 22 - 1;
+  if (inLine(g, 200, [10, 20, 30])) return L * 22 + 449;
+  if (g === 300 || g === 400) return L * 14 - 15;
+  if (inLine(g, 300, [10, 20]) || inLine(g, 400, [10, 20])) return L * 14 + 135;
+  if (g === 500) return L * 18 - 55;
+  if (inLine(g, 500, [10, 20])) return L * 18 + 95;
+  return null;
+}
+/** The MP the client counts an AP taken off as (for its minimum check): magicians INT x 3 / 40 + 30. */
+function mpLoss(job, int) {
+  const b = branchOf(job);
+  return [8, 4, Math.trunc((int * 3) / 40) + 30, 12, 12, 16][b] ?? 0;
+}
+
 /**
  * What a row's stat changes by: HP and MP by the job's amount, the others by 1 (the MP taken off is the server's).
  */
@@ -23,7 +66,7 @@ export function apChange(row, job, give) {
 
 /**
  * Which rows can't be picked. Taking AP off: HP / MP when no AP was ever put in them (STR + DEX + INT + LUK + free
- * AP still at what the level gives), a stat under 5, and a job's own stat at its floor (warrior STR 35, bowman /
+ * AP still at what the level gives) or when it would leave them under the job's least for the level, a stat under 5, and a job's own stat at its floor (warrior STR 35, bowman /
  * thief DEX 25, magician INT 20, pirate DEX 20). Putting it on: HP / MP over 30000, a stat at 999, the one taken from.
  */
 export function apDisabled(s, give, from) {
@@ -38,6 +81,10 @@ export function apDisabled(s, give, from) {
   let bonus = job % 10 === 1 ? 5 : job % 10 === 2 ? 10 : 0;
   if (Math.floor(job / 1000) === 1) bonus += lv < 70 ? lv - 1 : 69;
   if ((s.str || 0) + (s.dex || 0) + (s.int || 0) + (s.luk || 0) + (s.ap || 0) >= 20 + bonus + lv * 5) { off.add('maxHp'); off.add('maxMp'); }
+  // nor below the job's least max HP / MP for the level
+  const minHp = minMaxHp(job, lv), minMp = minMaxMp(job, lv);
+  if (minHp !== null && (s.maxHp || 0) - (b <= 5 ? HP_LOSS[b] : 0) < minHp) off.add('maxHp');
+  if (minMp !== null && (s.maxMp || 0) - mpLoss(job, s.int || 0) < minMp) off.add('maxMp');
   for (const k of ['str', 'dex', 'int', 'luk']) if ((s[k] || 0) < 5) off.add(k);
   if ((b === 1 && s.str <= 35) || ((b === 3 || b === 4) && s.dex < 26) || (b === 2 && s.int <= 20) || (b === 5 && s.dex <= 20)) off.add(b === 1 ? 'str' : b === 2 ? 'int' : 'dex');
   return off;

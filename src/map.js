@@ -488,6 +488,12 @@ function findMapName(strMap, id) {
 
 // MonsterStatus bits (second mask) that hold a monster still
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
+/**
+ * Looping status art with `repeat` (not icons: Weapon / Magic Immunity) shows one at a time: every monster update
+ * (one per 30ms tick) of a monster that has some counts on a counter all monsters share, and on each 22nd that
+ * monster moves on to its next one. A status of that kind coming or going sets the counter to 1 and moves on at once.
+ */
+const STATUS_TURN = { n: 0, every: 22, tick: 30 };
 /** A monster AI wait: `base` + up to `spread` ms, counted in 90ms units of its 30ms ticks (so a third as long). */
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
@@ -802,6 +808,11 @@ export class Life {
     const anim = this.anims[this.state];
     if (!this.frozen || this.state === 'die1') anim?.update(dt * 1000);   // frozen solid: its picture stops too
     this.beaconMark?.update(dt * 1000);
+    if ([...this.statusArt.values()].some((e) => e.turn)) {
+      for (this.turnAcc = (this.turnAcc || 0) + dt * 1000; this.turnAcc >= STATUS_TURN.tick; this.turnAcc -= STATUS_TURN.tick) {
+        if (STATUS_TURN.n++ % STATUS_TURN.every === 0) this.turnAt = (this.turnAt || 0) + 1;
+      }
+    }
     for (const e of this.statusArt.values()) {
       e.anim?.update(dt * 1000);
       if (e.doom) for (const a of [e.doom.stand, e.doom.move, e.doom.mark]) a?.update(dt * 1000);
@@ -925,10 +936,20 @@ export class Life {
     const { value, ...rest } = art; Object.assign(e, rest);
     if (second & MOB_SPEED) e.speed = value;
     this.statusArt.set(source, e);
+    if (e.turn) this.turnNow();
   }
   removeStatus(first, second) {
     this.status.first &= ~first; this.status.second &= ~second;
-    for (const [src, e] of this.statusArt) { e.first &= ~first; e.second &= ~second; if (!e.first && !e.second) this.statusArt.delete(src); }
+    let turned = false;
+    for (const [src, e] of this.statusArt) { e.first &= ~first; e.second &= ~second; if (!e.first && !e.second) { turned ||= !!e.turn; this.statusArt.delete(src); } }
+    if (turned) this.turnNow();
+  }
+  /** A turning status came or went: the shared counter starts again at 1 and this monster moves on to its next one. */
+  turnNow() { STATUS_TURN.n = 1; this.turnAt = (this.turnAt || 0) + 1; this.turnAcc = 0; }
+  /** The turning status art showing now (STATUS_TURN), or null. */
+  get turnShown() {
+    const list = [...this.statusArt.values()].filter((e) => e.turn);
+    return list.length ? list[(this.turnAt || 0) % list.length] : null;
   }
   /** Its statuses' art over its head (poison bubbles, stun stars...), and its own buffs' icons in a row above. */
   drawStatus(ctx, cam, assets, node) {
@@ -940,10 +961,11 @@ export class Life {
     // Homing Beacon's mark, over its head
     const bm = this.beaconMark?.node, bimg = bm && assets.image(bm);
     if (bimg) { const bo = bm.origin || [0, 0]; ctx.drawImage(bimg, Math.round(hx - bo[0]), Math.round(hy - bo[1])); }
-    const icons = [];
+    const icons = [], shown = this.turnShown;
     for (const e of this.statusArt.values()) {
-      // a one-shot animation (Doom's puff) is gone once played; Doom's puff is at the feet, everything else over the head
-      const n = e.anim?.done ? null : e.anim?.node, img = n && assets.image(n);
+      // a one-shot animation (Doom's puff) is gone once played; Doom's puff is at the feet, everything else over the
+      // head; of the turning ones only the one whose turn it is
+      const n = e.anim?.done || (e.turn && e !== shown) ? null : e.anim?.node, img = n && assets.image(n);
       const [ax, ay] = e.doom ? [this.x - cam.x, this.y - cam.y] : [hx, hy];
       if (img) { const no = n.origin || [0, 0]; ctx.drawImage(img, Math.round(ax - no[0]), Math.round(ay - no[1])); }
       const m = this.doomArt === e.doom && e.doom?.mark?.node, mark = m && assets.image(m);

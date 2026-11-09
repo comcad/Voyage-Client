@@ -1593,7 +1593,10 @@ export class Game {
       || (id === 5431000 || id === 5432000 ? this.openMapleLife : null)
       || (id === 5470000 ? this.useStoreRemote : null)
       || (type === 523 ? this.useOwlCash : null)
-      || ({ 550: this.useSandglass, 552: this.openKarma, 557: this.openHammer, 561: this.openVega }[type] ?? null);
+      || ({ 550: this.useSandglass, 552: this.openKarma, 557: this.openHammer, 561: this.openVega }[type] ?? null)
+      || (id === 5060000 ? this.useItemTagBare : null)
+      || (type === 553 ? this.useCashBare : null)
+      || (Math.floor(id / 1000) === 5281 ? this.useEffectCash : null);
     if (!run) return false;
     if (this.cashFree()) run.call(this, Number(slot), id);
     return true;
@@ -1635,6 +1638,22 @@ export class Game {
     if (!d.rows.length && d.npcPrice <= 0) { this.releaseExclusive(); this.windows.notice('Unable to find the item\r\nyou have entered.'); return; }
     if (!d.rows.length) this.releaseExclusive();
     this.owlResult = await this.showSingle(new OwlResultWin(this.windows, d));
+  }
+  /** The Item Tag double-clicked: sent with no target (equip slot 0), as the client does; dragging it onto what you wear tags it. */
+  useItemTagBare(slot) { this.sendCashItem(slot, 5060000, (w) => w.short(0)); }
+  /** 553xxxx: sent as it is on a double-click (5280xxx, the other way round, does nothing). */
+  useCashBare(slot, id) { this.sendCashItem(slot, id); }
+  /**
+   * 5281xxx (Passed Gas, Floral Scent): an item the client has no data for does nothing; while one of yours is out,
+   * or you stand in an item's mist that has started, "An Effect Item is currently in use..."; otherwise sent as it is.
+   */
+  async useEffectCash(slot, id) {
+    if (!(await this.assets.json('Item/Cash/0528.img'))?.[pad(id, 8)]) return;
+    const now = performance.now(), p = this.player, me = p.id;
+    const inUse = [...(this.mists?.values() || [])].some((m) => m.kind === 3 && m.start <= now
+      && ((m.owner === me && m.skill === id) || (p.x >= m.left && p.x < m.right && p.y >= m.top && p.y < m.bottom)));
+    if (inUse) { this.windows.notice('An Effect Item is currently in use. please try again later.'); return; }
+    this.sendCashItem(slot, id);
   }
   async openRemoteGachapon(slot, id) { await this.showSingle(new RemoteGachaponWin(this.windows, id)); }
   useStoreRemote(slot) { if (!this.tradeOpen()) this.net.remoteStore(slot); }
@@ -2521,7 +2540,7 @@ export class Game {
       if (d.pickedBy || !d.landed || d.petOk === false) return false;
       if (d.meso ? !f.pickupMeso : (!f.pickupItem && !(f.sweep && f.pickupOthers)) || Number(this.windows.info(d.id)?.pickUpBlock)) return false;
       const me = this.player.id;
-      const ours = (f.pickupOthers && now - (d.born || 0) > 15000) || !d.dropper || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || d.type >= 2;
+      const ours = (f.pickupOthers && now - (d.freeAt ?? d.born ?? 0) > 15000) || !d.dropper || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || d.type >= 2;
       return ours && now - (d.petTry || -Infinity) >= 3000 && !this.petIgnores(d);
     };
     for (const pet of mine) {
@@ -4092,7 +4111,8 @@ export class Game {
     // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
     const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
-    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
+    // freeAt: when anyone may take it after 15s counts from (its arrival plus the packet's delay, as the client)
+    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), freeAt: performance.now() + (d.delay || 0), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
       spin: !d.meso && !reward, angle: 0, speed, flight });
   }
 
@@ -5371,7 +5391,9 @@ export class Game {
       d.age += dt;
       if (d.pickedBy) {
         const L = d.pickedBy, u = Math.min(PICKUP_TIME, d.age), k = u / PICKUP_TIME, ms = u * 1000;
-        const tx = L.x, ty = L.y - (L === this.player || this.others.has(L.id) ? 32 : 0);   // the middle of a character; a pet's feet
+        // a character: half its frame's height up (a morph's own frame; otherwise the 64px body box); a pet: its feet
+        const ch = L === this.player || this.others.has(L.id), box = ch && L.morphView?.box(L.x, L.y, drawnRight(L));
+        const tx = L.x, ty = !ch ? L.y : box ? L.y - Math.trunc((box.bottom - box.top) / 2) : L.y - 32;
         d.cx = d.sx + (tx - d.sx) * k;
         d.cy = d.sy + (ty - d.sy) * k - 40 + ((ms - 350) ** 2 * 160) / 490000;
         d.alpha = ms < 420 ? 1 : (255 - ((ms - 420) * 192) / 280) / 255;
@@ -6974,9 +6996,14 @@ export class Game {
    */
   async addMist(d) {
     this.mists ??= new Map();
-    const node = d.kind === 0 ? (await this.mobSkillLevel(d.skill, d.level))?.tile : (await this.skills?.ensure(d.skill))?.tile;
+    // it acts from its delay x 100ms on (the client's start time, at least 1); type 3 is an item's (5281xxx), its tiles
+    // from Item/Cash/0528.img/<id>/tile
+    const start = performance.now() + (d.delay || 0) * 100;
+    const node = d.kind === 0 ? (await this.mobSkillLevel(d.skill, d.level))?.tile
+      : d.kind === 3 ? (await this.assets.json('Item/Cash/0528.img'))?.[pad(d.skill, 8)]?.tile
+        : (await this.skills?.ensure(d.skill))?.tile;
     const kinds = Object.keys(node || {}).filter((k) => /^\d+$/.test(k)).map((k) => node[k]);
-    if (!kinds.length) return;
+    if (!kinds.length) { this.mists.set(d.oid, { ...d, start, tiles: [] }); return; }
     const w = d.right - d.left, h = d.bottom - d.top, cols = Math.max(1, Math.round(w / 90)), rows = Math.max(1, Math.round(h / 70));
     const tiles = [];
     for (let r = 0; r < rows; r++) {
@@ -6987,7 +7014,7 @@ export class Game {
       }
     }
     await this.assets.preload(tiles.flatMap((t) => t.anim.frames));
-    this.mists.set(d.oid, { ...d, tiles });
+    this.mists.set(d.oid, { ...d, start, tiles });
   }
   drawMists(ctx, cam) {
     for (const m of this.mists?.values() || []) {
@@ -7399,9 +7426,10 @@ export class Game {
   /**
    * The Stat window's Speed and Jump %. Morphed: the morph's own (speed at least 80, jump 100-123). On a monster mount
    * (190xxxx / 193xxxx): the mount's (at least 80) plus the saddle's incSpeed / incJump, counted again when a third mount
-   * item is worn, at most 190 / 123. Otherwise 100 plus your equipment's (mount items only while riding) and Thrust's,
-   * or the map's forced values, held to 100 and the speed cap (140, or the map's) / 123, plus the buffs; Slow sets the
-   * speed outright.
+   * item is worn, at most 190 / 123; on mounts 1932001-1932005 and 1932007-1932011 Dash's speed / jump count too.
+   * Otherwise 100 plus your equipment's (mount items only while riding) and Thrust's, or the map's forced values, held
+   * to 100 and the speed cap (140, or the map's) / 123, plus the buffs (the bigger of Dash's and the Speed / Jump buff's;
+   * a negative Speed buff counts as it is); Slow sets the speed outright.
    */
   statSpeedJump() {
     const now = Date.now(), live = (this.buffs || []).filter((b) => b.until > now), top = this.forced('speedMax') || 140;
@@ -7409,16 +7437,20 @@ export class Game {
     if (morph && (!morph.superman || morph.hide)) return { speed: Math.min(Math.max(morph.speed, 80), top), jump: Math.min(Math.max(morph.jump, 100), 123) };
     const worn = this.inventory?.equipped || {}, info = (s) => this.windows?.info?.(worn[s]?.id) || {};
     const vehicle = this.riding?.item, tm = vehicle && [190, 193].includes(Math.floor(vehicle / 10000)) && this.mountData(vehicle)?.stats;
+    const dash = { speed: live.findLast((b) => b.dashSpeed)?.dashSpeed || 0, jump: live.findLast((b) => b.dashJump)?.dashJump || 0 };
     if (tm) {
       const twice = worn[-20] ? 2 : 1, inc = (k) => (worn[-19] ? (Number(info(-19)[k]) || 0) * twice : 0);
-      return { speed: Math.min(inc('incSpeed') + Math.max(Number(tm.speed) || 100, 80), 190), jump: Math.min(inc('incJump') + Math.max(Number(tm.jump) || 100, 80), 123) };
+      const dashes = (vehicle > 1932000 && vehicle < 1932006) || (vehicle > 1932006 && vehicle < 1932012);
+      return { speed: Math.min(inc('incSpeed') + (dashes ? dash.speed : 0) + Math.max(Number(tm.speed) || 100, 80), 190),
+        jump: Math.min(inc('incJump') + (dashes ? dash.jump : 0) + Math.max(Number(tm.jump) || 100, 80), 123) };
     }
     const riding = !!this.riding, job = this.stats?.job || 0;
     const equip = (k) => Object.entries(worn).reduce((t, [slot, it]) => t + ([-18, -19, -20].includes(Number(slot)) && !riding ? 0 : PET_WEAR_PARTS.includes(-slot % 100) ? 0 : it[k] || 0), 0);
     const thrust = [311, 312].includes(job) ? 3110000 : [321, 322].includes(job) ? 3210000 : job >= 1310 && job <= 1312 ? 13100004 : 0;
     const baseSpeed = Math.min(Math.max(this.forced('speed') || 100 + equip('speed') + (thrust ? this.passive(thrust, 'speed') : 0), 100), top);
     const baseJump = Math.max(100, Math.min(123, this.forced('jump') || 100 + equip('jump')));
-    const sb = live.findLast((b) => b.speed)?.speed || 0, jb = Math.max(0, ...live.filter((b) => b.jump).map((b) => b.jump));
+    const sb0 = live.findLast((b) => b.speed)?.speed || 0, sb = sb0 < 0 ? sb0 : Math.max(dash.speed, sb0);
+    const jb = Math.max(dash.jump, ...live.filter((b) => b.jump).map((b) => b.jump), 0);
     const slow = (this.diseases || []).find((d) => d.skill === SLOW);
     return { speed: slow ? Math.min(slow.value || slow.x || 0, top) : Math.min(baseSpeed + sb, top), jump: Math.min(baseJump + jb, 123) };
   }
@@ -8742,7 +8774,9 @@ export class Game {
     if (anim) await this.assets.preload(anim.frames);
     if (doom) await this.assets.preload([doom.stand, doom.move, doom.mark].filter(Boolean).flatMap((a) => a.frames));
     if (icon) await this.assets.preload([icon]);
-    m.addStatus(s.first, s.second, s.source, { anim, icon, doom, value: s.value });
+    // looping art with repeat (Weapon / Magic Immunity) takes turns with the monster's others of its kind
+    const turn = !!anim && !doom && Number(node?.repeat) > 0;
+    m.addStatus(s.first, s.second, s.source, { anim, icon, doom, turn, value: s.value });
   }
 
   /** Skill/MobSkill.img/<skill>/level/<level>: a monster skill's art (effect on the caster, affected on the cursed). */
@@ -8950,7 +8984,7 @@ export class Game {
       if (d.x < p.x - 25 || d.x >= p.x + 25 || d.y < p.y - 50 || d.y >= p.y + 10) continue;
       if (now - (d.tryAt || -Infinity) < 3000) continue;
       if (!d.meso && Number(this.windows.info(d.id)?.pickUpBlock)) continue;
-      const ours = !d.dropper || d.type >= 2 || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || now - (d.born || 0) > 15000;
+      const ours = !d.dropper || d.type >= 2 || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || now - (d.freeAt ?? d.born ?? 0) > 15000;
       if (!ours) continue;
       d.tryAt = now; this.pickupBusy = now;
       this.net.pickup(oid, { x: Math.round(p.x), y: Math.round(p.y) });
