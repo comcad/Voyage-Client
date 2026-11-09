@@ -80,6 +80,8 @@ const ERRORS = {
   0xE0: 'The event has either ended or this item is not available for free testing.', 0xE6: 'This item cannot be purchased with MaplePoints.',
   0xE7: 'Sorry for inconvinence. please try again.', 0xE8: 'This item cannot be purchased by anyone under 7.', 0xE9: 'This item cannot be received by anyone under 7.',
 };
+/** The weapon types a cash weapon can have art for, in the client's order. */
+const WEAPON_TYPES = [30, 31, 32, 33, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 39];
 /** Items only NX Prepaid can pay for. */
 /** NAME_TRANSFER / WORLD_TRANSFER refusals, by error code. */
 const TRANSFER_ERRORS = {
@@ -483,7 +485,7 @@ export class CashShopWin extends Win {
       if (!c.Price) { this.alert('You may not purchase the item since you already have it.'); return; }
       if (!(await this.alert('You already have the item(s) selected. Are\nyou sure you want to buy the item(s) again?', true))) return;
     }
-    const warn = await this.petWarning(c);
+    const warn = await this.buyWarning(c);
     if (warn && !(await this.alert(warn, true))) return;
     const wallet = await this.dialog({ mode: 0, items: [c], text: 'Are you sure you want to buy this item?', wallets: mask });
     if (!wallet) return;
@@ -501,16 +503,46 @@ export class CashShopWin extends Win {
     return out;
   }
   /**
-   * The pet warning before buying (for a package, its first item with one), or null:
+   * The warning before buying (for a package, its first item with one), or null, checked in the client's order:
    * - pet food (524) / pet skill items (519): no pet out, or the names of the pets out it isn't for (its spec list);
-   * - a pet accessory (180): no pet out, or a pet out it has no art for (with two or more out the names aren't given).
+   * - the Scissors of Karma (552): nothing you have takes them (tradeAvailable and not unlocked already);
+   * - an equip: your job (reqJob's bit for your class; a beginner only passes with no reqJob), level, fame, a cash
+   *   weapon your weapon's type has no art in, a pet accessory (180: no pet out, or a pet out it has no art for, with
+   *   two or more out the names aren't given), a mount or saddle (190 / 191) without your class's Monster Riding.
    */
-  async petWarning(c) {
+  async buyWarning(c) {
     const ids = this.isPackage(c) ? this.contents(c).map((x) => x.ItemId).filter(Boolean) : [c.ItemId];
-    const pets = this.petsOut(), a = this.mgr.assets;
+    const pets = this.petsOut(), a = this.mgr.assets, s = this.stats;
     const unfit = (fits) => pets.filter((p) => !fits(p)).map((p) => `${p.name} `).join('');
+    const sure = '\nAre you sure you want to buy the item?';
     for (const id of ids) {
       const cat = Math.floor(id / 10000);
+      if (cat === 552) {
+        const inv = this.g.inventory || {};
+        const items = [1, 2, 3, 4, 5].flatMap((t) => Object.values(inv[t] || {})).concat(Object.values(inv.equipped || {}));
+        let any = false;
+        for (const it of items) {
+          if (!it?.id || (it.flag || 0) & (invType(it.id) === 1 ? 0x10 : 0x02)) continue;
+          if (Number((await itemInfo(a, it.id))?.tradeAvailable)) { any = true; break; }
+        }
+        if (!any) return 'You currently do not have any items that\ncan use the Scissors of Karma.\nWould you still like to purchase it?';
+        continue;
+      }
+      if (Math.floor(id / 1000000) === 1) {
+        const info = (await itemInfo(a, id)) || {}, job = s.job || 0, cls = Math.floor((job % 1000) / 100), req = Number(info.reqJob) || 0;
+        if (req && !(cls && req & (1 << (cls - 1)))) return `Your job limit does not allow\nyou to use this item. ${sure}`;
+        if ((s.level || 0) < (Number(info.reqLevel) || 0)) return `Your level limit does not allow\nyou to use this item.${sure}`;
+        if (Number(info.reqPOP) && (s.fame || 0) < Number(info.reqPOP)) return `Your fame limit does not allow\nyou to use this item.${sure}`;
+        const weapon = this.g.inventory?.equipped?.[-11]?.id;
+        if (Math.floor(id / 100000) === 17 && weapon) {
+          const type = Math.floor(weapon / 10000) % 100, art = await a.json(`Character/Weapon/${pad(id, 8)}.img`);
+          if (!WEAPON_TYPES.includes(type) || !art?.[type]) return 'You may not use this item with\nthe weapon you are equipped with.\nWill you continue to make the purchase?';
+        }
+      }
+      if (cat === 190 || cat === 191) {
+        const job = s.job || 0, base = Math.floor(job / 100) === 22 || job === 2001 ? job : Math.floor(job / 1000) * 1000;
+        if (!(this.g.skills?.level(base * 10000 + 1004) > 0)) return 'This is an item that cannot be used\nif you do not have the Monster\nRiding skill. Would you\nstill like to purchase it?';
+      }
       if (cat === 519 || cat === 524) {
         if (!pets.length) return 'This item cannot be used without a pet, and\nthis item cannot be used on a deceased pet.\nAre you sure you want to make the purchase?';
         const spec = cat === 524 ? (await a.json('Item/Cash/0524.img'))?.[pad(id, 8)]?.spec : null, ok = new Set(Object.values(spec || {}).map(Number));
@@ -927,7 +959,7 @@ export class CashShopWin extends Win {
         if (!(await this.alert('You already have the item(s) selected. Are\nyou sure you want to buy the item(s) again?', true))) return;
         break;
       }
-      const warn = await this.petWarning(c);
+      const warn = await this.buyWarning(c);
       if (warn) { if (!(await this.alert(warn, true))) return; break; }
     }
     const wallet = await this.dialog({ mode: 1, items, text: `Total ${total} NX.\nMake purchase?`, wallets: mask });
