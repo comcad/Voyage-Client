@@ -1003,12 +1003,13 @@ const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, UI_W - 1 - W)), Mat
 
 /**
  * A slot expansion in the Cash Shop list (it.slots: the tab and its slots now): its name centred 8px down, then "Add n
- * slots for the <tab> inventory..." (the storage's own line) wrapped from x 10, at least 290 wide; on sale, the
- * original price and discount under it.
+ * slots for the <tab> inventory..." (the storage's and a character slot's own lines) wrapped from x 10, at least 290
+ * wide; on sale, the original price and discount under it.
  */
 function slotItemTip(ctx, mgr, it, mx, my) {
   const { type, delta, current } = it.slots, title = mgr.itemName(it.id) || '';
-  const text = type === 0 ? `Add ${delta} slots for the storage (Current: ${current})\nMaximum of 48 slots available.`
+  const text = type === 'char' ? `Add a character slot (Current : ${current} slots)\nYou may have up to 15 slots.`
+    : type === 0 ? `Add ${delta} slots for the storage (Current: ${current})\nMaximum of 48 slots available.`
     : `Add ${delta} slots for the ${['', 'Eqp', 'Use', 'Setup', 'Etc'][type]} inventory. (Current: ${current} slots)\nMaximum of 96 slots available.`;
   const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 16), titleH = 14;
   const desc = tipWrap(ctx, text, 275), sale = tipOnSale(it), body = titleH + 22 + tipWrapH(desc);

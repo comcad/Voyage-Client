@@ -1348,6 +1348,8 @@ export class CashShopWin extends Win {
       const delta = Number(this.slotItems?.[c.ItemId]?.delta) || 0;   // on the item itself, not under info
       if (type <= 4) t.slots = { type, delta, current: type ? this.g.inventory?.limits?.[type] || 0 : this.storageSlots ?? 0 };
     }
+    // a character slot (5430xxx): how many you have, when the login told us
+    if (Math.floor(c.ItemId / 1000) === 5430 && this.g.charSlots != null) t.slots = { type: 'char', current: this.g.charSlots };
     return t;
   }
   slotTip(type) {
