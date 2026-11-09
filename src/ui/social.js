@@ -48,25 +48,34 @@ export function drawPartyHp(ctx, game, cam) {
 
 // ==================================================================== player menu
 /**
- * ContextMenu (right-click on a player): t (100x23, the name bar), one c row (97x15) per entry with
- * its 85x14 button at x 6, then s (7). Trade is shown but disabled until trading exists.
+ * ContextMenu (right-click on a player), 100 wide and (rows + 2) * 15 tall: t (the name bar), a c row every 15px
+ * from y 23, then s. Its buttons sit at x 9 from y 24, 15px apart: Info, Save (the name to the clipboard, then the
+ * chat box opens), Trade, Whisper, Party (only without a party or as its leader), Guild invite (only as the Guild
+ * Master or a Jr. Master), Report, and Family (only with room for another junior). It opens at the click, kept
+ * on an 800x600 screen (x 700 at most, the bottom at 600). Report stays off until the Report window exists.
  */
 export class PlayerMenu extends Win {
   constructor(mgr, target, x, y) {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.M = mgr.W.ContextMenu; this.target = target; this.transient = true;
-    const g = this.g, lead = !g.party || g.party.leader === g.player.id;
+    const g = this.g, M = this.M, name = target.name;
+    const guildRank = g.guild?.members?.find((m) => m.id === g.player.id)?.rank;
     const items = [
-      [this.M.BtInfo, () => g.requestCharInfo(target.id)],
-      [this.M.BtWhisper, () => g.statusBar.focusChat(`/w ${target.name} `)],
-      [this.M.BtParty, () => { if (!g.party) g.net?.partyOp(1); g.net?.partyOp(4, target.name); }, lead],
-      [this.M.BtTrade, () => g.requestTrade(target)],
-    ];
-    this.w = 100; this.h = 23 + items.length * 15 + 7;
-    this.x = Math.min(x, UI_W - this.w - 2); this.y = Math.min(y, UI_H - 71 - this.h);
+      [M.BtInfo, () => g.requestCharInfo(target.id)],
+      [M.BtSave, () => { navigator.clipboard?.writeText(name).catch(() => {}); g.statusBar.focusChat(); }],
+      [M.BtTrade, () => g.requestTrade(target)],
+      [M.BtWhisper, () => g.statusBar.focusChat(`/w ${name} `)],
+      (!g.party || g.party.leader === g.player.id) && [M.BtParty, () => { if (!g.party) g.net?.partyOp(1); g.net?.partyOp(4, name); }],
+      g.guild && (guildRank === 1 || guildRank === 2) && [M.BtGuild, () => g.net?.guildOp(5, name)],
+      [M.BtClaim, () => {}, false],
+      g.family && g.family.juniors < g.family.maxJuniors && [M.BtFamily, () => g.net?.familyAdd(name)],
+    ].filter(Boolean);
+    this.rows = items.length;
+    this.w = 100; this.h = (items.length + 2) * 15;
+    this.x = x + 100 > UI_W ? UI_W - 100 : x; this.y = y + this.h > UI_H ? UI_H - this.h : y;
     items.forEach(([node, fn, on = true], i) => {
-      const b = this.button(node, 6, 23 + i * 15, () => { this.mgr.close(this); fn(); });
+      const b = this.button(node, 9, 24 + i * 15, () => { this.mgr.close(this); fn(); });
       b.enabled = on;
     });
   }
@@ -76,8 +85,8 @@ export class PlayerMenu extends Win {
     const im = (n) => this.mgr.image(n), t = im(this.M.t), c = im(this.M.c), s = im(this.M.s);
     if (!t || !c || !s) return;
     ctx.drawImage(t, 0, 0);
-    for (let i = 0; i < this.buttons.length; i++) ctx.drawImage(c, 0, 23 + i * 15);
-    ctx.drawImage(s, 0, this.h - 7);
+    for (let i = 0; i < this.rows; i++) ctx.drawImage(c, 0, 23 + i * 15);
+    ctx.drawImage(s, 0, 23 + this.rows * 15);
     this.text(ctx, this.target.name, 50, 6, { color: '#fff', bold: true, align: 'center' });
   }
 }

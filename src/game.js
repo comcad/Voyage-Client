@@ -916,7 +916,7 @@ export class Game {
       if (b) { if (b.source < 0) this.cancelItemEffect(-b.source); else if (b.source > 0 && b.source !== DRAGON_ROAR) this.net?.cancelBuff(b.source); return; }
       const tw = wm.top(...p);
       if (tw?.rclick) { tw.rclick(p[0] - tw.x, p[1] - tw.y); return; }
-      // right-click another player: Personal Info / Whisper / Party Invite / Trade
+      // right-click another player: the ContextMenu (Info, Save, Trade, Whisper, Party, Guild, Report, Family)
       const rp = !wm.top(...p) && !sb.contains(...p) && this.playerAt(...field(e));
       if (rp && this.net) wm.show(new PlayerMenu(wm, rp, Math.round(p[0]), Math.round(p[1])));
     });
