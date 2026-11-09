@@ -7423,9 +7423,10 @@ export class Game {
   /**
    * The Stat window's Speed and Jump %. Morphed: the morph's own (speed at least 80, jump 100-123). On a monster mount
    * (190xxxx / 193xxxx): the mount's (at least 80) plus the saddle's incSpeed / incJump, counted again when a third mount
-   * item is worn, at most 190 / 123. Otherwise 100 plus your equipment's (mount items only while riding) and Thrust's,
-   * or the map's forced values, held to 100 and the speed cap (140, or the map's) / 123, plus the buffs; Slow sets the
-   * speed outright.
+   * item is worn, at most 190 / 123; on mounts 1932001-1932005 and 1932007-1932011 Dash's speed / jump count too.
+   * Otherwise 100 plus your equipment's (mount items only while riding) and Thrust's, or the map's forced values, held
+   * to 100 and the speed cap (140, or the map's) / 123, plus the buffs (the bigger of Dash's and the Speed / Jump buff's;
+   * a negative Speed buff counts as it is); Slow sets the speed outright.
    */
   statSpeedJump() {
     const now = Date.now(), live = (this.buffs || []).filter((b) => b.until > now), top = this.forced('speedMax') || 140;
@@ -7433,16 +7434,20 @@ export class Game {
     if (morph && (!morph.superman || morph.hide)) return { speed: Math.min(Math.max(morph.speed, 80), top), jump: Math.min(Math.max(morph.jump, 100), 123) };
     const worn = this.inventory?.equipped || {}, info = (s) => this.windows?.info?.(worn[s]?.id) || {};
     const vehicle = this.riding?.item, tm = vehicle && [190, 193].includes(Math.floor(vehicle / 10000)) && this.mountData(vehicle)?.stats;
+    const dash = { speed: live.findLast((b) => b.dashSpeed)?.dashSpeed || 0, jump: live.findLast((b) => b.dashJump)?.dashJump || 0 };
     if (tm) {
       const twice = worn[-20] ? 2 : 1, inc = (k) => (worn[-19] ? (Number(info(-19)[k]) || 0) * twice : 0);
-      return { speed: Math.min(inc('incSpeed') + Math.max(Number(tm.speed) || 100, 80), 190), jump: Math.min(inc('incJump') + Math.max(Number(tm.jump) || 100, 80), 123) };
+      const dashes = (vehicle > 1932000 && vehicle < 1932006) || (vehicle > 1932006 && vehicle < 1932012);
+      return { speed: Math.min(inc('incSpeed') + (dashes ? dash.speed : 0) + Math.max(Number(tm.speed) || 100, 80), 190),
+        jump: Math.min(inc('incJump') + (dashes ? dash.jump : 0) + Math.max(Number(tm.jump) || 100, 80), 123) };
     }
     const riding = !!this.riding, job = this.stats?.job || 0;
     const equip = (k) => Object.entries(worn).reduce((t, [slot, it]) => t + ([-18, -19, -20].includes(Number(slot)) && !riding ? 0 : PET_WEAR_PARTS.includes(-slot % 100) ? 0 : it[k] || 0), 0);
     const thrust = [311, 312].includes(job) ? 3110000 : [321, 322].includes(job) ? 3210000 : job >= 1310 && job <= 1312 ? 13100004 : 0;
     const baseSpeed = Math.min(Math.max(this.forced('speed') || 100 + equip('speed') + (thrust ? this.passive(thrust, 'speed') : 0), 100), top);
     const baseJump = Math.max(100, Math.min(123, this.forced('jump') || 100 + equip('jump')));
-    const sb = live.findLast((b) => b.speed)?.speed || 0, jb = Math.max(0, ...live.filter((b) => b.jump).map((b) => b.jump));
+    const sb0 = live.findLast((b) => b.speed)?.speed || 0, sb = sb0 < 0 ? sb0 : Math.max(dash.speed, sb0);
+    const jb = Math.max(dash.jump, ...live.filter((b) => b.jump).map((b) => b.jump), 0);
     const slow = (this.diseases || []).find((d) => d.skill === SLOW);
     return { speed: slow ? Math.min(slow.value || slow.x || 0, top) : Math.min(baseSpeed + sb, top), jump: Math.min(baseJump + jb, 123) };
   }
