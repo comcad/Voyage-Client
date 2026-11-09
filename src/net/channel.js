@@ -856,8 +856,9 @@ export class ChannelSession {
     on(S.SPAWN_DOOR, (r) => { const launched = r.bool(), owner = r.int(); this.emit('doorSpawn', { owner, launched, x: r.short(), y: r.short() }); });
     // a mist (Poison Mist, Smokescreen, a monster's poison cloud...): kind 0 a monster's, 1 poison, 2 smoke, 4 recovery
     on(S.SPAWN_MIST, (r) => {
-      const oid = r.int(), kind = r.int(), owner = r.int(), skill = r.int(), level = r.ubyte(); r.short();
-      this.emit('mistSpawn', { oid, kind, owner, skill, level, left: r.int(), top: r.int(), right: r.int(), bottom: r.int() });
+      // the short is its delay: it acts from delay x 100ms after it came
+      const oid = r.int(), kind = r.int(), owner = r.int(), skill = r.int(), level = r.ubyte(), delay = r.short();
+      this.emit('mistSpawn', { oid, kind, owner, skill, level, delay, left: r.int(), top: r.int(), right: r.int(), bottom: r.int() });
     });
     on(S.REMOVE_MIST, (r) => this.emit('mistRemove', r.int()));
     // the field's timer: type 2 counts down from a number of seconds (a party quest, an event, a boat ride)

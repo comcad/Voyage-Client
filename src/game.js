@@ -1593,7 +1593,10 @@ export class Game {
       || (id === 5431000 || id === 5432000 ? this.openMapleLife : null)
       || (id === 5470000 ? this.useStoreRemote : null)
       || (type === 523 ? this.useOwlCash : null)
-      || ({ 550: this.useSandglass, 552: this.openKarma, 557: this.openHammer, 561: this.openVega }[type] ?? null);
+      || ({ 550: this.useSandglass, 552: this.openKarma, 557: this.openHammer, 561: this.openVega }[type] ?? null)
+      || (id === 5060000 ? this.useItemTagBare : null)
+      || (type === 553 ? this.useCashBare : null)
+      || (Math.floor(id / 1000) === 5281 ? this.useEffectCash : null);
     if (!run) return false;
     if (this.cashFree()) run.call(this, Number(slot), id);
     return true;
@@ -1635,6 +1638,22 @@ export class Game {
     if (!d.rows.length && d.npcPrice <= 0) { this.releaseExclusive(); this.windows.notice('Unable to find the item\r\nyou have entered.'); return; }
     if (!d.rows.length) this.releaseExclusive();
     this.owlResult = await this.showSingle(new OwlResultWin(this.windows, d));
+  }
+  /** The Item Tag double-clicked: sent with no target (equip slot 0), as the client does; dragging it onto what you wear tags it. */
+  useItemTagBare(slot) { this.sendCashItem(slot, 5060000, (w) => w.short(0)); }
+  /** 553xxxx: sent as it is on a double-click (5280xxx, the other way round, does nothing). */
+  useCashBare(slot, id) { this.sendCashItem(slot, id); }
+  /**
+   * 5281xxx (Passed Gas, Floral Scent): an item the client has no data for does nothing; while one of yours is out,
+   * or you stand in an item's mist that has started, "An Effect Item is currently in use..."; otherwise sent as it is.
+   */
+  async useEffectCash(slot, id) {
+    if (!(await this.assets.json('Item/Cash/0528.img'))?.[pad(id, 8)]) return;
+    const now = performance.now(), p = this.player, me = p.id;
+    const inUse = [...(this.mists?.values() || [])].some((m) => m.kind === 3 && m.start <= now
+      && ((m.owner === me && m.skill === id) || (p.x >= m.left && p.x < m.right && p.y >= m.top && p.y < m.bottom)));
+    if (inUse) { this.windows.notice('An Effect Item is currently in use. please try again later.'); return; }
+    this.sendCashItem(slot, id);
   }
   async openRemoteGachapon(slot, id) { await this.showSingle(new RemoteGachaponWin(this.windows, id)); }
   useStoreRemote(slot) { if (!this.tradeOpen()) this.net.remoteStore(slot); }
@@ -6974,9 +6993,14 @@ export class Game {
    */
   async addMist(d) {
     this.mists ??= new Map();
-    const node = d.kind === 0 ? (await this.mobSkillLevel(d.skill, d.level))?.tile : (await this.skills?.ensure(d.skill))?.tile;
+    // it acts from its delay x 100ms on (the client's start time, at least 1); type 3 is an item's (5281xxx), its tiles
+    // from Item/Cash/0528.img/<id>/tile
+    const start = performance.now() + (d.delay || 0) * 100;
+    const node = d.kind === 0 ? (await this.mobSkillLevel(d.skill, d.level))?.tile
+      : d.kind === 3 ? (await this.assets.json('Item/Cash/0528.img'))?.[pad(d.skill, 8)]?.tile
+        : (await this.skills?.ensure(d.skill))?.tile;
     const kinds = Object.keys(node || {}).filter((k) => /^\d+$/.test(k)).map((k) => node[k]);
-    if (!kinds.length) return;
+    if (!kinds.length) { this.mists.set(d.oid, { ...d, start, tiles: [] }); return; }
     const w = d.right - d.left, h = d.bottom - d.top, cols = Math.max(1, Math.round(w / 90)), rows = Math.max(1, Math.round(h / 70));
     const tiles = [];
     for (let r = 0; r < rows; r++) {
@@ -6987,7 +7011,7 @@ export class Game {
       }
     }
     await this.assets.preload(tiles.flatMap((t) => t.anim.frames));
-    this.mists.set(d.oid, { ...d, tiles });
+    this.mists.set(d.oid, { ...d, start, tiles });
   }
   drawMists(ctx, cam) {
     for (const m of this.mists?.values() || []) {
