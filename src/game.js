@@ -6,6 +6,7 @@ import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
 import { MedalWin } from './ui/medal.js';
+import { MemoWin } from './ui/memo.js';
 import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
@@ -40,7 +41,7 @@ import { MessengerWin } from './ui/messenger.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice, pqNotice } from './ui/notifier.js';
+import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice, pqNotice, notifyNote } from './ui/notifier.js';
 import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
@@ -975,10 +976,20 @@ export class Game {
     await this.hop((net) => net.leaveCashShop(), 'Returning to the game...', 'You cannot leave the Cash Shop right now.', true);
   }
   /** Notes (gift notices and the like): show each once, then let the server drop them. */
+  /**
+   * MEMO_RESULT 3: the notes waiting are kept (the last list replaces the one before) and, if there are any and no
+   * new-note balloon is up, one comes. Its O opens the inbox with them; X leaves them waiting.
+   */
   async showNotes(notes) {
+    this.pendingNotes = notes;
     if (!notes.length) return;
-    for (const n of notes) await this.windows.notice(`#bNote from ${n.from}#k\n${n.text}`);
-    this.net?.discardNotes(notes.map((n) => n.id));
+    const ok = await notifyNote(this.windows);
+    if (!ok || !this.pendingNotes?.length) return;
+    const list = this.pendingNotes;
+    this.pendingNotes = [];
+    const w = new MemoWin(this.windows, list);
+    await this.assets.preload(w.frames());
+    this.windows.show(w);
   }
   /** After weather music: the field's music back (a changed one is restarted), or the map's. */
   restoreFieldMusic() {

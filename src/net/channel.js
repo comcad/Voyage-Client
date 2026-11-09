@@ -1929,8 +1929,19 @@ export class ChannelSession {
   csBuyRing(op, birthday, wallet, sn, to, message) {
     this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(op).int(birthday).int(wallet).int(sn).string(to).string(message));
   }
-  /** NOTE_ACTION 1: discard read notes (count, then each id with a 0 fame byte) */
-  discardNotes(ids) { const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(ids.length).byte(0).byte(0); for (const id of ids) w.int(id).byte(0); this.send(w); }
+  /**
+   * NOTE_ACTION 1: the notes discarded: how many, how many are type 3, your free Etc slots, then each id with its type
+   * (a type 3 one, while slots last, adds the number before its text's "_").
+   */
+  discardNotes(notes, freeEtc = 0) {
+    const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(notes.length).byte(notes.filter((n) => n.fame === 3).length).byte(freeEtc);
+    let slots = freeEtc;
+    for (const n of notes) {
+      w.int(n.id).byte(n.fame);
+      if (n.fame === 3 && slots > 0) { w.int(parseInt(String(n.text).split('_')[0], 10) || 0); slots--; }
+    }
+    this.send(w);
+  }
   csWish(sns) { const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(5); for (let i = 0; i < 10; i++) w.int(sns[i] || 0); this.send(w); }
   csTake(cashId, type, slot) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0D).long(cashId).byte(type).short(slot)); }
   csPut(cashId, type) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0E).long(cashId).byte(type)); }
