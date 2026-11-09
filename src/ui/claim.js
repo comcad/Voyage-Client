@@ -96,9 +96,19 @@ export class ClaimForm extends Win {
   key(e) { if (e.key === 'Escape') this.finish(false); }
   down(lx, ly) {
     for (const d of [this.names, this.reasons]) {
-      if (d.open) { const i = d.rowAt(lx, ly); d.open = false; if (i >= 0) d.sel = i; return; }
+      if (d.open) { const i = d.rowAt(lx, ly); d.open = false; if (i >= 0) d.sel = i; this.coverLines(); return; }
     }
-    for (const d of [this.names, this.reasons]) if (d.hit(lx, ly)) { d.open = true; return; }
+    for (const d of [this.names, this.reasons]) if (d.hit(lx, ly)) { d.open = true; this.coverLines(); return; }
+  }
+  /** An open list lies over the description lines: the part of each line it covers is cut away (its text and its
+   * clicks), as the client's list sits above them. */
+  coverLines() {
+    const open = [this.names, this.reasons].find((d) => d.open);
+    const bottom = open ? open.y + COMBO_H * (1 + open.items.length) : 0;
+    for (const f of this.lines) {
+      const cut = Math.max(0, Math.min(f.rect.h, bottom - f.rect.y0));
+      f.el.style.clipPath = cut ? `inset(${(cut / f.rect.h) * 100}% 0 0 0)` : '';
+    }
   }
   draw(ctx) {
     super.draw(ctx);
