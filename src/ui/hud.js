@@ -75,12 +75,35 @@ export class Hud {
     if (type === 1) { this.game.windows.serverNotice(msg); return; }      // the server's pop-up
     if (type === 4) { this.banner(msg); return; }                         // the scrolling notice along the top
     if (type === 2) { this.megaphone([msg], CHAT_BAR.mega); return; }   // Megaphone: this channel
+    if (type === 0x0B && n.item) { this.gachapon(n); return; }
     if (type === 3 || type === 8 || type === 10) {                       // Super / Item / Triple: the world
       const lines = n.lines || [msg];
       this.megaphone(lines, { ...(type === 8 ? CHAT_BAR.itemMega : CHAT_BAR.superMega), channel: n.channel, ear: n.ear, item: type === 8 ? n.item : null });
       return;
     }
     this.message(type === 0 ? `[Notice] ${msg}` : msg, NOTICE_COLORS[type] || CHAT_COLOR.notice);
+  }
+  /**
+   * A Gachapon prize for the world: the sender's "name : got a(n)" split at the ' : ' and put in
+   * "%s %s  :  %s  from the %s Gachapon! Congrats!" with the item's name and the town, black on a green bar with
+   * the channel tag; a Cash Shop Surprise (channel -1) "... from the Cash Shop Surprise! Congrats!", white on a
+   * half-clear red one. Pointing at the line shows the item. Not shown on an event map (but 809xxxxxx) unless
+   * you are a GM.
+   */
+  async gachapon(n) {
+    const g = this.game, field = Math.floor((g.map?.id ?? 0) / 1000000);
+    if (!g.gm && field % 100 === 9 && field !== 809) return;
+    const cut = n.msg.indexOf(' : '), who = cut >= 0 ? n.msg.slice(0, cut) : n.msg, what = cut >= 0 ? n.msg.slice(cut + 3) : '';
+    const name = (await itemName(this.assets, n.item.id).catch(() => '')) || '';
+    g.windows.itemName(n.item.id);
+    if (n.channel === -1) {
+      g.statusBar?.message(`${who} ${what}  :  ${name}  from the Cash Shop Surprise! Congrats!`, '#FFFFFF', { bg: 'rgba(255,92,89,0.5)', item: n.item, inline: true });
+      return;
+    }
+    const M = g.windows.W.Megaphone;
+    this.assets.preload([M?.ch1, ...Object.values(M?.Num || {})].filter((x) => x?._canvas));
+    g.statusBar?.message(`${who} ${what}  :  ${name}  from the ${n.town} Gachapon! Congrats!`, '#000000',
+      { bg: 'rgb(153,204,51)', tag: { channel: n.channel + 1, ear: false }, item: n.item, inline: true });
   }
   /** Megaphone lines: their colour on their bar; the world ones carry the channel tag (with the ear when the sender allows whispers). */
   megaphone(lines, { color = '#fff', bg, channel, ear, item = null }) {

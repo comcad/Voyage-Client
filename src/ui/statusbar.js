@@ -228,11 +228,11 @@ export class StatusBar {
    * kinds). Megaphones add a coloured bar (bg); the world ones (tag: { channel, ear }) put the channel tag after the
    * sender on the first line. The view jumps to the newest line unless you scrolled up in the last 5 seconds.
    */
-  message(text, color = '#fff', { bg = null, tag = null, item = null, flush = null } = {}) {
+  message(text, color = '#fff', { bg = null, tag = null, item = null, flush = null, inline = false } = {}) {
     const atBottom = this.scrollPos >= this.range() - 1;
     const indent = !(flush ?? FLUSH.has(String(color).toUpperCase()));
     const pieces = this.wrap(String(text), tag ? WRAP_MEGA : WRAP_W, WRAP_W);
-    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, tag: i ? null : tag, item: i ? null : item }));
+    pieces.forEach((t, i) => this.lines.push({ text: i && indent ? `     ${t}` : t, color, bg, tag: i ? null : tag, item: i ? null : item, inline }));
     let dropped = 0;
     while (this.lines.length > CHAT_MAX) { this.lines.shift(); dropped++; }
     if (this.range() < 3 || atBottom || performance.now() - this.scrolledAt > 5000) this.toBottom();
@@ -742,7 +742,8 @@ export class StatusBar {
     if (d1) ctx.drawImage(d1, p + 15, y + 5);
     if (d2) ctx.drawImage(d2, p + 20, y + 5);
     // an Item Megaphone's item goes in brackets right after the ':' (its name looked up as it's drawn, so it is there once loaded)
-    const shown = l.item ? `: [${this.game.windows.itemName(l.item.id) || ''}]${rest.replace(/^:\s*/, '')}` : rest;
+    // (a Gachapon line already has the item's name in its text)
+    const shown = l.item && !l.inline ? `: [${this.game.windows.itemName(l.item.id) || ''}]${rest.replace(/^:\s*/, '')}` : rest;
     if (shown) uiText(ctx, shown, p + 36, y, { color: l.color, size: 12 });
     if (l.item) this.itemHits.push({ x: 0, y, w: SCROLL_X, h: LINE_H, item: l.item });
   }

@@ -409,7 +409,8 @@ export class ChannelSession {
 
     // SERVERMESSAGE: 0 notice, 1 pop-up, 2 Megaphone, 3 Super Megaphone (+ channel, whisper ear), 4 the scrolling
     // header, 5 pink, 6 light blue, 7 an NPC's, 8 Item Megaphone (+ channel, ear, the item), 10 Triple Megaphone
-    // (+ more lines, channels, ear)
+    // (+ more lines, channels, ear), 11 a Gachapon prize ("name : got a(n)", the channel or -1 for the Cash Shop
+    // Surprise, the town, the item)
     on(S.SERVERMESSAGE, (r) => {
       const type = r.ubyte();
       if (type === 4) r.ubyte();
@@ -417,6 +418,7 @@ export class ChannelSession {
       try {
         if (type === 3) { n.channel = r.ubyte() + 1; n.ear = r.bool(); }
         else if (type === 8) { n.channel = r.ubyte() + 1; n.ear = r.bool(); if (r.ubyte()) n.item = readItem(r, false); }
+        else if (type === 0x0B) { n.channel = r.int(); n.town = r.string(); n.item = readItem(r, false); }
         else if (type === 10) {
           n.lines = [n.msg];
           for (let k = r.ubyte(); k > 1; k--) n.lines.push(r.string());

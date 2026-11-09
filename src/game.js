@@ -5247,18 +5247,26 @@ export class Game {
     else if (!r.ok) this.hud.message(`Unable to find '${r.to}'`, CHAT_COLORS.notice);
     this.pendingWhisper = null;
   }
+  /**
+   * A /find answer, in the client's words: a map is "'name' is currently at 'street : map'." in grey (a GM also sees
+   * the map's nine-digit id), an event map (millions mod 100 of 9, as 109xxxxxx) just "is at the event map." for
+   * anyone but a GM; the Cash Shop and another channel (by its name) say so; anything else is "Unable to find". All
+   * but the map line are in the error colour.
+   */
   async onFindResult(f) {
     if (f.buddy) { this.windows.wins.userlist?.located(f); return; }
-    let where;
-    if (f.type === 1) where = `is in ${await this.mapName(f.where)}`;
-    else if (f.type === 3) where = `is in channel ${f.where + 1}`;
-    else if (f.type === 2) where = 'is in the Cash Shop';
-    else where = 'is in the MTS';
-    this.hud.message(`'${f.name}' ${where}.`, CHAT_COLORS.find);
+    const say = (t, color = CHAT_COLOR.error) => this.hud.message(t, color);
+    if (f.type === 2) return say(`'${f.name}' is at the Cash Shop.`);
+    if (f.type === 3) { const ch = this.channelNames?.[f.where]; return say(ch ? `'${f.name}' is at '${ch}'.` : `Unable to find '${f.name}'`); }
+    if (f.type !== 1) return say(`Unable to find '${f.name}'`);
+    if (Math.floor(f.where / 1000000) % 100 === 9 && !this.gm) return say(`'${f.name}' is at the event map.`);
+    const id = this.gm ? ` (${String(f.where).padStart(9, '0')})` : '';
+    say(`'${f.name}' is currently at '${await this.mapName(f.where)}'.${id}`, CHAT_COLORS.find);
   }
+  /** A map's "street : map" name (just the street when it has no map name). */
   async mapName(id) {
     const s = await this.assets.json('String/Map.img');
-    for (const r of Object.values(s || {})) if (r?.[id]) return `${r[id].streetName} : ${r[id].mapName}`;
+    for (const r of Object.values(s || {})) if (r?.[id]) return r[id].mapName ? `${r[id].streetName} : ${r[id].mapName}` : String(r[id].streetName ?? id);
     return String(id);
   }
 
