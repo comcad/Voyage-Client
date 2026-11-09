@@ -10,6 +10,19 @@
 <img width="1440" height="809" alt="Screenshot 2026-11-08 at 6 52 55 PM" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
 
 
+## What works
+
+- **Login and account** — v83 login scene, PIN, PIC soft keyboard, world/channel/character select, server-ban and client-update notices
+- **Maps** — full map rendering from the WZ, NPCs, portals, ladders and ropes, reactors, weather, imitated NPCs (ranking statues), forced map equipment, obstacles and traps
+- **Combat** — monster spawns, deaths, statuses and immunities, auto-aggro and banishing monsters, damage and hit rules, multi-line attacks, buffs and curses
+- **Skills** — every class line, including the full Pirate line (Pirate → Corsair, Brawler → Outlaw, Marauder → Gunslinger, and the Thunder Breaker skills), the skill macro editor and quick slots
+- **Bosses** — the boss HP bar, and Horntail's and Zakum's parts (their order, boxes, icons, and hits landing on the part struck)
+- **Windows** — inventory, stats, trade, the Maker, the Dojo, the Pyramid, Transform, Cash Shop, Player Shop (MTS), guild (alliance invitations), party, messenger and the world map
+- **Fame** — give and take fame from other players
+- **Aran** — the energy charge and the combo count
+- **Touch and gamepad** — play on phones and touch screens with drag-arrangeable touch controls, and gamepad support
+- **Settings** — server and quality-of-life options in `conf/client.conf` (see [Settings](#settings))
+
 
 ## Directories
 
@@ -34,8 +47,11 @@ Voyage-Client/
 ├── conf/
 │   └── client.conf.dist  # settings template; server.js makes client.conf from it (gitignored)
 ├── server.js           # Express server + WS↔TCP relay to the Cosmic v83 server
+├── build.mjs           # bundles src/ → public/Voyage.js (esbuild, optional obfuscation)
 ├── configmgr.mjs       # reads conf/*.conf (TOML)
 ├── serverconfigs.mjs   # server.js's settings
+├── package.json        # Node dependencies
+├── LICENSE.txt
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .dockerignore
