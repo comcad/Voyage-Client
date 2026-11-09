@@ -730,10 +730,14 @@ const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 121
 /** How long a pickup takes (s); see updateDrops. */
 const PICKUP_TIME = 0.7;
 
-/** Chat line colours, as in the v83 chat log. */
 // SUE_CHARACTER_RESULT: the answer to a report, in the chat log
 const SUE_RESULTS = { 0: 'You have successfully reported the user.', 1: 'Unable to locate the user.', 2: 'You may only report users 10 times a day.',
   3: "You have been reported to the GM's by a user.", other: 'Your request did not go through for unknown reasons. Please try again later.' };
+// CLAIM_RESULT codes other than 2 (and 0x47, the hours), each in a notice; other codes show nothing
+const CLAIM_RESULTS = { 3: 'You have been reported by a user.', 0x41: 'Please try again later.', 0x42: 'Please re-check the character name, then try again.',
+  0x43: 'You do not have enough mesos to report.', 0x44: 'Unable to connect to the server.', 0x45: 'You have exceeded\r\nthe number of reports available.',
+  0x48: 'Unable to report due to\n\npreviously being cited for a false report.' };
+/** Chat line colours, as in the v83 chat log. */
 const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.error };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
 // keymap UI actions for the chat: open the input with a target, or toggle the log
@@ -2904,6 +2908,19 @@ export class Game {
       claimStatus: (on) => { this.claimOn = on; },
       claimHours: (from, to) => { this.claimHours = [from, to]; },
       sueResult: (code) => this.hud.message(SUE_RESULTS[code] ?? SUE_RESULTS.other, CHAT_COLOR.error),
+      claimResult: (code, again, left) => {
+        let t = CLAIM_RESULTS[code];
+        if (code === 2) {
+          const made = 'Your report has been successfully registered.\r\n';
+          t = this.gm ? 'You have successfully registered.'
+            : !again ? 'The report has been successfully made.\r\nYou may not report for the rest of the day.'
+              : left < 1 ? `${made}You have no report left this week.` : `${made}You have ${left} reports left this week.`;
+        } else if (code === 0x47) {
+          const [from, to] = this.claimHours || [0, 0];
+          t = `You may only report from ${from} to ${to}.`;
+        }
+        if (t) this.windows.notice(t);
+      },
       whisperResult: (r) => this.onWhisperResult(r),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },

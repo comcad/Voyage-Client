@@ -811,6 +811,13 @@ export class ChannelSession {
     on(S.CLAIM_STATUS_CHANGED, (r) => this.emit('claimStatus', r.ubyte() !== 0));
     on(S.CLAIM_AVAILABLE_TIME, (r) => { const from = r.ubyte(); this.emit('claimHours', from, r.ubyte()); });
     on(S.SUE_CHARACTER_RESULT, (r) => this.emit('sueResult', r.ubyte()));
+    // CLAIM_RESULT: a code; 2 (made) also carries whether you may report again today and the reports left this week
+    on(S.CLAIM_RESULT, (r) => {
+      const code = r.ubyte();
+      if (code !== 2) { this.emit('claimResult', code); return; }
+      const again = r.ubyte() !== 0;
+      this.emit('claimResult', code, again, r.int());
+    });
     // MULTICHAT mode: 0 buddy, 1 party, 2 guild, 3 alliance
     on(S.MULTICHAT, (r) => this.emit('groupChat', { mode: r.ubyte(), name: r.string(), text: r.string() }));
     // WHISPER (CField::OnWhisper): flags LOCATION 1, WHISPER 2, RESULT 8, RECEIVE 0x10, LOCATION_FRIEND 0x40
