@@ -72,6 +72,8 @@ const WORLD_BUSY = 'Since There Are Many\r\nConcurrent Users in This World,\r\nY
 const WORLD_FULL = 'The Concurrent Users in This World\r\nHave Reached the Max.\r\nPlease Try Again Later.';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const NOTICE_AT = { x: 219, y: 170 }, NOTICE_SLIDE_MS = 150;
+/** "Ver. %d.%d" with the client's version, 0.83. */
+const VERSION_TEXT = 'Ver. 0.83';
 /** UPDATE_PINCODE 0: Pincode/text/8 in words (the PIN steps here are text prompts). */
 const PIN_REGISTERED = 'Your Security Pin has been assigned. Please keep in mind that it is your responsibility to remember and protect your Security Pin.';
 // characters on the select screen
@@ -236,6 +238,8 @@ export class LoginScene {
     for (let l = ui + 1; l < 8; l++) this.scene.drawLayer(ctx, cam, l);
     this.scene.drawBacks(ctx, cam, true);
     this.frame.draw(ctx, this.assets);
+    // the client version, written onto the frame: bold black Arial 12 ending at x 645, y 10
+    uiText(ctx, VERSION_TEXT, 645, 10, { color: '#000', bold: true, align: 'right' });
     // step banner and navigation buttons sit on the book's border, above the frame
     for (const o of this.screen?.over || []) o.draw(ctx, this.assets);
     for (const d of this.dialogs) {
