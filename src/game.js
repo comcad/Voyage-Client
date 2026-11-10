@@ -3215,6 +3215,8 @@ export class Game {
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
       reactorSpawn: later((d) => this.spawnReactor(d)),
+      weddingProgress: later((...a) => this.weddingProgress(...a)),
+      weddingEnd: later(() => this.weddingEnd()),
       mobMoveResponse: later((oid, r) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending || e.kind !== 'Mob') return;
@@ -3903,6 +3905,73 @@ export class Game {
   }
 
   levelUpEffect() { this.vfx?.play('LevelUp', this.player); }
+
+  /** The chapel (680000110, its officiant 9201011) or the cathedral (680000210, 9201002), on their wedding field. */
+  weddingHall() {
+    const id = this.map?.id;
+    if (Number(this.map?.info?.fieldType) !== 60) return null;
+    return id === 680000110 ? { npc: 9201011, bgm: 'BgmGL/chapel', cathedral: false } : id === 680000210 ? { npc: 9201002, bgm: 'BgmGL/cathedral', cathedral: true } : null;
+  }
+  /** Closes the ceremony's dialog still up from the last step, as with its Next (yes / no: No). */
+  closeWeddingDialog(next = true) {
+    const d = this.weddingDlg;
+    this.weddingDlg = null;
+    if (!d || !this.windows.order.includes(d)) return;
+    this.windows.close(d);
+    d.done?.({ action: next ? 1 : 0 });
+  }
+  /**
+   * WEDDING_PROGRESS, in a wedding hall: the step and the couple. Step 0 starts the hall's music and clears the last
+   * ending. In the cathedral at step 2 a guest is asked "Do you want to bless this couple?" (yes: WEDDING_TALK_MORE)
+   * and the couple see nothing; any other step shows everyone the officiant's line (String/Npc.img/<npc>/wedding<step>),
+   * and when the couple close it they send WEDDING_TALK with the step.
+   */
+  async weddingProgress(step, groom, bride) {
+    const hall = this.weddingHall();
+    if (!hall) return;
+    this.closeWeddingDialog(false);
+    this.wedding = { step, groom, bride };
+    if (step === 0) { this.weddingFx = null; this.fieldBgm = hall.bgm; music.play(hall.bgm); }
+    const me = this.player?.id, couple = me === groom || me === bride;
+    if (hall.cathedral && step === 2) {
+      if (couple) return;
+      const asked = localTalk(this.windows, hall.npc, 'Do you want to bless this couple?', ['Yes', 'No']);
+      this.weddingDlg = this.windows.order.findLast((w) => w instanceof NpcDialog) || null;
+      if ((await asked) === 'Yes') this.net?.weddingBless();
+      return;
+    }
+    const text = (await this.assets.json('String/Npc.img'))?.[hall.npc]?.[`wedding${step}`];
+    if (!text) return;
+    const said = localTalk(this.windows, hall.npc, text, ['Next']);
+    this.weddingDlg = this.windows.order.findLast((w) => w instanceof NpcDialog) || null;
+    await said;
+    if (couple) this.net?.weddingTalk(step);
+  }
+  /**
+   * WEDDING_CEREMONY_END: the officiant's line still up closes (a yes / no stays), and Effect/BasicEff.img/Wedding
+   * plays between the groom and the bride, following them, until the next ceremony starts or you leave.
+   */
+  weddingEnd() {
+    const d = this.weddingDlg;
+    if (d && d.d?.type === 0) this.closeWeddingDialog(true);
+    const w = this.wedding, node = this.vfx?.E?.Wedding;
+    if (!w || !node || !this.weddingHall()) return;
+    this.assets.preload(frames(node));
+    this.weddingFx = { anim: new Anim(node, true) };
+  }
+  /** The wedding's ending between the couple (both must be here). */
+  drawWeddingFx(ctx, cam, dt) {
+    const fx = this.weddingFx, w = this.wedding;
+    if (!fx || !w || !this.weddingHall()) { this.weddingFx = null; return; }
+    const who = (id) => (id === this.player?.id ? this.player : this.others.get(id));
+    const a = who(w.groom), b = who(w.bride);
+    if (!a || !b) return;
+    fx.anim.update(dt * 1000);
+    const n = fx.anim.node, img = n && this.assets.image(n);
+    if (!img) return;
+    const o = n.origin || [0, 0], x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+    ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+  }
 
   // ------------------------------------------------------------------ map
   async changeMap(id, { portal = null, portalIdx = null, pos = null } = {}) {
@@ -9563,6 +9632,7 @@ export class Game {
     map.drawPortals(ctx, cam);
     this.drawRingFx(ctx, cam);
     this.drawFx(ctx, cam);
+    this.drawWeddingFx(ctx, cam, this.frameDt || 0);
     this.drawKeyGauge(ctx, cam);
     map.drawBacks(ctx, cam, true);
     this.drawBalloons(ctx, cam);

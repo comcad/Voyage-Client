@@ -17,6 +17,8 @@ import { CODE_TO_SC, DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2, saveQuickKeys2 } f
  */
 const WHEEL_STEP = 100;
 
+const NO_DROP_WEDDING = new Set([1112803, 1112806, 1112807, 1112809, 4031481, 4031376, 4031480, 4031375, 4031373, 4031374, 3994085]);
+
 export class WindowManager {
   constructor(game, statusBar) {
     this.game = game; this.assets = game.assets; this.bar = statusBar;
@@ -555,8 +557,9 @@ class InventoryWin extends Win {
     const it = this.g.inventory?.[c.tab]?.[c.slot];
     if (!it || this.g.dead) return;
     if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
-    // ring boxes, the Officiator's Permission and the Admin's Candle stay; an engagement ring asks, then breaks it off
-    if (Math.floor(it.id / 10000) === 224 || it.id === 4031374 || it.id === 3994085) return;
+    // wedding rings, ring boxes, the reservation receipts, the Parent's Blessing, the Officiator's Permission and the
+    // Admin's Candle stay; an engagement ring asks, then breaks it off
+    if (Math.floor(it.id / 10000) === 224 || NO_DROP_WEDDING.has(it.id)) return;
     if (it.id >= 4031357 && it.id <= 4031364) {
       const married = this.g.rings?.marriage?.status === 3;
       if (await this.mgr.confirm(married ? 'You will not be able to receive the wedding ring.\r\nIs that okay?'

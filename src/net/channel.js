@@ -531,6 +531,9 @@ export class ChannelSession {
     // your account's gender (only 0 may propose)
     on(S.SET_GENDER, (r) => this.emit('accountGender', r.ubyte()));
     // a proposal to you (0: who, their id); 9 the wedding wish list
+    // a wedding hall's ceremony: the step reached (with the groom's and bride's ids), and its end
+    on(S.WEDDING_PROGRESS, (r) => { const step = r.ubyte(), groom = r.int(), bride = r.int(); this.emit('weddingProgress', step, groom, bride); });
+    on(S.WEDDING_CEREMONY_END, () => this.emit('weddingEnd'));
     on(S.MARRIAGE_REQUEST, (r) => { if (r.ubyte() === 0) { const name = r.string(); this.emit('proposal', name, r.int()); } });
     // MARRIAGE_RESULT: 0x0b / 0x0c the record (engaged / married), 0x0f an invitation (groom, bride, type), 0x24 a message
     on(S.MARRIAGE_RESULT, (r) => {
@@ -1774,6 +1777,9 @@ export class ChannelSession {
   propose(name, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(0).string(name).int(itemId)); }
   withdrawProposal() { this.send(new PacketWriter(C.RING_ACTION).byte(1)); }
   breakEngagement(itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(3).int(itemId)); }
+  /** WEDDING_TALK: the couple read the officiant's line for this step. WEDDING_TALK_MORE: a guest blesses them. */
+  weddingTalk(step) { this.send(new PacketWriter(C.WEDDING_TALK).byte(step)); }
+  weddingBless() { this.send(new PacketWriter(C.WEDDING_TALK_MORE)); }
   answerProposal(ok, name, id) { this.send(new PacketWriter(C.RING_ACTION).byte(2).byte(ok ? 1 : 0).string(name).int(id)); }
   inviteGuest(name, marriageId, slot) { this.send(new PacketWriter(C.RING_ACTION).byte(5).string(name).int(marriageId).int(slot)); }
   openInvitation(slot, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(6).int(slot).int(itemId)); }
