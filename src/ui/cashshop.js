@@ -154,8 +154,9 @@ export class CashShopWin extends Win {
       a.json('Etc/Category.img'), a.json('Item/Special/0910.img'), a.json('Item/Special/0911.img')]);
     this.C = C; this.pkg = pkg || {}; this.special = special || {}; this.slotItems = slotItems || {};
     this.buildCatalog(com || {}, cats || {});
-    const job = this.stats.job || 0;
-    this.bg = Math.floor(job / 1000) === 1 ? C.Base.backgrnd1 : Math.floor(job / 100) === 21 || job === 2000 ? C.Base.backgrnd2 : C.Base.backgrnd;
+    // every class gets the regular background (the client gives Cygnus backgrnd1 and Aran backgrnd2, each with its
+    // own Cash Inventory panel; Voyage keeps the one look)
+    this.bg = C.Base.backgrnd;
     await a.preload([this.bg, ...allCanvases(C.Base.Tab), ...allCanvases(C.Base.Tab2), ...allCanvases(C.Base.Preview), ...allCanvases(C.Base.PreviewOnOff),
       ...allCanvases(C.CSTab), C.CSList.Base, C.CSList.ItemIcon, ...allCanvases(C.CSEffect), ...allCanvases(C.CSIcon), ...allCanvases(C.GuideWords),
       ...allCanvases(C.CSDiscount), C.PicturePlate.HowTo, C.PicturePlate.HowToGift, C.PicturePlate.NoItem, ...allCanvases(C.CSNotice[0]),
