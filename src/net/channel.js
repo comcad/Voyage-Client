@@ -26,6 +26,22 @@ function readCommodityMod(r) {
 
 /** Guild emblem: background, its colour, mark, its colour. */
 const readEmblem = (r) => ({ bg: r.short(), bgColor: r.ubyte(), logo: r.short(), logoColor: r.ubyte() });
+const readGuildMember = (r) => ({ name: r.paddedString(13), job: r.int(), level: r.int(), rank: r.int(), online: r.int() === 1 });
+/** A guild's record as GUILD_OPERATION 0x1A and the alliance packets carry it; a member's last field is their alliance rank. */
+function readGuild(r) {
+  const g = { id: r.int(), name: r.string(), ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] };
+  const ids = []; for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
+  g.members = ids.map((id) => { const m = { id, ...readGuildMember(r) }; r.int(); m.allianceRank = r.int(); return m; });
+  g.capacity = r.int(); g.emblem = readEmblem(r); g.notice = r.string(); g.gp = r.int(); g.alliance = r.int();
+  return g;
+}
+/** A guild alliance's record: id, name, its five rank titles, its guilds' ids, capacity and notice. */
+function readAlliance(r) {
+  const a = { id: r.int(), name: r.string(), ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] };
+  a.guildIds = []; for (let n = r.ubyte(); n > 0; n--) a.guildIds.push(r.int());
+  a.capacity = r.int(); a.notice = r.string();
+  return a;
+}
 
 /** A pet: item id, name, cash SN, position, stance, foothold, Label Ring and Quote Ring on */
 function readPet(r) {
@@ -634,18 +650,17 @@ export class ChannelSession {
     // ---- guilds: GUILD_OPERATION sub-ops (GuildPackets); messages are bare codes, 53-55 add a name
     on(S.GUILD_OPERATION, (r) => {
       const op = r.ubyte(), e = (kind, d = {}) => this.emit('guild', { kind, ...d });
-      const member = () => ({ name: r.paddedString(13), job: r.int(), level: r.int(), rank: r.int(), online: r.int() === 1 });
+      const member = () => readGuildMember(r);
       if (op === 0x01) e('askName');
       else if (op === 0x03) { r.int(); e('agreement', { master: r.string(), name: r.string() }); }
       else if (op === 0x05) e('invite', { id: r.int(), from: r.string() });
       else if (op === 0x1A) {
-        if (!r.ubyte()) { e('info', { guild: null }); return; }
-        const g = { id: r.int(), name: r.string(), ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] };
-        const ids = []; for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
-        g.members = ids.map((id) => { const m = { id, ...member() }; r.int(); r.int(); return m; });
-        g.capacity = r.int(); g.emblem = readEmblem(r); g.notice = r.string(); g.gp = r.int(); g.alliance = r.int();
-        e('info', { guild: g });
-      } else if (op === 0x27) { const gid = r.int(), id = r.int(); e('join', { gid, member: { id, ...member() } }); }
+        e('info', { guild: r.ubyte() ? readGuild(r) : null });
+      } else if (op === 0x27) {
+        const gid = r.int(), id = r.int(), m = { id, ...member() };
+        if (r.available >= 8) { r.int(); m.allianceRank = r.int(); }
+        e('join', { gid, member: m });
+      }
       else if (op === 0x2C || op === 0x2F) e(op === 0x2F ? 'expel' : 'leave', { gid: r.int(), id: r.int(), name: r.string() });
       else if (op === 0x32) e('disband', { gid: r.int() });
       else if (op === 0x3A) e('capacity', { gid: r.int(), capacity: r.ubyte() });
@@ -1267,11 +1282,28 @@ export class ChannelSession {
     // a catch item that didn't work: 0 the monster is too strong, 1 used again too soon; then the item
     // a notice the server sends before it cuts you off (an autoban, a GM's ban): its text in a dialog, unless empty
     on(S.DATA_CRC_CHECK_FAILED, (r) => { const text = r.string(); if (text) this.emit('police', text); });
-    // guild alliances: mode 3 an invitation (the alliance's id, who sent it, their guild's name)
+    // guild alliances: 3 an invitation (the alliance's id, who sent it, their guild's name); the rest keep the
+    // alliance and its other guilds' records (0x0C the alliance, 0x0D guilds, 0x0F both, 0x10 a guild gone, 0x12 one
+    // joined, 0x17 the alliance again, 0x1E one guild again) or change one thing in them
     on(S.ALLIANCE_OPERATION, (r) => {
-      if (r.ubyte() !== 3) return;
-      const id = r.int(), from = r.string(), guildName = r.available >= 2 ? r.string() : '';
-      this.emit('allianceInvite', id, from, guildName);
+      const op = r.ubyte(), e = (kind, d = {}) => this.emit('alliance', { kind, ...d });
+      if (op === 0x03) {
+        const id = r.int(), from = r.string(), guildName = r.available >= 2 ? r.string() : '';
+        this.emit('allianceInvite', id, from, guildName);
+      } else if (op === 0x0C) e('info', { alliance: r.ubyte() ? readAlliance(r) : null });
+      else if (op === 0x0D) { const guilds = []; for (let n = r.int(); n > 0; n--) guilds.push(readGuild(r)); e('guilds', { guilds }); }
+      else if (op === 0x0E) e('online', { aid: r.int(), gid: r.int(), id: r.int(), online: r.ubyte() !== 0 });
+      else if (op === 0x0F) { const alliance = readAlliance(r); e('full', { alliance, guilds: alliance.guildIds.map(() => readGuild(r)) }); }
+      else if (op === 0x10) { const alliance = readAlliance(r), gid = r.int(), guild = readGuild(r); e('removed', { alliance, gid, guild, expelled: r.ubyte() !== 0 }); }
+      else if (op === 0x12) { const alliance = readAlliance(r), gid = r.int(); e('added', { alliance, gid, guild: readGuild(r) }); }
+      else if (op === 0x17) e('update', { alliance: readAlliance(r) });
+      else if (op === 0x18) e('levelJob', { aid: r.int(), gid: r.int(), id: r.int(), level: r.int(), job: r.int() });
+      else if (op === 0x19) e('leader', { aid: r.int(), from: r.int(), to: r.int() });
+      else if (op === 0x1A) { const aid = r.int(); e('titles', { aid, ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] }); }
+      else if (op === 0x1B) e('rank', { id: r.int(), rank: r.ubyte() });
+      else if (op === 0x1C) e('notice', { aid: r.int(), notice: r.string() });
+      else if (op === 0x1D) e('disband', { aid: r.int() });
+      else if (op === 0x1E) { const aid = r.int(), gid = r.int(); e('guild', { aid, gid, guild: readGuild(r) }); }
     });
     on(S.BRIDLE_MOB_CATCH_FAIL, (r) => { const type = r.ubyte(); this.emit('catchFail', type, r.int()); });
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
@@ -1901,6 +1933,14 @@ export class ChannelSession {
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
   /** ALLIANCE_OPERATION 4: take a guild alliance's invitation (its id, and the inviter's guild name). */
   allianceAccept(id, guildName = '') { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(4).int(id).string(guildName)); }
+  /**
+   * ALLIANCE_OPERATION from the Alliance tab: 1 ask for the alliance again, 2 leave, 3 invite a guild (its name),
+   * 0x0A the notice. allianceExpel 6 (guild, alliance), allianceLeader 7 (the new leader), allianceRank 9 (who, 1 up / 0 down).
+   */
+  allianceOp(mode, text = null) { const w = new PacketWriter(C.ALLIANCE_OPERATION).byte(mode); if (text !== null) w.string(text); this.send(w); }
+  allianceExpel(gid, aid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(6).int(gid).int(aid)); }
+  allianceLeader(cid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(7).int(cid)); }
+  allianceRank(cid, up) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(9).int(cid).byte(up ? 1 : 0)); }
   /** DENY_ALLIANCE_REQUEST 0x16: turn a guild alliance's invitation down (the inviter, your guild's name). */
   allianceDeny(from, guildName = '') { this.send(new PacketWriter(C.DENY_ALLIANCE_REQUEST).byte(0x16).string(from).string(guildName)); }
   /** DENY_GUILD_REQUEST: 0x37 refused, 0x36 busy with another invitation, 0x35 not taking invitations. */

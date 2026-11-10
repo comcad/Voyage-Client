@@ -2938,6 +2938,7 @@ export class Game {
         .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
+      alliance: (d) => this.onAlliance(d),
       // other players' guild tags: held for one still spawning
       guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
       guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
@@ -5262,6 +5263,78 @@ export class Game {
    * GUILD_OPERATION results: this.guild = { id, name, ranks[5], members[{ id, name, job, level, rank, online }],
    * capacity, emblem, notice, gp }, plus the prompts Heracle and inviters start.
    */
+  /** No alliance (and none of its other guilds) any more. */
+  leftAlliance() { this.alliance = null; this.allianceGuilds = []; }
+  /**
+   * Guild alliance packets: the alliance's record, the other guilds' records beside yours, and the changes to them.
+   * Its lines go to the chat log as the guild's do.
+   */
+  onAlliance(d) {
+    const me = this.player.id, msg = (t) => this.hud.message(t, CHAT_COLORS.guild), mine = this.guild;
+    const others = () => (this.allianceGuilds ??= []), here = (aid) => !!this.alliance && this.alliance.id === aid;
+    // a guild's record: yours replaces your guild's, another replaces its old record or joins the list
+    const putGuild = (g) => {
+      if (mine && g.id === mine.id) { this.guild = g; return; }
+      const list = others(), i = list.findIndex((x) => x.id === g.id);
+      if (i >= 0) list[i] = g; else list.push(g);
+    };
+    const everyone = () => [...(this.guild?.members || []), ...others().flatMap((g) => g.members)];
+    switch (d.kind) {
+      case 'info': this.alliance = d.alliance; break;
+      case 'guilds': d.guilds.forEach(putGuild); break;
+      case 'full': this.alliance = d.alliance; d.guilds.forEach(putGuild); break;
+      case 'online': {
+        if (d.id === me) break;
+        const m = others().find((g) => g.id === d.gid)?.members.find((x) => x.id === d.id);
+        if (!m) break;
+        m.online = d.online;
+        if (d.online) notifyLogin(this.windows, m.name);
+        break;
+      }
+      case 'removed':
+        if (!here(d.alliance.id)) break;
+        if (mine && d.gid === mine.id) {
+          this.leftAlliance(); this.guild = d.guild;
+          msg(d.expelled ? 'You are dismissed from the guild alliance.' : 'You leaved the guild alliance.');
+        } else {
+          this.alliance = d.alliance;
+          this.allianceGuilds = others().filter((g) => g.id !== d.gid);
+        }
+        break;
+      case 'added':
+        this.alliance = d.alliance;
+        if (mine && d.gid === mine.id) {
+          this.guild = d.guild;
+          msg(`You joined [${d.alliance.name}] guild alliance.`);
+          this.net?.allianceOp(1);
+        } else {
+          putGuild(d.guild);
+          msg(`[${d.guild.name}] guild joined in your guild alliance.`);
+        }
+        break;
+      case 'update': if (here(d.alliance.id)) this.alliance = d.alliance; break;
+      case 'levelJob': {
+        if (!here(d.aid) || (mine && d.gid === mine.id)) break;
+        const m = others().find((g) => g.id === d.gid)?.members.find((x) => x.id === d.id);
+        if (m) Object.assign(m, { level: d.level, job: d.job });
+        break;
+      }
+      case 'leader':
+        if (!here(d.aid)) break;
+        for (const m of everyone()) { if (m.id === d.from) m.allianceRank = 2; if (m.id === d.to) m.allianceRank = 1; }
+        break;
+      case 'titles': if (here(d.aid)) this.alliance.ranks = d.ranks; break;
+      case 'rank': { const m = everyone().find((x) => x.id === d.id); if (m) m.allianceRank = d.rank; break; }
+      case 'notice': if (here(d.aid)) this.alliance.notice = d.notice; break;
+      case 'disband':
+        if (!here(d.aid)) break;
+        this.leftAlliance();
+        if (this.guild) { this.guild.alliance = 0; for (const m of this.guild.members) m.allianceRank = 3; }
+        break;
+      case 'guild': if (here(d.aid)) putGuild(d.guild); break;
+      default: break;
+    }
+  }
   onGuild(d) {
     const me = this.player.id, g = this.guild, msg = (t) => this.hud.message(t, CHAT_COLORS.guild);
     const member = (id) => g?.members.find((m) => m.id === id), master = g?.members[0]?.id === me;
@@ -5279,7 +5352,7 @@ export class Game {
           .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from, 0x37, this.player.name)));
         break;
       }
-      case 'info': this.guild = d.guild; break;
+      case 'info': this.guild = d.guild; if (!d.guild) this.leftAlliance(); break;
       case 'join':
         if (d.member.id === me) { msg('You have entered the guild.'); this.net.guildOp(0); break; }
         if (!g) break;
@@ -5287,13 +5360,13 @@ export class Game {
         msg(`'${d.member.name}' has joined the guild.`);
         break;
       case 'leave': case 'expel':
-        if (d.id === me) { this.guild = null; msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have quit the guild.'); break; }
+        if (d.id === me) { this.guild = null; this.leftAlliance(); msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have quit the guild.'); break; }
         if (g) g.members = g.members.filter((m) => m.id !== d.id);
         if (d.kind === 'leave') msg(`'${d.name}' quitted the guild.`);
         else msg(d.name ? `'${d.name}' has been expelled from the guild.` : 'Deleted Chracters have been expelled.');
         break;
       case 'disband':
-        this.guild = null;
+        this.guild = null; this.leftAlliance();
         if (master) heracleSays(this.windows, 'The guild has been disbanded..  Please come back to me when you want to make a guild, again..');
         else msg('The guild has been disbanded.');
         break;
