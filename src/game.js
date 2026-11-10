@@ -80,6 +80,7 @@ import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
 import { EnergyBarWin } from './ui/energybar.js';
+import { GuildBBSWin } from './ui/guildbbs.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -2845,7 +2846,7 @@ export class Game {
     // a name or a line: the small UtilDlg box with a white field, opened without a sound
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
     Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), medal: new MedalWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
-      energybar: new EnergyBarWin(wm) });
+      energybar: new EnergyBarWin(wm), guildbbs: new GuildBBSWin(wm) });
     await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook', 'medal'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
@@ -2968,6 +2969,8 @@ export class Game {
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
       alliance: (d) => this.onAlliance(d),
+      // the guild BBS only takes its packets while it is open
+      bbs: (d) => { if (this.windows?.isOpen('guildbbs')) this.windows.wins.guildbbs.onPacket(d); },
       // other players' guild tags: held for one still spawning
       guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
       guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
@@ -3742,13 +3745,13 @@ export class Game {
 
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
-   * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, Ranking, GM
-   * Board, Maple Event) do nothing; 0x14 is the Energy Charge gauge; 0x17 is the Maker, 0x1F the Medal window.
+   * only the Quest window (6) opens. Ids without a window here (UserInfo, Monster Carnival, Ranking, GM Board, Maple
+   * Event) do nothing; 0xB is the Guild BBS, 0x14 the Energy Charge gauge, 0x17 the Maker, 0x1F the Medal window.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
-    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x14: 'energybar', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
+    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0xb: 'guildbbs', 0x14: 'energybar', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
     if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
     if (name === 'familytree') w?.load(this.player.name);

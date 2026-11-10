@@ -754,6 +754,21 @@ export class ChannelSession {
       this.emit('family', { op: 'chart', self, members, counts, canAdd: r.available >= 2 ? r.short() !== 0 : true });
     });
     on(S.FAMILY_RESULT, (r) => this.emit('family', { op: 'result', code: r.int(), mesos: r.int() }));
+    // the guild BBS: 6 a page of the list (a notice flag and the notice, the total, then the threads), 7 a thread with its
+    // replies, 8 the thread was deleted
+    on(S.GUILD_BBS_PACKET, (r) => {
+      const op = r.ubyte();
+      const entry = () => ({ id: r.int(), writer: r.int(), title: r.string(), time: r.long(), icon: r.int(), replies: r.int() });
+      if (op === 6) {
+        const notice = r.ubyte() ? entry() : null, total = r.int(), threads = [];
+        if (total > 0) for (let n = r.int(); n > 0; n--) threads.push(entry());
+        this.emit('bbs', { op: 'list', notice, total, threads });
+      } else if (op === 7) {
+        const id = r.int(), writer = r.int(), time = r.long(), title = r.string(), body = r.string(), icon = r.int(), replies = [];
+        for (let n = r.int(); n > 0; n--) replies.push({ id: r.int(), writer: r.int(), time: r.long(), text: r.string() });
+        this.emit('bbs', { op: 'thread', thread: { id, writer, time, title, body, icon, replies } });
+      } else if (op === 8) this.emit('bbs', { op: 'deleted' });
+    });
     on(S.FAMILY_JOIN_REQUEST, (r) => this.emit('family', { op: 'invite', id: r.int(), name: r.string() }));
     on(S.FAMILY_JOIN_REQUEST_RESULT, (r) => this.emit('family', { op: 'joined', ok: r.bool(), name: r.string() }));
     on(S.FAMILY_JOIN_ACCEPTED, (r) => this.emit('family', { op: 'senior', name: r.string() }));
@@ -1944,6 +1959,18 @@ export class ChannelSession {
     for (const a of args) if (typeof a === 'string') w.string(a); else w.int(a);
     this.send(w);
   }
+  /** BBS_OPERATION 0: post (edit flag, the thread when editing, notice flag, title, text, emoticon). */
+  bbsPost(edit, id, notice, title, text, icon) {
+    const w = new PacketWriter(C.BBS_OPERATION).byte(0).byte(edit ? 1 : 0);
+    if (edit) w.int(id);
+    this.send(w.byte(notice ? 1 : 0).string(title).string(text).int(icon));
+  }
+  /** BBS_OPERATION 1 delete a thread, 2 a page of the list, 3 open a thread, 4 reply, 5 delete a reply. */
+  bbsDelete(id) { this.send(new PacketWriter(C.BBS_OPERATION).byte(1).int(id)); }
+  bbsList(page) { this.send(new PacketWriter(C.BBS_OPERATION).byte(2).int(page)); }
+  bbsShow(id) { this.send(new PacketWriter(C.BBS_OPERATION).byte(3).int(id)); }
+  bbsReply(id, text) { this.send(new PacketWriter(C.BBS_OPERATION).byte(4).int(id).string(text)); }
+  bbsReplyDelete(id, reply) { this.send(new PacketWriter(C.BBS_OPERATION).byte(5).int(id).int(reply)); }
   guildRank(cid, rank) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0E).int(cid).byte(rank)); }
   guildEmblem(e) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0F).short(e.bg).byte(e.bgColor).short(e.logo).byte(e.logoColor)); }
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }

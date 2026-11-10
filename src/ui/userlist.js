@@ -84,7 +84,7 @@ export class UserListWin extends Win {
       where: at(GI.BtWhere, 160, 317, () => this.find()), whisper: at(GI.BtWhisper, 239, 317, () => this.whisper()),
       up: at(GI.BtUp, 8, 337, () => this.guildRank(-1)), down: at(GI.BtDown, 80, 337, () => this.guildRank(1)),
       kick: at(GI.BtKick, 160, 337, () => this.guildExpel()), talk: at(GI.BtChat, 239, 337, () => this.talk()),
-      bbs: at(GI.BtGuildBBS, 80, 364, () => {}), party: at(GI.BtPartyInvite, 160, 364, () => this.partyInvite()),
+      bbs: at(GI.BtGuildBBS, 80, 364, () => this.mgr.open('guildbbs')), party: at(GI.BtPartyInvite, 160, 364, () => this.partyInvite()),
       info: at(GI.BtInfo, 239, 364, () => this.toggleInfo()), notice: at(GI.Btnotice, 288, 79, () => this.guildNotice()),
       edit: at(GG.BtModf, PANEL.x + 25, PANEL.y + 268, () => this.editRank()), save: at(GG.BtSave, PANEL.x + 125, PANEL.y + 268, () => this.saveRanks()),
     };
@@ -723,7 +723,7 @@ export class UserListWin extends Win {
     G.talk.enabled = G.whisper.enabled && !this.mgr.isOpen('messenger');
     G.up.enabled = !!g && up; G.down.enabled = !!g && down;
     G.kick.enabled = !!g && !!c && ((c.rank >= 3 && rank <= 2) || (c.rank === 2 && this.isMaster()));
-    G.bbs.enabled = false;
+    G.bbs.enabled = !!g;
     G.info.enabled = !!g;
     G.notice.enabled = !!g && rank <= 2;
     const panel = this.panelOpen() && this.panelReveal() >= PANEL.w;
