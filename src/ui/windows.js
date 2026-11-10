@@ -727,6 +727,28 @@ function autoTargets(job, L, flag) {
   if (line === 52 || (job === 500 && flag === 0)) return [['str', L], ['dex', 4 * L + 12]];
   return null;
 }
+/**
+ * The Stat window's guide balloons after the first job advancement (WorldNotice/Balloon, black Arial 12): one at the
+ * automatic distribution button, and one (two for a Pirate) at the job's main stat's + button. Each is
+ * [arrow type, x, y, lines]: 0 nel / 1 sel / 2 swl / 3 nwl arrows.
+ */
+const RAISE = 'You can raise the desired stat by pressing the arrow key.', MAIN = (j) => `The most important stat for a ${j} and`;
+const STAT_GUIDE_AUTO = [2, 170, 197, ['If you press the automatic distribution button, the AP will be', 'distributed automatically as needed.']];
+const STAT_GUIDE = {
+  100: [[3, 164, 248, [RAISE, MAIN('Warrior is STR'), 'In addition, A bit of DEX is required.']]],
+  // (the client's own Magician line has no stat in it)
+  200: [[2, 164, 273, [RAISE, 'The most important stat for a Magician is and', 'In addition, A bit of LUK is required.']]],
+  300: [[2, 164, 255, [RAISE, MAIN('Bowman is DEX'), 'In addition, A bit of STR is required.']]],
+  400: [[2, 164, 291, [RAISE, MAIN('Thief is LUK'), 'In addition, A bit of DEX is required.']]],
+  500: [[1, 153, 237, [RAISE, MAIN('knuckle using Pirate is STR'), 'In addition, a bit of DEX is required.']],
+    [2, 164, 255, [MAIN('gun using Pirate is DEX'), 'In addition, a bit of STR is required.']]],
+  1100: [[3, 164, 248, [RAISE, MAIN('Dawn Warrior is STR'), 'In addition, a bit of DEX is required.']]],
+  1200: [[2, 164, 273, [RAISE, MAIN('Blaze Wizard is INT'), 'In addition, a bit of LUK is required.']]],
+  1300: [[2, 164, 255, [RAISE, MAIN('Wind Archer is DEX'), 'In addition, a bit of STR is required.']]],
+  1400: [[2, 164, 291, [RAISE, MAIN('Night Walker is LUK'), 'In addition, a bit of DEX is required.']]],
+  1500: [[3, 164, 248, [RAISE, MAIN('Thunder Breaker is STR'), 'In addition, a bit of DEX is required.']]],
+};
+const STAT_ARROWS = ['nelArrow', 'selArrow', 'swlArrow', 'nwlArrow'];
 class StatWin extends Win {
   constructor(mgr) {
     const W = mgr.W.Stat;
@@ -738,12 +760,40 @@ class StatWin extends Win {
     this.button(W.BtDetail, 121, 324, () => { this.detail = !this.detail; });
     this.hideBtn = this.button(mgr.B.BtHide, DETAIL_X + 155, DETAIL_Y + 182, () => { this.detail = !this.detail; });
   }
+  /** The first job advancement's guide balloons, for this opening only (job: the new job). */
+  showGuide(job) { this.guide = [STAT_GUIDE_AUTO, ...(STAT_GUIDE[job] || [])]; }
+  /**
+   * A guide balloon: its box W = the widest line + 20 by 15 a line + 20, the 9-slice in it, and its arrow beside it:
+   * nel / sel on the right (box at (0, 23) / (0, 0), arrow at (W - 8, 0) / (W - 8, 15n + 4)), swl / nwl on the left (box
+   * at (23, 0) / (23, 23), arrow at (0, 15n + 4) / (0, 0)). North arrows hang from y, south ones stand on it; the arrow
+   * end is at x (left arrows) or x - (W + 22) (right arrows) - that last part was lost: placed so the tip lands on x.
+   * Lines are centred in the box from 10 down, 15px apart.
+   */
+  guideBalloon(ctx, B, [type, x, y, lines]) {
+    const im = (k) => this.mgr.image(B[k]);
+    const [nw, ne, sw, se] = ['nw', 'ne', 'sw', 'se'].map(im);
+    if (!nw || !ne || !sw || !se) return;
+    ctx.save(); ctx.font = '12px Arial';
+    const widths = lines.map((l) => Math.ceil(ctx.measureText(l).width));
+    ctx.restore();
+    const W = Math.max(...widths) + 20, H = lines.length * 15 + 20, n = lines.length;
+    const lx = type <= 1 ? x - (W + 22) : x, ly = type === 0 || type === 3 ? y : y - 23 - H;
+    const box = [[0, 23], [0, 0], [23, 0], [23, 23]][type], arrow = [[W - 8, 0], [W - 8, n * 15 + 4], [0, n * 15 + 4], [0, 0]][type];
+    const bx = lx + box[0], by = ly + box[1];
+    const put = (k, dx, dy, dw, dh) => { const i = im(k); if (i && dw > 0 && dh > 0) ctx.drawImage(i, bx + dx, by + dy, dw, dh); };
+    put('c', 9, 9, W - 18, H - 18);
+    put('n', 9, 0, W - 18, 9); put('s', 9, H - 9, W - 18, 9); put('w', 0, 9, 9, H - 18); put('e', W - 9, 9, 9, H - 18);
+    ctx.drawImage(nw, bx, by); ctx.drawImage(ne, bx + W - 9, by); ctx.drawImage(sw, bx, by + H - 9); ctx.drawImage(se, bx + W - 9, by + H - 9);
+    const a = im(STAT_ARROWS[type]);
+    if (a) ctx.drawImage(a, lx + arrow[0], ly + arrow[1]);
+    lines.forEach((l, i) => uiText(ctx, l, bx + Math.round(W / 2 - widths[i] / 2), by + 10 + 15 * i, { color: '#000', size: 12 }));
+  }
   /** The detail panel slides out from behind the window, or back, 1px a ms; reopened, it is where it was left. */
   tick(ms) {
     const to = this.detail ? DETAIL_X : 0;
     this.panelX = to > this.panelX ? Math.min(to, this.panelX + ms) : Math.max(to, this.panelX - ms);
   }
-  onClose() { this.panelX = this.detail ? DETAIL_X : 0; }
+  onClose() { this.panelX = this.detail ? DETAIL_X : 0; this.guide = null; }
   get panelShown() { return this.detail || this.panelX > 0; }
   frames() { return [...super.frames(), this.W.backgrnd2, this.W.basicStat, ...allCanvases(this.W.Job), ...allCanvases(this.W.Disabled)]; }
   contains(x, y) {
@@ -766,6 +816,8 @@ class StatWin extends Win {
     super.draw(ctx);
     // clickable only where the main panel doesn't cover it
     hide.visible = shown && hide.rect().x >= this.w;
+    const B = this.guide && this.g.loginUi?.WorldNotice?.Balloon;
+    if (B) { ctx.save(); ctx.translate(this.x, this.y); for (const b of this.guide) this.guideBalloon(ctx, B, b); ctx.restore(); }
   }
   /** ToolTipHelp's Stat (main panel) and StatDetail (detail panel) rects; the EXP row shows its figures. */
   tooltip(lx, ly) {

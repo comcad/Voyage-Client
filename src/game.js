@@ -3792,6 +3792,15 @@ export class Game {
     if (w) w.guide = true;
   }
 
+  /** The first job advancement: the Stat window opens with its guide balloons for the new job. */
+  async statGuide(job) {
+    this.loginUi ??= await this.assets.json('UI/Login.img');
+    const B = this.loginUi?.WorldNotice?.Balloon;
+    if (B) await this.assets.preload(Object.values(B).filter((n) => n?._canvas));
+    const w = this.windows.open('stat');
+    w?.showGuide?.(job);
+  }
+
   /** Context for quest checks and NPC text (#c item counts). */
   textCtx() {
     const bookCards = Object.values(this.monsterBook?.cards || {}).filter((n) => n > 0).length;
@@ -3834,7 +3843,7 @@ export class Game {
       this.vfx?.play('JobChanged', this.player); sfx.play('Game/JobChanged');
       if (this.skills && s.job !== this.skills.job) this.skills.loadJob(s.job).then(() => this.skillWin?.render());
       // the first job advancement opens the Stat window
-      if ([0, 1000, 2000, 2001].includes(job0) && !this.windows.isOpen('stat')) this.windows.open('stat');
+      if ([0, 1000, 2000, 2001].includes(job0) && !this.windows.isOpen('stat')) this.statGuide(this.stats.job);
     }
     // levelling up with AP piled past 199
     if (s.level > before && this.stats.ap > 199 && Math.floor((this.stats.job % 1000) / 100) !== 9) {
