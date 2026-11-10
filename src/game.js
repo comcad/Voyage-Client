@@ -1445,6 +1445,12 @@ export class Game {
     if (text.length > 60) { this.windows.notice('Use the megaphone to text up to 60 characters.'); return false; }
     return true;
   }
+  /** A trade or shop room's chat line: refused for a curse word, or by the chat checks (repeats, too many lines), else sent. */
+  async roomChat(text) {
+    if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return; }
+    if (this.statusBar?.canSay && !this.statusBar.canSay(text)) return;
+    this.net?.tradeChat(text);
+  }
   /** Whether a line holds a word from Etc/Curse.img (ignoring case), or a control character. */
   async cursed(text) {
     if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text)) return true;
@@ -2990,7 +2996,8 @@ export class Game {
       tradeMeso: (side, v) => this.tradeWin?.setMeso(side, v),
       tradeConfirm: () => this.tradeWin?.partnerConfirmed(),
       // room chat from the other seat has its curse words masked
-      tradeChat: (text, slot) => this.tradeWin?.say(slot === this.tradeWin.slot ? text : this.maskedLine(text)),
+      // your own line in #006699, your partner's in black
+      tradeChat: (text, slot) => { const mine = slot === this.tradeWin?.slot; this.tradeWin?.say(mine ? text : this.maskedLine(text), mine ? '#006699' : '#000'); },
       tradeEnd: (result) => this.tradeWin?.ended(result),
       // player shops
       shopOpen: later(async (d) => {
@@ -3005,7 +3012,11 @@ export class Game {
       family: later((e) => this.onFamily(e)),
       shopSold: later((i, qty, buyer) => this.playerShop?.soldUpdate(i, qty, buyer)),
       shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
-      shopChat: later((slot, text) => this.playerShop?.say(slot === this.playerShop.slot ? text : this.maskedLine(text))),
+      shopChat: later((slot, text) => this.playerShop?.seatSay(slot, slot === this.playerShop.slot ? text : this.maskedLine(text))),
+      shopOrganized: later((mesos) => this.playerShop?.organized(mesos)),
+      shopMesoTaken: later(() => this.playerShop?.mesoTaken()),
+      shopVisits: later((list) => this.playerShop?.showVisits(list)),
+      shopBlacklist: later((list) => this.playerShop?.showBlacklist(list)),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
       shopClosed: later((reason, result) => {
         this.playerShop?.end(reason);
@@ -3363,6 +3374,16 @@ export class Game {
         if (e.op === 'open') { if (!this.tradeOpen()) this.showSingle(new FredrickWin(this.windows, e)).then((w) => { this.fredrickWin = w; }); }
         else if (e.op === 'result') { if (this.fredrickWin && this.windows.order.includes(this.fredrickWin)) this.fredrickWin.result(e.code); }
         else if (e.op === 'unavailable') this.windows.notice('This is currently unavailable.\r\nPlease try again later');
+        // the storing fee: only while GET ALL is waiting in his open window
+        else if (e.op === 'fee') { if (this.fredrickWin?.busy && this.windows.order.includes(this.fredrickWin)) this.fredrickWin.askFee(e); }
+        // your Hired Merchant is open elsewhere (or there's nothing to retrieve): his OK-only dialog
+        else if (e.op === 'elsewhere') {
+          const none = e.map === 999999999 || e.channel > 0xFD;
+          localTalk(this.windows, e.npc, none
+            ? "I don't think you have any items or money to retrieve here.\r\nThis is where you retrieve the items and mesos that you couldn't get from your Hired Merchant. You'll also need to see me as the character that opened the Personal Store."
+            // the Free Market room's number was lost in the decompile: taken from the map id (910000001 is room 1)
+            : `Your Personal Store is open #bin Channel ${this.channelLabel(e.channel)}, Free Market ${e.map - 910000000}#k.\r\nIf you need me, then please close your personal store first before seeing me.`, ['OK']);
+        }
       },
       storageOpen: (s) => {
         if (this.storageWin) this.windows.close(this.storageWin);

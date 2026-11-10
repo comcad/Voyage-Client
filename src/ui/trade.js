@@ -25,7 +25,7 @@ const RESULTS = { 1: 'The trade was successful.', 2: 'The trade has been cancell
 export class TradeWin extends Win {
   constructor(mgr) {
     const T = mgr.W.TradingRoom;
-    super(mgr, T.backgrnd, Math.round((UI_W - 565) / 2), 20);
+    super(mgr, T.backgrnd, Math.round((UI_W - 565) / 2), 63);   // centred on the 800x600 screen, as the client places it
     this.buttons = [];
     this.T = T; this.transient = false;
     this.partner = null;                  // { name }
@@ -35,14 +35,26 @@ export class TradeWin extends Win {
     this.coin = this.button(T.BtCoin, 170, 244, () => this.offerMesos());   // over the art's own coin
     this.tradeBtn = this.button(T.BtTrade, 114, 47, () => this.confirm());
     this.cancelBtn = this.button(T.BtReset, 114, 70, () => this.cancel());   // v83 draws BtReset here, not BtCancel
+    // ENTER sends the chat line as the Enter key does; the Report siren does nothing in the client either. Both lost
+    // their places: ENTER right of the chat line, the siren in the blue band's end (unverified)
+    this.button(mgr.W.Messenger.BtEnter, 490, 244, () => this.sendChat());
+    this.button(mgr.B.BtClaim, 537, 242, () => {});
     this.chat = new TextField(mgr.game.statusBar.layer, 0, 0, 190, 14, { max: 70, color: '#000' });
     this.chat.el.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter' && this.chat.value.trim()) { this.g.net?.tradeChat(this.chat.value.trim()); this.chat.value = ''; }
+      if (e.key === 'Enter') this.sendChat();
       else if (e.key === 'Escape') this.chat.el.blur();
     });
   }
   frames() { return [...super.frames()]; }
+  /** The line, if any, goes through the chat checks; the box is cleared. */
+  sendChat() {
+    const t = this.chat.value;
+    if (!t) return;
+    this.chat.value = '';
+    this.g.roomChat?.(t);
+    this.chat.el.focus();
+  }
 
   // ---------------------------------------------------------------- server events
   // the look comes with the trade packet, so a hidden GM partner still shows up in the room

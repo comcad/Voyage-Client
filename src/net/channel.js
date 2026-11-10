@@ -112,17 +112,17 @@ function readMerchantRoom(r, selfName) {
   const notes = [];
   for (let n = r.short(); n > 0; n--) notes.push({ text: r.string(), slot: r.ubyte() });
   const owner = r.string(), mine = owner === selfName, sold = [];
-  let firstTime = false;
+  let firstTime = false, elapsed = 0, received = 0;
   if (mine) {
-    r.short(); r.short(); firstTime = r.bool();
+    elapsed = r.int(); firstTime = r.bool();           // how long it has been open (ms), and a store not opened yet
     for (let n = r.ubyte(); n > 0; n--) sold.push({ id: r.int(), qty: r.short(), mesos: r.int(), buyer: r.string() });
-    r.int();
+    received = r.int();               // what the merchant holds for you
   }
   const title = r.string(); r.ubyte();
   const mesos = r.int();            // the owner: what the merchant has earned; a visitor: their own
   const n = r.ubyte();
   const items = n ? Array.from({ length: n }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) })) : (r.ubyte(), []);
-  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, mesos, sold, people, title, items, notes };
+  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, elapsed, received, mesos, sold, people, title, items, notes };
 }
 /** ROOM type 4 (getPlayerShop): max visitors, your slot (0 owner), sales so far, owner and visitors, title, stock. */
 function readShopRoom(r) {
@@ -768,7 +768,9 @@ export class ChannelSession {
         const mesos = flags & 2 ? r.int() : 0;
         for (const f of [4, 8, 0x10, 0x20, 0x40]) if (flags & f) for (let n = r.ubyte(); n > 0; n--) items.push(readItem(r, false));
         this.emit('fredrick', { op: 'open', npc, slots, mesos, items });
-      } else if (op === 0x26) this.emit('fredrick', { op: 'unavailable' });
+      } else if (op === 0x24) { const days = r.int(); this.emit('fredrick', { op: 'fee', days, fee: r.int() }); }   // the storing fee, asked before GET ALL goes on
+      else if (op === 0x25) { const npc = r.int(), map = r.int(); this.emit('fredrick', { op: 'elsewhere', npc, map, channel: r.ubyte() }); }   // your store is open somewhere
+      else if (op === 0x26) this.emit('fredrick', { op: 'unavailable' });
     });
     on(S.FREDRICK_MESSAGE, (r) => this.emit('fredrick', { op: 'result', code: r.ubyte() }));
     // the guild BBS: 6 a page of the list (a notice flag and the notice, the total, then the threads), 7 a thread with its
@@ -1813,6 +1815,12 @@ export class ChannelSession {
     if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
     if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0, r.available ? r.ubyte() : null); return true; }   // REAL_CLOSE_MERCHANT: closed, and what came back
     if (op === 0x1A) { this.emit('shopSold', r.ubyte(), r.short(), r.string()); return true; } // UPDATE_PLAYERSHOP: sold (owner)
+    // a Hired Merchant's owner: ORGANIZE's answer (its mesos, sold-out rows dropped), the mesos withdrawn, the visit list
+    // (name, ms there) and the blacklist
+    if (op === 0x28) { this.emit('shopOrganized', r.int()); return true; }
+    if (op === 0x2C) { this.emit('shopMesoTaken'); return true; }
+    if (op === 0x2E) { const list = []; for (let n = r.short(); n > 0; n--) list.push({ name: r.string(), ms: r.int() }); this.emit('shopVisits', list); return true; }
+    if (op === 0x2F) { const list = []; for (let n = r.short(); n > 0; n--) list.push(r.string()); this.emit('shopBlacklist', list); return true; }
     if (op === 4) { const slot = r.ubyte(), look = readCharLook(r); this.emit('shopVisitor', slot, r.string(), look); return true; }
     if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('shopChat', slot, r.string()); return true; }
     if (op === 0x0A) {                                                   // a visitor left, or the shop closed on you
@@ -1967,7 +1975,18 @@ export class ChannelSession {
   merchantTakeBack(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x26).short(index)); }
   merchantOrganize() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x28)); }
   merchantClose() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x29)); }
-  merchantLeave() { this.roomType = 0; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x27)); }
+  merchantLeave() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x27)); }
+  /** A Hired Merchant's owner: withdraw its mesos (2B), ask for the visit list (2E) or the blacklist (2F), add (30) or remove (31) a name. */
+  merchantMeso() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x2B)); }
+  merchantVisits() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x2E)); }
+  merchantBlacklist() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x2F)); }
+  merchantBlacklistAdd(name) { if (name) this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x30).string(name)); }
+  merchantBlacklistRemove(name) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x31).string(name)); }
+  /** A shop's owner bans the visitor in a slot (1C), or the hour-long stay runs out (1D). */
+  pshopBan(slot, name) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1C).byte(slot).string(name)); }
+  pshopStayOver(slot, name) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1D).byte(slot).string(name)); }
+  /** OPEN STORE first sends your own blacklist's names. */
+  pshopBlacklistNames(names) { const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0x1E).short(names.length); for (const n of names) w.string(n); this.send(w); }
   /** PLAYER_INTERACTION: 0 create (type 3 = trade), 2 invite, 3 decline, 4 visit, 6 chat, 0xA exit, 0xF item, 0x10 meso, 0x11 confirm */
   tradeStart(cid) {
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3));
@@ -1992,7 +2011,7 @@ export class ChannelSession {
     this.send(w);
   }
   /** FREDRICK_ACTION: 0x1A take everything back, 0x1C his window closed. */
-  fredrick(op) { this.send(new PacketWriter(C.FREDRICK_ACTION).byte(op)); }
+  fredrick(op) { this.send(new PacketWriter(C.FREDRICK_ACTION).byte(op)); }   // 0x1B: yes to the storing fee
   /** BBS_OPERATION 0: post (edit flag, the thread when editing, notice flag, title, text, emoticon). */
   bbsPost(edit, id, notice, title, text, icon) {
     const w = new PacketWriter(C.BBS_OPERATION).byte(0).byte(edit ? 1 : 0);
