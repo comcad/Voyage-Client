@@ -39,14 +39,14 @@ export class Reactor {
     }
     return out;
   }
-  get event() { return this.img?.[this.state]?.event?.[0] || null; }
   /**
-   * Can an attack set it off now? Not one walked into, nor one that waits for an item or a timer; not while a hit is
-   * still showing, nor before its block time (800 ms after it appears, the hit's tenths of a second after a hit).
+   * Can an attack set it off now? Only when one of its state's events is a hit (type 0-4); not while a hit is still
+   * showing, nor before its block time (800 ms after it appears, the hit's tenths of a second after a hit).
    */
   get hittable() {
-    const t = Number(this.event?.type ?? -1);
-    return !this.gone && !this.touch && t >= 0 && t < 100 && t !== 9 && this.phase === 0 && performance.now() >= this.blockUntil;
+    const ev = this.img?.[this.state]?.event || {};
+    const hit = Object.keys(ev).some((k) => /^\d+$/.test(k) && Number(ev[k]?.type ?? -1) >= 0 && Number(ev[k]?.type) < 5);
+    return !this.gone && hit && this.phase === 0 && performance.now() >= this.blockUntil;
   }
 
   /**
