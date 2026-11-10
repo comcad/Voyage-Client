@@ -4,7 +4,8 @@ import { Win, allCanvases } from './windows.js';
 import { localTalk } from './dialogs.js';
 import { drawEmblem } from './social.js';
 import { CHAT_COLOR } from './statusbar.js';
-import { UI_W } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
+import { TextField } from './wzui.js';
 
 /**
  * The community window (UI/UIWindow.img/UserList, 312x389): Buddy, Party, Guild, Guild Alliance and Blacklist tabs,
@@ -443,12 +444,22 @@ export class UserListWin extends Win {
     if ((this.g.buddies || []).some((b) => b.name.toLowerCase() === name.toLowerCase() && (b.group || DEFAULT_GROUP) === group)) { this.mgr.notice('The buddy is already registered.'); return; }
     this.g.net?.buddyAdd(name, group);
   }
-  /** Puts the selected buddy in a new group. */
-  async addGroup() {
-    const r = this.selected();
-    if (r?.kind !== 'buddy') { this.mgr.notice('You have not selected any friends.'); return; }
-    const group = await this.askGroup('');
-    if (group) this.g.net?.buddyAdd(r.item.name, group);
+  /** ADD GROUP: Edit Group for a new group. */
+  addGroup() { this.groupMod('', true); }
+  /**
+   * Edit Group over every buddy, those in this group checked. On OK each checked buddy is added to the group under
+   * its (new) name, and each unchecked one already in a group of that name goes back to Default Group.
+   */
+  groupMod(name, isNew) {
+    const groups = this.buddyGroups();
+    const entries = groups.flatMap((grp) => grp.list.map((b) => ({ name: b.name, group: b.group || DEFAULT_GROUP, checked: (b.group || DEFAULT_GROUP) === name })));
+    this.g.showModal(new GroupModWin(this.mgr, name, entries, isNew, groups.map((grp) => grp.name), (newName, list) => {
+      if (!newName) return;
+      for (const e of list) {
+        if (e.checked) this.g.net?.buddyAdd(e.name, newName);
+        else if (e.group === newName) this.g.net?.buddyAdd(e.name, DEFAULT_GROUP);
+      }
+    }));
   }
   async askGroup(def) {
     const name = (await this.mgr.askText('Please enter the group name.', def, { max: 16 }))?.trim();
@@ -461,10 +472,7 @@ export class UserListWin extends Win {
     if (!r) return;
     if (r.kind === 'buddy') { const group = await this.askGroup(r.item.group || DEFAULT_GROUP); if (group) this.g.net?.buddyAdd(r.item.name, group); return; }
     if (r.item.name === DEFAULT_GROUP) { this.mgr.notice(`${DEFAULT_GROUP} cannot be changed or deleted.`); return; }
-    const group = await this.askGroup(r.item.name);
-    if (!group) return;
-    if (this.buddyGroups().some((x) => x.name === group)) { this.mgr.notice('This name already exists.'); return; }
-    for (const b of r.item.list) this.g.net?.buddyAdd(b.name, group);
+    this.groupMod(r.item.name, false);
   }
   async deleteBuddy() {
     const r = this.selected();
@@ -1008,6 +1016,74 @@ export class PartyHpWin extends Win {
  * contract (message) fades in at (31, 51) with the master and guild names in yellow Arial 12, right-aligned at x 105
  * on its blanks, and two seconds after that AGREE / DISAGREE. Left alone for 30s it refuses.
  */
+/**
+ * Edit Group (UserList/Friend/GroupMod, 268x364, centred and modal), from ADD GROUP (a new group, no name) and from
+ * MODIFY on a group. The group's name (16 letters at most) goes in the box at the top; every buddy is listed below,
+ * seven rows from y 137, 20px apart, each a check box with the buddy's name and, at x 113 in grey (#909090), the group
+ * they are in now; its scrollbar is at (243, 113), 164 tall. OK needs a name, a checked row among the seven showing,
+ * and - for a new or renamed group - a name no other group has. The name box's, the check boxes' and the buttons'
+ * places were lost: they sit in the art's box, its NAME column and its bottom strip.
+ */
+const GM_ROW_Y = 137, GM_ROW_H = 20, GM_ROWS = 7, GM_BAR = { x: 243, y: 113, h: 164 }, GM_BOX_X = 12;
+export class GroupModWin extends Win {
+  constructor(mgr, groupName, entries, isNew, groups, done) {
+    const G = mgr.W.UserList.Friend.GroupMod;
+    super(mgr, G.backgrnd, (UI_W - 268) >> 1, (UI_H - 364) >> 1);
+    this.buttons = []; this.closeBtn = null;
+    Object.assign(this, { G, modal: true, original: groupName, entries, isNew, groups, done, first: 0 });
+    this.field = new TextField(mgr.game.statusBar.layer, 0, 0, 246, 15, { max: 16, color: '#000' });
+    this.field.value = groupName;
+    this.field.el.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') this.ok();
+      else if (e.key === 'Escape') this.finish(null);
+    });
+    this.button(mgr.B.BtClose, 249, 6, () => this.finish(null));
+    this.button(G.BtOk, 70, 327, () => this.ok());
+    this.button(G.BtCancel, 138, 327, () => this.finish(null));
+  }
+  frames() { return [...super.frames(), ...allCanvases(this.G), this.mgr.B.CheckBox?.[0], this.mgr.B.CheckBox?.[1]].filter(Boolean); }
+  async ok() {
+    const name = this.field.value, say = (t) => this.mgr.notice(t).then(() => this.field.focus());
+    if (!name) { say('Please enter the group name.'); return; }
+    if (!this.entries.slice(this.first, this.first + GM_ROWS).some((e) => e.checked)) { say('You have not selected any friends.'); return; }
+    if ((this.isNew || name !== this.original) && this.groups.includes(name)) { say('This name already exists.'); return; }
+    this.finish(name);
+  }
+  finish(v) {
+    if (this.answered) return;
+    this.answered = true; this.field.remove(); this.mgr.close(this);
+    this.done(v, this.entries);
+  }
+  onClose() { this.field.remove(); }
+  key(e) { if (e.key === 'Escape') this.finish(null); else if (e.key === 'Enter') this.ok(); }
+  draw(ctx) {
+    super.draw(ctx);
+    this.field.rect.x = this.x + 10; this.field.rect.y = this.y + 64;
+    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
+    if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
+  }
+  body(ctx) {
+    for (let k = 0; k < GM_ROWS; k++) {
+      const e = this.entries[this.first + k];
+      if (!e) break;
+      const y = GM_ROW_Y + k * GM_ROW_H, box = this.mgr.image(this.mgr.B.CheckBox?.[e.checked ? 1 : 0]);
+      if (box) ctx.drawImage(box, GM_BOX_X, y + 1);
+      this.text(ctx, e.name, GM_BOX_X + 16, y + 2, { size: 12, color: '#000' });
+      this.text(ctx, e.group, 113, y + 2, { size: 12, color: '#909090' });
+    }
+    this.scrollbar(ctx, GM_BAR.x, GM_BAR.y, GM_BAR.h, this.first, this.entries.length, GM_ROWS);
+  }
+  down(lx, ly) {
+    const s = this.scrollClick(lx, ly, GM_BAR.x, GM_BAR.y, GM_BAR.h, this.first, this.entries.length, GM_ROWS);
+    if (s !== null) { this.first = s; return; }
+    const k = Math.floor((ly - GM_ROW_Y) / GM_ROW_H), e = this.entries[this.first + k];
+    // a row's check box control is 93x14 from the box
+    if (e && k >= 0 && k < GM_ROWS && lx >= GM_BOX_X && lx < GM_BOX_X + 93 && ly - GM_ROW_Y - k * GM_ROW_H < 14) { e.checked = !e.checked; sfx.play('UI/BtMouseClick'); }
+  }
+  wheel(dy) { this.first = Math.max(0, Math.min(Math.max(0, this.entries.length - GM_ROWS), this.first + Math.sign(dy))); }
+}
+
 export class GuildContractWin extends Win {
   constructor(mgr, master, guildName, done) {
     super(mgr, null, 275, 100);
