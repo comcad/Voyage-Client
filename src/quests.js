@@ -97,6 +97,13 @@ export class QuestBook {
     [this.info, this.check, this.act, this.say] = await Promise.all(
       ['QuestInfo', 'Check', 'Act', 'Say'].map((f) => this.assets.json(`Quest/${f}.img`)));
     this.info ||= {}; this.check ||= {}; this.act ||= {}; this.say ||= {};
+    // Exclusive.img: groups of quests (named by its children) of which only one may be in progress at a time
+    this.exclusive = new Map();
+    for (const g of Object.values((await this.assets.json('Quest/Exclusive.img')) || {})) {
+      if (!g || typeof g !== 'object') continue;
+      const ids = Object.keys(g).filter((k) => /^\d+$/.test(k)).map(Number);
+      for (const id of ids) this.exclusive.set(id, [...(this.exclusive.get(id) || []), ...ids.filter((o) => o !== id)]);
+    }
     // the quests in the files' own order (kept as _order by the extractor), which the quest log's lists follow
     const order = (o) => { const ord = o._order; delete o._order; return (ord || Object.keys(o)).filter((k) => /^\d+$/.test(k)).map(Number); };
     this.infoOrder = order(this.info); this.checkOrder = order(this.check); order(this.act); order(this.say);
@@ -269,8 +276,14 @@ export class QuestBook {
   }
 
   /**
-   * ctx: { stats, meso, itemCount(id), equipped(id), mapId, skillLevel(id), pet: {id, closeness} | null, bookCards }
+   * ctx: { stats, meso, itemCount(id), equipped(id), mapId, skillLevel(id), pet: {id, closeness, skill} | null, bookCards,
+   *        book: {card id: count}, world, mountLevel, morph, hasBuff(source) }
    * npcId undefined skips the NPC test (the quest log's Available tab).
+   * Besides the checks above: no other quest of its Exclusive.img group in progress; the world within worldmin /
+   * worldmax; the mount's level within tamingmoblevelmin / max (0 to 30 by default, so always checked); the morph
+   * worn; the item buffs that must be on (buff) and off (exceptbuff), an item buff's source being minus the item id;
+   * petRecallLimit / petAutoSpeakingLimit: a first pet out that hasn't the skill yet (its skill flags 0x80 / 0x100);
+   * the Monster Book's card count (mbmin / mbmax) and listed cards' counts (mbcard).
    */
   canStart(id, ctx, npcId) {
     const c = this.check[id]?.['0'];
@@ -279,6 +292,10 @@ export class QuestBook {
     if (st === 1) return false;
     if (npcId !== undefined && c.npc && Number(c.npc) !== npcId) return false;
     if (st === 2 && !this.repeatable(id, c)) return false;
+    if ((this.exclusive?.get(id) || []).some((o) => this.status(o) === 1)) return false;
+    const num = (v, d) => (v === undefined || v === '' ? d : Number(v));
+    const w = ctx.world, wmin = num(c.worldmin, -1), wmax = num(c.worldmax, -1);
+    if (w !== undefined && ((wmin >= 0 && w < wmin) || (wmax >= 0 && w > wmax))) return false;
     const s = ctx.stats || {};
     if (c.lvmax && s.level > c.lvmax) return false;
     if (c.lvmin && s.level < c.lvmin - (isPartyQuest(id) ? 5 : 0)) return false;
@@ -305,6 +322,24 @@ export class QuestBook {
     if (!this.questsOk(c)) return false;
     if (this.hasInfoReq(c) && !this.infoOk(id, c)) return false;
     if (c.dayOfWeek && DAYS.some((d) => c.dayOfWeek[d] !== undefined) && !Number(c.dayOfWeek[DAYS[new Date().getDay()]])) return false;
+    const ml = ctx.mountLevel ?? 0;
+    if (ml < num(c.tamingmoblevelmin, 0) || ml > num(c.tamingmoblevelmax, 30)) return false;
+    if (num(c.morph, 0) && (ctx.morph || 0) !== num(c.morph, 0)) return false;
+    const ids = (v) => String(v ?? '').split(/\D+/).filter(Boolean).map(Number).filter((n) => n);
+    if (ctx.hasBuff && (ids(c.buff).some((b) => !ctx.hasBuff(-b)) || ids(c.exceptbuff).some((b) => ctx.hasBuff(-b)))) return false;
+    const recall = num(c.petRecallLimit, 0), talk = num(c.petAutoSpeakingLimit, 0);
+    if (recall || talk) {
+      const sk = ctx.pet?.skill;
+      if (sk === undefined || (recall && sk & 0x80) || (talk && sk & 0x100)) return false;
+    }
+    if (ctx.book) {
+      const n = ctx.bookCards ?? 0, bmin = num(c.mbmin, -1), bmax = num(c.mbmax, -1);
+      if ((bmin >= 0 && n < bmin) || (bmax >= 0 && n > bmax)) return false;
+      for (const m of list(c.mbcard)) {
+        const have = ctx.book[m.id] ?? 0, cmin = num(m.min, -1), cmax = num(m.max, -1);
+        if ((cmin >= 0 && have < cmin) || (cmax >= 0 && have > cmax)) return false;
+      }
+    }
     return true;
   }
 

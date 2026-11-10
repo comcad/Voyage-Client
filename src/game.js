@@ -3797,7 +3797,9 @@ export class Game {
     return {
       stats: this.stats, meso: this.meso, itemCount: (id) => this.itemCount(id), equipped: (id) => worn.has(id), bookCards,
       mapId: this.map?.id, skillLevel: (id) => this.skills?.levels?.[id]?.level || 0,
-      pet: first ? { id: first.id, closeness: item?.pet?.closeness ?? 0 } : null,
+      pet: first ? { id: first.id, closeness: item?.pet?.closeness ?? 0, skill: item?.pet?.skill ?? 0 } : null,
+      world: this.worldId, mountLevel: this.mountInfo?.level ?? 0, morph: this.player?.morph || 0, book: this.monsterBook?.cards || {},
+      hasBuff: (src) => { const now = Date.now(); return (this.buffs || []).some((b) => b.source === src && b.until > now); },
     };
   }
 
