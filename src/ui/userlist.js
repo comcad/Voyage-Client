@@ -96,7 +96,10 @@ export class UserListWin extends Win {
       change: at(GU.BtChange, 160, 317, () => this.allyLeader()), whisper: at(GU.BtWhisper, 239, 317, () => this.whisper()),
       up: at(GU.BtUp, 8, 337, () => this.allyRank(true)), down: at(GU.BtDown, 80, 337, () => this.allyRank(false)),
       kick: at(GU.BtKick, 160, 337, () => this.allyExpel()), talk: at(GU.BtChat, 239, 337, () => this.talk()),
-      party: at(GU.BtPartyInvite, 160, 364, () => this.partyInvite()), info: at(GU.BtInfo, 239, 364, () => {}),
+      party: at(GU.BtPartyInvite, 160, 364, () => this.partyInvite()), info: at(GU.BtInfo, 239, 364, () => this.toggleInfo()),
+      // the alliance's rank titles: the guild's title panel with the alliance's titles (the client's own window,
+      // CUIUserList_b3c2a0, is the same 233x304 on the same GuildGrade art, but its place was lost)
+      edit: at(GG.BtModf, PANEL.x + 25, PANEL.y + 268, () => this.editRank()), save: at(GG.BtSave, PANEL.x + 125, PANEL.y + 268, () => this.saveRanks()),
       notice: at(GU.Btnotice, 288, 79, () => this.allyNotice()),
     };
   }
@@ -436,10 +439,16 @@ export class UserListWin extends Win {
   setShowOnline(on) { this.showOnline = on; this.save(); }
   toggleGroup(name) { if (this.closedGroups.has(name)) this.closedGroups.delete(name); else this.closedGroups.add(name); this.save(); }
   selGroup() { const r = this.selected(); return r?.kind === 'group' ? r.item : r?.kind === 'buddy' ? { name: r.item.group || DEFAULT_GROUP } : null; }
+  /**
+   * Add Buddy: the name (12 long) and a group from the box's drop-down, which lists your buddies' groups with the
+   * first chosen (none, and "", with no buddies yet). Then BUDDYLIST_MODIFY 1 with both.
+   */
   async addBuddy() {
-    const name = (await this.mgr.askText("Please enter the name of the character\r\nyou'll add as a buddy.", '', { max: 12 }))?.trim();
+    const groups = [...new Set((this.g.buddies || []).map((b) => b.group || DEFAULT_GROUP))];
+    const r = await this.mgr.askBuddy("Please enter the name of the character\r\nyou'll add as a buddy.", groups);
+    const name = r?.name?.trim();
     if (!name) return;
-    const group = this.selGroup()?.name || DEFAULT_GROUP;
+    const group = r.group;
     if (name.toLowerCase() === this.g.player.name.toLowerCase()) { this.mgr.notice("You can't enter yourself as your buddy."); return; }
     if ((this.g.buddies || []).some((b) => b.name.toLowerCase() === name.toLowerCase() && (b.group || DEFAULT_GROUP) === group)) { this.mgr.notice('The buddy is already registered.'); return; }
     this.g.net?.buddyAdd(name, group);
@@ -620,12 +629,15 @@ export class UserListWin extends Win {
     if (this.myRank === 2 && m.rank >= 3) return [m.rank > 3, m.rank < low];
     return [false, false];
   }
-  toggleInfo() { this.info = this.info ? null : { at: performance.now(), sel: -1, ranks: [...(this.guild?.ranks || ['', '', '', '', ''])] }; }
-  panelOpen() { return !!this.info && this.tab === 2 && !!this.guild; }
+  toggleInfo() {
+    const ally = this.tab === 3;
+    this.info = this.info ? null : { at: performance.now(), sel: -1, ally, ranks: [...((ally ? this.g.alliance?.ranks : this.guild?.ranks) || ['', '', '', '', ''])] };
+  }
+  panelOpen() { return !!this.info && !!this.guild && (this.info.ally ? this.tab === 3 && !!this.g.alliance : this.tab === 2); }
   panelReveal() { return this.info ? Math.min(PANEL.w, 40 * (1 + Math.floor((performance.now() - this.info.at) / 30))) : 0; }
   async editRank() {
-    const i = this.info?.sel ?? -1;
-    if (i < 0 || !this.isMaster()) return;
+    const i = this.info?.sel ?? -1, ally = !!this.info?.ally;
+    if (i < 0 || (ally ? this.myAllyRank() !== 1 : !this.isMaster())) return;
     const t = await this.mgr.askText('Please put a position,\r\n which you want to change to.', this.info.ranks[i] || '', { max: 10, empty: i >= 3 });
     if (t === null || !this.info) return;
     const v = t.trim(), ranks = this.info.ranks;
@@ -633,12 +645,22 @@ export class UserListWin extends Win {
     if (!v) {
       if (i < 3) return;
       if (i === 3 && ranks[4]) { this.mgr.notice('You cannot delete this position, because\r\nthere is a lower rank than this position.'); return; }
-      if (this.guild.members.some((m) => m.rank === i + 1)) { this.mgr.notice('You cannot delete this position,\r\nbecause there are still members\r\nwho are in this position.'); return; }
+      if (ally ? (this.allyMembers?.() || this.guild.members).some((m) => m.allianceRank === i + 1) : this.guild.members.some((m) => m.rank === i + 1)) {
+        this.mgr.notice(ally ? 'Unable to delete due to a member\r\nin the Union currently being on the position.' : 'You cannot delete this position,\r\nbecause there are still members\r\nwho are in this position.');
+        return;
+      }
     }
     ranks[i] = v;
     if (i === 4 && v && !ranks[3]) ranks[3] = 'Member';
   }
   async saveRanks() {
+    if (this.info?.ally) {
+      // ALLIANCE_OPERATION 8 with the five titles, then the client says so at once
+      if (this.myAllyRank() !== 1 || !await this.mgr.confirm('Would like to save the change?')) return;
+      this.g.net?.allianceTitles(this.info.ranks);
+      this.mgr.notice('It is saved.');
+      return;
+    }
     if (!this.info || !this.isMaster() || !await this.mgr.confirm('Would like to save the change?')) return;
     const ranks = this.info.ranks;
     if (ranks.some((r, k) => r !== (this.guild?.ranks[k] || ''))) this.g.net?.guildOp(0x0D, ...ranks); else this.mgr.notice('It is saved.');
@@ -727,7 +749,7 @@ export class UserListWin extends Win {
     G.info.enabled = !!g;
     G.notice.enabled = !!g && rank <= 2;
     const panel = this.panelOpen() && this.panelReveal() >= PANEL.w;
-    G.edit.visible = G.save.visible = panel;
+    G.edit.visible = G.save.visible = panel && !this.info?.ally;
     G.edit.enabled = this.isMaster() && (this.info?.sel ?? -1) >= 0;
     G.save.enabled = this.isMaster();
     // alliance: nothing without one; Kick and Change need the master and another guild's master selected; Up and Down
@@ -744,7 +766,11 @@ export class UserListWin extends Win {
       A.whisper.enabled = A.party.enabled = !!c && on;
       A.talk.enabled = A.whisper.enabled && !this.mgr.isOpen('messenger');
       A.notice.enabled = my === 1 || my === 2;
+      A.info.enabled = true;
+      A.edit.enabled = my === 1 && (this.info?.sel ?? -1) >= 0;
+      A.save.enabled = my === 1;
     }
+    A.edit.visible = A.save.visible = panel && !!this.info?.ally;
     // blacklist
     this.lb.add.enabled = this.mine.black.length < BLACK_MAX;
     this.lb.del.enabled = this.mine.black.length > 0;
@@ -831,7 +857,7 @@ export class UserListWin extends Win {
     const put = (n, x, y) => { const a = this.im(n); if (a) ctx.drawImage(a, x, y); };
     put(this.U.Guild.backgrnd, 0, 0);
     put(GG.guildgrade3, 6, 18); put(GG.guildgrade4, 6, 45); put(GG.guildgrade0, 6, 91); put(GG.guildgrade1, 6, 128); put(GG.guildgrade2, 6, 146);
-    this.t(ctx, String(g.gp ?? 0), 221, 67, COL.black, { align: 'right' });
+    if (!this.info.ally) this.t(ctx, String(g.gp ?? 0), 221, 67, COL.black, { align: 'right' });
     for (let i = 0; i < 5; i++) {
       const y = 146 + 18 * i, sel = this.info.sel === i;
       if (sel) { ctx.fillStyle = SEL; ctx.fillRect(6, y, 221, 18); }

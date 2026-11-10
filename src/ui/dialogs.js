@@ -1,6 +1,6 @@
 import { pad, frames } from '../assets.js';
 import { invType, itemInfo } from '../data.js';
-import { drawParts } from '../character.js';
+import { drawParts, CharacterLook } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases, drawTabStrip } from './windows.js';
@@ -295,6 +295,10 @@ export class NpcDialog extends Win {
 /** Shows a server NPC_TALK and resolves with { action, sel } once the player answers. */
 export function npcTalk(mgr, d) {
   if (d.type === 0x0E) return new Promise((resolve) => mgr.show(new SlideMenu(mgr, d, resolve), null));
+  // a style choice: the avatar picker (its art loaded first)
+  if (d.type === 7 && d.styles?.length) {
+    return new Promise((resolve) => { const w = new AvatarStyleDialog(mgr, d, resolve); mgr.assets.preload(w.frames()).then(() => mgr.show(w, null)); });
+  }
   return new Promise((resolve) => mgr.show(new NpcDialog(mgr, d, resolve), null));   // opens without the dialog alert
 }
 
@@ -427,6 +431,79 @@ export class PetSelectDialog extends Win {
   }
 }
 
+/**
+ * NPC_TALK 7 / 8, choosing a style: UIWindow.img/UtilDlgEx_Avatar (419x306), centred on (400, 300). The words are at
+ * x 110, centred in the text box from y 28. A copy of your own look wears the style - a face for 2xxxx ids, a hair for
+ * 3xxxx, otherwise a skin - standing with its feet at (207, 245); a face or hair shows the item's name in white on
+ * nameTag at (123, 246), centred on x 210. BACK / NEXT step round the styles (wrapping), TAKE OFF ALL shows it with no
+ * equipment and DEFAULT SETTINGS (in its place) puts it back. OK answers with the style's index; Cancel and LEAVE
+ * STORE answer no. Lost in the decompile and placed by the art (unverified): every button, the shadow, and the NPC's
+ * portrait (the blue panel at the top left, its name on the bar under it).
+ */
+export class AvatarStyleDialog extends Win {
+  constructor(mgr, d, done) {
+    const A = mgr.W.UtilDlgEx_Avatar, B = mgr.B;
+    super(mgr, A.backgrnd, Math.max(0, Math.min(UI_W - 419, (UI_W >> 1) - 209)), Math.max(0, Math.min(UI_H - 306, (UI_H >> 1) - 153)));
+    this.buttons = []; this.closeBtn = null;
+    this.A = A; this.U = mgr.W.UtilDlgEx; this.d = d; this.done = done; this.modal = true; this.sel = 0; this.dressed = true;
+    const k = Math.floor((d.styles[0] || 0) / 10000);
+    this.kind = k === 2 ? 'face' : k === 3 ? 'hair' : 'skin';
+    this.layout = richText(scratch(), d.text || '', 280, textRef(mgr), NPC_TEXT);
+    this.textY = 28 + (this.layout.height > 100 ? -6 : Math.trunc((100 - this.layout.height - 6) / 2));
+    const n = d.styles.length, turn = (s) => { this.sel = (this.sel + s + n) % n; this.rebuild(); };
+    this.button(A.BtPrev, 15, 193, () => turn(-1));
+    this.button(A.BtNext, 340, 193, () => turn(1));
+    this.button(B.BtOK2, 307, 279, () => this.finish(1));
+    this.button(B.BtCancel2, 358, 279, () => this.finish(0));
+    this.offBtn = this.button(A.BtOff, 12, 279, () => { this.dressed = false; this.rebuild(); });
+    this.onBtn = this.button(A.BtOn, 12, 279, () => { this.dressed = true; this.rebuild(); });
+    this.button(A.BtExit, 96, 279, () => this.finish(0));
+    this.rebuild();
+    NpcDialog.prototype.portrait.call(this);
+  }
+  frames() { return [...super.frames(), this.A.nameTag, this.A.shadow, this.U.bar].filter(Boolean); }
+  /** Your look with the style on (and without equipment when TAKE OFF ALL is down); shown once its parts are in. */
+  async rebuild() {
+    this.offBtn.visible = this.dressed; this.onBtn.visible = !this.dressed;
+    const me = this.g.look, id = this.d.styles[this.sel], seq = (this.seq = (this.seq || 0) + 1);
+    if (!me) return;
+    const o = { skin: me.skin, face: me.faceId, hair: me.hairId, gender: me.gender, equips: this.dressed ? [...(me.equipIds || [])] : [] };
+    if (this.kind === 'face') o.face = id; else if (this.kind === 'hair') o.hair = id; else o.skin = id % 100;
+    const look = new CharacterLook(this.mgr.assets, o);
+    await look.load();
+    if (seq !== this.seq) return;
+    this.look = look;
+    if (this.kind !== 'skin') this.mgr.itemName(id);   // its name, for the tag
+  }
+  finish(action) { this.mgr.close(this); this.done({ action, sel: action === 1 ? this.sel : undefined }); }
+  key(e) { if (e.key === 'Enter') this.finish(1); else if (e.key === 'Escape') this.finish(0); }
+  body(ctx) {
+    const m = this.mgr;
+    drawRich(ctx, this.layout, 110, this.textY, { size: NPC_TEXT.size, drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
+    // the NPC, standing in the blue panel, with its name on the bar under it
+    if (this.face?.length) {
+      const total = this.face.reduce((t, f) => t + (Number(f.delay) || 180), 0);
+      let tt = performance.now() % total, f = this.face[0];
+      for (const x of this.face) { f = x; if ((tt -= Number(x.delay) || 180) < 0) break; }
+      const img = m.image(f), o = f?.origin || [img?.width / 2, img?.height];
+      if (img) ctx.drawImage(img, Math.round(55 - o[0]), Math.round(106 - o[1]));
+    }
+    if (this.name) {
+      const bar = m.image(this.U.bar);
+      if (bar) ctx.drawImage(bar, 55 - Math.trunc(bar.width / 2), 108);
+      uiText(ctx, this.name, 55, 110, { color: '#fff', size: 12, align: 'center' });
+    }
+    const sh = m.image(this.A.shadow);
+    if (sh) ctx.drawImage(sh, 182, 241);
+    if (this.look) drawParts(ctx, m.assets, this.look.compose(this.look.standAction(), 0), 207, 245, false);
+    if (this.kind !== 'skin') {
+      const tag = m.image(this.A.nameTag);
+      if (tag) ctx.drawImage(tag, 123, 246);
+      uiText(ctx, m.itemName(this.d.styles[this.sel]) || '', 210, 248, { color: '#fff', size: 12, align: 'center' });
+    }
+  }
+}
+
 // ==================================================================== notices
 /**
  * The death notice at (257, 97), its words in the art. 'ok' (UIWindow.img/Notice/0): "PRESS OK TO BE REVIVED. Once
@@ -461,7 +538,7 @@ export class UtilBox extends Win {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.modal = true; this.kind = kind; this.done = done; this.opts = opts;
-    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text';
+    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text' || kind === 'buddy';
     // centred lines take item names (#t), colours and \r\n breaks; each is trimmed so it centres on its words
     this.centred = !field && kind !== 'okcancelLeft';
     this.lines = kind === 'okcancelLeft' ? text.split('\n')
@@ -471,7 +548,8 @@ export class UtilBox extends Win {
     // centred lines stack by their own height (a line with an item icon is taller)
     this.textH = this.centred ? this.lines.reduce((t, l) => t + (l.h || 14), 0) : n * 14;
     this.tiles = Math.max(2, Math.floor(this.textH / 20) + 1);
-    this.w = 266; this.h = field ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
+    // (Add Buddy's drop-down makes the box 6px taller)
+    this.w = 266; this.h = field ? 121 + (n - 1) * 14 + (kind === 'buddy' ? 6 : 0) : 21 + this.tiles * 20 + 55;
     this.x = (UI_W - this.w) >> 1; this.y = (UI_H - this.h) >> 1;
     // 'ok': a notice with OK alone, where Cancel would be
     this.button(mgr.B.BtOK2, kind === 'ok' ? 205 : 155, this.h - 30, () => this.finish(true));
@@ -489,6 +567,12 @@ export class UtilBox extends Win {
       this.field.rect.h = 15; this.field.value = opts.def || '';
       this.names = opts.names || []; this.listOpen = false;
     }
+    // 'buddy': the name in the box, and the box's drop-down picks the group (the first one at first)
+    if (kind === 'buddy') {
+      this.field = overlayField(mgr, 140, { max: opts.max || 12, color: '#000' });
+      this.field.rect.h = 15; this.field.value = '';
+      this.names = opts.groups || []; this.group = this.names[0] ?? ''; this.listOpen = false;
+    }
   }
   frames() { return [...allCanvases(this.mgr.B.YesNo3), ...allCanvases(this.mgr.B.ComboBox?.normal), ...super.frames()]; }
   finish(ok) {
@@ -500,6 +584,7 @@ export class UtilBox extends Win {
     }
     this.answered = true; this.field?.remove(); this.mgr.close(this);
     if (this.kind === 'whisper' || this.kind === 'text') { const v = this.field.value.trim(); this.done(ok && (v || this.opts.empty) ? v : null); return; }
+    if (this.kind === 'buddy') { const v = this.field.value.trim(); this.done(ok && v ? { name: v, group: this.group } : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
     const v = Math.floor(Number(this.field.value));
     this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
@@ -531,12 +616,12 @@ export class UtilBox extends Win {
     }
     this.lines.forEach((l, i) => line(l, 19, 28 + i * 14, 'left'));
     const fy = this.h - 73;
-    if (this.kind === 'whisper') this.drawCombo(ctx);
+    if (this.kind === 'whisper' || this.kind === 'buddy') this.drawCombo(ctx);
     else {
       ctx.fillStyle = '#000'; ctx.fillRect(18, fy - 1, 228, 17);
       ctx.fillStyle = '#fff'; ctx.fillRect(19, fy, 226, 15);
     }
-    placeField(m, this.field, this.x + (this.kind === 'whisper' ? 21 : 19), this.y + fy);
+    placeField(m, this.field, this.x + (this.kind === 'whisper' || this.kind === 'buddy' ? 21 : 19), this.y + fy + (this.kind === 'buddy' ? 3 : 0));
     if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
   }
 }
@@ -548,6 +633,8 @@ UtilBox.prototype.drawCombo = function drawCombo(ctx) {
   const l = m.image(C?.[0]), c = m.image(C?.[1]), e = m.image(C?.[2]);
   if (l && c && e) { ctx.drawImage(l, r.x, r.y); ctx.drawImage(c, r.x + l.width, r.y, r.w - l.width - e.width, r.h); ctx.drawImage(e, r.x + r.w - e.width, r.y); }
   else { ctx.fillStyle = '#fff'; ctx.fillRect(r.x, r.y, r.w, r.h); }
+  // Add Buddy: the group picked, at the box's right end before its arrow
+  if (this.kind === 'buddy' && this.group) uiText(ctx, this.group, r.x + r.w - 22, r.y + 2, { color: '#555', size: 12, align: 'right' });
   if (!this.listOpen || !this.names.length) return;
   const hover = this.rowAt(m.mouse.x - this.x, m.mouse.y - this.y);
   this.names.forEach((n, i) => {
@@ -562,9 +649,9 @@ UtilBox.prototype.rowAt = function rowAt(lx, ly) {
   return this.listOpen && lx >= r.x && lx < r.x + r.w && i >= 0 && i < this.names.length ? i : -1;
 };
 UtilBox.prototype.down = function down(lx, ly) {
-  if (this.kind !== 'whisper') return;
+  if (this.kind !== 'whisper' && this.kind !== 'buddy') return;
   const r = this.comboRect(), row = this.rowAt(lx, ly);
-  if (row >= 0) { this.field.value = this.names[row]; this.listOpen = false; this.field.focus(); return; }
+  if (row >= 0) { if (this.kind === 'buddy') this.group = this.names[row]; else this.field.value = this.names[row]; this.listOpen = false; this.field.focus(); return; }
   this.listOpen = lx >= r.x + r.w - 18 && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h ? !this.listOpen : false;
 };
 

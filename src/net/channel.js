@@ -2002,6 +2002,8 @@ export class ChannelSession {
    * 0x0A the notice. allianceExpel 6 (guild, alliance), allianceLeader 7 (the new leader), allianceRank 9 (who, 1 up / 0 down).
    */
   allianceOp(mode, text = null) { const w = new PacketWriter(C.ALLIANCE_OPERATION).byte(mode); if (text !== null) w.string(text); this.send(w); }
+  /** ALLIANCE_OPERATION 8: the alliance's five rank titles. */
+  allianceTitles(ranks) { const w = new PacketWriter(C.ALLIANCE_OPERATION).byte(8); for (let i = 0; i < 5; i++) w.string(ranks[i] || ''); this.send(w); }
   allianceExpel(gid, aid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(6).int(gid).int(aid)); }
   allianceLeader(cid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(7).int(cid)); }
   allianceRank(cid, up) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(9).int(cid).byte(up ? 1 : 0)); }
@@ -2089,7 +2091,7 @@ export class ChannelSession {
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */
   npcReply(lastType, action, selection) {
     const w = new PacketWriter(C.NPC_TALK_MORE).byte(lastType).byte(action);
-    if (lastType === 7 || lastType === 8) w.byte(action === 1 ? selection ?? 0 : 0);   // a style choice is one byte
+    if (lastType === 7 || lastType === 8) { if (action === 1) w.byte(selection ?? 0); }   // a style choice: one byte, and none on a cancel
     else if (typeof selection === 'string') w.string(selection);
     else if (selection !== undefined && selection !== null) w.int(selection);
     this.send(w);

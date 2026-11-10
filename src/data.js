@@ -87,7 +87,9 @@ export function itemNode(id) {
 
 const STRING_FILES = { 1: 'Eqp', 2: 'Consume', 3: 'Ins', 4: 'Etc', 5: 'Cash' };
 export async function itemName(assets, id) {
-  const t = invType(id);
+  const t = invType(id), kind = Math.floor(id / 10000);
+  // faces (2xxxx) and hairs (3xxxx): String/Eqp.img's Face / Hair
+  if (id < 1000000 && (kind === 2 || kind === 3)) return (await assets.json('String/Eqp.img'))?.Eqp?.[kind === 2 ? 'Face' : 'Hair']?.[id]?.name || `#${id}`;
   if (Math.floor(id / 10000) === 500) return (await assets.json('String/Pet.img'))?.[id]?.name || `#${id}`;   // pets
   if (t === 9) return (await assets.json(itemNode(id).path))?.[id]?.name || `#${id}`;
   const s = await assets.json(`String/${STRING_FILES[t]}.img`);

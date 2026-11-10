@@ -75,7 +75,6 @@ const NOTICE_AT = { x: 219, y: 170 }, NOTICE_SLIDE_MS = 150;
 /** "Ver. %d.%d" with the client's version, 0.83. */
 const VERSION_TEXT = 'Ver. 0.83';
 /** UPDATE_PINCODE 0: Pincode/text/8 in words (the PIN steps here are text prompts). */
-const PIN_REGISTERED = 'Your Security Pin has been assigned. Please keep in mind that it is your responsibility to remember and protect your Security Pin.';
 // characters on the select screen
 const CHAR_FACING_RIGHT = true;
 // the selected character walks on the spot, the rest stand (walk1/2 and stand1/2 by weapon)
@@ -596,29 +595,48 @@ export class LoginScene {
     });
   }
 
-  /** Login.img/Gender: pick male or female for a new account. */
+  /**
+   * The gender question (Login.img/Gender), at (355, 200) with no backdrop of its own: scroll/0 unrolls (350 ms) and
+   * stays, then text/0 at (22, 25) (the welcome words, with the Gender box drawn in), StatusBar's chatTarget at (157, 99)
+   * with the choice - Male by default - in white at (170, 103), and BtYes (190, 150) / BtNo (262, 150). The Male /
+   * Female drop-down sits over the box; its place and frame were lost: the box opens a two-row list under it
+   * (unverified). Resolves with 0 / 1, or null for No.
+   */
   async gender() {
-    const G = this.L.Gender;
-    const x = (W - 362) / 2, y = (H - 219) / 2;
+    const G = this.L.Gender, x = 355, y = 200;
+    this.SB ??= await this.assets.json('UI/StatusBar.img');
     return new Promise((resolve) => {
-      let pick = 0;
-      const d = { buttons: [], sprites: [new WzSprite(G.backgrnd[0], x, y)], hotspots: [] };
-      const opts = [{ label: 'Male', r: { x: x + 120, y: y + 100, w: 90, h: 22 } }, { label: 'Female', r: { x: x + 220, y: y + 100, w: 90, h: 22 } }];
-      d.hotspots = opts.map((o) => o.r);
-      d.onPointer = (mx, my) => opts.forEach((o, i) => { if (inRect({ x: mx, y: my }, o.r)) pick = i; });
+      let pick = 0, open = false, shown = false;
+      const scroll = new WzSprite(G.scroll[0], x, y, { loop: false });
+      const d = { buttons: [], sprites: [scroll], hotspots: [] };
+      const box = { x: x + 157, y: y + 99, w: 45, h: 17 }, row = (i) => ({ x: box.x, y: box.y + box.h + i * 17, w: 81, h: 17 });
+      const yes = this.button(G.BtYes, x + 190, y + 150, () => close(pick)), no = this.button(G.BtNo, x + 262, y + 150, () => close(null));
+      d.hotspots = [box, row(0), row(1)];
+      d.onPointer = (mx, my) => {
+        if (!shown) return;
+        const m = { x: mx, y: my };
+        if (open) { for (const i of [0, 1]) if (inRect(m, row(i))) pick = i; open = false; return; }
+        if (inRect(m, box)) open = true;
+      };
+      const im = (n) => n && this.assets.image(n);
       d.drawFront = (ctx) => {
-        uiText(ctx, 'Please choose your gender.', x + 114, y + 45, { color: '#5a3200', bold: true });
-        uiText(ctx, 'This cannot be changed later.', x + 114, y + 62, { color: '#5a3200' });
-        opts.forEach((o, i) => {
-          ctx.fillStyle = i === pick ? '#f4c06a' : 'rgba(255,255,255,0.6)'; ctx.fillRect(o.r.x, o.r.y, o.r.w, o.r.h);
-          ctx.strokeStyle = '#a8763c'; ctx.strokeRect(o.r.x + 0.5, o.r.y + 0.5, o.r.w - 1, o.r.h - 1);
-          uiText(ctx, o.label, o.r.x + o.r.w / 2, o.r.y + 5, { color: '#5a3200', align: 'center', bold: i === pick });
-        });
+        if (!shown && scroll.anim.done) { shown = true; d.buttons = [yes, no]; this.hover(); }
+        if (!shown) return;
+        const t = im(G.text?.[0]); if (t) ctx.drawImage(t, x + 22, y + 25);   // its origin isn't used
+        const ct = im(this.SB?.base?.chatTarget); if (ct) ctx.drawImage(ct, box.x, box.y);
+        uiText(ctx, pick ? 'Female' : 'Male', x + 170, y + 103, { color: '#fff', size: 12 });
+        if (open) {
+          ['Male', 'Female'].forEach((label, i) => {
+            const r = row(i);
+            ctx.fillStyle = i === pick ? '#569ab8' : '#315574'; ctx.fillRect(r.x, r.y, r.w, r.h);
+            uiText(ctx, label, r.x + 4, r.y + 2, { color: '#fff', size: 12 });
+          });
+        }
       };
       const close = (v) => { this.dialogs.splice(this.dialogs.indexOf(d), 1); this.hover(); resolve(v); };
-      d.buttons.push(this.button(G.BtYes, x + 196, y + 172, () => close(pick)), this.button(G.BtNo, x + 276, y + 172, () => close(null)));
-      d.onEnter = () => close(pick);
-      this.assets.preload([...d.sprites.flatMap((s) => s.frames()), ...d.buttons.flatMap((b) => b.frames())]).then(() => { this.dialogs.push(d); this.hover(); });
+      d.onEnter = () => { if (shown) close(pick); };
+      d.onEscape = () => { if (shown) close(null); };
+      this.assets.preload([...scroll.frames(), G.text?.[0], this.SB?.base?.chatTarget, ...yes.frames(), ...no.frames()].filter((n) => n?._canvas)).then(() => { this.dialogs.push(d); this.hover(); });
     });
   }
 
@@ -730,25 +748,142 @@ export class LoginScene {
     }
   }
 
+  /**
+   * The PIN step, as the client runs CHECK_PINCODE: 0 in; 1 choose a PIN (entered twice, text 0 / 2, text 1 when it
+   * isn't 4 long, text 3 when the two differ; Cancel asks text 7 first and starts over on No); 2 / 4 enter it (text 5 /
+   * 4), LOGIN sending AFTER_LOGIN 1 and CHANGE PIN AFTER_LOGIN 2 (the server then asks for a new one); 3 and 7 the
+   * Login Notice's 15 / 17. A PIN goes as "%04d". After registering, text 8 and back to the title (the server closes).
+   */
   async pin() {
     let mode = await this.s.pinStart();
+    const fmt = (v) => String(parseInt(v, 10) || 0).padStart(4, '0');
     for (;;) {
       if (mode === 0) return true;
+      if (mode === 3 || mode === 7) { await this.notice(mode === 3 ? 15 : 17, 'info'); return false; }
       if (mode === 1) {
-        const a = await this.prompt('Register your PIN\nChoose a 4-digit PIN.', { pattern: /^\d{4}$/, max: 4 });
-        if (a === null) { this.s.pinRegisterCancel(); return false; }
-        const b = await this.prompt('Register your PIN\nEnter the same PIN again.', { pattern: /^\d{4}$/, max: 4 });
-        if (b === null) { this.s.pinRegisterCancel(); return false; }
-        if (a !== b) { await this.notice('The PINs do not match. Please try again.'); continue; }
+        let text = 0, pin = null;
+        while (pin === null) {
+          const a = await this.pinBox(1, text);
+          if (a.code === 0 || a.code === -1) {
+            // Cancel: are you sure? (yes leaves, no starts over)
+            if (a.code === 0 || (await this.pinBox(0, 7)).code === 1) { this.s.pinRegisterCancel(); return false; }
+            text = 0; continue;
+          }
+          if (a.value.length !== 4) { text = 1; continue; }
+          const b = await this.pinBox(1, 2);
+          if (b.code === 0 || b.code === -1) {
+            if (b.code === 0 || (await this.pinBox(0, 7)).code === 1) { this.s.pinRegisterCancel(); return false; }
+            text = 0; continue;
+          }
+          if (b.value.length !== 4 || fmt(a.value) !== fmt(b.value)) { text = 3; continue; }
+          pin = fmt(a.value);
+        }
         // the server says how it went and closes the session: back to the title either way
-        const r = await this.s.pinRegister(a);
-        await this.notice(r === 0 ? PIN_REGISTERED : 15);
+        const r = await this.s.pinRegister(pin);
+        if (r === 0) await this.pinBox(2, 8); else await this.notice(15);
         return false;
       }
-      const p = await this.prompt(mode === 2 ? 'Wrong PIN\nPlease enter your PIN again.' : 'Enter your PIN\nPlease enter your 4-digit PIN.', { pattern: /^\d{4}$/, max: 4 });
-      if (p === null) { this.s.pinCancel(); return false; }
-      mode = await this.s.pinCheck(p);
+      let text = mode === 4 ? 4 : 5, r;
+      for (;;) {
+        r = await this.pinBox(3, text);
+        if (r.code === 0 || r.value.length === 4) break;
+        text = 5;
+      }
+      if (r.code === 0) { this.s.pinCancel(); return false; }
+      mode = r.code === 2 ? await this.s.pinChange(fmt(r.value)) : await this.s.pinCheck(fmt(r.value));
     }
+  }
+
+  /**
+   * The PIN window (CUIPincode, Login.img/Pincode, 362x219), sliding in to (219, 170): mode 0 a yes / no question,
+   * 1 choosing a PIN, 2 a notice, 3 entering your PIN. Its background is backgrnd/0, or for modes 1 / 3 backgrnd/2
+   * (backgrnd/1, the crossed-out mushroom, after an error); text/<n> at (119, 21); the box at (130, 103), 150x15,
+   * starred, 8 long. Buttons: mode 0 NO (107, 150) and YES; mode 1 YES and NO (196, 150); mode 2 YES alone; mode 3
+   * CHANGE PIN (47, 150), LOGIN and NO (212, 150). The YES / LOGIN places were lost: (189, 150), (114, 150), (196, 150)
+   * and (130, 150) (unverified). Enter is OK and Esc cancels; any other key in modes 1 and 3 opens the soft keyboard,
+   * which types for you. Resolves with { code: 1 OK, 0 cancel, -1 mode 1's NO, 2 CHANGE PIN; value: the box }.
+   */
+  async pinBox(mode, text) {
+    const P = this.L.Pincode, { x, y } = NOTICE_AT;
+    const bg = mode === 1 ? (text === 0 || text === 2 ? 2 : 1) : mode === 3 ? (text === 4 ? 2 : 1) : 0;
+    this.UW ??= await this.assets.json('UI/UIWindow.img');
+    return new Promise((resolve) => {
+      const d = { buttons: [], sprites: [new WzSprite(P.backgrnd[bg], x, y), new WzSprite(P.text[text], x + 119, y + 21)], slide: true, t: 0 };
+      const keep = [...this.fields], input = mode === 1 || mode === 3;
+      const f = input ? this.field(x + 130, y + 103, 150, 15, { password: true, max: 8, color: '#000' }) : null;
+      let kb = null;
+      const close = (code) => {
+        if (kb) this.closeDialog(kb);
+        const value = f ? f.value : '';
+        this.clearFields(keep); this.closeDialog(d); resolve({ code, value });
+      };
+      const b = (node, dx, fn) => d.buttons.push(this.button(node, x + dx, y + 150, fn));
+      if (mode === 0) { b(P.BtNo, 107, () => close(0)); b(P.BtYes, 189, () => close(1)); }
+      else if (mode === 1) { b(P.BtYes, 114, () => close(1)); b(P.BtNo, 196, () => close(-1)); }
+      else if (mode === 2) b(P.BtYes, 196, () => close(1));
+      else { b(P.BtChgPin, 47, () => close(2)); b(P.BtLogin, 130, () => close(1)); b(P.BtNo, 212, () => close(0)); }
+      d.onEnter = () => close(1); d.onEscape = () => close(0);
+      if (f) {
+        f.el.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') return;
+          e.preventDefault();
+          if (!kb) kb = this.softKeyboard(f, () => { kb = null; f.focus(); });
+        });
+      }
+      this.assets.preload([...d.sprites.flatMap((s) => s.frames()), ...d.buttons.flatMap((x2) => x2.frames())]).then(() => {
+        this.dialogs.push(d); this.hover();
+        if (f) setTimeout(() => f.focus(), 50);
+      });
+    });
+  }
+
+  /**
+   * The soft keyboard (UIWindow.img/SoftKeyboard, 315x127 at (242, 286)): its keyboard picture at (22, 18) and 36 keys
+   * (0-9, A-Z) in the picture's slots, shuffled when it opens and after every key and backspace. It types into the PIN
+   * box: digits only while it is under 4 long, nothing once it is 4. Backspace (277, 20), Enter (265, 66) and the close
+   * box (283, 1) lost their places: placed on the picture's slots (unverified).
+   */
+  softKeyboard(f, onClose) {
+    const K = this.UW?.SoftKeyboard;
+    if (!K) return null;
+    const win = { x: 242, y: 286 };
+    const ROWS = [[20, [24, 47, 70, 93, 116, 139, 162, 185, 208, 231]], [43, [47, 70, 93, 116, 139, 162, 185, 208, 231, 254]],
+      [66, [58, 81, 104, 127, 150, 173, 196, 219, 242]], [89, [74, 97, 120, 143, 166, 189, 212]]];
+    const pos = ROWS.flatMap(([yy, xs]) => xs.map((xx) => ({ x: xx, y: yy })));
+    const slot = Array.from({ length: 36 }, (_, i) => i);
+    const shuffle = () => { for (let i = 0; i < 36; i++) { const j = Math.floor(Math.random() * 36); [slot[i], slot[j]] = [slot[j], slot[i]]; } };
+    shuffle();
+    const enabled = (id) => f.value.length < 4 && id < 10;
+    const inBox = (rx, ry, bx, by, bw, bh) => rx >= bx && rx < bx + bw && ry >= by && ry < by + bh;
+    const slotAt = (rx, ry) => pos.findIndex((p) => inBox(rx, ry, p.x, p.y, 21, 22));
+    const d = { buttons: [] };
+    const close = () => { this.closeDialog(d); onClose?.(); };
+    d.onPointer = (mx, my) => {
+      const rx = mx - win.x, ry = my - win.y;
+      if (inBox(rx, ry, 283, 1, 14, 14) || inBox(rx, ry, 265, 66, 33, 22)) { close(); return; }
+      if (inBox(rx, ry, 277, 20, 21, 45)) { f.value = f.value.slice(0, -1); shuffle(); return; }
+      const i = slotAt(rx, ry);
+      if (i < 0 || !enabled(slot[i])) return;
+      const id = slot[i];
+      f.value += id < 10 ? String(id) : String.fromCharCode(65 + id - 10);
+      sfx.play('UI/BtMouseClick');
+      shuffle();
+    };
+    d.drawFront = (ctx) => {
+      const im = (n) => n && this.assets.image(n), at = (n, dx, dy) => { const i = im(n); if (i) ctx.drawImage(i, win.x + dx, win.y + dy); };
+      at(K.backgrnd?.[1]?.back, 0, 0); at(K.backgrnd?.[1]?.keyboard, 22, 18);
+      const m = this.mouse, over = slotAt(m.x - win.x, m.y - win.y);
+      pos.forEach((p, i) => {
+        const id = slot[i], k = K.key?.[id], state = !enabled(id) ? 'disabled' : i === over ? 'mouseOver' : 'normal';
+        at(k?.[state]?.[0] || k?.normal?.[0], p.x, p.y);
+      });
+      at(K.funckey?.backspace?.normal?.[0], 277, 20); at(K.funckey?.enter?.normal?.[0], 265, 66);
+      at(K.Bt?.[1]?.BtClose?.normal?.[0], 283, 1);
+    };
+    const art = [K.backgrnd?.[1]?.back, K.backgrnd?.[1]?.keyboard, K.funckey?.backspace?.normal?.[0], K.funckey?.enter?.normal?.[0], K.Bt?.[1]?.BtClose?.normal?.[0],
+      ...Object.values(K.key || {}).flatMap((k) => ['normal', 'disabled', 'mouseOver'].map((s) => k?.[s]?.[0]))].filter((n) => n?._canvas);
+    this.assets.preload(art).then(() => { this.dialogs.push(d); this.hover(); });
+    return d;
   }
 
   // ------------------------------------------------------------------ world / channel

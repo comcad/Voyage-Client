@@ -101,6 +101,12 @@ export class LoginSession {
     this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(1).byte(0).string(pin));
     return (await p).ubyte();
   }
+  /** CHANGE PIN: AFTER_LOGIN 2 with the current PIN; the server answers 1 (choose a new one) or 2 (wrong). */
+  async pinChange(pin) {
+    const p = this.conn.expect(S.CHECK_PINCODE);
+    this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(2).byte(0).string(pin));
+    return (await p).ubyte();
+  }
   async pinRegister(pin) {
     const p = this.conn.expect(S.UPDATE_PINCODE);
     this.conn.send(new PacketWriter(C.REGISTER_PIN).byte(1).string(pin));

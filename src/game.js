@@ -2830,6 +2830,8 @@ export class Game {
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));
     // a name or a line: the small UtilDlg box with a white field, opened without a sound
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
+    // Add Buddy: a name (12 long) and a group from the drop-down; resolves with { name, group } or null
+    wm.askBuddy = (text, groups) => new Promise((r) => wm.show(new UtilBox(wm, 'buddy', text.replace(/\r\n/g, '\n'), r, { groups, max: 12 }), null));
     Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), medal: new MedalWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
       energybar: new EnergyBarWin(wm), guildbbs: new GuildBBSWin(wm) });
     await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook', 'medal'].flatMap((k) => wm.wins[k].frames()));
@@ -3767,6 +3769,11 @@ export class Game {
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
+    // UserInfo: an empty Character Info window, nothing sent; a later CHAR_INFO replaces it
+    if (type === 10) {
+      if (!this.infoWin || !this.windows.order.includes(this.infoWin)) this.infoWin = this.windows.show(new CharInfoWin(this.windows, { id: 0, name: '', level: 0, job: 0, fame: 0, guild: '', alliance: '', pets: [], wish: [] }), null);
+      return;
+    }
     const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0xb: 'guildbbs', 0x14: 'energybar', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
     if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
