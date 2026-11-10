@@ -72,6 +72,10 @@ const WORLD_BUSY = 'Since There Are Many\r\nConcurrent Users in This World,\r\nY
 const WORLD_FULL = 'The Concurrent Users in This World\r\nHave Reached the Max.\r\nPlease Try Again Later.';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const NOTICE_AT = { x: 219, y: 170 }, NOTICE_SLIDE_MS = 150;
+/** "Ver. %d.%d" with the client's version, 0.83. */
+const VERSION_TEXT = 'Ver. 0.83';
+/** UPDATE_PINCODE 0: Pincode/text/8 in words (the PIN steps here are text prompts). */
+const PIN_REGISTERED = 'Your Security Pin has been assigned. Please keep in mind that it is your responsibility to remember and protect your Security Pin.';
 // characters on the select screen
 const CHAR_FACING_RIGHT = true;
 // the selected character walks on the spot, the rest stand (walk1/2 and stand1/2 by weapon)
@@ -234,6 +238,8 @@ export class LoginScene {
     for (let l = ui + 1; l < 8; l++) this.scene.drawLayer(ctx, cam, l);
     this.scene.drawBacks(ctx, cam, true);
     this.frame.draw(ctx, this.assets);
+    // the client version, written onto the frame: bold black Arial 12 ending at x 645, y 10
+    uiText(ctx, VERSION_TEXT, 645, 10, { color: '#000', bold: true, align: 'right' });
     // step banner and navigation buttons sit on the book's border, above the frame
     for (const o of this.screen?.over || []) o.draw(ctx, this.assets);
     for (const d of this.dialogs) {
@@ -710,7 +716,7 @@ export class LoginScene {
     let account = res.account;
     if (account.gender === 10) {
       const g = await this.gender();
-      if (g === null) return null;
+      if (g === null) { this.s.genderCancel(); return null; }
       account = (await this.s.setGender(g)).account;
     }
     this.account = account;
@@ -730,15 +736,17 @@ export class LoginScene {
       if (mode === 0) return true;
       if (mode === 1) {
         const a = await this.prompt('Register your PIN\nChoose a 4-digit PIN.', { pattern: /^\d{4}$/, max: 4 });
-        if (a === null) return false;
+        if (a === null) { this.s.pinRegisterCancel(); return false; }
         const b = await this.prompt('Register your PIN\nEnter the same PIN again.', { pattern: /^\d{4}$/, max: 4 });
-        if (b === null) return false;
+        if (b === null) { this.s.pinRegisterCancel(); return false; }
         if (a !== b) { await this.notice('The PINs do not match. Please try again.'); continue; }
-        await this.s.pinRegister(a);
-        return true;
+        // the server says how it went and closes the session: back to the title either way
+        const r = await this.s.pinRegister(a);
+        await this.notice(r === 0 ? PIN_REGISTERED : 15);
+        return false;
       }
       const p = await this.prompt(mode === 2 ? 'Wrong PIN\nPlease enter your PIN again.' : 'Enter your PIN\nPlease enter your 4-digit PIN.', { pattern: /^\d{4}$/, max: 4 });
-      if (p === null) return false;
+      if (p === null) { this.s.pinCancel(); return false; }
       mode = await this.s.pinCheck(p);
     }
   }
@@ -974,8 +982,9 @@ export class LoginScene {
   }
 
   // ------------------------------------------------------------------ character select
-  async charSelect(server, world, channel, loading = null) {
-    const list = await this.s.chars(world.id, channel.id);
+  /** known: the list already in hand (after a new character is added to it), shown without asking again. */
+  async charSelect(server, world, channel, loading = null, known = null) {
+    const list = known || await this.s.chars(world.id, channel.id);
     loading?.close();
     if (list.full) { await this.notice(WORLD_FULL, 'info'); return null; }
     if (list.status) { await this.loginFailed({ reason: list.status }); return null; }
@@ -1058,8 +1067,6 @@ export class LoginScene {
         finish({ server, charId: c.stats.id, port: res.port, cafe: res.cafe, world: world.id, channel: channel.id, channels: world.channels.length, channelNames: world.channels.map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm, admin: this.account?.admin || 0, slots: list.slots, charCount: list.chars.length });
       };
       const start = guard(pick);
-      // a new list after a create or delete; if it can't be loaded (world full...), back to world select
-      const reload = async () => finish((await this.charSelect(server, world, channel)) ?? 'back');
       const create = async () => {
         if (world.blockCreate) { await this.notice(NOTICE.CREATE_BLOCKED, 'info'); return; }
         if (list.chars.length >= list.slots) { await this.notice(NOTICE.NO_MORE_CHARS); return; }
@@ -1068,9 +1075,10 @@ export class LoginScene {
           const race = await this.raceSelect(world, channel);
           if (!race) break;
           const c = await this.creator(race, world, channel);
-          if (c) { store.set(lastKey, String(c.stats.id)); break; }   // the new character is selected
+          // ADD_NEW_CHAR_ENTRY: the new character joins this list, selected, with no new list request
+          if (c) { list.chars.push(c); store.set(lastKey, String(c.stats.id)); break; }
         }
-        await reload();
+        finish((await this.charSelect(server, world, channel, null, list)) ?? 'back');
       };
       const remove = async () => {
         if (sel < 0) return;
