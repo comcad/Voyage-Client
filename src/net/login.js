@@ -88,7 +88,7 @@ export class LoginSession {
   /** PIN step. Returns the server's mode: 0 accepted, 1 register new, 2 wrong (retry), 4 enter existing. */
   async pinStart() {
     const p = this.conn.expect(S.CHECK_PINCODE);
-    this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(1).byte(1));
+    this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(1).byte(1).string(''));   // the client adds an empty string
     return (await p).ubyte();
   }
   async pinCheck(pin) {
