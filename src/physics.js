@@ -142,21 +142,26 @@ export class Footholds {
     return this.wallR;
   }
 
-  /** Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh. */
-  fall(ent, dt, ignore = null, swimming = false) {
-    // moved by the average of the speed before and after gravity, so a jump peaks at v²/2g whatever the frame time
-    const vy0 = ent.vy;
+  /**
+   * Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh.
+   * old: the speeds before this step's push (steering, swimming); without it, the speeds as they are now.
+   */
+  fall(ent, dt, ignore = null, swimming = false, old = null) {
+    // moved by the average of the speed before and after the step's push and gravity, on both axes, so a jump peaks
+    // at v²/2g whatever the frame time
+    const vx0 = old ? old.vx : ent.vx, vy0 = old ? old.vy : ent.vy;
     if (!swimming) ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
-    const nx = ent.x + ent.vx * dt;
-    const ny = ent.y + (swimming ? ent.vy : (vy0 + ent.vy) / 2) * dt;
+    const nx = ent.x + ((vx0 + ent.vx) / 2) * dt;
+    const ny = ent.y + ((vy0 + ent.vy) / 2) * dt;
 
     // walls: those of the floor we are over
-    const under = ent.vx ? this.below(ent.x, ent.y, Infinity, ignore) : null;
+    const under = nx !== ent.x ? this.below(ent.x, ent.y, Infinity, ignore) : null;
+    let walled = false;
     if (under) {
-      const w = this.wallFor(under, ent.vx < 0, ent.y);
-      if ((ent.vx < 0 && ent.x >= w && nx < w) || (ent.vx > 0 && ent.x <= w && nx > w)) { ent.x = w; ent.vx = 0; }
+      const w = this.wallFor(under, nx < ent.x, ent.y);
+      if ((nx < ent.x && ent.x >= w && nx < w) || (nx > ent.x && ent.x <= w && nx > w)) { ent.x = w; ent.vx = 0; walled = true; }
     }
-    const x = ent.x + ent.vx * dt;
+    const x = walled ? ent.x : nx;
 
     // land on the first floor the step's path crosses from above (rising or falling: a slope can rise faster than
     // you do), wherever along the floor that is

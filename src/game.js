@@ -2680,10 +2680,11 @@ export class Game {
 
   /**
    * A monster's blow is what sets the pet's potions off: HP is checked against what the blow will take from it, and a
-   * blow that also went elsewhere (Magic Guard's share to MP, Power Guard's reflected share) starts the MP checks,
-   * which then run on every stat update until an MP potion goes. Spending HP / MP on skills sets off nothing.
+   * blow that also went elsewhere (Power Guard's reflected share, Meso Guard's share paid in mesos, Magic Guard's share
+   * to MP: flag 1, 2 or 4, the first that applies) starts the MP checks, which then run on every stat update until an
+   * MP potion goes. Spending HP / MP on skills sets off nothing. meso: the share Meso Guard took (already off damage).
    */
-  petHitPots(m, damage, from) {
+  petHitPots(m, damage, from, meso = 0) {
     const now = Date.now(), on = (ids) => ids.find((id) => this.buffs?.some((b) => b.source === id && b.until > now));
     let hp = damage, flag = 0;
     const pg = from === -1 && damage > 0 && on(POWER_GUARDS);
@@ -2692,6 +2693,7 @@ export class Game {
       if (m.src?.info?.boss) back = Math.trunc(back / 2);
       if (back > 0) { hp -= back; flag = 1; }
     }
+    if (meso > 0) flag ||= 2;
     const mg = damage > 0 && on(MAGIC_GUARDS);
     if (mg) {
       const mp = Math.min(Math.trunc((damage * (this.skills.levelData(mg)?.x || 0)) / 100), this.stats?.mp || 0);
@@ -5762,7 +5764,8 @@ export class Game {
     if (this.hasDisease(STUN)) {
       const hw = this.pressedSkill();   // Hero's Will still goes
       if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
-      if (p.ladder) { p.attack = null; this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
+      // on a ladder or rope you let go: with no input the plain physics runs, not the climb, and you fall
+      if (p.ladder) { p.ladder = null; p.attack = null; p.vx = 0; p.vy = 0; }
       this.coast(dt);
       this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
@@ -5945,9 +5948,10 @@ export class Game {
         }
         this.playerFall(dt, dir, inY, ms);
       } else {
+        const v0 = { vx: p.vx, vy: p.vy };   // the step moves by the average of these and the steered speeds
         if (dir) p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
         else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
-        this.playerFall(dt, dir, inY, ms);
+        this.playerFall(dt, dir, inY, ms, v0);
       }
       // falling or sinking (not on the way up) with up held catches a ladder / rope the step passed within 10px of
       if (!p.fh && p.vy > 0 && held('up') && this.canClimb()) {
@@ -5979,14 +5983,14 @@ export class Game {
     return { acc: 1, speed: ms.speed * pct / 100, v: ms.speed };
   }
   /** Off the ground: in water you swim (no gravity; left / right and up / down steer it), else you fall. */
-  playerFall(dt, dir = 0, inY = 0, ms = null) {
-    const p = this.player, fh = this.map.fh;
-    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe(ms || this.moveStats())); fh.fall(p, dt, p.ignoreFh, true); }
+  playerFall(dt, dir = 0, inY = 0, ms = null, v0 = null) {
+    const p = this.player, fh = this.map.fh, old = v0 || { vx: p.vx, vy: p.vy };
+    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe(ms || this.moveStats())); fh.fall(p, dt, p.ignoreFh, true, old); }
     else {
       // Wings: falling no faster than its speed
       const glide = this.wings && performance.now() < this.wings.until ? this.wings.speed : 0;
       if (glide && p.vy + PHYS.gravity * dt > glide) p.vy = glide - PHYS.gravity * dt;
-      fh.fall(p, dt, p.ignoreFh);
+      fh.fall(p, dt, p.ignoreFh, false, glide ? { vx: old.vx, vy: p.vy } : old);   // a glide caps the fall itself
     }
   }
   /** In water a jump or a stroke is taken at most every 300ms. */
@@ -9029,7 +9033,7 @@ export class Game {
       if (this.meso < Math.trunc((absorbed * guard.x) / 100)) absorbed = Math.trunc((this.meso * 100) / guard.x);
       if (absorbed > 0) { lost = damage - absorbed; this.playSkillEffect(MESO_GUARD, p, false, 'special'); }
     }
-    this.petHitPots(m, lost, from);
+    this.petHitPots(m, lost, from, damage - lost);
     this.vfx?.damage(p, [lost], 'violet');
     if (CHAR_DAM[from]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[from]}`);
     setExpression(p, 1, HIT_FACE_TIME);
