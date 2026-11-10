@@ -7,8 +7,8 @@ import { UI_W, UI_H } from '../view.js';
  * guild stands alone at y 80 under the crown (icon0 at 155, 43, IconEff looping at 127, 23); then six a page from y 137,
  * 25px apart: ranks 2-7, 8-13 and so on. Each shows its rank at 44 ("0n" under 10), its name at 85 and its GP ending at
  * 275, in Arial 12 black: rank 1 opaque, ranks 2-3 at 180/255, the rest at 120/255. BtLeft (86, 297) and BtRight
- * (217, 297) turn the page; BtOK (148, 297) closes it. The emblem's place was lost: it sits centred in the art's
- * 60-85 cell of its 25px row.
+ * (217, 297) turn the page; BtOK (148, 297) closes it. The emblem sits centred in the art's 60-85 cell of its 25px
+ * row.
  */
 const ROW0 = 137, ROW_H = 25, PER_PAGE = 6, EFF_DELAY = 100;
 

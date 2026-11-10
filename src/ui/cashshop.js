@@ -1584,8 +1584,8 @@ class CsNoticeDialog extends Win {
  */
 /**
  * The wish-list gift's message (CashShop.img/CSNotice/2, 266x142, centred): the receiver's name at (84, 25), two
- * message lines of 34 letters (72 at most in all) and OK / Cancel. The lines' and buttons' places were lost; they sit
- * as in CSGift, whose art is the same 27px lower.
+ * message lines of 34 letters (72 at most in all) and OK / Cancel. The lines and buttons sit as in CSGift, whose art
+ * is the same 27px lower.
  */
 class CsWishGiftDialog extends Win {
   constructor(shop, to, done) {

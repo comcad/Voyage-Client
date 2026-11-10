@@ -33,8 +33,8 @@ const isBeginner = (job) => job === 0 || job === 1000 || job === 2000;
  * The Alliance tab: a section for your guild and then each other guild in the alliance. Its bar holds the guild's mark
  * at 5, its name at 27, [online/total] at 155 and the page right-aligned to 261, all 8 down; open, a 4px gap, the
  * column head, 5 members a page in the Guild tab's columns (their alliance title last), the closing line and 10px.
- * The buttons sit where the Guild tab's do, Change in Where's place: they are made in the same order, and the decomp
- * lost both tabs' positions. The fold toggle's place was lost too; it sits 13px before the count as on the Guild tab.
+ * The buttons sit where the Guild tab's do (they come in the same order), Change in Where's place; the fold toggle
+ * sits 13px before the count, as on the Guild tab.
  */
 const ALLY_PAGE = 5, ALLY_COUNT_X = 155, ALLY_FOLD_X = 142;
 const NAME_RE = /^[A-Za-z0-9]{4,12}$/;
@@ -1021,8 +1021,8 @@ export class PartyHpWin extends Win {
  * MODIFY on a group. The group's name (16 letters at most) goes in the box at the top; every buddy is listed below,
  * seven rows from y 137, 20px apart, each a check box with the buddy's name and, at x 113 in grey (#909090), the group
  * they are in now; its scrollbar is at (243, 113), 164 tall. OK needs a name, a checked row among the seven showing,
- * and - for a new or renamed group - a name no other group has. The name box's, the check boxes' and the buttons'
- * places were lost: they sit in the art's box, its NAME column and its bottom strip.
+ * and - for a new or renamed group - a name no other group has. The name box, the check boxes and the buttons sit in
+ * the art's box, its NAME column and its bottom strip.
  */
 const GM_ROW_Y = 137, GM_ROW_H = 20, GM_ROWS = 7, GM_BAR = { x: 243, y: 113, h: 164 }, GM_BOX_X = 12;
 export class GroupModWin extends Win {
