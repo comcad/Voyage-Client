@@ -558,16 +558,22 @@ export class UserListWin extends Win {
     if (p && p.members.length >= 6) { this.error('It is impossible to invite someone to the party.'); return; }
     this.g.net?.partyOp(4, name);
   }
+  /** The map's fieldType: expelling is barred on 10, 11, 15, 23, 25 and 26, leaving on 23, 25 and 26. */
+  fieldType() { return Number(this.g.map?.info?.fieldType) || 0; }
+  noExpel() { return [10, 11, 15, 23, 25, 26].includes(this.fieldType()); }
+  noLeave() { return [23, 25, 26].includes(this.fieldType()); }
   kick() {
     const m = this.other();
     if (!m) return;
     if (this.party?.leader !== this.me) { this.error('You are not the master of the party.'); return; }
+    if (this.noExpel()) { this.error('Cannot kick another user in this map'); return; }
     this.g.net?.partyOp(5, m.id);
     this.sel = null;
   }
   leave() {
     if (!this.party) { this.error('You have yet to join a party.'); return; }
-    this.g.net?.partyOp(2);
+    if (this.noLeave()) { this.error('Cannot kick another user in this map'); return; }
+    this.g.net?.partyLeave();
   }
   async makeLeader() {
     const m = this.other();
@@ -703,8 +709,9 @@ export class UserListWin extends Win {
     const P = this.pb, p = this.party, lead = !!p && p.leader === this.me;
     P.create.enabled = !p;
     P.search.enabled = !!p || (this.g.stats?.level ?? 0) >= 10;
-    P.hp.enabled = P.leave.enabled = !!p;
-    P.kick.enabled = lead && !!c;
+    P.hp.enabled = !!p;
+    P.leave.enabled = !this.noLeave();
+    P.kick.enabled = lead && !!c && !this.noExpel();
     P.whisper.enabled = P.talk.enabled = !!c && on;
     P.invite.enabled = !p || lead;
     P.boss.enabled = lead && !!c && on && c.job !== 0;

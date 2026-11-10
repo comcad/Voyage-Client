@@ -1753,6 +1753,8 @@ export class ChannelSession {
     if (typeof arg === 'string') w.string(arg); else if (arg !== undefined) w.int(arg);
     this.send(w);
   }
+  /** PARTY_OPERATION 2, leave: the client sends a 0 byte after it. */
+  partyLeave() { this.send(new PacketWriter(C.PARTY_OPERATION).byte(2).byte(0)); }
   /** Player shop room ops (Cosmic PlayerShop / PacketCreator.getPlayerShop*). Returns whether it was one. */
   shopOp(op, r) {
     if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
