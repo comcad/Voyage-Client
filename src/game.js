@@ -26,7 +26,7 @@ import { Guide } from './guide.js';
 import { pad, frames } from './assets.js';
 import { music, sfx, songLength } from './audio.js';
 import { StatusBar, CHAT_COLOR, CHAT_BAR } from './ui/statusbar.js';
-import { Weather } from './weather.js';
+import { Weather, drawFloatNotice } from './weather.js';
 import { AvatarBanner } from './ui/avatarmega.js';
 import { MapleTVWin, MapleTVScreen } from './ui/mapletv.js';
 import { ItemGuardWin } from './ui/itemguard.js';
@@ -3078,7 +3078,26 @@ export class Game {
         if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
         // a Pyramid stage times itself in its own window
         if (secs !== null && Number(this.map?.info?.fieldType) === 23) { (this.pyramid ??= new PyramidWindow(this)).clock(secs); return; }
-        this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt();
+        this.clock = secs === null ? null : { end: performance.now() + secs * 1000, dur: secs * 1000 }; if (secs !== null) this.loadClockArt();
+      }),
+      // OX_QUIZ: the question (Etc/OXQuiz.img/<set>/<n>/q) or its answer (d, a space, "[Answer:O]" for a = 1, else X)
+      // on the quiz's own FloatNotice/0, over the weather's, until the next; 0 takes it down. A question starts the
+      // field clock at 30s, or starts one already up over again.
+      oxQuiz: later(async (ask, set, id) => {
+        const q = id ? (await this.assets.json('Etc/OXQuiz.img'))?.[set]?.[id] : null;
+        if (!q) { this.quizNotice = null; return; }
+        let text;
+        if (ask) {
+          text = String(q.q ?? '');
+          if (this.clock) this.clock.end = performance.now() + (this.clock.dur ?? 30000);
+          else { this.clock = { end: performance.now() + 30000, dur: 30000 }; this.loadClockArt(); }
+        } else {
+          const d = String(q.d ?? '');
+          text = `${d}${d ? ' ' : ''}[Answer:${Number(q.a) ? 'O' : 'X'}]`;
+        }
+        const N = this.windows.W.FloatNotice?.[0];
+        await this.assets.preload([N?.[0], N?.[1], N?.[2]].filter(Boolean));
+        this.quizNotice = { text, N };
       }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
       ship: later((move) => this.shipMove(move)),
@@ -9571,6 +9590,7 @@ export class Game {
       this.vfx?.drawHud(ctx);
       this.drawAranCombo(ctx);
       this.weather.drawNotice(ctx);
+      if (this.quizNotice) drawFloatNotice(ctx, this.assets, this.quizNotice.N, this.quizNotice.text);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
       this.dojo?.draw(ctx);

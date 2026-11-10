@@ -939,6 +939,8 @@ export class ChannelSession {
     });
     on(S.REMOVE_MIST, (r) => this.emit('mistRemove', r.int()));
     // the field's timer: type 2 counts down from a number of seconds (a party quest, an event, a boat ride)
+    // OX_QUIZ: question (1) or answer (0), the Etc/OXQuiz.img set and number (0 takes the quiz's notice down)
+    on(S.OX_QUIZ, (r) => { const ask = r.ubyte(), set = r.ubyte(), id = r.ushort(); this.emit('oxQuiz', ask !== 0, set, id); });
     on(S.CLOCK, (r) => {
       const type = r.ubyte();
       if (type === 2) this.emit('clock', r.int());
