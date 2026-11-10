@@ -804,6 +804,15 @@ export class ChannelSession {
       else if (op === 4) { const name = r.string(); this.emit('messenger', { op: 'invited', name, ok: r.ubyte() === 1 }); }
       else if (op === 5) { const name = r.string(); this.emit('messenger', { op: 'declined', name, mode: r.ubyte() }); }
       else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
+      // the whole room again: each spot 0 empty, 1 as it is, else who sits there (look, name, channel)
+      else if (op === 8) {
+        const seats = [];
+        for (let i = 0; i < 3; i++) {
+          const f = r.ubyte();
+          seats.push(f === 0 ? null : f === 1 ? undefined : { look: readCharLook(r), name: r.string(), channel: r.ubyte() });
+        }
+        this.emit('messenger', { op: 'room', seats });
+      }
     });
     // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
     on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => {
