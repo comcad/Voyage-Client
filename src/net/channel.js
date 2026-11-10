@@ -835,7 +835,8 @@ export class ChannelSession {
         if (me === 1) { r.ubyte(); look = readCharLook(r); partner = r.string(); }
         this.emit('tradeOpen', { slot: me, partner, look });
       } else if (op === 2) {                              // INVITE
-        if (r.ubyte() === 3) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0); }
+        const type = r.ubyte();   // 3 a trade, 6 a cash item trade
+        if (type === 3 || type === 6) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0, type === 6); }
       } else if (op === 4) {                              // VISIT: partner joined
         r.ubyte(); const look = readCharLook(r); this.emit('tradePartner', r.string(), look);
       } else if (op === 0x0F) {                           // SET_ITEMS: 0 yours, 1 partner's

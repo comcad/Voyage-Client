@@ -18,6 +18,8 @@ const KINDS = {
   messenger: { ...WIDE, icon: 0, lines: (n) => [['An invitation', 25, 5], [`from '${n}'`, 25, 18]] },
   buddy: { ...WIDE, icon: 1, lines: (n) => [['Buddy request', 25, 5], [`from '${n}'`, 25, 18]], stack: true },
   trade: { ...WIDE, icon: 2, lines: (n) => [['Trade request', 25, 5], [`from '${n}'`, 25, 18]] },
+  // a cash item trade (room type 6): its own 160px balloon; O / X sit where the 154px ones have them
+  cashTrade: { art: 'backgrnd6', ok: [136, 6], x: [136, 20], icon: 9, lines: (n) => [[`from '${n}'`, 25, 7], ['This is a Cash Trade Invite', 25, 20]] },
   party: { ...WIDE, icon: 5, lines: (n) => [['Party invite', 27, 7], [`from '${n}'`, 27, 20]] },
   guild: { ...WIDE, icon: 5, lines: (n) => [[`from '${n}'`, 27, 7], ['Guild invite', 27, 20]] },
   alliance: { ...WIDE, icon: 5, lines: (n) => [[`'${n}'s`, 27, 7], ['Guild Alliance Invitation.', 27, 20]] },

@@ -1000,9 +1000,10 @@ export class Game {
    * within its hours (CLAIM_AVAILABLE_TIME, local time; 0 and 0: always). The notice picks the kind: a conversation
    * report lists who spoke in your chat log (newest first, you aside; with a target, only them if they did, else
    * "This character is unable to report others."), a program report everyone on the map, by name (with a target, only
-   * them if they are here). Then the form; its answer goes as REPORT, a conversation one with its chat lines.
+   * them if they are here). Then the form; its answer goes as REPORT, a conversation one with its chat lines. The
+   * Messenger's Report passes its own room's lines (log: { name, line }) in place of the chat log.
    */
-  async openReport(target = '') {
+  async openReport(target = '', log = null) {
     const say = (t) => this.windows.notice(t);
     if (!this.claimOn) { say('The reporting system is currently undergoing maintenence check.'); return; }
     const [from, to] = this.claimHours || [0, 0], h = new Date().getHours();
@@ -1016,7 +1017,8 @@ export class Game {
     let names;
     if (kind === 'chat') {
       const said = [];
-      for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) { const n = this.chatLog[i].name; if (n && n !== me && !said.includes(n)) said.push(n); }
+      const src = log || this.chatLog || [];
+      for (let i = src.length - 1; i >= 0; i--) { const n = src[i].name; if (n && n !== me && !said.includes(n)) said.push(n); }
       if (target && !said.includes(target)) { say('This character is unable to report others.'); return; }
       names = target ? [target] : said;
     } else {
@@ -1027,14 +1029,14 @@ export class Game {
     if (!names.length) { say("There's no character can be reported in this map."); return; }
     const res = await new Promise((r) => { const w = new ClaimForm(this.windows, names, kind === 'chat', r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); });
     if (!res) return;
-    this.net?.report(kind === 'chat' ? 1 : 0, res.name, res.reason, res.text, kind === 'chat' ? this.reportLog(res.name) : '');
+    this.net?.report(kind === 'chat' ? 1 : 0, res.name, res.reason, res.text, kind === 'chat' ? this.reportLog(res.name, log) : '');
   }
   /** The chat lines a conversation report carries: theirs and yours, oldest first, up to 1600 characters. */
-  reportLog(name) {
-    const me = this.player.name;
+  reportLog(name, log = null) {
+    const me = this.player.name, src = log || this.chatLog || [];
     let out = '', n = 0;
-    for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) {
-      const c = this.chatLog[i];
+    for (let i = src.length - 1; i >= 0; i--) {
+      const c = src[i];
       if (c.name !== name && c.name !== me) continue;
       n += 1 + c.line.length;
       if (n > 1600) break;
@@ -3007,9 +3009,9 @@ export class Game {
         notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, guildName) : this.net.allianceDeny(from, mine)));
       }),
       // trade requests off in the Game Option, or from someone on the Blacklist: turned down at once (reason 4)
-      tradeInvite: (name, id) => {
+      tradeInvite: (name, id, cash) => {
         if (!this.optionAllowed('tradeRequest') || this.windows.wins.userlist?.blacklisted(name)) { this.net.tradeDecline(id, 4); return; }
-        notify(this.windows, 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
+        notify(this.windows, cash ? 'cashTrade' : 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
       },
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
