@@ -66,6 +66,7 @@ export class MedalWin extends Win {
     const [cats, chk, npc] = await Promise.all([a.json('Etc/QuestCategory.img'), a.json('Quest/Check.img'), a.json('String/Npc.img')]);
     this.area = Number(Object.keys(cats || {}).find((k) => cats[k] === 'Title') ?? -1);
     this.check = chk || {}; this.npcNames = npc || {};
+    a.json('Etc/NpcLocation.img').then((l) => { this.npcMaps = l || {}; });
     this.mgr.namesVersion++;
   }
   /** Every medal quest: id, category, state, start NPC. */
@@ -174,6 +175,19 @@ export class MedalWin extends Win {
     }
     if (this.tab === 0 || lx < LIST.x || lx >= LIST.x + LIST.w) return;
     for (const { r, y } of this.layout(rows)) if (r.kind === 'medal' && ly >= y && ly < y + 46) { this.pick(r); return; }
+  }
+  /**
+   * A double-click on the panel's NPC (its frame, centred on x 242 with its bottom at 112): the World Map search
+   * for it, as the quest log's Mark NPC does.
+   */
+  async dblclick(lx, ly) {
+    const m = this.shown, dl = lx - this.panelX();
+    if (!this.dAlive || lx < this.w || !m) return;
+    const f = this.npcArt?.get(m.npc)?.[0], pi = f && this.mgr.image(f);
+    if (!pi || dl < 242 - (pi.width >> 1) || dl >= 242 + (pi.width >> 1) || ly < 112 - pi.height || ly >= 112) return;
+    const maps = Object.values(this.npcMaps?.[m.npc] || {}).map(Number).filter(Boolean);
+    const WorldMap = this.mgr.wins.worldmap?.constructor;
+    if (!maps.length || !(await WorldMap?.searchNpc(this.mgr, maps))) this.mgr.notice('This NPC is located at a spot not\navailable through the World Map.');
   }
   wheel(dy) {
     const m = this.mgr.mouse, lx = m.x - this.x;

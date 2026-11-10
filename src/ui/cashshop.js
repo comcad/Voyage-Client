@@ -1966,6 +1966,11 @@ class CsRulesNotice extends Win {
     this.steps = range < 2 ? 0 : range;
   }
   scrollTo(p) { this.pos = Math.max(0, Math.min(Math.max(0, this.steps - 1), p)); this.btOK.enabled = this.steps > 0 && this.last <= this.pos; }
+  /** The wheel, over the bar or up to 355px left of it: a step a notch. */
+  wheel(dy) {
+    const lx = this.mgr.mouse.x - this.x, ly = this.mgr.mouse.y - this.y;
+    if (this.steps && lx >= 384 - 355 && lx < 384 + 12 && ly >= 47 && ly < 47 + 324) this.scrollTo(this.pos + Math.sign(dy));
+  }
   finish(ok) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(ok); }
   key() {}
   /** The bar: an arrow moves a step; the track above or below the thumb pages by max(steps / 16, 16). */

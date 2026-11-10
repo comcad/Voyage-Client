@@ -774,7 +774,9 @@ export class LoginScene {
           if (res === 'back') resolve('again'); else if (res) resolve(res);
         } catch (e) { reject(cancelled ? new BackToTitle() : e); } finally { loading.close(); pending = false; }
       };
-      const openWorld = (w) => {
+      let worldStatus = 0;   // the open world's SERVERSTATUS: 1 (busy) puts WorldNotice/Populated/1 on its paper
+      const openWorld = (w, status = 0) => {
+        worldStatus = status;
         if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; sfx.play('UI/RollDown'); }
         world = w; channel = -1;
         // 20 places, 4 columns 94px apart and rows 32px apart; places past the world's channels are disabled
@@ -808,7 +810,7 @@ export class LoginScene {
         try { status = await this.s.serverStatus(w.id); } catch (e) { reject(e); return; } finally { pending = false; }
         if (status === 2) { await this.notice(WORLD_FULL, 'info'); btn.enabled = true; return; }
         if (status === 1) await this.notice(WORLD_BUSY, 'info');
-        openWorld(w);
+        openWorld(w, status);
       };
       const hang = WS.BtWorld[0]?.disabled?.[0];
       const worldButtons = this.worlds.map((w, i) => {
@@ -844,25 +846,63 @@ export class LoginScene {
       const recs = () => (this.s.recommended || []).filter((r) => this.worlds.some((w) => w.id === r.world));
       let rec = null;
       const RW = { x: 136, y: 51 }, A = WS.alert;
-      const recStep = (d) => { rec.i = (rec.i + d + recs().length) % recs().length; };
+      const recStep = (d) => { rec.i = (rec.i + d + recs().length) % recs().length; rec.first = 0; };
       const recArrows = [this.button(A.BtArrowL, RW.x + 45, RW.y + 70, () => recStep(-1)), this.button(A.BtArrowR, RW.x + 215, RW.y + 70, () => recStep(1))];
       const recChoice = this.button(A.BtChoice, RW.x + 113, RW.y + 114, () => { picked = true; focusWorld(recs()[rec.i].world); closeRec(); });
       recChoice.fixedOrigin = true;   // its hover / pressed art is centred, the normal art isn't
       const openRec = () => {
         if (!recs().length || pending) return;
         closeWorld();
-        rec = { i: 0 };
+        rec = { i: 0, first: 0 };
       };
       const closeRec = () => { rec = null; };
       const viewChoice = this.button(WS.BtViewChoice, 0, 125, openRec), viewAll = this.button(WS.BtViewAll, 0, 125, closeRec);
 
+      // the message: cut by letters at 200px and at each \r\n, six 14px rows from (280, 60), scrolled by a VScr7 at x 502
+      // (the scrollbar's top and length were lost: it runs down the right box, 57 to 145)
+      const REC_ROWS = 6, REC_BAR = { x: 502, y: 57, h: 88 };
+      const loadBar = (B) => this.assets.preload(Object.values(B?.VScr7 || {}).flatMap((st) => Object.values(st || {})).filter((n) => n?._canvas));
+      if (this.B) loadBar(this.B); else this.assets.json('UI/Basic.img').then((b) => { this.B ??= b; loadBar(this.B); });
       const recLines = (text) => {
         this.recWrap ??= new Map();
-        if (!this.recWrap.has(text)) this.recWrap.set(text, wrapText(this.ctx, String(text).replace(/\\r|\r\n?/g, '\n'), 200));
+        if (!this.recWrap.has(text)) {
+          const ctx = this.ctx, out = [];
+          let rest = String(text).replace(/\\r/g, '\r').replace(/\\n/g, '\n');
+          ctx.save(); ctx.font = '12px Arial, sans-serif';
+          while (rest) {
+            let n = rest.length;
+            while (n > 1 && ctx.measureText(rest.slice(0, n)).width > 200) n--;
+            const cr = rest.indexOf('\r');
+            if (cr < 0 || n <= cr) { out.push(rest.slice(0, n)); rest = rest.slice(n); } else { out.push(rest.slice(0, cr)); rest = rest.slice(cr + 2); }
+          }
+          ctx.restore();
+          this.recWrap.set(text, out);
+        }
         return this.recWrap.get(text);
       };
+      const recBar = () => { const V = this.B?.VScr7; return V && { V, x: RW.x + REC_BAR.x, y: RW.y + REC_BAR.y, h: REC_BAR.h, w: V.enabled?.prev0?._w || 15, a: V.enabled?.prev0?._h || 14, t: V.enabled?.thumb0?._h || 25 }; };
+      const recMax = () => { const r = rec && recs()[rec.i]; return r ? Math.max(0, recLines(r.text).length - REC_ROWS) : 0; };
+      const drawRecBar = (ctx) => {
+        const b = recBar();
+        if (!b) return;
+        const max = recMax(), on = max > 0, S = on ? b.V.enabled : b.V.disabled, im = (n) => n && this.assets.image(n);
+        const base = im(S.base), prev = im(on ? S.prev0 : S.prev), next = im(on ? S.next0 : S.next);
+        if (base) ctx.drawImage(base, b.x, b.y + b.a, b.w, b.h - 2 * b.a);
+        if (prev) ctx.drawImage(prev, b.x, b.y);
+        if (next) ctx.drawImage(next, b.x, b.y + b.h - b.a);
+        const thumb = on && im(S.thumb0);
+        if (thumb) ctx.drawImage(thumb, b.x, b.y + b.a + Math.round((b.h - 2 * b.a - b.t) * rec.first / max));
+      };
+      /** A click on the message's scrollbar: the arrows step a row, the track jumps there. */
+      const recBarClick = (mx, my) => {
+        const b = recBar(), max = recMax();
+        if (!b || mx < b.x || mx >= b.x + b.w || my < b.y || my >= b.y + b.h) return;
+        if (my < b.y + b.a) rec.first = Math.max(0, rec.first - 1);
+        else if (my >= b.y + b.h - b.a) rec.first = Math.min(max, rec.first + 1);
+        else rec.first = Math.max(0, Math.min(max, Math.round(((my - b.y - b.a - b.t / 2) / (b.h - 2 * b.a - b.t)) * max)));
+      };
       const recPanel = {
-        frames: () => [A.backgrd],
+        frames: () => [A.backgrd, ...Object.values(this.B?.VScr7 || {}).flatMap((st) => Object.values(st || {}))].filter((n) => n?._canvas),
         draw: (ctx) => {
           if (!rec) return;
           const bg = this.assets.image(A.backgrd);
@@ -870,7 +910,8 @@ export class LoginScene {
           const r = recs()[rec.i], img = r && WS.world[r.world] && this.assets.image(WS.world[r.world]);
           if (!r) return;
           if (img) ctx.drawImage(img, RW.x + 145 - Math.round(img.width / 2), RW.y + 61);
-          recLines(r.text).slice(0, 6).forEach((ln, i) => uiText(ctx, ln, RW.x + 280, RW.y + 60 + i * 14, { color: '#000' }));
+          recLines(r.text).slice(rec.first, rec.first + REC_ROWS).forEach((ln, i) => uiText(ctx, ln, RW.x + 280, RW.y + 60 + i * 14, { color: '#000' }));
+          drawRecBar(ctx);
           for (const b of [...recArrows, recChoice]) b.draw(ctx, this.assets);
         },
       };
@@ -879,7 +920,7 @@ export class LoginScene {
         viewChoice.enabled = recs().length > 0;
         for (const b of recArrows) b.enabled = recs().length > 1;
         // opens by itself only when the last world is 0xFF
-        if (!autoOpened && this.s.lastWorld === 0xFF && recs().length) { autoOpened = true; rec = { i: 0 }; }
+        if (!autoOpened && this.s.lastWorld === 0xFF && recs().length) { autoOpened = true; rec = { i: 0, first: 0 }; }
       };
       // the Events balloon draws over the book frame
       const eventPanel = { frames: () => [], draw: (ctx) => { if (opened() && this.camY === this.camTarget) this.eventBalloon(ctx, world, win); } };
@@ -894,10 +935,16 @@ export class LoginScene {
         sprites: blanks,
         get over() { return [eventPanel, ...nav.over, rec ? viewAll : viewChoice, recPanel]; },
         preload: [WS.chBackgrn, hang, goBtn.frames(), viewChoice.frames(), viewAll.frames(), A.backgrd, ...[...recArrows, recChoice].flatMap((b) => b.frames()),
-          ...Object.values(this.L.WorldNotice.BalloonForLoginProcess).filter((n) => n?._canvas), ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
+          ...Object.values(this.L.WorldNotice.BalloonForLoginProcess).filter((n) => n?._canvas), this.L.WorldNotice[1], this.L.WorldNotice[2], this.L.WorldNotice[3], this.L.WorldNotice.Populated?.[1], ...blanks.flatMap((b) => b.frames()), ...Object.values(WS.world).filter((n) => n?._canvas),
           ...new WzSprite(WS.scroll[0]).frames(), ...new WzSprite(WS.scroll[1]).frames()].flat(),
         onEnter: go,
         onEscape: closeWorld,
+        onPointer: (mx, my) => { if (rec) recBarClick(mx, my); },
+        // the wheel over the message's bar (or 6px left of it)
+        onWheel: (d) => {
+          const b = rec && recBar(), m = this.mouse;
+          if (b && m && m.x >= b.x - 6 && m.x < b.x + b.w && m.y >= b.y && m.y < b.y + b.h) rec.first = Math.max(0, Math.min(recMax(), rec.first + d));
+        },
         update: (dt) => {
           syncLast(); syncRec();
           nav.vacBtn.enabled = !rec;
@@ -916,8 +963,15 @@ export class LoginScene {
           const name = WS.world[world.id] && this.assets.image(WS.world[world.id]);
           if (name) ctx.drawImage(name, win.x + 12, win.y + 3);
           else uiText(ctx, world.name, win.x + 20, win.y + 16, { color: '#5a3200', bold: true, size: 14 });
+          const busy = worldStatus > 0 && this.assets.image(this.L.WorldNotice.Populated?.[worldStatus]);
+          if (busy) ctx.drawImage(busy, win.x + 260, win.y + 10);
         },
-        drawFront: (ctx) => {  // load gauges and the selection swirl round the CH label
+        drawFront: (ctx) => {  // the worlds' badges, then load gauges and the selection swirl round the CH label
+          // a world's flag (1 event, 2 new, 3 hot) puts WorldNotice/<flag> over its tag, 5px left of it and 10px up
+          this.worlds.forEach((w, i) => {
+            const b = w.flag > 0 && this.assets.image(this.L.WorldNotice[w.flag]);
+            if (b) ctx.drawImage(b, tabX + i * TAG_STEP - 5, tabY - 10);
+          });
           if (!opened()) return;
           const gauge = this.assets.image(WS.channel.chgauge);
           for (const b of chButtons) {

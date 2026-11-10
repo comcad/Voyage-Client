@@ -26,7 +26,7 @@ import { Guide } from './guide.js';
 import { pad, frames } from './assets.js';
 import { music, sfx, songLength } from './audio.js';
 import { StatusBar, CHAT_COLOR, CHAT_BAR } from './ui/statusbar.js';
-import { Weather } from './weather.js';
+import { Weather, drawFloatNotice } from './weather.js';
 import { AvatarBanner } from './ui/avatarmega.js';
 import { MapleTVWin, MapleTVScreen } from './ui/mapletv.js';
 import { ItemGuardWin } from './ui/itemguard.js';
@@ -1000,9 +1000,10 @@ export class Game {
    * within its hours (CLAIM_AVAILABLE_TIME, local time; 0 and 0: always). The notice picks the kind: a conversation
    * report lists who spoke in your chat log (newest first, you aside; with a target, only them if they did, else
    * "This character is unable to report others."), a program report everyone on the map, by name (with a target, only
-   * them if they are here). Then the form; its answer goes as REPORT, a conversation one with its chat lines.
+   * them if they are here). Then the form; its answer goes as REPORT, a conversation one with its chat lines. The
+   * Messenger's Report passes its own room's lines (log: { name, line }) in place of the chat log.
    */
-  async openReport(target = '') {
+  async openReport(target = '', log = null) {
     const say = (t) => this.windows.notice(t);
     if (!this.claimOn) { say('The reporting system is currently undergoing maintenence check.'); return; }
     const [from, to] = this.claimHours || [0, 0], h = new Date().getHours();
@@ -1016,7 +1017,8 @@ export class Game {
     let names;
     if (kind === 'chat') {
       const said = [];
-      for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) { const n = this.chatLog[i].name; if (n && n !== me && !said.includes(n)) said.push(n); }
+      const src = log || this.chatLog || [];
+      for (let i = src.length - 1; i >= 0; i--) { const n = src[i].name; if (n && n !== me && !said.includes(n)) said.push(n); }
       if (target && !said.includes(target)) { say('This character is unable to report others.'); return; }
       names = target ? [target] : said;
     } else {
@@ -1027,14 +1029,14 @@ export class Game {
     if (!names.length) { say("There's no character can be reported in this map."); return; }
     const res = await new Promise((r) => { const w = new ClaimForm(this.windows, names, kind === 'chat', r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); });
     if (!res) return;
-    this.net?.report(kind === 'chat' ? 1 : 0, res.name, res.reason, res.text, kind === 'chat' ? this.reportLog(res.name) : '');
+    this.net?.report(kind === 'chat' ? 1 : 0, res.name, res.reason, res.text, kind === 'chat' ? this.reportLog(res.name, log) : '');
   }
   /** The chat lines a conversation report carries: theirs and yours, oldest first, up to 1600 characters. */
-  reportLog(name) {
-    const me = this.player.name;
+  reportLog(name, log = null) {
+    const me = this.player.name, src = log || this.chatLog || [];
     let out = '', n = 0;
-    for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) {
-      const c = this.chatLog[i];
+    for (let i = src.length - 1; i >= 0; i--) {
+      const c = src[i];
       if (c.name !== name && c.name !== me) continue;
       n += 1 + c.line.length;
       if (n > 1600) break;
@@ -2045,36 +2047,6 @@ export class Game {
   }
 
 
-  /**
-   * FIND NPC: a bouncing arrow over that NPC for a few seconds - or, while it is off screen, one at the
-   * screen's edge pointing its way, with its name.
-   */
-  markNpc(ent, name) { this.npcMark = { ent, name, until: performance.now() + 8000 }; sfx.play('UI/BtMouseClick'); }
-  drawNpcMark(ctx, cam) {
-    const k = this.npcMark;
-    if (!k) return;
-    const now = performance.now();
-    if (now > k.until || !this.map.life.includes(k.ent)) { this.npcMark = null; return; }
-    // above the head - and above the quest bulb when the NPC wears one
-    const q = this.quests?.npcQuests(Number(k.ent.spawn?.id), this.textCtx());
-    const bulb = q && (q.start.length || q.complete.length || q.progress.length) ? 38 : 0;
-    const top = (typeof k.ent.box === 'function' ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
-    const sx = k.ent.x - cam.x, sy = top - cam.y;
-    // the arrow points down at (0, 8) from its own origin; turned for the edge pointer
-    const arrow = (x, y, angle) => {
-      ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.rotate(angle);
-      ctx.beginPath(); ctx.moveTo(-9, -22); ctx.lineTo(9, -22); ctx.lineTo(9, -14); ctx.lineTo(15, -14);
-      ctx.lineTo(0, 0); ctx.lineTo(-15, -14); ctx.lineTo(-9, -14); ctx.closePath();
-      ctx.fillStyle = '#ffd21e'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#7a4a00'; ctx.stroke();
-      ctx.restore();
-    };
-    if (sx >= 0 && sx <= VIEW_W && sy >= 0 && sy <= VIEW_H) { arrow(sx, sy - 6 - bob, 0); return; }
-    const right = sx > VIEW_W / 2, ex = right ? VIEW_W - 8 - bob : 8 + bob;
-    const ey = Math.max(90, Math.min(VIEW_H - 140, sy + 30));
-    arrow(ex, ey, right ? -Math.PI / 2 : Math.PI / 2);
-    if (k.name) uiText(ctx, k.name, right ? ex - 30 : ex + 30, ey - 7, { color: '#ffd21e', bold: true, size: 12, align: right ? 'right' : 'left', outline: '#3a2600' });
-  }
-
   /** The shop sign over a character at canvas point (x, y), if any. */
   shopSignAt(x, y) {
     for (const ent of [this.player, ...this.others.values()]) {
@@ -3007,9 +2979,9 @@ export class Game {
         notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, guildName) : this.net.allianceDeny(from, mine)));
       }),
       // trade requests off in the Game Option, or from someone on the Blacklist: turned down at once (reason 4)
-      tradeInvite: (name, id) => {
+      tradeInvite: (name, id, cash) => {
         if (!this.optionAllowed('tradeRequest') || this.windows.wins.userlist?.blacklisted(name)) { this.net.tradeDecline(id, 4); return; }
-        notify(this.windows, 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
+        notify(this.windows, cash ? 'cashTrade' : 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
       },
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
@@ -3106,7 +3078,26 @@ export class Game {
         if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
         // a Pyramid stage times itself in its own window
         if (secs !== null && Number(this.map?.info?.fieldType) === 23) { (this.pyramid ??= new PyramidWindow(this)).clock(secs); return; }
-        this.clock = secs === null ? null : { end: performance.now() + secs * 1000 }; if (secs !== null) this.loadClockArt();
+        this.clock = secs === null ? null : { end: performance.now() + secs * 1000, dur: secs * 1000 }; if (secs !== null) this.loadClockArt();
+      }),
+      // OX_QUIZ: the question (Etc/OXQuiz.img/<set>/<n>/q) or its answer (d, a space, "[Answer:O]" for a = 1, else X)
+      // on the quiz's own FloatNotice/0, over the weather's, until the next; 0 takes it down. A question starts the
+      // field clock at 30s, or starts one already up over again.
+      oxQuiz: later(async (ask, set, id) => {
+        const q = id ? (await this.assets.json('Etc/OXQuiz.img'))?.[set]?.[id] : null;
+        if (!q) { this.quizNotice = null; return; }
+        let text;
+        if (ask) {
+          text = String(q.q ?? '');
+          if (this.clock) this.clock.end = performance.now() + (this.clock.dur ?? 30000);
+          else { this.clock = { end: performance.now() + 30000, dur: 30000 }; this.loadClockArt(); }
+        } else {
+          const d = String(q.d ?? '');
+          text = `${d}${d ? ' ' : ''}[Answer:${Number(q.a) ? 'O' : 'X'}]`;
+        }
+        const N = this.windows.W.FloatNotice?.[0];
+        await this.assets.preload([N?.[0], N?.[1], N?.[2]].filter(Boolean));
+        this.quizNotice = { text, N };
       }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
       ship: later((move) => this.shipMove(move)),
@@ -5503,9 +5494,11 @@ export class Game {
     this.windows.wins.partysearch?.partyChanged();
   }
 
+  /** A whisper with your own whispers off in the Game Option warns you that the answer may not come (chat type 9). */
   whisperTo(name, text) {
     this.pendingWhisper = { name, text };
     this.net.whisper(name, text);
+    if (text && !this.optionAllowed('whisper')) this.hud.message('Since the character has the whispers blocked at this point, you may not receive an answer.', CHAT_COLOR.result);
   }
   onWhisper(w) {
     // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so
@@ -9573,7 +9566,6 @@ export class Game {
     this.weather.draw(ctx);
     this.mapleTV.draw(ctx, cam, this.map);
     drawPartyHp(ctx, this, cam);
-    this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
     this.drawMapTips(ctx, cam);
 
     for (const e of this.effects) {
@@ -9598,6 +9590,7 @@ export class Game {
       this.vfx?.drawHud(ctx);
       this.drawAranCombo(ctx);
       this.weather.drawNotice(ctx);
+      if (this.quizNotice) drawFloatNotice(ctx, this.assets, this.quizNotice.N, this.quizNotice.text);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
       this.dojo?.draw(ctx);

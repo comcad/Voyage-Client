@@ -110,18 +110,27 @@ export class Weather {
    * frame's own y.
    */
   drawNotice(ctx) {
-    const c = this.cur, N = c?.notice, a = this.g.assets;
-    if (!c?.message || !N || performance.now() > c.msgUntil) return;
-    const l = a.image(N[0]), m = a.image(N[1]), r = a.image(N[2]);
-    if (!l || !m || !r) return;
-    ctx.save(); ctx.font = '12px Arial, sans-serif';
-    const tw = Math.ceil(ctx.measureText(c.message).width), n = Math.max(1, Math.ceil(tw / m.width));
-    const w = l.width + n * m.width + r.width, x = Math.floor((UI_W - w) / 2), y = 160;
-    ctx.globalAlpha = 0xc0 / 255;
-    ctx.drawImage(l, x, y);
-    for (let i = 0; i < n; i++) ctx.drawImage(m, x + l.width + i * m.width, y);
-    ctx.drawImage(r, x + l.width + n * m.width, y);
-    ctx.restore();
-    uiText(ctx, c.message, x + Math.round((w - tw) / 2), y + (Number(N.y) || 0), { color: '#fff', size: 12 });
+    const c = this.cur;
+    if (!c?.message || !c.notice || performance.now() > c.msgUntil) return;
+    drawFloatNotice(ctx, this.g.assets, c.notice, c.message);
   }
+}
+
+/**
+ * A FloatNotice frame round a message, at 75%: the left piece, the middle repeated as many times as the text needs,
+ * the right piece; centred, its top at y 160; the text centred on it, at the frame's own y. (The weather's message
+ * and the OX Quiz's each have one.)
+ */
+export function drawFloatNotice(ctx, a, N, text) {
+  const l = a.image(N?.[0]), m = a.image(N?.[1]), r = a.image(N?.[2]);
+  if (!l || !m || !r || !text) return;
+  ctx.save(); ctx.font = '12px Arial, sans-serif';
+  const tw = Math.ceil(ctx.measureText(text).width), n = Math.max(1, Math.ceil(tw / m.width));
+  const w = l.width + n * m.width + r.width, x = Math.floor((UI_W - w) / 2), y = 160;
+  ctx.globalAlpha = 0xc0 / 255;
+  ctx.drawImage(l, x, y);
+  for (let i = 0; i < n; i++) ctx.drawImage(m, x + l.width + i * m.width, y);
+  ctx.drawImage(r, x + l.width + n * m.width, y);
+  ctx.restore();
+  uiText(ctx, text, x + Math.round((w - tw) / 2), y + (Number(N.y) || 0), { color: '#fff', size: 12 });
 }

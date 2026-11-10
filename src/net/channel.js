@@ -835,7 +835,8 @@ export class ChannelSession {
         if (me === 1) { r.ubyte(); look = readCharLook(r); partner = r.string(); }
         this.emit('tradeOpen', { slot: me, partner, look });
       } else if (op === 2) {                              // INVITE
-        if (r.ubyte() === 3) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0); }
+        const type = r.ubyte();   // 3 a trade, 6 a cash item trade
+        if (type === 3 || type === 6) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0, type === 6); }
       } else if (op === 4) {                              // VISIT: partner joined
         r.ubyte(); const look = readCharLook(r); this.emit('tradePartner', r.string(), look);
       } else if (op === 0x0F) {                           // SET_ITEMS: 0 yours, 1 partner's
@@ -938,6 +939,8 @@ export class ChannelSession {
     });
     on(S.REMOVE_MIST, (r) => this.emit('mistRemove', r.int()));
     // the field's timer: type 2 counts down from a number of seconds (a party quest, an event, a boat ride)
+    // OX_QUIZ: question (1) or answer (0), the Etc/OXQuiz.img set and number (0 takes the quiz's notice down)
+    on(S.OX_QUIZ, (r) => { const ask = r.ubyte(), set = r.ubyte(), id = r.ushort(); this.emit('oxQuiz', ask !== 0, set, id); });
     on(S.CLOCK, (r) => {
       const type = r.ubyte();
       if (type === 2) this.emit('clock', r.int());

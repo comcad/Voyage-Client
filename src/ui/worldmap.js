@@ -48,6 +48,21 @@ export class WorldMapWin extends Win {
     return best;
   }
   load(name) { return this.mgr.assets.json(`Map/WorldMap/${name}.img`); }
+  /**
+   * Mark NPC (the quest log): a world map of its own, over everything until it is closed, on the most detailed world
+   * map that lists one of the NPC's maps, with MapHelper.img/worldMap/npcPos<spot type> pulsing on every spot that
+   * holds one. False when no world map lists any of them.
+   */
+  static async searchNpc(mgr, maps) {
+    const w = new WorldMapWin(mgr);
+    let name = null;
+    for (const id of maps) if ((name = await w.find(id))) break;
+    if (!name) return false;
+    w.modal = true; w.npcMaps = new Set(maps);
+    await w.show(name);
+    mgr.show(w, w.openSound);
+    return true;
+  }
   async show(name) {
     const data = await this.load(name);
     if (!data) return;
@@ -94,6 +109,13 @@ export class WorldMapWin extends Win {
       let kind = null;
       for (const no of Object.values(s.mapNo || {})) for (const m of marks) if (m.map === no && kind !== 'curPos') kind = m.kind;
       if (kind) draw(H2[kind]?.[f], cx + s.spot[0], cy + s.spot[1]);
+    }
+    // the NPC being looked for: 7 frames, 20ms each
+    if (this.npcMaps) {
+      const n = Math.floor(performance.now() / 20) % 7;
+      for (const s of Object.values(d.MapList || {})) {
+        if (s?.spot && Object.values(s.mapNo || {}).some((no) => this.npcMaps.has(no))) draw(H2[`npcPos${s.type ?? 0}`]?.[n], cx + s.spot[0], cy + s.spot[1]);
+      }
     }
   }
 
