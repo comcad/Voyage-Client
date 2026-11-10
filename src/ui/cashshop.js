@@ -359,9 +359,24 @@ export class CashShopWin extends Win {
     const inv = this.g.inventory?.[invType(item.itemId)];
     if (inv) for (const [pos, it] of Object.entries(inv)) if (String(it.cashId) === String(item.cashId)) delete inv[pos];
   }
+  /**
+   * A slot purchase went through: taken only when it grows and stays in range (an inventory tab 1-5 up to 96, the
+   * storage up to 48, character slots up to 15); anything else is shown as an error, as the client does.
+   */
   slots(kind, n, type) {
-    if (kind === 'inventory' && this.g.inventory?.limits) this.g.inventory.limits[type] = n;
-    if (kind === 'storage') this.storageSlots = n;
+    const lim = this.g.inventory?.limits;
+    if (kind === 'inventory') {
+      if (!(type >= 1 && type <= 5 && n >= (lim?.[type] ?? 0) && n < 97)) { this.alert(ERRORS[type] || UNKNOWN_ERROR); return; }
+      if (lim) lim[type] = n;
+    } else if (kind === 'storage') {
+      const old = this.storageSlots ?? 0;
+      this.storageSlots = n;
+      if (!(old < n && n < 49)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+    } else {
+      const old = this.g.charSlots ?? 0;
+      this.g.charSlots = n;
+      if (!(old < n && n < 16)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+    }
     this.alert(kind === 'character' ? 'You have added a new character slot.' : 'You have added slots to your item inventory.');
   }
   error(reason, op, sn) {
@@ -687,7 +702,10 @@ export class CashShopWin extends Win {
     if (!this.available) { this.alert(ERRORS[0xC3]); return; }
     if (kind === 'world') {
       const me = this.g.player?.id, leader = this.g.guild?.members?.find((m) => m.rank === 1);
-      const why = leader && leader.id === me ? 'Guild Master can not transfer worlds.' : this.g.gm ? 'GM can not transfer worlds.' : '';
+      // then (anyone with juniors or a family leader) the family must be left first
+      const fam = this.g.family;
+      const why = leader && leader.id === me ? 'Guild Master can not transfer worlds.' : this.g.gm ? 'GM can not transfer worlds.'
+        : fam && (fam.juniors || fam.leader) ? 'You have to quit Family \nto move to another world.' : '';
       if (why) { this.alert(why); return; }
     }
     const birthday = await this.askBirthday();
