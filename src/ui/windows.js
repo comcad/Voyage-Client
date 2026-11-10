@@ -1220,7 +1220,7 @@ class QuestWin extends Win {
   markAllSeen() { const t = this.tab; this.tab = 0; for (const e of this.entries()) this.seen.add(e.id); this.tab = t; this.rowCache = null; }
   frames() {
     const W = this.W;
-    return [...super.frames(), W.backgrnd2, W.backgrnd4, W.icon0, W.icon4, W.summary, W.reward, W.prob, W.select, W.basic,
+    return [...super.frames(), W.backgrnd2, W.backgrnd4, W.Gauge?.frame, W.Gauge?.gauge, W.Gauge?.spot, W.icon0, W.icon4, W.summary, W.reward, W.prob, W.select, W.basic,
       ...['icon2', 'icon3', 'icon5', 'icon6', 'icon7', 'icon8', 'icon9'].flatMap((k) => allCanvases(W[k])), W.notice0, W.notice1, W.notice2, ...allCanvases(W.Tab)].filter(isCanvas);
   }
   get wide() { return this.dAlive ? Math.max(this.w, this.detailX() + QPANEL.w) : this.w; }
@@ -1264,7 +1264,7 @@ class QuestWin extends Win {
    */
   chainEntry(parent, parts, ctx) {
     const book = this.g.quests, first = parts[0], area = book.area(first);
-    if (book.canStart(first, ctx)) return { id: first, name: parent, chain: true, tab: 0, area, texts: [[book.name(first), book.info[first]?.['0']]], first };
+    if (book.canStart(first, ctx)) return { id: first, name: parent, chain: true, tab: 0, area, texts: [[book.name(first), book.info[first]?.['0']]], first, done: 0, count: parts.length };
     let current = 0, last = 0, done = 0;
     const texts = [];
     for (const id of parts) {
@@ -1273,7 +1273,7 @@ class QuestWin extends Win {
       else if (st === 2) { last = id; done++; texts.push([book.name(id), book.info[id]?.['2']]); }
     }
     if (!current && !done) return null;
-    return { id: current || last, name: parent, chain: true, tab: done === parts.length ? 2 : 1, area, texts, first, current, ended: done === parts.length ? last : 0 };
+    return { id: current || last, name: parent, chain: true, tab: done === parts.length ? 2 : 1, area, texts, first, current, ended: done === parts.length ? last : 0, done, count: parts.length };
   }
   entry(id) { return this.rows().find((r) => r.id === id)?.e || { id, name: this.g.quests.name(id) }; }
   areaName(code) { const n = this.areas?.[code]; return n && n !== 'empty' ? n : 'Etc.'; }
@@ -1405,15 +1405,16 @@ class QuestWin extends Win {
       image: (path) => { if (!path.includes('/')) return W[path] || null; const [, file, ...rest] = path.split('/'); let n = file === 'UIWindow.img' ? m.W : file === 'Basic.img' ? m.B : null; for (const k of rest) n = n?.[k]; return n?._canvas ? n : null; },
     };
   }
-  /** Mark NPC: point at the NPC if it is here, else say where it lives. */
-  findNpc() {
+  /**
+   * Mark NPC: the World Map, opened on its own over everything, marking the spots where the quest's NPC stands
+   * (its maps from Etc/NpcLocation.img); "This NPC is located at a spot not available through the World Map." when
+   * no world map lists them.
+   */
+  async findNpc() {
     if (!this.sel) return;
-    const npc = this.questNpc(this.sel), g = this.g;
-    const name = this.ref().npc(npc);
-    const here = g.map?.life.find((e) => e.kind === 'Npc' && Number(e.spawn.id) === npc);
-    if (here) { g.markNpc(here, name); return; }
-    const maps = Object.values(this.npcMaps?.[npc] || {}).map((id) => this.ref().map(id)).filter((n) => typeof n === 'string');
-    this.mgr.notice(maps.length ? `${name} is in ${[...new Set(maps)].join(', ')}.` : 'This NPC is located at a spot not\navailable through the World Map.');
+    const maps = Object.values(this.npcMaps?.[this.questNpc(this.sel)] || {}).map(Number).filter(Boolean);
+    const WorldMap = this.mgr.wins.worldmap?.constructor;
+    if (!maps.length || !(await WorldMap?.searchNpc(this.mgr, maps))) this.mgr.notice('This NPC is located at a spot not\navailable through the World Map.');
   }
 
   // ---------------------------------------------------------------- frame
@@ -1511,6 +1512,7 @@ class QuestWin extends Win {
     uiText(ctx, name, 35, 40, { color: '#fff', bold: true, size: QFONT });
     const lv = this.levelLine(e);
     if (lv) uiText(ctx, lv, 23, 60, { color: '#fff', size: QFONT });
+    this.drawChainGauge(ctx, e);
     // the start NPC standing (animated), feet at (242, 100) - a tall one rises over the box
     const fr = this.portraits.get(this.questNpc(id));
     if (fr?.length) {
@@ -1538,6 +1540,28 @@ class QuestWin extends Win {
       uiText(ctx, `Time Left ${Math.floor(left / 3600)}:${Math.floor(left / 60) % 60}:${left % 60}`, 17, 375, { color: '#ff2020', bold: true, size: QFONT });
     }
     ctx.restore();
+  }
+  /**
+   * A chain of more than one part not yet finished: Quest/Gauge/frame centred on (100, 105), Gauge/gauge filling it
+   * from x 15 to the mark after the parts done, and Gauge/spot at each mark between parts (part k of n at
+   * 15 + (width - 15) x k / n, rounded down). Pointing at it says "Chain Quest ( done / parts )".
+   */
+  drawChainGauge(ctx, e) {
+    this.gaugeRect = null;
+    if (!e?.chain || !(e.count > 1) || !(e.done >= 0) || e.done >= e.count) return;
+    const G = this.W.Gauge, m = this.mgr, frame = m.image(G?.frame), fill = m.image(G?.gauge), spot = m.image(G?.spot);
+    if (!frame) return;
+    const fw = frame.width, fh = frame.height, x = 100 - (fw >> 1), y = 105 - (fh >> 1);
+    const marks = Array.from({ length: e.count - 1 }, (_, k) => Math.trunc(((fw - 15) * (k + 1)) / e.count + 15));
+    ctx.drawImage(frame, x, y);
+    if (e.done > 0 && fill) for (let i = 15; i < marks[e.done - 1]; i++) ctx.drawImage(fill, x + i, y + 1);
+    if (spot) for (const k of marks) ctx.drawImage(spot, x + k, y + 1);
+    this.gaugeRect = { x, y, w: fw, h: fh, done: e.done, count: e.count };
+  }
+  tooltip(lx, ly) {
+    const r = this.gaugeRect, dl = lx - this.detailX();
+    if (this.dAlive && lx >= this.w && r && dl >= r.x && dl < r.x + r.w && ly >= r.y && ly < r.y + r.h) return lineTip(`Chain Quest ( ${r.done} / ${r.count} )`, 6, 2);
+    return null;
   }
   down(lx, ly) {
     const t = tabAt(this.tabRects, lx, ly);
@@ -1571,8 +1595,10 @@ class QuestWin extends Win {
   }
   dblclick(lx, ly) {
     // the NPC's picture: find it
-    const dl = lx - this.detailX();
-    if (this.dAlive && lx >= this.w && dl >= 198 && dl < 284 && ly >= 28 && ly < 122 && this.sel && this.dtab !== 2) this.findNpc();
+    // the NPC's frame, centred on x 242 with its bottom at 100
+    const dl = lx - this.detailX(), f = this.portraits.get(this.questNpc(this.did))?.[0], pi = f && this.mgr.image(f);
+    if (!pi || !this.dAlive || lx < this.w || !this.sel || this.tab === 2) return;   // the list's tab: Available or In Progress
+    if (dl >= 242 - (pi.width >> 1) && dl < 242 + (pi.width >> 1) && ly >= 100 - pi.height && ly < 100) this.findNpc();
   }
   wheel(dy) {
     const lx = this.mgr.mouse.x - this.x, ly = this.mgr.mouse.y - this.y;

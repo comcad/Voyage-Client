@@ -940,7 +940,11 @@ export class LoginScene {
         onEnter: go,
         onEscape: closeWorld,
         onPointer: (mx, my) => { if (rec) recBarClick(mx, my); },
-        onWheel: (d) => { if (rec) rec.first = Math.max(0, Math.min(recMax(), rec.first + d)); },
+        // the wheel over the message's bar (or 6px left of it)
+        onWheel: (d) => {
+          const b = rec && recBar(), m = this.mouse;
+          if (b && m && m.x >= b.x - 6 && m.x < b.x + b.w && m.y >= b.y && m.y < b.y + b.h) rec.first = Math.max(0, Math.min(recMax(), rec.first + d));
+        },
         update: (dt) => {
           syncLast(); syncRec();
           nav.vacBtn.enabled = !rec;

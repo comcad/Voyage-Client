@@ -2047,36 +2047,6 @@ export class Game {
   }
 
 
-  /**
-   * FIND NPC: a bouncing arrow over that NPC for a few seconds - or, while it is off screen, one at the
-   * screen's edge pointing its way, with its name.
-   */
-  markNpc(ent, name) { this.npcMark = { ent, name, until: performance.now() + 8000 }; sfx.play('UI/BtMouseClick'); }
-  drawNpcMark(ctx, cam) {
-    const k = this.npcMark;
-    if (!k) return;
-    const now = performance.now();
-    if (now > k.until || !this.map.life.includes(k.ent)) { this.npcMark = null; return; }
-    // above the head - and above the quest bulb when the NPC wears one
-    const q = this.quests?.npcQuests(Number(k.ent.spawn?.id), this.textCtx());
-    const bulb = q && (q.start.length || q.complete.length || q.progress.length) ? 38 : 0;
-    const top = (typeof k.ent.box === 'function' ? k.ent.box().top : k.ent.y - 80) - bulb, bob = Math.abs(Math.sin(now / 180)) * 10;
-    const sx = k.ent.x - cam.x, sy = top - cam.y;
-    // the arrow points down at (0, 8) from its own origin; turned for the edge pointer
-    const arrow = (x, y, angle) => {
-      ctx.save(); ctx.translate(Math.round(x), Math.round(y)); ctx.rotate(angle);
-      ctx.beginPath(); ctx.moveTo(-9, -22); ctx.lineTo(9, -22); ctx.lineTo(9, -14); ctx.lineTo(15, -14);
-      ctx.lineTo(0, 0); ctx.lineTo(-15, -14); ctx.lineTo(-9, -14); ctx.closePath();
-      ctx.fillStyle = '#ffd21e'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#7a4a00'; ctx.stroke();
-      ctx.restore();
-    };
-    if (sx >= 0 && sx <= VIEW_W && sy >= 0 && sy <= VIEW_H) { arrow(sx, sy - 6 - bob, 0); return; }
-    const right = sx > VIEW_W / 2, ex = right ? VIEW_W - 8 - bob : 8 + bob;
-    const ey = Math.max(90, Math.min(VIEW_H - 140, sy + 30));
-    arrow(ex, ey, right ? -Math.PI / 2 : Math.PI / 2);
-    if (k.name) uiText(ctx, k.name, right ? ex - 30 : ex + 30, ey - 7, { color: '#ffd21e', bold: true, size: 12, align: right ? 'right' : 'left', outline: '#3a2600' });
-  }
-
   /** The shop sign over a character at canvas point (x, y), if any. */
   shopSignAt(x, y) {
     for (const ent of [this.player, ...this.others.values()]) {
@@ -5505,9 +5475,11 @@ export class Game {
     this.windows.wins.partysearch?.partyChanged();
   }
 
+  /** A whisper with your own whispers off in the Game Option warns you that the answer may not come (chat type 9). */
   whisperTo(name, text) {
     this.pendingWhisper = { name, text };
     this.net.whisper(name, text);
+    if (text && !this.optionAllowed('whisper')) this.hud.message('Since the character has the whispers blocked at this point, you may not receive an answer.', CHAT_COLOR.result);
   }
   onWhisper(w) {
     // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so
@@ -9575,7 +9547,6 @@ export class Game {
     this.weather.draw(ctx);
     this.mapleTV.draw(ctx, cam, this.map);
     drawPartyHp(ctx, this, cam);
-    this.drawNpcMark(ctx, cam);         // over everything in the world, the quest bulbs included
     this.drawMapTips(ctx, cam);
 
     for (const e of this.effects) {

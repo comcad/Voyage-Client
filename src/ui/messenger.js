@@ -287,8 +287,11 @@ export class MessengerWin extends Win {
     const s = this.scrollClick(lx, ly, ...S.bar, this.first ?? max, this.rowCount || 0, S.rows);
     if (s !== null) this.first = s >= max ? null : s;
   }
+  /** The wheel, over the chat's scrollbar or up to 250px left of it. */
   wheel(dy) {
     if (this.size === 2) return;
+    const [bx, by, bh] = this.S.bar, lx = this.mgr.mouse.x - this.x, ly = this.mgr.mouse.y - this.y;
+    if (lx < bx - 250 || lx >= bx + 12 || ly < by || ly >= by + bh) return;
     const max = Math.max(0, (this.rowCount || 0) - this.S.rows), cur = this.first ?? max;
     const next = Math.max(0, Math.min(max, cur + Math.sign(dy)));
     this.first = next >= max ? null : next;
