@@ -1623,8 +1623,9 @@ class CsWishGiftDialog extends Win {
     this.button(mgr.B.BtOK2, 168, 112, () => this.ok());
     this.button(mgr.B.BtCancel2, 210, 112, () => this.finish(null));
   }
-  ok() {
+  async ok() {
     const l1 = this.lines[0].value.trim(), l2 = this.lines[1].value.trim(), message = `${l1}\n${l2}`;
+    if ((await this.shop.g.cursed(l1)) || (await this.shop.g.cursed(l2))) { this.shop.alert('Cursing is not allowed.'); return; }
     if (!l1 && !l2) { this.shop.alert('Please enter the message.'); return; }
     if (message.length > 72) { this.shop.alert('The message can be no longer than 72 characters long.'); return; }
     this.finish(message);
@@ -1851,10 +1852,11 @@ class CsPartnerDialog extends Win {
   }
   frames() { return [this.bg, ...this.buttons.flatMap((b) => b.frames())]; }
   say(text) { this.shop.alert(text); }
-  ok() {
+  async ok() {
     const to = this.to.value.trim(), l1 = this.line1.value.trim(), l2 = this.line2.value.trim();
     if (to.length < 4 || to.length > 12) { this.say('Please enter the name of \nthe receiving character.'); return; }
     if (to.toLowerCase() === (this.shop.g.player?.name || '').toLowerCase()) { this.say('You cannot send gifts to yourself.'); return; }
+    if ((await this.shop.g.cursed(l1)) || (await this.shop.g.cursed(l2))) { this.say('Cursing is not allowed.'); return; }
     if (!l1 && !l2) { this.say('Please enter the message.'); return; }
     const message = `${l1}\n${l2}`;
     if (message.length > 72) { this.say('The message can be no longer than 72 characters long.'); return; }
@@ -2020,17 +2022,19 @@ class CsNameDialog extends Win {
   /** The server says the name is free: OK comes on for it. */
   accept(name) { this.checked = name; this.btOK.enabled = true; }
   send() { if (this.shop.begin()) this.shop.g.net?.csNameChange(this.sn, this.me, this.field.value); }
-  ok() {
+  async ok() {
+    if (await this.shop.g.cursed(this.field.value.trim())) { this.say('Cursing is not allowed.'); return; }
     if (this.field.value === this.checked) this.send();
     else this.say('Press the CHECK button \nto check if you can use\nthe name of the character.');
   }
-  key(e) {
+  async key(e) {
     if (e.key === 'Escape') { this.finish(); return; }
     if (e.key !== 'Enter') return;
     const t = this.field.value.replace(/^[ \t\r\n]+|[ \t\r\n]+$/g, '');
     const press = 'Press the CHECK button \nto check if you can use\nthe name of the character.';
     if (t.length < 4 || t.length > 12) { this.say(press); return; }
     if (t === this.me) { this.say('This name is same as your current name. \nPlease use another name.'); return; }
+    if (await this.shop.g.cursed(t)) { this.say('Cursing is not allowed.'); return; }
     if (this.field.value !== this.checked) { this.say(press); return; }
     this.send();
     this.finish();
@@ -2138,7 +2142,7 @@ class CsGiftDialog extends Win {
     return null;
   }
   say(t) { this.shop.alert(t); }
-  ok() {
+  async ok() {
     const me = (this.shop.g.player?.name || '').toLowerCase(), to = [], l1 = this.line1.value.trim(), l2 = this.line2.value.trim();
     let rest = this.to.value;
     for (;;) {
@@ -2154,6 +2158,7 @@ class CsGiftDialog extends Win {
       rest = rest.slice(k + 1);
     }
     const message = `${l1}\n${l2}`;
+    if ((await this.shop.g.cursed(l1)) || (await this.shop.g.cursed(l2))) { this.say('Cursing is not allowed.'); return; }
     if (!l1 && !l2) { this.say('Please enter the message.'); return; }
     if (message.length > 72) { this.say('The message can be no longer than 72 characters long.'); return; }
     this.finish({ to, message });
