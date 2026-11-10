@@ -39,6 +39,7 @@ import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
 import { BookWin } from './ui/book.js';
 import { MessengerWin } from './ui/messenger.js';
+import { GuildRankWin } from './ui/guildrank.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
@@ -5381,6 +5382,7 @@ export class Game {
       case 'emblem': if (g) { g.emblem = d.emblem; if (master) this.windows.notice('It is completed.'); } break;
       case 'notice': if (g) { g.notice = d.notice; if (d.notice) msg(`* Guild Notice : ${d.notice}`); } break;
       case 'gp': if (g) g.gp = d.gp; break;
+      case 'board': this.showModal(new GuildRankWin(this.windows, d.list)); break;
       case 'makeMark':
         if (master) this.showModal(new GuildMarkWin(this.windows, g.emblem, (e) => { if (e) this.net.guildEmblem(e); }));
         break;

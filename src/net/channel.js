@@ -672,7 +672,13 @@ export class ChannelSession {
       else if (op === 0x44) { r.int(); e('notice', { notice: r.string() }); }
       else if (op === 0x48) { r.int(); e('gp', { gp: r.int() }); }
       else if (op === 0x11) e('makeMark');
-      else if (op === 0x49) return;                                                   // rank board
+      else if (op === 0x49) {
+        // the ranking board: the NPC's id, then each guild's name, GP and emblem (logo, its colour, background, its colour)
+        r.int();
+        const list = [];
+        for (let n = r.int(); n > 0; n--) list.push({ name: r.string(), gp: r.int(), emblem: { logo: r.int(), logoColor: r.int(), bg: r.int(), bgColor: r.int() } });
+        e('board', { list });
+      }
       // the Guild Quest queue: channel, then place (an int; some servers send a byte)
       else if (op === 0x4C) { const channel = r.ubyte(); e('gpqQueue', { channel, pos: r.available >= 4 ? r.int() : r.ubyte() }); }
       else if (op === 0x4E) { const ok = r.ubyte(); e('message', { code: op, ok, text: r.available >= 2 ? r.string() : '' }); }
