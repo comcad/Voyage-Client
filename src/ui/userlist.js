@@ -84,7 +84,7 @@ export class UserListWin extends Win {
       where: at(GI.BtWhere, 160, 317, () => this.find()), whisper: at(GI.BtWhisper, 239, 317, () => this.whisper()),
       up: at(GI.BtUp, 8, 337, () => this.guildRank(-1)), down: at(GI.BtDown, 80, 337, () => this.guildRank(1)),
       kick: at(GI.BtKick, 160, 337, () => this.guildExpel()), talk: at(GI.BtChat, 239, 337, () => this.talk()),
-      bbs: at(GI.BtGuildBBS, 80, 364, () => {}), party: at(GI.BtPartyInvite, 160, 364, () => this.partyInvite()),
+      bbs: at(GI.BtGuildBBS, 80, 364, () => this.mgr.open('guildbbs')), party: at(GI.BtPartyInvite, 160, 364, () => this.partyInvite()),
       info: at(GI.BtInfo, 239, 364, () => this.toggleInfo()), notice: at(GI.Btnotice, 288, 79, () => this.guildNotice()),
       edit: at(GG.BtModf, PANEL.x + 25, PANEL.y + 268, () => this.editRank()), save: at(GG.BtSave, PANEL.x + 125, PANEL.y + 268, () => this.saveRanks()),
     };
@@ -558,16 +558,22 @@ export class UserListWin extends Win {
     if (p && p.members.length >= 6) { this.error('It is impossible to invite someone to the party.'); return; }
     this.g.net?.partyOp(4, name);
   }
+  /** The map's fieldType: expelling is barred on 10, 11, 15, 23, 25 and 26, leaving on 23, 25 and 26. */
+  fieldType() { return Number(this.g.map?.info?.fieldType) || 0; }
+  noExpel() { return [10, 11, 15, 23, 25, 26].includes(this.fieldType()); }
+  noLeave() { return [23, 25, 26].includes(this.fieldType()); }
   kick() {
     const m = this.other();
     if (!m) return;
     if (this.party?.leader !== this.me) { this.error('You are not the master of the party.'); return; }
+    if (this.noExpel()) { this.error('Cannot kick another user in this map'); return; }
     this.g.net?.partyOp(5, m.id);
     this.sel = null;
   }
   leave() {
     if (!this.party) { this.error('You have yet to join a party.'); return; }
-    this.g.net?.partyOp(2);
+    if (this.noLeave()) { this.error('Cannot kick another user in this map'); return; }
+    this.g.net?.partyLeave();
   }
   async makeLeader() {
     const m = this.other();
@@ -703,8 +709,9 @@ export class UserListWin extends Win {
     const P = this.pb, p = this.party, lead = !!p && p.leader === this.me;
     P.create.enabled = !p;
     P.search.enabled = !!p || (this.g.stats?.level ?? 0) >= 10;
-    P.hp.enabled = P.leave.enabled = !!p;
-    P.kick.enabled = lead && !!c;
+    P.hp.enabled = !!p;
+    P.leave.enabled = !this.noLeave();
+    P.kick.enabled = lead && !!c && !this.noExpel();
     P.whisper.enabled = P.talk.enabled = !!c && on;
     P.invite.enabled = !p || lead;
     P.boss.enabled = lead && !!c && on && c.job !== 0;
@@ -716,7 +723,7 @@ export class UserListWin extends Win {
     G.talk.enabled = G.whisper.enabled && !this.mgr.isOpen('messenger');
     G.up.enabled = !!g && up; G.down.enabled = !!g && down;
     G.kick.enabled = !!g && !!c && ((c.rank >= 3 && rank <= 2) || (c.rank === 2 && this.isMaster()));
-    G.bbs.enabled = false;
+    G.bbs.enabled = !!g;
     G.info.enabled = !!g;
     G.notice.enabled = !!g && rank <= 2;
     const panel = this.panelOpen() && this.panelReveal() >= PANEL.w;

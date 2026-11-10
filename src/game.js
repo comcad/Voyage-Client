@@ -80,6 +80,7 @@ import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
 import { EnergyBarWin } from './ui/energybar.js';
+import { GuildBBSWin } from './ui/guildbbs.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -738,6 +739,14 @@ const SUE_RESULTS = { 0: 'You have successfully reported the user.', 1: 'Unable 
 const CLAIM_RESULTS = { 3: 'You have been reported by a user.', 0x41: 'Please try again later.', 0x42: 'Please re-check the character name, then try again.',
   0x43: 'You do not have enough mesos to report.', 0x44: 'Unable to connect to the server.', 0x45: 'You have exceeded\r\nthe number of reports available.',
   0x48: 'Unable to report due to\n\npreviously being cited for a false report.' };
+// REAL_CLOSE_MERCHANT's result byte, each a notice
+const MERCHANT_CLOSED = {
+  0: 'Both the items and mesos\r\nare successfully retrieved.',
+  1: 'Unable to retrieve the items and mesos due to the store having too much money.\r\nPlease go see Fredrick at the Free Market entrance.',
+  2: 'Unable to retrieve the items because one of the items ___________, but the Mesos were retrieved.\r\nPlease go see Fredrick at the Free Market entrance.',
+  3: 'Unable to retrieve the items due to full inventory, but the Mesos were retrieved.\r\nthe item could not be retrieved.\r\nPlease go see Fredrick at the Free Market entrance.',
+  4: 'Unable to retrieve the items for unknown reasons, but the Mesos were retrieved.\r\nPlease go see Fredrick at the Free Market entrance.',
+};
 /** Chat line colours, as in the v83 chat log. */
 const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.error };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
@@ -946,7 +955,7 @@ export class Game {
       const kite = this.kites.at(wx, wy);
       if (kite) { this.openKiteMessage(kite); return; }
       const stall = this.boards.at(p[0] + this.cam.x, p[1] + this.cam.y);
-      if (stall?.merchant && stall.merchant.owner !== this.player.id) { this.net.pshopVisit(stall.merchant.oid); return; }
+      if (stall?.merchant) { this.visitMerchant(stall.merchant); return; }
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
       if (rp) { this.requestCharInfo(rp.id); return; }
       // a pet: its owner's
@@ -1344,7 +1353,7 @@ export class Game {
 
   /** Family traffic: your info and the pedigree go to their windows; invitations and summons ask you. */
   async onFamily(e) {
-    const say = (t) => this.hud?.message(t, CHAT_COLORS.notice), refresh = () => {
+    const line = (t) => this.hud?.message(t, CHAT_COLORS.guild), refresh = () => {
       if (this.windows.isOpen('family')) this.net?.familyOpen();
       const tree = this.windows.wins.familytree;
       if (this.windows.isOpen('familytree') && tree.chart) tree.load(tree.chart.members.find((m) => m.id === tree.chart.self)?.name || this.player.name);
@@ -1352,16 +1361,29 @@ export class Game {
     if (e.op === 'privileges') this.familyPrivileges = e.list;
     else if (e.op === 'info') this.family = e.info;
     else if (e.op === 'chart') this.windows.wins.familytree.setChart(e);
-    else if (e.op === 'result') { const t = familyResult(e.code, e.mesos); if (t) this.windows.notice(t); refresh(); }
+    else if (e.op === 'result') {
+      const [notices, lines] = familyResult(e.code, e.mesos, this.familySevered || '');
+      for (const t of lines) line(t);
+      for (const t of notices) await this.windows.notice(t);
+      refresh();
+    }
     else if (e.op === 'invite') {
       // Family invitations off in the Game Option, or from someone on the Blacklist: ignored
       if (!this.optionAllowed('familyInvite') || this.windows.wins.userlist?.blacklisted(e.name)) return;
       const ok = await notify(this.windows, 'family', e.name);
       this.net?.familyAnswer(e.id, e.name, ok);
-    } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
-    else if (e.op === 'senior') { say(`You are now a junior of ${e.name}.`); this.net?.familyOpen(); refresh(); }
-    else if (e.op === 'rep') say(`You have gained ${e.gain} reputation${e.from ? ` from ${e.from}` : ''}.`);
-    else if (e.op === 'login') { if (e.online) notifyLogin(this.windows, e.name); }
+    } else if (e.op === 'joined') {
+      if (e.ok) line(`You have added ${e.name} as a Junior. Please do your best to guide the Junior in his/her game play.`);
+      else this.windows.notice(`${e.name} has declined your Junior request.`);
+      refresh();
+    } else if (e.op === 'senior') { line(`${e.name} has become your Senior. He/she will guide you in your game play.`); this.net?.familyOpen(); refresh(); }
+    else if (e.op === 'rep') line(e.gain < 0 ? `You have used ${-e.gain} Rep Points.` : `Your Rep has increased (${e.from}, +${e.gain})`);
+    else if (e.op === 'login') {
+      if (e.online) notifyLogin(this.windows, e.name);
+      // an open family tree lights or dims that member's plate
+      const tree = this.windows.wins.familytree, m = this.windows.isOpen('familytree') && tree.chart?.members.find((x) => x.name === e.name);
+      if (m) m.online = e.online;
+    }
     else if (e.op === 'summon') {
       const ok = await notify(this.windows, 'familySummon', e.from);
       this.net?.familySummonAnswer(e.family, ok);
@@ -1974,6 +1996,11 @@ export class Game {
     ent.chalkRect = { x: x - 18 + this.cam.x, y: y - 19 + this.cam.y, w: w + 36, h: h + 38 };
   }
 
+  /** A Hired Merchant clicked: your own asks before you go in to manage it; either way VISIT with two 0 bytes. */
+  async visitMerchant(m) {
+    if (m.owner === this.player.id && !(await this.windows.confirm("You can't sell items while managing the store.\r\nWould you like to start managing the store?"))) return;
+    this.net.merchantVisit(m.oid);
+  }
   /** A Hired Merchant: ask the server whether one may open here; merchantCheck carries on. */
   openMerchant(itemId) {
     if (this.playerShop || this.tradeWin) return;
@@ -2819,7 +2846,7 @@ export class Game {
     // a name or a line: the small UtilDlg box with a white field, opened without a sound
     wm.askText = (text, def, opts = {}) => new Promise((r) => wm.show(new UtilBox(wm, 'text', text.replace(/\r\n/g, '\n'), r, { def, ...opts }), null));
     Object.assign(wm.wins, { channel: new ChannelWin(wm), gameopt: new GameOptWin(wm), sysopt: new SysOptWin(wm), userlist: new UserListWin(wm), partyhp: new PartyHpWin(wm), worldmap: new WorldMapWin(wm), questalarm: new QuestAlarmWin(wm), monsterbook: new MonsterBookWin(wm), medal: new MedalWin(wm), messenger: new MessengerWin(wm), partysearch: new PartySearchWin(wm), family: new FamilyWin(wm), familytree: new FamilyTreeWin(wm),
-      energybar: new EnergyBarWin(wm) });
+      energybar: new EnergyBarWin(wm), guildbbs: new GuildBBSWin(wm) });
     await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook', 'medal'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
@@ -2935,11 +2962,15 @@ export class Game {
       },
       buddyCapacity: (n) => { this.buddyCapacity = n; },
       buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
-      buddyRequest: (b) => notify(this.windows, 'buddy', b.name)
-        .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
+      buddyRequest: (b) => {
+        if (b.entry && !this.buddies.some((x) => x.id === b.entry.id)) this.buddies = [...this.buddies, b.entry];
+        notify(this.windows, 'buddy', b.name).then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id)));
+      },
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
       alliance: (d) => this.onAlliance(d),
+      // the guild BBS only takes its packets while it is open
+      bbs: (d) => { if (this.windows?.isOpen('guildbbs')) this.windows.wins.guildbbs.onPacket(d); },
       // other players' guild tags: held for one still spawning
       guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
       guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
@@ -2986,7 +3017,11 @@ export class Game {
       shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
       shopChat: later((slot, text) => this.playerShop?.say(text)),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
-      shopClosed: later((reason) => this.playerShop?.end(reason)),
+      shopClosed: later((reason, result) => {
+        this.playerShop?.end(reason);
+        // REAL_CLOSE_MERCHANT's result: what came back to you when the store closed
+        if (MERCHANT_CLOSED[result]) this.windows.notice(MERCHANT_CLOSED[result]);
+      }),
       roomError: later((code) => { if (ROOM_ERRORS[code]) this.windows.notice(ROOM_ERRORS[code]); }),
       merchantSpawn: later((m) => this.boards.spawn(m)),
       merchantUpdate: later((owner, info) => this.boards.update(owner, info)),
@@ -3710,13 +3745,13 @@ export class Game {
 
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
-   * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, the Energy
-   * Charge gauge, Ranking, GM Board, Maple Event) do nothing; 0x17 is the Maker, 0x1F the Medal window.
+   * only the Quest window (6) opens. Ids without a window here (UserInfo, Monster Carnival, Ranking, GM Board, Maple
+   * Event) do nothing; 0xB is the Guild BBS, 0x14 the Energy Charge gauge, 0x17 the Maker, 0x1F the Medal window.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
-    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
+    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0xb: 'guildbbs', 0x14: 'energybar', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
     if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
     if (name === 'familytree') w?.load(this.player.name);

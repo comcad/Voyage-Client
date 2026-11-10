@@ -631,8 +631,14 @@ export class ChannelSession {
         }
         this.emit('buddies', list);
       } else if (op === 9) {
+        // a request: who it's from, then their buddy record (the list keeps it as a pending entry) and an in-shop byte
         const id = r.int(), name = r.string();
-        this.emit('buddyRequest', { id, name });
+        let entry = null;
+        if (r.available >= 40) {
+          entry = { id: r.int(), name: fixed(r, 13), pending: r.ubyte() === 1, channel: r.int(), group: fixed(r, 17) };
+          r.ubyte();
+        }
+        this.emit('buddyRequest', { id, name, entry });
       } else if (op === 0x14) {
         const id = r.int(); r.ubyte();
         this.emit('buddyChannel', id, r.int());
@@ -748,6 +754,21 @@ export class ChannelSession {
       this.emit('family', { op: 'chart', self, members, counts, canAdd: r.available >= 2 ? r.short() !== 0 : true });
     });
     on(S.FAMILY_RESULT, (r) => this.emit('family', { op: 'result', code: r.int(), mesos: r.int() }));
+    // the guild BBS: 6 a page of the list (a notice flag and the notice, the total, then the threads), 7 a thread with its
+    // replies, 8 the thread was deleted
+    on(S.GUILD_BBS_PACKET, (r) => {
+      const op = r.ubyte();
+      const entry = () => ({ id: r.int(), writer: r.int(), title: r.string(), time: r.long(), icon: r.int(), replies: r.int() });
+      if (op === 6) {
+        const notice = r.ubyte() ? entry() : null, total = r.int(), threads = [];
+        if (total > 0) for (let n = r.int(); n > 0; n--) threads.push(entry());
+        this.emit('bbs', { op: 'list', notice, total, threads });
+      } else if (op === 7) {
+        const id = r.int(), writer = r.int(), time = r.long(), title = r.string(), body = r.string(), icon = r.int(), replies = [];
+        for (let n = r.int(); n > 0; n--) replies.push({ id: r.int(), writer: r.int(), time: r.long(), text: r.string() });
+        this.emit('bbs', { op: 'thread', thread: { id, writer, time, title, body, icon, replies } });
+      } else if (op === 8) this.emit('bbs', { op: 'deleted' });
+    });
     on(S.FAMILY_JOIN_REQUEST, (r) => this.emit('family', { op: 'invite', id: r.int(), name: r.string() }));
     on(S.FAMILY_JOIN_REQUEST_RESULT, (r) => this.emit('family', { op: 'joined', ok: r.bool(), name: r.string() }));
     on(S.FAMILY_JOIN_ACCEPTED, (r) => this.emit('family', { op: 'senior', name: r.string() }));
@@ -1753,10 +1774,12 @@ export class ChannelSession {
     if (typeof arg === 'string') w.string(arg); else if (arg !== undefined) w.int(arg);
     this.send(w);
   }
+  /** PARTY_OPERATION 2, leave: the client sends a 0 byte after it. */
+  partyLeave() { this.send(new PacketWriter(C.PARTY_OPERATION).byte(2).byte(0)); }
   /** Player shop room ops (Cosmic PlayerShop / PacketCreator.getPlayerShop*). Returns whether it was one. */
   shopOp(op, r) {
     if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
-    if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0); return true; }           // REAL_CLOSE_MERCHANT: the owner's room closed
+    if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0, r.available ? r.ubyte() : null); return true; }   // REAL_CLOSE_MERCHANT: closed, and what came back
     if (op === 0x1A) { this.emit('shopSold', r.ubyte(), r.short(), r.string()); return true; } // UPDATE_PLAYERSHOP: sold (owner)
     if (op === 4) { const slot = r.ubyte(), look = readCharLook(r); this.emit('shopVisitor', slot, r.string(), look); return true; }
     if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('shopChat', slot, r.string()); return true; }
@@ -1805,6 +1828,8 @@ export class ChannelSession {
   /** CREATE type 4 (a Shop Permit) or 5 (a Hired Merchant): the title and the item that opens it */
   pshopCreate(title, itemId, type = 4) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
   pshopVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
+  /** VISIT a Hired Merchant: the client adds two 0 bytes. */
+  merchantVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid).byte(0).byte(0)); }
   pshopOpenStore() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0B).byte(1)); }
   pshopOpenCash(type, birthday) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(0x0B).byte(type).int(birthday)); }
   /** ADD_ITEM: inventory tab, slot, how many bundles, how many in each, the price of one bundle */
@@ -1934,6 +1959,18 @@ export class ChannelSession {
     for (const a of args) if (typeof a === 'string') w.string(a); else w.int(a);
     this.send(w);
   }
+  /** BBS_OPERATION 0: post (edit flag, the thread when editing, notice flag, title, text, emoticon). */
+  bbsPost(edit, id, notice, title, text, icon) {
+    const w = new PacketWriter(C.BBS_OPERATION).byte(0).byte(edit ? 1 : 0);
+    if (edit) w.int(id);
+    this.send(w.byte(notice ? 1 : 0).string(title).string(text).int(icon));
+  }
+  /** BBS_OPERATION 1 delete a thread, 2 a page of the list, 3 open a thread, 4 reply, 5 delete a reply. */
+  bbsDelete(id) { this.send(new PacketWriter(C.BBS_OPERATION).byte(1).int(id)); }
+  bbsList(page) { this.send(new PacketWriter(C.BBS_OPERATION).byte(2).int(page)); }
+  bbsShow(id) { this.send(new PacketWriter(C.BBS_OPERATION).byte(3).int(id)); }
+  bbsReply(id, text) { this.send(new PacketWriter(C.BBS_OPERATION).byte(4).int(id).string(text)); }
+  bbsReplyDelete(id, reply) { this.send(new PacketWriter(C.BBS_OPERATION).byte(5).int(id).int(reply)); }
   guildRank(cid, rank) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0E).int(cid).byte(rank)); }
   guildEmblem(e) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0F).short(e.bg).byte(e.bgColor).short(e.logo).byte(e.logoColor)); }
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
