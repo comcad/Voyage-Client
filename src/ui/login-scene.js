@@ -880,27 +880,11 @@ export class LoginScene {
         }
         return this.recWrap.get(text);
       };
-      const recBar = () => { const V = this.B?.VScr7; return V && { V, x: RW.x + REC_BAR.x, y: RW.y + REC_BAR.y, h: REC_BAR.h, w: V.enabled?.prev0?._w || 15, a: V.enabled?.prev0?._h || 14, t: V.enabled?.thumb0?._h || 25 }; };
+      const recBar = () => this.vscr7(RW.x + REC_BAR.x, RW.y + REC_BAR.y, REC_BAR.h);
       const recMax = () => { const r = rec && recs()[rec.i]; return r ? Math.max(0, recLines(r.text).length - REC_ROWS) : 0; };
-      const drawRecBar = (ctx) => {
-        const b = recBar();
-        if (!b) return;
-        const max = recMax(), on = max > 0, S = on ? b.V.enabled : b.V.disabled, im = (n) => n && this.assets.image(n);
-        const base = im(S.base), prev = im(on ? S.prev0 : S.prev), next = im(on ? S.next0 : S.next);
-        if (base) ctx.drawImage(base, b.x, b.y + b.a, b.w, b.h - 2 * b.a);
-        if (prev) ctx.drawImage(prev, b.x, b.y);
-        if (next) ctx.drawImage(next, b.x, b.y + b.h - b.a);
-        const thumb = on && im(S.thumb0);
-        if (thumb) ctx.drawImage(thumb, b.x, b.y + b.a + Math.round((b.h - 2 * b.a - b.t) * rec.first / max));
-      };
+      const drawRecBar = (ctx) => this.drawVScr(ctx, recBar(), rec.first, recMax());
       /** A click on the message's scrollbar: the arrows step a row, the track jumps there. */
-      const recBarClick = (mx, my) => {
-        const b = recBar(), max = recMax();
-        if (!b || mx < b.x || mx >= b.x + b.w || my < b.y || my >= b.y + b.h) return;
-        if (my < b.y + b.a) rec.first = Math.max(0, rec.first - 1);
-        else if (my >= b.y + b.h - b.a) rec.first = Math.min(max, rec.first + 1);
-        else rec.first = Math.max(0, Math.min(max, Math.round(((my - b.y - b.a - b.t / 2) / (b.h - 2 * b.a - b.t)) * max)));
-      };
+      const recBarClick = (mx, my) => { const f = this.vscrClick(recBar(), mx, my, rec.first, recMax()); if (f !== null) rec.first = f; };
       const recPanel = {
         frames: () => [A.backgrd, ...Object.values(this.B?.VScr7 || {}).flatMap((st) => Object.values(st || {}))].filter((n) => n?._canvas),
         draw: (ctx) => {
@@ -1290,6 +1274,8 @@ export class LoginScene {
     }
     const chars = res.chars.slice(0, 60);
     const VA = this.L.ViewAllChar, CS = this.L.CharSelect;
+    this.B ??= await this.assets.json('UI/Basic.img');
+    const barArt = Object.values(this.B?.VScr7 || {}).flatMap((st) => Object.values(st || {})).filter((n) => n?._canvas);
     const looks = await Promise.all(chars.map(async (c) => {
       const cl = new CharacterLook(this.assets, { skin: c.look.skin, face: c.look.face, hair: c.look.hair, gender: c.look.gender, equips: lookEquipIds(c.look) });
       await cl.load();
@@ -1301,6 +1287,10 @@ export class LoginScene {
       let sel = 0, top = 0, busy = false, done = false;
       // fewer than 10 characters don't scroll; otherwise n / 3 - 2 rows (a partial last row can't be reached)
       const maxTop = chars.length < 10 ? 0 : Math.floor(chars.length / 3) - 2;
+      // the scrollbar: its create call lost its arguments. A VScr7 (the style of the login's other scrollbar) centred in
+      // the art's track beside the grid, whose inside is x 372-393, y 64-413 (350 tall) (unverified). The wheel works
+      // over the bar and up to 350px left of it (its +0x34 is 0x15e), so over the grid.
+      const bar = () => this.vscr7(VW.x + 375, VW.y + 64, 350);
       const anim = chars.map(() => ({ frame: 0, t: 0 }));
       const selFx = new WzSprite(VA.Select, 0, 0);
       const cell = (i) => { const rel = i - 3 * top; return rel >= 0 && rel <= 8 ? { c: rel % 3, r: Math.floor(rel / 3) } : null; };
@@ -1331,6 +1321,11 @@ export class LoginScene {
       };
       const nav = this.chrome(5, { back });
       const enterBtn = this.button(VA.BtEnter, 582, 432, enter);
+      const scrollTo = (t) => {
+        top = Math.max(0, Math.min(maxTop, t));
+        // keep the selection in view, in the same column
+        if (sel >= 0 && !cell(sel)) sel = Math.min(chars.length - 1, (sel < 3 * top ? 3 * top : 3 * (top + 2)) + (sel % 3));
+      };
       const hit = (i, mx, my) => {
         const at = cell(i);
         if (!at) return false;
@@ -1341,16 +1336,18 @@ export class LoginScene {
         buttons: [enterBtn, ...nav.buttons],
         over: nav.over,
         sprites: [new WzSprite(VA.backgrnd[1], VW.x + 291, VW.y + 220)],   // origin (291, 220): top-left at (122, 38)
-        preload: [...selFx.frames(), ...Object.values(VA.WorldIcons), VA.Job[0], CS.icon.up, CS.icon.down, CS.icon.same, ...Object.values(CS.icon.job),
+        preload: [...selFx.frames(), ...barArt, ...Object.values(VA.WorldIcons), VA.Job[0], CS.icon.up, CS.icon.down, CS.icon.same, ...Object.values(CS.icon.job),
           ...Object.values(CS.nameTag[0] || {}), ...Object.values(CS.nameTag[1] || {})],
         onEnter: enter,
         onWheel: (d) => {
-          top = Math.max(0, Math.min(maxTop, top + d));
-          // keep the selection in view, in the same column
-          if (sel >= 0 && !cell(sel)) sel = Math.min(chars.length - 1, (sel < 3 * top ? 3 * top : 3 * (top + 2)) + (sel % 3));
+          const b = bar(), m = this.mouse;
+          if (b && !(m.x >= b.x - 350 && m.x < b.x + b.w && m.y >= b.y && m.y < b.y + b.h)) return;
+          scrollTo(top + d);
         },
         onPointer: (mx, my) => {
           if (busy) return;
+          const f = this.vscrClick(bar(), mx, my, top, maxTop);
+          if (f !== null) { scrollTo(f); return; }
           for (let i = 0; i < chars.length; i++) {
             if (!hit(i, mx, my)) continue;
             if (sel === i && performance.now() - (this.lastVacClick || 0) < 400) enter();   // double-click enters
@@ -1364,6 +1361,7 @@ export class LoginScene {
           advanceLooks(looks, anim, sel, ms);
         },
         drawFront: (ctx) => {
+          this.drawVScr(ctx, bar(), top, maxTop);
           chars.forEach((c, i) => {
             const at = cell(i);
             if (!at) return;
@@ -1403,6 +1401,30 @@ export class LoginScene {
       };
       this.setScreen(layer, 'vac').then(() => sfx.play('UI/CharSelect'));
     });
+  }
+
+  /** A Basic.img VScr7 bar, the login screens' scrollbar: its art and box (null until Basic.img is in). */
+  vscr7(x, y, h) {
+    const V = this.B?.VScr7;
+    return V && { V, x, y, h, w: V.enabled?.prev0?._w || 15, a: V.enabled?.prev0?._h || 14, t: V.enabled?.thumb0?._h || 25 };
+  }
+  /** Draws bar b scrolled to first of max; greyed, with no thumb, when there is nothing to scroll. */
+  drawVScr(ctx, b, first, max) {
+    if (!b) return;
+    const on = max > 0, S = on ? b.V.enabled : b.V.disabled, im = (n) => n && this.assets.image(n);
+    const base = im(S.base), prev = im(on ? S.prev0 : S.prev), next = im(on ? S.next0 : S.next);
+    if (base) ctx.drawImage(base, b.x, b.y + b.a, b.w, b.h - 2 * b.a);
+    if (prev) ctx.drawImage(prev, b.x, b.y);
+    if (next) ctx.drawImage(next, b.x, b.y + b.h - b.a);
+    const thumb = on && im(S.thumb0);
+    if (thumb) ctx.drawImage(thumb, b.x, b.y + b.a + Math.round((b.h - 2 * b.a - b.t) * first / max));
+  }
+  /** A click on bar b: the arrows step one, the track jumps there. The new first, or null when the click missed it. */
+  vscrClick(b, mx, my, first, max) {
+    if (!b || mx < b.x || mx >= b.x + b.w || my < b.y || my >= b.y + b.h) return null;
+    if (my < b.y + b.a) return Math.max(0, first - 1);
+    if (my >= b.y + b.h - b.a) return Math.min(max, first + 1);
+    return Math.max(0, Math.min(max, Math.round(((my - b.y - b.a - b.t / 2) / (b.h - 2 * b.a - b.t)) * max)));
   }
 
   /** A 150x22 box of CharSelect/nameTag/1 pieces with the name centred in white. */
