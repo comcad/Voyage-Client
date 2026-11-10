@@ -100,7 +100,7 @@ function readShopItems(r) {
   return Array.from({ length: r.ubyte() }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) }));
 }
 /**
- * ROOM type 5 (getHiredMerchant): your slot, the merchant item, visitors, notes, the owner's name - then, for the
+ * ROOM type 5 (getHiredMerchant): your slot, the merchant item, visitors, the notes left while away, the owner's name - then, for the
  * owner only, opening time, sales and stored mesos - the title, and the stock (an empty one adds a 0 byte).
  */
 function readMerchantRoom(r, selfName) {
@@ -108,7 +108,9 @@ function readMerchantRoom(r, selfName) {
   const slot = r.short(), itemId = r.int(); r.string();
   const people = [];
   for (let s = r.ubyte(); s !== 0xFF; s = r.ubyte()) people.push({ slot: s, look: readCharLook(r), name: r.string() });
-  for (let n = r.short(); n > 0; n--) { r.string(); r.ubyte(); }
+  // what visitors said while the owner was away (the owner's copy only): "name : text" and the seat it came from
+  const notes = [];
+  for (let n = r.short(); n > 0; n--) notes.push({ text: r.string(), slot: r.ubyte() });
   const owner = r.string(), mine = owner === selfName, sold = [];
   let firstTime = false;
   if (mine) {
@@ -120,7 +122,7 @@ function readMerchantRoom(r, selfName) {
   const mesos = r.int();            // the owner: what the merchant has earned; a visitor: their own
   const n = r.ubyte();
   const items = n ? Array.from({ length: n }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) })) : (r.ubyte(), []);
-  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, mesos, sold, people, title, items };
+  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, mesos, sold, people, title, items, notes };
 }
 /** ROOM type 4 (getPlayerShop): max visitors, your slot (0 owner), sales so far, owner and visitors, title, stock. */
 function readShopRoom(r) {

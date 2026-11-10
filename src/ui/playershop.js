@@ -48,6 +48,8 @@ export class PlayerShopWin extends Win {
       });
     }
     this.first = 0; this.sel = -1; this.lines = [];
+    // your Hired Merchant's notes from while you were away start its chat, their text masked as room chat is
+    for (const n of d.notes || []) this.say(this.g.maskedLine ? this.g.maskedLine(n.text) : n.text);
     this.w = 525; this.h = this.owner ? 553 : 365;   // the owner also sees the fee table under the room
     const bx = 149;
     const tip = () => this.mgr.notice('Drag an item from your inventory into the shop to put it up for sale.');
