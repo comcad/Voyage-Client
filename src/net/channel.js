@@ -154,7 +154,8 @@ function readMobStats(r, has) {
   if (has(30)) r.int();
   if (has(29) || has(30)) r.int();
   // bit 31: two bytes; while the first isn't 0 blows do nothing to it
-  if (has(31)) { const a = r.ubyte(); r.ubyte(); out.push({ first: 0, second: 0x80000000, source: 0, value: a }); }
+  // (the second byte: while it isn't 0 the monster neither attacks nor bombs)
+  if (has(31)) { const a = r.ubyte(), b = r.ubyte(); out.push({ first: 0, second: 0x80000000, source: 0, value: a, value2: b }); }
   return out;
 }
 

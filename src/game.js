@@ -3293,8 +3293,13 @@ export class Game {
         if (st.energyCharged) { rp.energy = st.energyCharged.value; this.energyAura(rp, st.energyCharged.reason); }
         if (st.barrier) { rp.barrier = true; this.barrierShield(rp); }
       })),
-      mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
-      mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
+      // Hypnotize: the last monster put under it is the one whose attacks count; its end clears that, whichever it was
+      mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { if (s.second & HYPNOTIZE) this.lastHypnotized = e; this.applyMobStatus(e, s); } }),
+      mobStatusCancel: later((oid, first, second) => {
+        const e = this.lifeByOid.get(oid);
+        if (second & HYPNOTIZE) this.lastHypnotized = null;
+        if (e && !e.pending) e.removeStatus(first, second);
+      }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
       moveMob: later((oid, start, moves, act, skill, level) => {
@@ -5613,6 +5618,7 @@ export class Game {
     if (this.net) this.monsterBombs();
     this.revealChildren();
     if (this.net) this.friendlyMobHit();
+    if (this.net) this.hypnoTouch();
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
     if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
@@ -8001,7 +8007,8 @@ export class Game {
     return false;
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
+  /** The monsters your attacks can reach: alive, never a Hypnotized one, nor one only monsters hurt (info/damagedByMob). */
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !hypnotized(m) && !Number(m.src?.info?.damagedByMob)); }
   /** A monster within a ranged weapon's swing, so a held shot gives way to the swing (never with Combat.NoWhack). */
   swingsClose() { return !config.noWhack && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length > 0; }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
@@ -9060,7 +9067,7 @@ export class Game {
    */
   async applyMobStatus(m, s) {
     // values the damage rolls read: bit 31's guard, bit 34's damage taken (%)
-    if (s.second & 0x80000000) m.guardValue = s.value;
+    if (s.second & 0x80000000) { m.guardValue = s.value; m.disableValue = s.value2 || 0; }
     if (s.first & 0x4) m.takenPct = s.value;
     const low = s.source & 0xffff, high = s.source >>> 16, mobSkill = s.source > 0 && low >= 100 && low <= 200 && high > 0 && high < 256;
     let node = null, icon = null, doom = null;
@@ -9233,34 +9240,85 @@ export class Game {
     return (type === 10 || type === 15) && this.carnivalTeam !== undefined && m.team === this.carnivalTeam;
   }
   /**
-   * A monster's attack landing on the monsters of the other side (one Hypnotized, the other not; a Hypnotized one's
-   * only when we control it): each it reaches, at most once in 2s, takes its attack x 0.8-0.85 (magic 0.75-0.8) less
-   * its defence x 0.5-0.6, shown with the attack's hit art and CharDam sound, and the server hears it (MOB_DAMAGE_MOB).
+   * A monster's attack landing on the monsters of the other side (one Hypnotized, the other not): up to 15 it
+   * reaches, never an escort (info/damagedByMob), each struck through mobHitsMob.
    */
   mobAttackMobs(m, a, spots) {
-    if (!this.net || this.player?.id == null || (hypnotized(m) && !m.controlled)) return;
-    const now = performance.now(), magic = !!a.info.magic, roll = (lo, hi) => lo + Math.random() * (hi - lo);
-    const atk = Number(m.src.info?.[magic ? 'MADamage' : 'PADamage']) || 0;
+    if (!this.net || this.player?.id == null) return;
+    let n = 0;
     for (const v of this.map.life) {
+      if (n >= 15) break;
       if (v === m || v.kind !== 'Mob' || !v.alive || v.dying || v.oid == null || hypnotized(v) === hypnotized(m)) continue;
-      if (now - (v.mobHitAt ?? -Infinity) < 2000 || !m.reaches(a, v.hitBox(), spots)) continue;
-      v.mobHitAt = now;
-      const def = Number(v.src.info?.[magic ? 'MDDamage' : 'PDDamage']) || 0;
-      const dmg = Math.max(1, Math.trunc(atk * (magic ? roll(0.75, 0.8) : roll(0.8, 0.85)) - (def > 0 ? def * roll(0.5, 0.6) : 0)));
-      const b = v.hitBox(), cx = Math.round((b.left + b.right) / 2), cy = Math.round((b.top + b.bottom) / 2);
-      const hit = a.info.hit && Game.fxNode(a.info.hit);
-      if (hit) {
-        const anim = new Anim(hit, false), x = b.left + Math.random() * (b.right - b.left), y = b.top + Math.random() * (b.bottom - b.top);
-        this.assets.preload(anim.frames).then(() => this.fx.push({ anim, x, y, flip: m.facingRight }));
-      }
-      if (CHAR_DAM[a.index]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[a.index]}`, { volume: this.volumeAt(v.x, v.y) });
-      v.hit(dmg, m.x > v.x);
-      this.damageNumbers(v, [dmg], false);
-      this.net.mobDamageMob(m.oid, this.player.id, v.oid, a.index, dmg, !m.facingRight, cx, cy);
+      if (Number(v.src?.info?.damagedByMob) || !m.reaches(a, v.hitBox(), spots)) continue;
+      n++;
+      this.mobHitsMob(m, v, a);
+    }
+  }
+  /**
+   * Monster m strikes monster v of the other side (MOB_DAMAGE_MOB), at most once in 2s per struck monster. The
+   * damage: (atk x (0.8 + 0.05r) + 100) x atk / 100 less def x (0.5 + 0.1r) (none under 1 def), magic with MADamage /
+   * MDDamage and 0.75; not floored. With an attack, its hit art at a random point of v's body and its CharDam sound;
+   * a body touch (a = null) sends no attack (-1) and its side by where they stand.
+   */
+  mobHitsMob(m, v, a = null) {
+    if (!this.net || this.player?.id == null || hypnotized(v) === hypnotized(m)) return;
+    const now = performance.now();
+    if (now - (v.mobHitAt ?? -Infinity) < 2000) return;
+    v.mobHitAt = now;
+    const magic = !!a?.info?.magic;
+    const atk = Number(m.src.info?.[magic ? 'MADamage' : 'PADamage']) || 0, def = Number(v.src.info?.[magic ? 'MDDamage' : 'PDDamage']) || 0;
+    const atkRoll = atk * ((magic ? 0.75 : 0.8) + 0.05 * Math.random()), defRoll = def < 1 ? 0 : def * (0.5 + 0.1 * Math.random());
+    const dmg = Math.trunc((atkRoll + 100) * atk * 0.01 - defRoll);
+    const b = v.hitBox(), cx = Math.round((b.left + b.right) / 2), cy = Math.round((b.top + b.bottom) / 2);
+    const hit = a?.info?.hit && Game.fxNode(a.info.hit);
+    if (hit) {
+      const anim = new Anim(hit, false), x = b.left + Math.random() * (b.right - b.left), y = b.top + Math.random() * (b.bottom - b.top);
+      this.assets.preload(anim.frames).then(() => this.fx.push({ anim, x, y, flip: m.facingRight }));
+    }
+    if (a && CHAR_DAM[a.index]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[a.index]}`, { volume: this.volumeAt(v.x, v.y) });
+    v.hit(Math.max(0, dmg), m.x > v.x);
+    this.damageNumbers(v, [Math.max(0, dmg)], false);
+    const left = a ? !m.facingRight : v.x < m.x;
+    this.net.mobDamageMob(m.oid, this.player.id, v.oid, a ? a.index : -1, dmg, left, cx, cy);
+  }
+  /** A monster that can't attack now: status bit 31's second byte, or info/disable when that status isn't on it. */
+  mobDisabled(m) { return m.status?.second & 0x80000000 ? !!m.disableValue : !!Number(m.src?.info?.disable); }
+  /**
+   * The last Hypnotized monster, while we control it, standing or flying: every 2s or more, the first monster that
+   * attacks with its body (info/bodyAttack), isn't Hypnotized, an escort or unable to attack, and whose attack boxes
+   * or body core (its middle, 25px in from the sides, 30 from the top, 10 from the bottom) meet its body, and it hurt
+   * each other: two MOB_DAMAGE_MOB with no attack.
+   */
+  hypnoTouch() {
+    const h = this.lastHypnotized;
+    if (!h || !h.controlled || !h.alive || h.dying || !this.map.life.includes(h) || h.attacking || (!h.flying && !h.fh)) return;
+    const now = performance.now();
+    if (now - (this.hypnoTouchAt ?? -Infinity) < 2000) return;
+    const hb = h.hitBox(), meets = (b) => b.left <= hb.right && hb.left <= b.right && b.top <= hb.bottom && hb.top <= b.bottom;
+    for (const v of this.map.life) {
+      if (v === h || v.kind !== 'Mob' || !v.alive || v.dying || v.oid == null || hypnotized(v)) continue;
+      const info = v.src?.info || {};
+      if (Number(info.notAttack) || !Number(info.bodyAttack) || Number(info.damagedByMob) || this.mobDisabled(v)) continue;
+      const b = v.hitBox(), cx = (b.left + b.right) / 2, cy = (b.top + b.bottom) / 2;
+      const core = { left: Math.max(cx - 1, b.left + 25), right: Math.min(cx + 1, b.right - 25), top: Math.max(cy - 1, b.top + 30), bottom: Math.min(cy + 1, b.bottom - 10) };
+      // an attack's range (lt / rb from where it stands, mirrored when it faces right)
+      const byAttack = (v.attacks || []).some((a) => {
+        const r = a.info?.range;
+        if (!r?.lt || !r?.rb) return false;
+        const [l, rt] = v.facingRight ? [v.x - r.rb[0], v.x - r.lt[0]] : [v.x + r.lt[0], v.x + r.rb[0]];
+        return meets({ left: l, right: rt, top: v.y + r.lt[1], bottom: v.y + r.rb[1] });
+      });
+      if (!meets(core) && !byAttack) continue;
+      this.mobHitsMob(v, h); this.mobHitsMob(h, v);
+      this.hypnoTouchAt = now;
+      return;
     }
   }
   mobAttackLand(m, a, spots) {
     const p = this.player;
+    // the client works an attack out only from a monster that may attack (no info/notAttack, not disabled) and, when
+    // it is Hypnotized, only from the last one put under it
+    if ((hypnotized(m) && m !== this.lastHypnotized) || Number(m.src?.info?.notAttack) || this.mobDisabled(m)) return;
     this.mobAttackMobs(m, a, spots);
     if (!this.net || this.dead || !this.stats || !m.alive || this.invincible > 0 || !m.reaches(a, this.playerBody(), spots)) return;
     const magic = !!a.info.magic;
