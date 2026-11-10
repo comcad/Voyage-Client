@@ -40,7 +40,7 @@ export class MessengerWin extends Win {
     this.M = M;
     this.reset();
     this.enter = this.button(M.BtEnter, 238, 318, () => this.send());
-    this.field = new TextField(mgr.game.statusBar.layer, 0, 0, 206, 15, { max: 70, color: '#000' });
+    this.field = new TextField(mgr.game.statusBar.layer, 0, 0, 206, 15, { max: 256, color: '#000' });
     this.field.show(false);
     this.field.el.addEventListener('keydown', (e) => {
       e.stopPropagation();
