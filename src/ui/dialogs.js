@@ -93,7 +93,8 @@ export class NpcDialog extends Win {
     if (d.type === 0) {
       if (d.prev) this.btn(U.BtPrev, W - 10 - 122 - shift, mid, () => this.reply(0));
       if (d.next) this.primary = this.btn(U.BtNext, W - 10 - 68 - shift, mid, () => this.reply(1));
-      else this.primary = this.btn(U.BtOK, W - 54, low, () => this.reply(1));
+      // a say page answers 1 for NEXT, 0 for PREV and -1 (0xFF) for anything else, OK included
+      else this.primary = this.btn(U.BtOK, W - 54, low, () => this.reply(-1));
     } else if (d.type === 1) { this.btn(U.BtYes, W - 108, low, () => this.reply(1)); this.btn(U.BtNo, W - 54, low, () => this.reply(0)); }
     else if (d.type === 12) { this.btn(U.BtQYes, W - 130, low, () => this.reply(1)); this.btn(U.BtQNo, W - 65, low, () => this.reply(0)); }
     else if (input) this.primary = this.btn(U.BtOK, W - 54, low, () => this.submit());
@@ -146,10 +147,25 @@ export class NpcDialog extends Win {
   frames() { const U = this.U; return [...allCanvases(this.F), U.dot0, U.dot1, U.bar, U.list0, U.list1, U.list2, U.list3, ...this.buttons.flatMap((b) => b.frames())]; }
   reply(action, sel) { this.close(); this.done({ action, sel }); }
   pick(o) { if (o === null || o === undefined || o < 0) return; sfx.play('UI/BtMouseClick'); this.reply(1, this.opts[o] ?? o); }
+  /**
+   * The client's checks before it answers, each a notice that leaves the box open: a number must be digits only and
+   * within min / max; text, trimmed, must be at least min long (and is sent trimmed).
+   */
   submit() {
-    const v = this.field.value;
-    if (this.d.type === 3) this.reply(1, Math.max(this.d.min, Math.min(this.d.max, Number(v) || 0)));
-    else this.reply(1, v);
+    const v = this.field.value, say = (t) => this.mgr.notice(t).then(() => this.field?.focus());
+    if (this.d.type === 3) {
+      const low = `You may only enter a number \r\nequal to or lower than ${this.d.max}.`;
+      if (!/^\d*$/.test(v)) { say('Only numbers are allowed.'); return; }
+      const n = Number(v || 0);
+      if (n > 0x7fffffff) { say(low); return; }
+      if (n < this.d.min) { say(`You may only enter a number \r\nequal to or higher than ${this.d.min}.`); return; }
+      if (n > this.d.max) { say(low); return; }
+      this.reply(1, n);
+      return;
+    }
+    const t = v.trim();
+    if (t.length < (this.d.min || 0)) { say(`Please enter at least ${this.d.min} characters.`); return; }
+    this.reply(1, t);
   }
   close() { this.field?.remove(); dlgCentre.x = this.x + this.w / 2; dlgCentre.y = this.y + this.h / 2; this.mgr.close(this); }
   key(e) {
