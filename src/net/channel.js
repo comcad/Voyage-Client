@@ -832,7 +832,7 @@ export class ChannelSession {
       } else if (op === 0x10) this.emit('tradeMeso', r.ubyte(), r.int());
       else if (op === 0x11) this.emit('tradeConfirm');
       else if (op === 0x0A) { r.ubyte(); this.emit('tradeEnd', r.available ? r.ubyte() : 2); }
-      else if (op === 6 && r.ubyte() === 8) { r.ubyte(); this.emit('tradeChat', r.string()); }
+      else if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('tradeChat', r.string(), slot); }
     });
     // CHAR_INFO (Cosmic PacketCreator.charInfo): id, level, job, fame, married, guild, alliance, medal-info byte,
     // pets (each led by a non-zero byte, 0 ends), mount, wish list SNs, Monster Book, medal, medal quests

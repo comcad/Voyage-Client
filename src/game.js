@@ -1564,7 +1564,7 @@ export class Game {
     const w = this.gameRoom && this.windows.order.includes(this.gameRoom) ? this.gameRoom : null;
     if (!w) return;
     if (e.op === 4) w.visit(e.slot, { name: e.name, look: this.lookFrom(e.look) }, e.record);
-    else if (e.op === 6) { if (e.system !== undefined) w.system(e.system, e.name); else w.say(e.text, 0); }
+    else if (e.op === 6) { if (e.system !== undefined) w.system(e.system, e.name); else w.say(e.slot === w.me ? e.text : this.maskedLine(e.text), 0); }
     else if (e.op === 9) { if (w.users[e.slot]) w.users[e.slot].look = this.lookFrom(e.look); }
     else if (e.op === 0x0A) w.left(e.slot, e.reason);
     else w.op(e.op, e);
@@ -2511,6 +2511,11 @@ export class Game {
    * The same for a line that came in (others' chat, whispers, group and spouse chat, chalkboards), as the client shows
    * them; the word list is loaded as the game starts.
    */
+  /** A room chat line ("name : text") from someone else: the text after the name masked. */
+  maskedLine(line) {
+    const at = line.indexOf(' : ');
+    return at < 0 ? this.masked(line) : line.slice(0, at + 3) + this.masked(line.slice(at + 3));
+  }
   masked(text) {
     let out = text;
     for (const w of this.curses || []) {
@@ -2927,9 +2932,9 @@ export class Game {
       skillBookResult: (d) => this.onSkillBookResult(d),
       inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
       sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
-      avatarMega: (a) => { this.hud.megaphone([`${a.name} : ${a.lines.join('')}`], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
+      avatarMega: (a) => { this.hud.megaphone([this.masked(`${a.name} : ${a.lines.join('')}`)], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
       avatarMegaClear: () => this.avatarBanner.clear(),
-      tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show(d); },
+      tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show({ ...d, lines: d.lines.map((l) => this.masked(l)) }); },
       tvOff: () => { this.tvWait = 0; this.mapleTV.clear(); },
       tvError: (code) => { const t = TV_ERRORS[code]; if (t) this.hud.message(t, CHAT_COLOR.error); },
       tvResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
@@ -2989,6 +2994,7 @@ export class Game {
       tradeOpen: (t) => {
         if (this.tradeWin) return;
         const w = this.tradeWin = this.windows.show(new TradeWin(this.windows), null);
+        w.slot = t.slot;
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         this.windows.open('inventory');
       },
@@ -3008,7 +3014,8 @@ export class Game {
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
       tradeMeso: (side, v) => this.tradeWin?.setMeso(side, v),
       tradeConfirm: () => this.tradeWin?.partnerConfirmed(),
-      tradeChat: (text) => this.tradeWin?.say(text),
+      // room chat from the other seat has its curse words masked
+      tradeChat: (text, slot) => this.tradeWin?.say(slot === this.tradeWin.slot ? text : this.maskedLine(text)),
       tradeEnd: (result) => this.tradeWin?.ended(result),
       // player shops
       shopOpen: later(async (d) => {
@@ -3023,7 +3030,7 @@ export class Game {
       family: later((e) => this.onFamily(e)),
       shopSold: later((i, qty, buyer) => this.playerShop?.soldUpdate(i, qty, buyer)),
       shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
-      shopChat: later((slot, text) => this.playerShop?.say(text)),
+      shopChat: later((slot, text) => this.playerShop?.say(slot === this.playerShop.slot ? text : this.maskedLine(text))),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
       shopClosed: later((reason, result) => {
         this.playerShop?.end(reason);
