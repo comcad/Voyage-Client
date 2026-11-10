@@ -754,6 +754,18 @@ export class ChannelSession {
       this.emit('family', { op: 'chart', self, members, counts, canAdd: r.available >= 2 ? r.short() !== 0 : true });
     });
     on(S.FAMILY_RESULT, (r) => this.emit('family', { op: 'result', code: r.int(), mesos: r.int() }));
+    // FREDRICK: 0x23 his store bank (the NPC, the slots, a flag block, then the mesos and each inventory's items as the
+    // flags say), 0x26 not available now. FREDRICK_MESSAGE: what came of GET ALL.
+    on(S.FREDRICK, (r) => {
+      const op = r.ubyte();
+      if (op === 0x23) {
+        const npc = r.int(), slots = r.ubyte(), flags = r.bytes(8)[0], items = [];
+        const mesos = flags & 2 ? r.int() : 0;
+        for (const f of [4, 8, 0x10, 0x20, 0x40]) if (flags & f) for (let n = r.ubyte(); n > 0; n--) items.push(readItem(r, false));
+        this.emit('fredrick', { op: 'open', npc, slots, mesos, items });
+      } else if (op === 0x26) this.emit('fredrick', { op: 'unavailable' });
+    });
+    on(S.FREDRICK_MESSAGE, (r) => this.emit('fredrick', { op: 'result', code: r.ubyte() }));
     // the guild BBS: 6 a page of the list (a notice flag and the notice, the total, then the threads), 7 a thread with its
     // replies, 8 the thread was deleted
     on(S.GUILD_BBS_PACKET, (r) => {
@@ -1959,6 +1971,8 @@ export class ChannelSession {
     for (const a of args) if (typeof a === 'string') w.string(a); else w.int(a);
     this.send(w);
   }
+  /** FREDRICK_ACTION: 0x1A take everything back, 0x1C his window closed. */
+  fredrick(op) { this.send(new PacketWriter(C.FREDRICK_ACTION).byte(op)); }
   /** BBS_OPERATION 0: post (edit flag, the thread when editing, notice flag, title, text, emoticon). */
   bbsPost(edit, id, notice, title, text, icon) {
     const w = new PacketWriter(C.BBS_OPERATION).byte(0).byte(edit ? 1 : 0);

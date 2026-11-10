@@ -81,6 +81,7 @@ import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
 import { EnergyBarWin } from './ui/energybar.js';
 import { GuildBBSWin } from './ui/guildbbs.js';
+import { FredrickWin } from './ui/fredrick.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -1450,7 +1451,7 @@ export class Game {
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
     const open = (w) => w && this.windows.order.includes(w);
-    return open(this.shopWin) || open(this.storageWin) || open(this.dueyWin)
+    return open(this.shopWin) || open(this.storageWin) || open(this.dueyWin) || open(this.fredrickWin)
       || this.windows.order.some((w) => (w instanceof MegaphoneWin && w.kind === 6) || SINGLE_WINS.some((W) => w instanceof W));
   }
 
@@ -3362,6 +3363,12 @@ export class Game {
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s), null); },
       shopResult: (code, extra) => this.shopWin?.result(code, extra),
+      // Fredrick: his store bank opens (one single window at a time), its results, or "not available"
+      fredrick: (e) => {
+        if (e.op === 'open') { if (!this.tradeOpen()) this.showSingle(new FredrickWin(this.windows, e)).then((w) => { this.fredrickWin = w; }); }
+        else if (e.op === 'result') { if (this.fredrickWin && this.windows.order.includes(this.fredrickWin)) this.fredrickWin.result(e.code); }
+        else if (e.op === 'unavailable') this.windows.notice('This is currently unavailable.\r\nPlease try again later');
+      },
       storageOpen: (s) => {
         if (this.storageWin) this.windows.close(this.storageWin);
         this.storageWin = this.windows.show(new StorageWin(this.windows, s), null);
