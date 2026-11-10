@@ -2864,7 +2864,8 @@ export class Game {
     Object.assign(h, {
       cashShopOpen: (d) => this.openCashShop(d),
       csCash: (c) => this.csWin?.setCash(c),
-      csInventory: (items, storageSlots) => this.csWin?.setInventory(items, storageSlots),
+      // the locker's last short is your character slots: the slot item's tooltip counts them (after View All too)
+      csInventory: (items, storageSlots, charSlots) => { if (charSlots !== null && charSlots !== undefined) this.charSlots = charSlots; this.csWin?.setInventory(items, storageSlots); },
       csWish: (sns, reply) => this.csWin?.setWish(sns, reply),
       csBought: (it) => this.csWin?.bought(it),
       csBoughtPackage: (items, bonus) => this.csWin?.boughtPackage(items, bonus),
