@@ -20,6 +20,7 @@ import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { KeyCommands } from './commands.js';
 import { DojoWindow } from './ui/dojo.js';
+import { loadFieldMode } from './fieldmodes.js';
 import { PyramidWindow } from './ui/pyramid.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { Guide } from './guide.js';
@@ -3078,6 +3079,8 @@ export class Game {
         if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
         // a Pyramid stage times itself in its own window
         if (secs !== null && Number(this.map?.info?.fieldType) === 23) { (this.pyramid ??= new PyramidWindow(this)).clock(secs); return; }
+        // the Coconut Harvest's board counts the time down itself
+        if (secs !== null && this.fieldMode?.clock) { this.fieldMode.clock(secs); return; }
         this.clock = secs === null ? null : { end: performance.now() + secs * 1000, dur: secs * 1000 }; if (secs !== null) this.loadClockArt();
       }),
       // OX_QUIZ: the question (Etc/OXQuiz.img/<set>/<n>/q) or its answer (d, a space, "[Answer:O]" for a = 1, else X)
@@ -3226,6 +3229,12 @@ export class Game {
         e.appearing = false; delete e.fadeInAt; e.state = ''; e.setState(e.flying ? 'fly' : 'stand');
       }),
       carnivalTeam: (team) => { this.carnivalTeam = team; },
+      // the Snowball event (fieldmodes.js)
+      snowState: later((...a) => this.fieldMode?.snowState?.(...a)),
+      snowHit: later((...a) => this.fieldMode?.snowHit?.(...a)),
+      snowMessage: later((...a) => this.fieldMode?.snowMessage?.(...a)),
+      coconutHit: later((...a) => this.fieldMode?.coconutHit?.(...a)),
+      coconutScore: later((...a) => this.fieldMode?.coconutScore?.(...a)),
       // LEFT_KNOCK_BACK (the Snowball event): 300 left and 300 up, as a blow's impact
       leftKnockBack: later(() => {
         const p = this.player, impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
@@ -3926,7 +3935,9 @@ export class Game {
         new Promise((r) => setTimeout(r, Math.max(0, FADE_MS - (performance.now() - fadeStart)))),
       ]);
       if (!current()) return;
-      this.map = map;
+      const fieldMode = await loadFieldMode(this, map);   // an event field's own game
+      if (!current()) return;
+      this.map = map; this.fieldMode = fieldMode;
       this.questLayerTags();
       for (const { tag, on } of this.objVisQueue || []) map.setObjectVisible(tag, on);
       this.objVisQueue = null;
@@ -4148,13 +4159,15 @@ export class Game {
     if (rp) for (const fn of waiting) fn(rp);
   }
   async addOther(d) {
-    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips: lookEquipIds(d.look) });
+    // on an event field that dresses its teams, their team's outfit instead
+    const equips = this.fieldMode?.teamLook?.(d.look.gender, d.team) || lookEquipIds(d.look);
+    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
-    rp.lookData = d.look;
+    rp.lookData = d.look; rp.team = d.team;
     rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk && this.masked(d.chalk); rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
@@ -4168,7 +4181,8 @@ export class Game {
 
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
-    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips: lookEquipIds(lookData) });
+    const equips = this.fieldMode?.teamLook?.(lookData.gender, rp.team) || lookEquipIds(lookData);   // a team outfit stays on
+    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
     await look.load();
     rp.look = look; rp.lookData = lookData;
   }
@@ -5595,6 +5609,7 @@ export class Game {
     this.vfx?.update(dt);
     this.weather.update(dt);
     this.kites.update(dt);
+    this.fieldMode?.update(dt);
     const p = this.player;
     if (p.morphView) p.morphView.update(p, p.action, !!p.attack, dt, p.attack ? p.attackScale || 1 : 1);
     for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
@@ -5871,7 +5886,7 @@ export class Game {
       }
       const skill = this.pressedSkill();
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
-      if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
+      if (this.holdAction(ACTION.ATTACK)) { if (!this.fieldMode?.attack?.()) this.attack(0); return; }   // an event field swings its own way
     }
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
@@ -8229,6 +8244,42 @@ export class Game {
   }
 
 
+  /**
+   * The attack key on an event field (Snowball, Coconut): your weapon's plain swing (lying down, the prone stab) at no
+   * monster or reactor, sent as a close-range attack that hit nothing, with where you stand. Returns the first of
+   * `rects` the swing's afterimage box reaches (-1 for none: a swing with no afterimage box reaches nothing) and when
+   * the blow lands (ms), or null when you couldn't swing.
+   */
+  fieldAttack(rects) {
+    const p = this.player;
+    if (this.dead || p.ladder) return null;
+    const mt = this.morphTpl();
+    if (mt && !p.morphView?.dropped) {
+      if (mt.hide) { this.net?.cancelBuff(5101007); return null; }   // swinging ends the Oak Barrel
+      if (!mt.superman) return null;
+    }
+    const ds = this.darkSight();
+    if (ds && !this.skills.level(VANISH)) {   // only brings you out of Dark Sight
+      if (!ds.leaving) { ds.leaving = true; this.playSkillEffect(ds.source, p); this.net?.cancelBuff(ds.source); }
+      return null;
+    }
+    const prone = !!p.fh && this.input.is('down') && this.look.has('proneStab');
+    const pose = prone ? 'proneStab' : this.look.attackAction();
+    p.attack = pose; p.frame = 0; p.frameT = 0; p.action = pose;
+    const scale = p.attackScale = this.attackScale(this.attackSpeed(0)), trailAt = this.hitFrame(pose, 'melee');
+    this.after(this.frameTime(pose, trailAt) * scale, () => { this.playAfterimage(pose, trailAt, 0); this.playWeaponSound(p); });
+    let hit = -1;
+    const s = this.afterimage?.[this.afterimageLevel()]?.[pose];
+    if (s?.lt && s?.rb) {
+      const [x1, x2] = p.facingRight ? [p.x - s.rb[0], p.x - s.lt[0]] : [p.x + s.lt[0], p.x + s.rb[0]];
+      const top = p.y + s.lt[1], bottom = p.y + s.rb[1];
+      hit = rects.findIndex((r) => r.left < r.right && r.top < r.bottom
+        && Math.max(r.left, x1) < Math.min(r.right, x2) && Math.max(r.top, top) < Math.min(r.bottom, bottom));
+    }
+    this.net?.attack('melee', { targets: [], lines: 1, stance: this.actionId(pose), facingLeft: !p.facingRight, speed: this.attackSpeed(0), at: p });
+    return { hit, delay: Math.round(this.look.attackDelay(pose) * scale) };
+  }
+
   /** The box an attack reaches: the skill's lt/rb, else the swing's afterimage box, else a default per kind. */
   attackBox(kind, skillId, lv, action, charge = 0) {
     const p = this.player;
@@ -8902,28 +8953,36 @@ export class Game {
       if (force >= 0) d = force < hp ? hp - force : hp;
       const disease = Number(info.disease) && Number(info.level) ? ((Number(info.disease) & 0xff) << 8) | (Number(info.level) & 0xff) : 0;
       if (d > 0) {
-        const p = this.player, dir = Number(info.dir) || 0;
+        const dir = Number(info.dir) || 0;
         // the push: along dir, or 270 the way you were moving (and 270 up unless you were falling)
         let vx, vy;
         if (dir) { const a = ((90 - dir * 30) * Math.PI) / 180; vx = Math.round(Math.cos(a) * KNOCKBACK); vy = -Math.round(Math.sin(a) * KNOCKBACK); if (obj.f) vx = -vx; }
         else { vx = dx < 0 ? -KNOCKBACK : dx > 0 ? KNOCKBACK : 0; vy = dy < 1 ? -KNOCKBACK : 0; }
-        this.net.takeObstacleDamage(d, disease);
-        this.vfx?.damage(p, [d], 'violet');
-        setExpression(p, 1, HIT_FACE_TIME);
-        this.standUp();
-        if ((vx || vy) && !this.holdsStance()) {
-          if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
-          if (vy < 0) { p.fh = null; p.ladder = null; }
-          p.vx = vx; if (vy) p.vy = vy;
-        }
-        p.attack = null;
-        this.invincible = HIT_PROTECTION; this.missed = false;
+        this.fieldHurt(d, vx, vy, disease);
       }
       const target = Number(info.targetField) || 0;
       if (target && target !== 999999999) this.net.directionField(target);
       return true;
     }
     return false;
+  }
+  /**
+   * A blow from the field itself (an obstacle, a Snowball snowman): TAKE_DAMAGE -3 with its disease, shown in violet,
+   * and you're thrown (vx, vy) unless you hold your stance; then the usual protection after a hit.
+   */
+  fieldHurt(d, vx, vy, disease = 0) {
+    const p = this.player;
+    this.net.takeObstacleDamage(d, disease);
+    this.vfx?.damage(p, [d], 'violet');
+    setExpression(p, 1, HIT_FACE_TIME);
+    this.standUp();
+    if ((vx || vy) && !this.holdsStance()) {
+      if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
+      if (vy < 0) { p.fh = null; p.ladder = null; }
+      p.vx = vx; if (vy) p.vy = vy;
+    }
+    p.attack = null;
+    this.invincible = HIT_PROTECTION; this.missed = false;
   }
   /**
    * The damage a monster's blow does you, or 0 for a MISS.
@@ -9537,6 +9596,7 @@ export class Game {
     const chars = this.drawOrder(ctx, cam, inShop), playerLayer = this.playerZ.page;
     const mobs = map.life.filter((e) => e.kind !== 'Npc').map((e) => ({ e, k: mobDepth(e) })).sort((a, b) => a.k - b.k).map((x) => x.e);
     for (let l = 0; l < 8; l++) {
+      if (l === 3) this.fieldMode?.drawWorld?.(ctx, cam);   // an event field's pieces stand just behind page 3
       map.drawLayer(ctx, cam, l);
       for (const e of mobs) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
@@ -9561,6 +9621,7 @@ export class Game {
     this.drawFx(ctx, cam);
     this.drawKeyGauge(ctx, cam);
     map.drawBacks(ctx, cam, true);
+    this.fieldMode?.drawOver?.(ctx, cam);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
     this.weather.draw(ctx);
@@ -9593,6 +9654,7 @@ export class Game {
       if (this.quizNotice) drawFloatNotice(ctx, this.assets, this.quizNotice.N, this.quizNotice.text);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
+      this.fieldMode?.drawHud?.(ctx);
       this.dojo?.draw(ctx);
       this.pyramid?.draw(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top

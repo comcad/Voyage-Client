@@ -909,7 +909,7 @@ export class ChannelSession {
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
-      let chalk = null, rings = null, berserk = false, mountInfo = null;
+      let chalk = null, rings = null, berserk = false, mountInfo = null, team = -1;
       const cards = [];
       if (r.available >= 13) {
         mountInfo = { level: r.int(), exp: r.int(), tired: r.int() };   // the mount's level / exp / tiredness
@@ -920,9 +920,10 @@ export class ChannelSession {
         try {
           if (r.available && r.ubyte()) for (let n = r.int(); n > 0; n--) cards.push(r.int());
           berserk = r.available > 0 && r.ubyte() !== 0;
+          if (r.available >= 2) { r.ubyte(); team = r.byte(); }   // then another byte, and the team an event field reads (-1 none)
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, team, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -1370,6 +1371,20 @@ export class ChannelSession {
     });
     // the Snowball event's wall: thrown back left (and up)
     on(S.LEFT_KNOCK_BACK, () => this.emit('leftKnockBack'));
+    // the Snowball event: its state, both snowmen's HP and each snowball's position and speed; the first one also
+    // carries what a blow to a snowball and to a snowman (usual / 1 in 10) sends
+    on(S.SNOWBALL_STATE, (r) => {
+      const state = r.ubyte(), hp0 = r.int(), hp1 = r.int();
+      const balls = [0, 1].map(() => ({ pos: r.short(), speed: r.ubyte() }));
+      const extra = r.available >= 6 ? [r.ushort(), r.ushort(), r.ushort()] : null;
+      this.emit('snowState', state, hp0, hp1, balls, extra);
+    });
+    // what was struck (0 / 1 a snowball, 2 / 3 a snowman), for how much, shown after how many ms
+    on(S.HIT_SNOWBALL, (r) => { const what = r.ubyte(), damage = r.ushort(), delay = r.ushort(); this.emit('snowHit', what, damage, delay); });
+    on(S.SNOWBALL_MESSAGE, (r) => { const team = r.ubyte(), msg = r.ubyte(); this.emit('snowMessage', team, msg); });
+    // Coconut Harvest: a coconut (-1 every one) goes to a state after a delay; both teams' scores
+    on(S.COCONUT_HIT, (r) => { const id = r.short(), delay = r.ushort(), state = r.ubyte(); this.emit('coconutHit', id, delay, state); });
+    on(S.COCONUT_SCORE, (r) => { const a = r.ushort(), b = r.ushort(); this.emit('coconutScore', a, b); });
     on(S.RESET_MONSTER_ANIMATION, (r) => { const oid = r.int(); if (r.ubyte()) this.emit('mobResetAnim', oid); });
     // a Monster Carnival starts: your team (the CP counts after it aren't shown yet)
     on(S.MONSTER_CARNIVAL_START, (r) => this.emit('carnivalTeam', r.ubyte()));
@@ -1591,7 +1606,7 @@ export class ChannelSession {
    * Attack packets (AbstractDealDamageHandler.parseDamage). kind: melee | ranged | magic.
    * targets: [{oid, x, y, dmg:[...]}]; stance = body action id; facingLeft -> direction bit.
    */
-  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0 }) {
+  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0, at = null }) {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
     if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
@@ -1618,6 +1633,7 @@ export class ChannelSession {
       w.int(0); // per-target trailer (mob CRC in the real client); parseDamage skips 4 bytes per target
     }
     if (skill === 14111006) w.int(0).pos({ x: 0, y: 0 }); // Poison Bomb: position
+    if (at) w.pos({ x: Math.round(at.x), y: Math.round(at.y) });   // an event field's swing: where you stand
     this.send(w);
   }
   closeRangeAttack(o) { this.attack('melee', o); }
@@ -1719,6 +1735,12 @@ export class ChannelSession {
   takeObstacleDamage(damage, disease = 0) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(-3).byte(0).int(damage).short(disease).byte(0));
   }
+  /** SNOWBALL: your swing reached a snowball (0 / 1) or a snowman (2 / 3), for `damage`, landing after `delay` ms. */
+  snowball(what, damage, delay) { this.send(new PacketWriter(C.SNOWBALL).byte(what).short(damage).short(delay)); }
+  /** LEFT_KNOCKBACK: you stand in a snowball's box. */
+  leftKnockback() { this.send(new PacketWriter(C.LEFT_KNOCKBACK)); }
+  /** COCONUT: your swing reached coconut `id`, landing after `delay` ms. */
+  coconut(id, delay) { this.send(new PacketWriter(C.COCONUT).short(id).short(delay)); }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
   }
