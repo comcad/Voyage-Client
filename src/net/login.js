@@ -79,6 +79,8 @@ export class LoginSession {
     return this._status(await p);
   }
 
+  /** The gender dialog's Cancel: SET_GENDER 0 (the server then closes the session). */
+  genderCancel() { this.conn.send(new PacketWriter(0x08).byte(0)); }
   async setGender(gender) {
     const p = this.conn.expect(S.LOGIN_STATUS);
     this.conn.send(new PacketWriter(0x08).byte(1).byte(gender));
@@ -91,6 +93,9 @@ export class LoginSession {
     this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(1).byte(1).string(''));   // the client adds an empty string
     return (await p).ubyte();
   }
+  /** Cancel on the PIN prompt: AFTER_LOGIN 0, or REGISTER_PIN 0 while choosing one (the server then closes the session). */
+  pinCancel() { this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(0)); }
+  pinRegisterCancel() { this.conn.send(new PacketWriter(C.REGISTER_PIN).byte(0)); }
   async pinCheck(pin) {
     const p = this.conn.expect(S.CHECK_PINCODE);
     this.conn.send(new PacketWriter(C.AFTER_LOGIN).byte(1).byte(0).string(pin));

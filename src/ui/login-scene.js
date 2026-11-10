@@ -72,6 +72,8 @@ const WORLD_BUSY = 'Since There Are Many\r\nConcurrent Users in This World,\r\nY
 const WORLD_FULL = 'The Concurrent Users in This World\r\nHave Reached the Max.\r\nPlease Try Again Later.';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const NOTICE_AT = { x: 219, y: 170 }, NOTICE_SLIDE_MS = 150;
+/** UPDATE_PINCODE 0: Pincode/text/8 in words (the PIN steps here are text prompts). */
+const PIN_REGISTERED = 'Your Security Pin has been assigned. Please keep in mind that it is your responsibility to remember and protect your Security Pin.';
 // characters on the select screen
 const CHAR_FACING_RIGHT = true;
 // the selected character walks on the spot, the rest stand (walk1/2 and stand1/2 by weapon)
@@ -710,7 +712,7 @@ export class LoginScene {
     let account = res.account;
     if (account.gender === 10) {
       const g = await this.gender();
-      if (g === null) return null;
+      if (g === null) { this.s.genderCancel(); return null; }
       account = (await this.s.setGender(g)).account;
     }
     this.account = account;
@@ -730,15 +732,17 @@ export class LoginScene {
       if (mode === 0) return true;
       if (mode === 1) {
         const a = await this.prompt('Register your PIN\nChoose a 4-digit PIN.', { pattern: /^\d{4}$/, max: 4 });
-        if (a === null) return false;
+        if (a === null) { this.s.pinRegisterCancel(); return false; }
         const b = await this.prompt('Register your PIN\nEnter the same PIN again.', { pattern: /^\d{4}$/, max: 4 });
-        if (b === null) return false;
+        if (b === null) { this.s.pinRegisterCancel(); return false; }
         if (a !== b) { await this.notice('The PINs do not match. Please try again.'); continue; }
-        await this.s.pinRegister(a);
-        return true;
+        // the server says how it went and closes the session: back to the title either way
+        const r = await this.s.pinRegister(a);
+        await this.notice(r === 0 ? PIN_REGISTERED : 15);
+        return false;
       }
       const p = await this.prompt(mode === 2 ? 'Wrong PIN\nPlease enter your PIN again.' : 'Enter your PIN\nPlease enter your 4-digit PIN.', { pattern: /^\d{4}$/, max: 4 });
-      if (p === null) return false;
+      if (p === null) { this.s.pinCancel(); return false; }
       mode = await this.s.pinCheck(p);
     }
   }
