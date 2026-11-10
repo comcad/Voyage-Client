@@ -2505,8 +2505,15 @@ export class Game {
   /** Words from Etc/Curse.img in a line, ignoring case, replaced with '*'. */
   async maskCurses(text) {
     this.curses ??= await this.assets.json('Etc/Curse.img').then((l) => Object.values(l || {}).filter((w) => typeof w === 'string' && w).map((w) => w.toLowerCase()));
+    return this.masked(text);
+  }
+  /**
+   * The same for a line that came in (others' chat, whispers, group and spouse chat, chalkboards), as the client shows
+   * them; the word list is loaded as the game starts.
+   */
+  masked(text) {
     let out = text;
-    for (const w of this.curses) {
+    for (const w of this.curses || []) {
       for (let i = out.toLowerCase().indexOf(w); i >= 0; i = out.toLowerCase().indexOf(w, i + w.length)) out = out.slice(0, i) + '*'.repeat(w.length) + out.slice(i + w.length);
     }
     return out;
@@ -2850,6 +2857,7 @@ export class Game {
     await this.assets.preload(['channel', 'gameopt', 'sysopt', 'userlist', 'partyhp', 'worldmap', 'questalarm', 'monsterbook', 'medal'].flatMap((k) => wm.wins[k].frames()));
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
+    this.maskCurses('');   // loads the word list for incoming lines
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
     this.windows.fit(this.windows.wins.minimap);
     this.bindUiPointer();
@@ -2926,11 +2934,11 @@ export class Game {
       tvError: (code) => { const t = TV_ERRORS[code]; if (t) this.hud.message(t, CHAT_COLOR.error); },
       tvResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
       avatarMegaResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
-      spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${text}`, CHAT_COLORS.spouse),
+      spouseChat: (from, text) => this.hud.message(`${from ? `${from} : ` : ''}${this.masked(text)}`, CHAT_COLORS.spouse),
       groupChat: (c) => {
         // off in the Game Option, or a buddy, guild or alliance line from someone on the Blacklist: not shown
         if (!this.chatAllowed(c.mode) || (c.mode !== 1 && this.windows.wins.userlist?.blacklisted(c.name))) return;
-        this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
+        this.hud.message(`${c.name} : ${this.masked(c.text)}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
       },
       whisper: (w) => this.onWhisper(w),
       claimStatus: (on) => { this.claimOn = on; },
@@ -3056,7 +3064,7 @@ export class Game {
         const t = ['The other character is online now.\r\nPlease use the whisper function,', 'Please check the name of the receiving character.', "The receiver's inbox is full.\r\nPlease try again."][code];
         if (t) this.windows.notice(t);
       },
-      chalkboard: later((id, text) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.chalk = text; }),
+      chalkboard: later((id, text) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.chalk = text && this.masked(text); }),
       rocks: (vip, list) => { if (this.rocks) this.rocks[vip ? 'vip' : 'regular'] = list; },
       rockError: (code) => {
         const name = this.rockTarget || ''; this.rockTarget = '';
@@ -4142,7 +4150,7 @@ export class Game {
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look;
-    rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk; rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk && this.masked(d.chalk); rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
     if (rp.chair) this.chairArt(rp.chair);
@@ -4163,6 +4171,8 @@ export class Game {
   onChat(c) {
     const ent = c.id === this.player.id ? this.player : this.others.get(c.id);
     const name = ent?.name || '?';
+    // another player's line has its curse words masked; your own was checked as you sent it
+    if (c.id !== this.player.id) c = { ...c, text: this.masked(c.text) };
     if (ent) ent.chat = { text: c.text, t: 5 };
     // kept for a conversation report: who said what, the last 64 lines
     (this.chatLog ??= []).push({ name, line: `${name} : ${c.text}` });
@@ -5485,7 +5495,7 @@ export class Game {
     if (!this.optionAllowed('whisper') || this.windows.wins.userlist?.blacklisted(w.from)) { this.net?.whisperBlock(w.from); return; }
     this.lastWhisperFrom = w.from;
     const ch = w.channel === this.channel ? '' : `[${this.channelNames?.[w.channel] || `Ch. ${w.channel + 1}`}]`;
-    this.hud.message(`${w.from}${ch}>> ${w.text}`, CHAT_COLORS.whisper);
+    this.hud.message(`${w.from}${ch}>> ${this.masked(w.text)}`, CHAT_COLORS.whisper);
   }
   onWhisperResult(r) {
     const p = this.pendingWhisper;
