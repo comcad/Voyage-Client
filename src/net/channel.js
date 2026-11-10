@@ -631,8 +631,14 @@ export class ChannelSession {
         }
         this.emit('buddies', list);
       } else if (op === 9) {
+        // a request: who it's from, then their buddy record (the list keeps it as a pending entry) and an in-shop byte
         const id = r.int(), name = r.string();
-        this.emit('buddyRequest', { id, name });
+        let entry = null;
+        if (r.available >= 40) {
+          entry = { id: r.int(), name: fixed(r, 13), pending: r.ubyte() === 1, channel: r.int(), group: fixed(r, 17) };
+          r.ubyte();
+        }
+        this.emit('buddyRequest', { id, name, entry });
       } else if (op === 0x14) {
         const id = r.int(); r.ubyte();
         this.emit('buddyChannel', id, r.int());

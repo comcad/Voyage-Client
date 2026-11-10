@@ -2948,8 +2948,10 @@ export class Game {
       },
       buddyCapacity: (n) => { this.buddyCapacity = n; },
       buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
-      buddyRequest: (b) => notify(this.windows, 'buddy', b.name)
-        .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
+      buddyRequest: (b) => {
+        if (b.entry && !this.buddies.some((x) => x.id === b.entry.id)) this.buddies = [...this.buddies, b.entry];
+        notify(this.windows, 'buddy', b.name).then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id)));
+      },
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
       alliance: (d) => this.onAlliance(d),
