@@ -1385,6 +1385,20 @@ export class ChannelSession {
     // Coconut Harvest: a coconut (-1 every one) goes to a state after a delay; both teams' scores
     on(S.COCONUT_HIT, (r) => { const id = r.short(), delay = r.ushort(), state = r.ubyte(); this.emit('coconutHit', id, delay, state); });
     on(S.COCONUT_SCORE, (r) => { const a = r.ushort(), b = r.ushort(); this.emit('coconutScore', a, b); });
+    // the Ariant Coliseum: each player's score (a negative one takes them off the board), and the result scroll
+    on(S.ARIANT_ARENA_USER_SCORE, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0; n--) list.push({ name: r.string(), score: r.int() });
+      this.emit('ariantScores', list);
+    });
+    on(S.ARIANT_ARENA_SHOW_RESULT, () => this.emit('ariantResult'));
+    // Rock-Paper-Scissors: 8 opens it for an NPC, 11 is the NPC's hand and how you did; the others are bare
+    on(S.RPS_GAME, (r) => {
+      const mode = r.ubyte(), d = {};
+      if (mode === 8) d.npc = r.int();
+      else if (mode === 11) { d.hand = r.ubyte(); d.result = r.byte(); }
+      this.emit('rpsGame', mode, d);
+    });
     on(S.RESET_MONSTER_ANIMATION, (r) => { const oid = r.int(); if (r.ubyte()) this.emit('mobResetAnim', oid); });
     // a Monster Carnival starts: your team (the CP counts after it aren't shown yet)
     on(S.MONSTER_CARNIVAL_START, (r) => this.emit('carnivalTeam', r.ubyte()));
@@ -1741,6 +1755,8 @@ export class ChannelSession {
   leftKnockback() { this.send(new PacketWriter(C.LEFT_KNOCKBACK)); }
   /** COCONUT: your swing reached coconut `id`, landing after `delay` ms. */
   coconut(id, delay) { this.send(new PacketWriter(C.COCONUT).short(id).short(delay)); }
+  /** RPS_ACTION: 0 START, 1 a hand (0 rock, 1 paper, 2 scissors), 2 time up, 3 CONTINUE, 4 EXIT, 5 RETRY. */
+  rpsAction(mode, sel = 0) { const w = new PacketWriter(C.RPS_ACTION).byte(mode); if (mode === 1) w.byte(sel); this.send(w); }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
   }

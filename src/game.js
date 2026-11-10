@@ -21,6 +21,7 @@ import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { KeyCommands } from './commands.js';
 import { DojoWindow } from './ui/dojo.js';
 import { loadFieldMode } from './fieldmodes.js';
+import { RpsWin, RPS_TEXT } from './ui/rps.js';
 import { PyramidWindow } from './ui/pyramid.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { Guide } from './guide.js';
@@ -3235,6 +3236,9 @@ export class Game {
       snowMessage: later((...a) => this.fieldMode?.snowMessage?.(...a)),
       coconutHit: later((...a) => this.fieldMode?.coconutHit?.(...a)),
       coconutScore: later((...a) => this.fieldMode?.coconutScore?.(...a)),
+      ariantScores: later((list) => this.fieldMode?.ariantScores?.(list)),
+      ariantResult: later(() => this.fieldMode?.ariantResult?.()),
+      rpsGame: later((mode, d) => this.rpsGame(mode, d)),
       // LEFT_KNOCK_BACK (the Snowball event): 300 left and 300 up, as a blow's impact
       leftKnockBack: later(() => {
         const p = this.player, impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
@@ -8965,6 +8969,23 @@ export class Game {
       return true;
     }
     return false;
+  }
+  /**
+   * RPS_GAME: 8 opens Rock-Paper-Scissors for an NPC (its notice first, then the window, not while one is open);
+   * 6, 7 and 9-14 only reach an open window. Anything else is ignored.
+   */
+  async rpsGame(mode, d) {
+    if (mode < 6 || mode > 14) return;
+    const open = this.rps && this.windows.order.includes(this.rps) ? this.rps : null;
+    if (mode === 8) {
+      if (open) return;
+      await localTalk(this.windows, d.npc, RPS_TEXT.notice, ['OK']);
+      const w = new RpsWin(this.windows, d.npc);
+      await this.assets.preload(w.frames());
+      this.rps = this.windows.show(w, null);
+      return;
+    }
+    open?.game(mode, d);
   }
   /**
    * A blow from the field itself (an obstacle, a Snowball snowman): TAKE_DAMAGE -3 with its disease, shown in violet,

@@ -36,11 +36,29 @@
  *   gender (avatar/<team>/<gender>), and nothing else.
  * - The attack key swings at the coconuts instead of the usual attack (each one's box from its current frame's
  *   lt / rb). A swing that reaches one tells the server which one (COCONUT), and when it lands.
+ *
+ * Ariant Coliseum (fieldType 13; its lobbies are ordinary maps):
+ * - ARIANT_ARENA_USER_SCORE: each player's name and score.
+ *   - A negative score takes them off; scores stop at 9999.
+ *   - A GM job (x8x / x9x) sees only their own row.
+ *   - A newcomer gets AriantMatch/characterIcon/<their place in the list>.
+ *   - The list is kept sorted by score, highest first (ties keep their order).
+ * - The score board (300x300, at the screen's top-left):
+ *   - one row per player, 17px apart from y 2;
+ *   - the icon at x 5, the name at x 21 and the score ("%4d") at x 106;
+ *   - bold 12px Arial in #2000FF.
+ * - ARIANT_ARENA_SHOW_RESULT:
+ *   - The board goes, the Result scroll unrolls once at (400, 100), with Sound/UI.img/ScrollOpen.
+ *   - Once it is open, the ranking fades in over 1s, 26px apart from y 104 on the scroll:
+ *     - rank at x 63 (players who tie share the lower place);
+ *     - the name centred on 140, the score centred on 235;
+ *     - 12px Arial in black.
  */
 import { frames, nodeAt } from './assets.js';
 import { sfx } from './audio.js';
 import { CHAT_COLOR } from './ui/statusbar.js';
 import { UI_W } from './view.js';
+import { uiText } from './ui/wzui.js';
 
 const TICK = 30;
 const STUN = 123;
@@ -61,6 +79,7 @@ export async function loadFieldMode(game, map) {
   let mode = null;
   if (type === 1 && map.data?.snowBall) mode = new SnowballField(game, map.data.snowBall);
   else if (type === 4 && map.data?.coconut) mode = new CoconutField(game, map, map.data.coconut);
+  else if (type === 13) mode = new AriantField(game);
   if (mode) await mode.load();
   return mode;
 }
@@ -347,5 +366,95 @@ export class CoconutField {
     ctx.drawImage(bg, x, y);
     this.shown.scores.forEach((s, i) => this.text(ctx, C.fontScore, s, x + BOARD.score[i][0], y + BOARD.score[i][1], BOARD.scoreGap));
     if (this.shown.time) this.text(ctx, C.fontTime, this.shown.time, x + BOARD.time[0], y + BOARD.time[1], BOARD.timeGap);
+  }
+}
+
+const ARIANT = {
+  board: { x: 0, y: 0, w: 300, h: 300, row0: 2, rowH: 17, icon: 5, name: 21, score: 106 },
+  result: { x: 400, y: 100, frameMs: 100 },
+  rank: { x: 63, name: 140, score: 235, row0: 104, rowH: 26, fade: 1000 },
+  blue: '#2000FF', black: '#000000', max: 9999,
+};
+
+export class AriantField {
+  constructor(game) { this.game = game; this.scores = []; this.board = true; this.result = null; this.ranking = null; }
+  async load() {
+    const a = this.game.assets;
+    this.art = await nodeAt(a, 'UI/UIWindow.img/AriantMatch');
+    this.resultFrames = frames(this.art?.Result);
+    await a.preload([...frames(this.art?.characterIcon), ...this.resultFrames].filter(Boolean));
+  }
+  /** ARIANT_ARENA_USER_SCORE: [{ name, score }]. */
+  ariantScores(list) {
+    const g = this.game, me = g.player?.name, job = g.stats?.job || 0, gm = [8, 9].includes(Math.floor((job % 1000) / 100));
+    for (const { name, score } of list) {
+      if (!name) continue;
+      if (gm && name !== me) continue;
+      const i = this.scores.findIndex((e) => e.name === name);
+      if (score < 0) { if (i >= 0) this.scores.splice(i, 1); continue; }
+      const v = Math.min(score, ARIANT.max);
+      if (i >= 0) this.scores[i].score = v;
+      else { this.scores.push({ name, score: v, icon: null }); this.scores[this.scores.length - 1].icon = this.art?.characterIcon?.[this.scores.length - 1] || null; }
+    }
+    // highest first; equal scores keep their order
+    for (let i = 1; i < this.scores.length; i++) {
+      const t = this.scores[i]; let j = i;
+      while (j > 0 && this.scores[j - 1].score < t.score) { this.scores[j] = this.scores[j - 1]; j--; }
+      this.scores[j] = t;
+    }
+    this.board = true;   // a score after the result puts the board back up, as in the client
+  }
+  /** ARIANT_ARENA_SHOW_RESULT: the scroll unrolls and the board goes. */
+  ariantResult() {
+    this.result = { t0: performance.now() };
+    this.ranking = null; this.board = false;
+    sfx.play('UI/ScrollOpen');
+  }
+  update() {
+    const r = this.result;
+    if (!r || this.ranking) return;
+    const total = this.resultFrames.reduce((n, f) => n + (Number(f.delay) || ARIANT.result.frameMs), 0);
+    if (performance.now() - r.t0 >= total) this.ranking = { t0: performance.now(), rows: this.rankRows() };
+  }
+  /** The ranking as it stood when the scroll opened: a tie shares the place of its last member. */
+  rankRows() {
+    const s = this.scores;
+    return s.map((e, i) => {
+      let last = i;
+      while (last + 1 < s.length && s[last + 1].score === e.score) last++;
+      return { rank: last + 1, name: e.name, score: e.score };
+    });
+  }
+  drawHud(ctx) {
+    const im = (n) => this.game.assets.image(n), B = ARIANT.board;
+    if (this.board && this.scores.length) {
+      ctx.save(); ctx.beginPath(); ctx.rect(B.x, B.y, B.w, B.h); ctx.clip();
+      this.scores.forEach((e, i) => {
+        const y = B.y + B.row0 + i * B.rowH, ic = im(e.icon);
+        if (ic) ctx.drawImage(ic, B.x + B.icon, y);
+        uiText(ctx, e.name, B.x + B.name, y, { color: ARIANT.blue, bold: true });
+        uiText(ctx, String(e.score).padStart(4, ' '), B.x + B.score, y, { color: ARIANT.blue, bold: true });
+      });
+      ctx.restore();
+    }
+    const r = this.result;
+    if (!r) return;
+    const fr = this.resultFrames;
+    let t = performance.now() - r.t0, f = fr[fr.length - 1];
+    for (const x of fr) { const d = Number(x.delay) || ARIANT.result.frameMs; if (t < d) { f = x; break; } t -= d; }
+    const img = im(f);
+    if (img) ctx.drawImage(img, ARIANT.result.x - (f.origin?.[0] || 0), ARIANT.result.y - (f.origin?.[1] || 0));
+    if (!this.ranking) return;
+    // the text sits on the open scroll's last frame, from its top-left
+    const last = fr[fr.length - 1], ox = ARIANT.result.x - (last?.origin?.[0] || 0), oy = ARIANT.result.y - (last?.origin?.[1] || 0), R = ARIANT.rank;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (performance.now() - this.ranking.t0) / R.fade);
+    this.ranking.rows.forEach((row, i) => {
+      const y = oy + R.row0 + i * R.rowH;
+      uiText(ctx, String(row.rank), ox + R.x, y, { color: ARIANT.black });
+      uiText(ctx, row.name, ox + R.name, y, { color: ARIANT.black, align: 'center' });
+      uiText(ctx, String(row.score), ox + R.score, y, { color: ARIANT.black, align: 'center' });
+    });
+    ctx.restore();
   }
 }
