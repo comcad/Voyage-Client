@@ -978,8 +978,9 @@ export class LoginScene {
   }
 
   // ------------------------------------------------------------------ character select
-  async charSelect(server, world, channel, loading = null) {
-    const list = await this.s.chars(world.id, channel.id);
+  /** known: the list already in hand (after a new character is added to it), shown without asking again. */
+  async charSelect(server, world, channel, loading = null, known = null) {
+    const list = known || await this.s.chars(world.id, channel.id);
     loading?.close();
     if (list.full) { await this.notice(WORLD_FULL, 'info'); return null; }
     if (list.status) { await this.loginFailed({ reason: list.status }); return null; }
@@ -1062,8 +1063,6 @@ export class LoginScene {
         finish({ server, charId: c.stats.id, port: res.port, cafe: res.cafe, world: world.id, channel: channel.id, channels: world.channels.length, channelNames: world.channels.map((ch) => ch.name), stats: c.stats, look: c.look, gm: !!this.account?.gm, admin: this.account?.admin || 0, slots: list.slots, charCount: list.chars.length });
       };
       const start = guard(pick);
-      // a new list after a create or delete; if it can't be loaded (world full...), back to world select
-      const reload = async () => finish((await this.charSelect(server, world, channel)) ?? 'back');
       const create = async () => {
         if (world.blockCreate) { await this.notice(NOTICE.CREATE_BLOCKED, 'info'); return; }
         if (list.chars.length >= list.slots) { await this.notice(NOTICE.NO_MORE_CHARS); return; }
@@ -1072,9 +1071,10 @@ export class LoginScene {
           const race = await this.raceSelect(world, channel);
           if (!race) break;
           const c = await this.creator(race, world, channel);
-          if (c) { store.set(lastKey, String(c.stats.id)); break; }   // the new character is selected
+          // ADD_NEW_CHAR_ENTRY: the new character joins this list, selected, with no new list request
+          if (c) { list.chars.push(c); store.set(lastKey, String(c.stats.id)); break; }
         }
-        await reload();
+        finish((await this.charSelect(server, world, channel, null, list)) ?? 'back');
       };
       const remove = async () => {
         if (sel < 0) return;
