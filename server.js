@@ -38,7 +38,7 @@ const CLIENT_CONFIG = clientConfigs(ConfigMgr);
 const portAllowed = (p) => p === 8484 || (p >= 7575 && p <= 7699);
 
 const app = express();
-app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false }));
+app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false, dotfiles: 'allow' }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
 app.get('/config.json', (req, res) => res.json(CLIENT_CONFIG));
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
