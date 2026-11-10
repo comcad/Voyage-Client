@@ -224,6 +224,7 @@ export class CashShopWin extends Win {
     for (const c of Object.values(com)) if (c?.SN && !removed.has(c.SN)) bySN.set(c.SN, { ...c });
     for (const m of d.mods || []) bySN.set(m.SN, { ...(bySN.get(m.SN) || {}), ...m, priceSet: m.Price !== undefined });
     this.bySN = bySN;
+    setTimeout(() => this.maybeWishGift(), 0);
     this.subNames = new Map();
     for (const c of Object.values(cats)) {
       const cat = Number(c.Category), sub = Number(c.CategorySub);
@@ -260,6 +261,8 @@ export class CashShopWin extends Win {
     if (this.giftRun) { this.nextGift(); return; }
     if (this.queue.length) { this.sendBuy(this.queue.shift(), true); return; }
     if (this.multiBuy) { this.multiBuy = false; this.alert('You have successfully made the purchase.'); }
+    this.cashKnown = true;
+    this.maybeWishGift();
     if (this.wishAfterBuy) {   // bought from the wish list: it comes off the list
       const sn = this.wishAfterBuy; this.wishAfterBuy = null;
       if (this.wish.includes(sn)) this.sendWish(this.wish.filter((s) => s !== sn), true);
@@ -629,6 +632,37 @@ export class CashShopWin extends Win {
       this.nextGift();
       return;
     }
+  }
+  /** Come in from a wish list's PRESENT: that gift is asked for once the cash and the catalogue are both in. */
+  maybeWishGift() {
+    const w = this.g.wishGift;
+    if (!w || !this.cashKnown || !this.bySN) return;
+    this.g.wishGift = null;
+    this.giftWish(w.sn, w.name);
+  }
+  /**
+   * A gift from someone's wish list (Character Info's PRESENT): the birthday code, NX Prepaid enough for it, a message
+   * to them (CSNotice/2), then "Will you buy this item as a gift for ...?". Rings go as 0x1D (couple) or 0x23
+   * (friendship), packages (910xxxx) as 0x1F.
+   */
+  async giftWish(sn, to) {
+    if (!this.available) { this.alert(ERRORS[0xC3]); return; }
+    if (this.busy) return;
+    const c = this.bySN.get(sn);
+    if (!c || c.OnSale !== 1) { this.alert('The item is not on sale now.'); return; }
+    const birthday = await this.askBirthday();
+    if (birthday === null) return;
+    if ((this.cash.prepaid || 0) < c.Price) { this.alert("You don't have enough cash."); return; }
+    const message = await new Promise((done) => this.mgr.show(new CsWishGiftDialog(this, to, done)));
+    if (message === null) return;
+    const name = this.mgr.itemName(c.ItemId) || '';
+    if (!(await this.alert(`${name} (${c.Price} NX)\nWill you buy this item as a gift for\n'${to}'?`, true))) return;
+    const id = c.ItemId, ring = Math.floor(id / 100);
+    const mode = ring === 11128 && id % 10 < 3 ? 0x23 : ring === 11120 && id !== 1112000 ? 0x1D : Math.floor(id / 10000) === 910 ? 0x1F : 4;
+    if (this.tab === WISH) this.wishAfterBuy = c.SN;
+    this.giftRun = { birthday, sn, to: [to], message, i: 1, sent: [], total: 0, name: '' };
+    this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
+    this.g.net?.csWishGift(mode, birthday, sn, to, message);
   }
   /** The next recipient's gift, or the summary once every one has been tried. */
   nextGift() {
@@ -1547,6 +1581,52 @@ class CsNoticeDialog extends Win {
  * A Cash Shop message box from CSNotice/4: the blue panel (top, a stretched middle, the rounded bottom from the
  * first 12 rows of 4/4) round the centred text, then 4/4's grey band (its last 42 rows) with OK (and CANCEL).
  */
+/**
+ * The wish-list gift's message (CashShop.img/CSNotice/2, 266x142, centred): the receiver's name at (84, 25), two
+ * message lines of 34 letters (72 at most in all) and OK / Cancel. The lines' and buttons' places were lost; they sit
+ * as in CSGift, whose art is the same 27px lower.
+ */
+class CsWishGiftDialog extends Win {
+  constructor(shop, to, done) {
+    const mgr = shop.mgr, N = shop.C.CSNotice?.[2] || shop.C.CSNotice?.['2'];
+    super(mgr, N?.backgrnd, (UI_W - 266) >> 1, (UI_H - 142) >> 1);
+    this.buttons = [];
+    this.shop = shop; this.to = to; this.done = done; this.w = 266; this.h = 142; this.modal = true;
+    this.lines = [editBox(shop, 210, 13, 34), editBox(shop, 210, 13, 34)];
+    this.focus = this.lines[0];
+    this.lines.forEach((f, i) => {
+      f.el.addEventListener('focus', () => { this.focus = f; });
+      f.el.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Tab') { e.preventDefault(); this.lines[1 - i].focus(); }
+      });
+    });
+    this.button(mgr.B.BtOK2, 168, 112, () => this.ok());
+    this.button(mgr.B.BtCancel2, 210, 112, () => this.finish(null));
+  }
+  ok() {
+    const l1 = this.lines[0].value.trim(), l2 = this.lines[1].value.trim(), message = `${l1}\n${l2}`;
+    if (!l1 && !l2) { this.shop.alert('Please enter the message.'); return; }
+    if (message.length > 72) { this.shop.alert('The message can be no longer than 72 characters long.'); return; }
+    this.finish(message);
+  }
+  finish(v) { if (this.answered) return; this.answered = true; for (const f of this.lines) f.remove(); this.mgr.close(this); this.done(v); }
+  /** Enter on the first line moves to an empty second one; otherwise it sends. */
+  key(e) {
+    if (e.key === 'Escape') { this.finish(null); return; }
+    if (e.key !== 'Enter') return;
+    if (this.focus === this.lines[0] && !this.lines[1].value) this.lines[1].focus();
+    else this.ok();
+  }
+  body(ctx) {
+    placeBox(this, this.lines[0], 26, 49); placeBox(this, this.lines[1], 26, 65);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.lines[0].focus(), 0); }
+    uiText(ctx, this.to, 84, 25, { color: '#000', size: 12 });
+    // the art's "Enter your message here." sits on the first line: covered once there is a message
+    if (this.lines.some((f) => f.value)) { ctx.fillStyle = '#fff'; ctx.fillRect(22, 46, 220, 17); }
+  }
+}
+
 class CsAlert extends Win {
   constructor(shop, text, cancel, done) {
     const lines = wrapText((CsAlert.scratch ??= document.createElement('canvas').getContext('2d')), String(text), 236, 11);

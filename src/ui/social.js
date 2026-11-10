@@ -122,15 +122,18 @@ export class CharInfoWin extends Win {
     // with a pet out it opens on PET INFO
     this.U = U; this.info = info; this.panel = info.pets?.length ? 'pet' : 'none'; this.side = null; this.sideFirst = 0; this.petSel = 0;
     const g = this.g, other = info.id !== g.player.id;
-    const party = this.button(U.BtParty, 148, 21, () => {
-      if (!g.party) g.net?.partyOp(1);
-      g.net?.partyOp(4, this.name());
+    // PARTY invites only from a party's leader (with no party it does nothing); PARTY and TRADE are off on your own window
+    const party = this.button(U.BtParty, 149, 23, () => {
+      if (g.party && g.party.leader === g.player.id) g.net?.partyOp(4, this.name());
     });
-    party.enabled = other && (!g.party || g.party.leader === g.player.id);
+    party.enabled = other;
     const rp = g.others.get(info.id);
-    this.button(U.BtTrade, 148, 42, () => { if (rp) g.requestTrade(rp); }).enabled = other && !!rp;
-    this.button(U.BtItem, 208, 21, () => this.toggleSide('item'));
-    this.button(U.BtWish, 208, 42, () => this.toggleSide('wish'));
+    this.button(U.BtTrade, 149, 42, () => { if (rp) g.requestTrade(rp); }).enabled = other;
+    this.button(U.BtItem, 208, 22, () => this.toggleSide('item'));
+    this.button(U.BtWish, 208, 41, () => this.toggleSide('wish'));
+    this.button(U.BtFamily, 105, 23, () => this.family());
+    // the wish list's PRESENT, one a row (165, 50 + 40n)
+    this.presentBtns = [0, 1, 2].map((k) => this.button(U.BtPresent, SIDE_X + 165, 50 + k * 40, () => this.present(k)));
     // fame up / down (UI/Basic.img BtUP at (237, 114), BtDown at (252, 114)); both are disabled under level 15 and
     // on your own window, and send by name
     this.fameUp = this.button(mgr.B.BtUP, 237, 114, () => g.giveFame(this.name(), 1));
@@ -179,6 +182,33 @@ export class CharInfoWin extends Win {
   key(e) { if (e.key === 'Escape') this.mgr.close(this); }
   setPanel(p) { this.panel = this.panel === p ? 'none' : p; this.layout(); }
   toggleSide(s) { this.side = this.side === s ? null : s; this.sideFirst = 0; this.layout(); }
+  /** FAMILY: on your own window your Family window; on someone else's the family tree, asking for theirs. */
+  family() {
+    const g = this.g, name = this.name();
+    if (name === g.player.name) { if (!g.windows.isOpen('family')) g.windows.open('family'); return; }
+    if (!g.windows.isOpen('familytree')) g.windows.open('familytree');
+    g.windows.wins.familytree.load(name);
+  }
+  /**
+   * A wish row's PRESENT shows on someone else's list only, and not for a 911xxxx, 5430xxx or 555xxxx item or the
+   * Character Transfer (5401000).
+   */
+  canPresent(i) {
+    if (this.info.id === this.g.player.id) return false;
+    const c = this.wishItems()[i], id = c?.ItemId;
+    return !!c && Math.floor(id / 10000) !== 911 && Math.floor(id / 1000) !== 5430 && Math.floor(id / 10000) !== 555 && id !== 5401000;
+  }
+  /** PRESENT: into the Cash Shop, where the gift of that item to them is asked for at once. */
+  present(k) {
+    const c = this.wishItems()[this.sideFirst + k];
+    if (!c) return;
+    this.g.wishGift = { sn: c.SN, name: this.name() };
+    this.g.enterCashShop();
+  }
+  draw(ctx) {
+    this.presentBtns.forEach((b, k) => { b.visible = this.side === 'wish' && this.canPresent(this.sideFirst + k); });
+    super.draw(ctx);
+  }
   layout() {
     const P = INFO_PANELS[this.panel], bg = this.U[P.bg];
     this.h = bg?._h || 199;
@@ -262,7 +292,9 @@ export class CharInfoWin extends Win {
     return { shown: (i) => look?.equips?.[i], hidden: (i) => look?.masked?.[i], cashWeapon: look?.cashWeapon };
   }
   wishItems() { return (this.info.wish || []).map((sn) => this.commodity?.get(sn)).filter(Boolean); }
-  sideRows() { return this.side === 'item' ? this.equipped().map((id) => ({ id })) : this.side === 'wish' ? this.wishItems().map((c) => ({ id: c.ItemId, price: c.Price })) : []; }
+  sideRows() { return this.side === 'item' ? this.equipped().map((id) => ({ id })) : this.side === 'wish' ? this.wishItems().map((c) => ({ id: c.ItemId, count: c.Count })) : []; }
+  /** The side list's scrollbar: the wish list's at (218, 33), 112 tall. */
+  sideBar() { return this.side === 'wish' ? { x: SIDE_X + 218, y: 33, h: 112 } : { x: SIDE_X + 220, y: 27, h: 122 }; }
 
   // ---------------------------------------------------------------- frame
   body(ctx) {
@@ -313,16 +345,24 @@ export class CharInfoWin extends Win {
     if (panel) ctx.drawImage(panel, SIDE_X, 0);
     const rows = this.sideRows(), reqLv = m.image(U.ReqLv);
     for (let k = 0; k < SIDE_ROWS; k++) {
-      const r = rows[this.sideFirst + k];
+      const r = rows[this.sideFirst + k], y = SIDE_ROW_Y + k * 40;
       if (!r) break;
-      this.listRow(ctx, SIDE_X + 15, SIDE_ROW_Y + k * 40, r.id, (x, y) => {
-        if (r.price !== undefined) { this.text(ctx, `${r.price.toLocaleString('en-US')} NX`, x, y, { size: 12 }); return; }
-        if (reqLv) ctx.drawImage(reqLv, x, y + 2);
-        this.text(ctx, String(m.info(r.id)?.reqLevel ?? 0), x + 36, y, { size: 12 });
+      if (this.side === 'wish') {
+        // a wish: its icon, and its name (with "(n)" for more than one) at (57, 32 + 40n)
+        m.drawIcon(ctx, m.icon(r.id), SIDE_X + 17, y + 1, r.id);
+        ctx.save(); ctx.beginPath(); ctx.rect(SIDE_X + 53, y, 160, 36); ctx.clip();
+        this.text(ctx, `${m.itemName(r.id)}${r.count > 1 ? `(${r.count})` : ''}`, SIDE_X + 57, y + 1, { size: 12 });
+        ctx.restore();
+        continue;
+      }
+      this.listRow(ctx, SIDE_X + 15, y, r.id, (x, yy) => {
+        if (reqLv) ctx.drawImage(reqLv, x, yy + 2);
+        this.text(ctx, String(m.info(r.id)?.reqLevel ?? 0), x + 36, yy, { size: 12 });
       });
     }
     if (!rows.length) this.text(ctx, this.side === 'item' ? 'No items equipped.' : 'The wish list is empty.', SIDE_X + 120, 80, { align: 'center', color: '#555' });
-    this.scrollbar(ctx, SIDE_X + 220, 27, 122, this.sideFirst, rows.length, SIDE_ROWS);
+    const bar = this.sideBar();
+    this.scrollbar(ctx, bar.x, bar.y, bar.h, this.sideFirst, rows.length, SIDE_ROWS);
   }
   /** A pet's list: its accessory, then the ability items and rings worn for it, in slot order; the potion pouches are shared, so every pet lists them. */
   petEquips(p, k) {
@@ -410,7 +450,7 @@ export class CharInfoWin extends Win {
       const k = Math.floor((ly - 24) / 14);
       if (lx >= SIDE_X + 8 && lx < SIDE_X + 147 && k >= 0 && k < 6) this.excSel = this.sideFirst + k;
     } else if (this.side) {
-      const s = this.scrollClick(lx, ly, SIDE_X + 220, 27, 122, this.sideFirst, this.sideRows().length, SIDE_ROWS);
+      const bar = this.sideBar(), s = this.scrollClick(lx, ly, bar.x, bar.y, bar.h, this.sideFirst, this.sideRows().length, SIDE_ROWS);
       if (s !== null) { this.sideFirst = s; return; }
     }
     if (this.panel === 'pet') {

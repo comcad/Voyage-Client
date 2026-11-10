@@ -1985,6 +1985,12 @@ export class ChannelSession {
   coupon(code) { this.send(new PacketWriter(C.COUPON_CODE).string('').string(code)); }
   /** A gift: paid from NX Prepaid, confirmed with the account's birthday (YYYYMMDD) */
   csGift(birthday, sn, to, message) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(4).int(birthday).int(sn).string(to).string(message)); }
+  /** A gift from someone's wish list: mode 4, or 0x1D / 0x23 for rings (with the paying wallet, 4 NX Prepaid) and 0x1F for packages. */
+  csWishGift(mode, birthday, sn, to, message) {
+    const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(mode).int(birthday);
+    if (mode !== 4 && mode !== 0x1F) w.int(4);
+    this.send(w.int(sn).string(to).string(message));
+  }
   /** A name change / world transfer asks first whether it may go ahead: character id, birthday */
   nameTransfer(cid, birthday) { this.send(new PacketWriter(C.NAME_TRANSFER).int(cid).int(birthday)); }
   worldTransfer(cid, birthday) { this.send(new PacketWriter(C.WORLD_TRANSFER).int(cid).int(birthday)); }
