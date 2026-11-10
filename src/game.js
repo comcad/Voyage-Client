@@ -3742,13 +3742,13 @@ export class Game {
 
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
-   * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, the Energy
-   * Charge gauge, Ranking, GM Board, Maple Event) do nothing; 0x17 is the Maker, 0x1F the Medal window.
+   * only the Quest window (6) opens. Ids without a window here (UserInfo, Guild BBS, Monster Carnival, Ranking, GM
+   * Board, Maple Event) do nothing; 0x14 is the Energy Charge gauge; 0x17 is the Maker, 0x1F the Medal window.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
-    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
+    const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0x14: 'energybar', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
     if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
     const w = this.windows.open(name);
     if (name === 'familytree') w?.load(this.player.name);
