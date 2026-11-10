@@ -19,7 +19,10 @@ import { jobName } from '../data.js';
  *     at (55, row + 8) cut to 170px, and under it at (55, row + 27) in 11px #999999 the date it ended ("Ended at
  *     %d/%d/%d at %02d:00") or its level and job limits ("Over Level 15, Available to all"). Pointing at the icon shows
  *     the medal item.
- * Clicking a medal in a category opens its panel beside the window (backgrnd3 305x373 at x 259): its name in bold
+ * Clicking a medal in a category opens its panel (backgrnd3 305x373), a window of its own behind this one: made at
+ * the window's left edge, it slides out until it is 259 past it, 1px a millisecond; hidden, it slides back to 4 and
+ * goes once it gets there (the selection with it). Dragging the window puts it 259 past its left edge. Choosing a
+ * category tab picks its first medal; the window opens on Basic. On the panel: the medal's name in bold
  * white at (35, 42) cut to 150px, its level limit in white at (23, 75), its start NPC standing at (242, 112), and its
  * QuestInfo text for where you are in it (the data's "\r\n" two line breaks) from (18, 130) in 16px lines, clipped
  * to (18, 124) 263x213 and scrolled 8px a step by VScr5 at (284, 124), 213 long. BtHide (286, 6) closes it. A
@@ -28,7 +31,7 @@ import { jobName } from '../data.js';
  */
 const TAB_X = 4, TAB_Y = 25, TAB_W = 50;
 const LIST = { x: 7, y: 48, w: 230, bottom: 339 }, BASIC_TOP = 96;
-const ROW_H = 49, HEAD_H = 25, PANEL_X = 259;
+const ROW_H = 49, HEAD_H = 25, PANEL = { w: 305, open: 259, shut: 4, moved: 259 };
 const DESC = { x: 18, y: 124, w: 263, h: 213, top: 130, line: 16, wrap: 258 };
 const GROUP_TEXT = ['Title being challenged', 'Obtainable Title'];
 
@@ -38,18 +41,25 @@ export class MedalWin extends Win {
     super(mgr, T.backgrnd, (UI_W - 260) >> 1, (UI_H - 374) >> 1);
     this.T = T; this.tab = 0; this.first = 0; this.sel = null; this.folded = new Set(); this.dfirst = 0;
     this.closeBtn.x = 243; this.closePinned = true;
-    this.hideBtn = this.button(mgr.B.BtHide, PANEL_X + 286, 6, () => this.select(null));
-    this.okBtn = this.button(T.BtOK, PANEL_X + 184, 350, () => this.startMedal());
-    this.giveupBtn = this.button(T.BtGiveup, PANEL_X + 243, 350, () => this.giveUp());
+    this.hideBtn = this.button(mgr.B.BtHide, 286, 6, () => this.showPanel(false));   // the panel's buttons, placed on it
+    this.okBtn = this.button(T.BtOK, 184, 350, () => this.startMedal());
+    this.giveupBtn = this.button(T.BtGiveup, 243, 350, () => this.giveUp());
     this.minBtns = [0, 1].map((g) => this.button(mgr.B.BtMin, 10, 0, () => this.fold(g, true)));
     this.maxBtns = [0, 1].map((g) => this.button(mgr.B.BtMax, 10, 0, () => this.fold(g, false)));
     for (const b of [this.hideBtn, this.okBtn, this.giveupBtn, ...this.minBtns, ...this.maxBtns]) b.visible = false;
+    // under the window only the part out from under it takes the mouse
+    this.panelBtns = [this.hideBtn, this.okBtn, this.giveupBtn];
+    for (const b of this.panelBtns) { b.rx = b.x; const hit = b.hit.bind(b); b.hit = (px, py) => px >= this.w && hit(px, py); }
+    this.dAlive = false; this.dOpen = false; this.dx = 0; this.slide = null; this.dLeft = 0;
   }
   frames() { const B = this.mgr.B; return [...super.frames(), ...allCanvases(this.T), ...allCanvases(B.BtMin), ...allCanvases(B.BtMax), ...allCanvases(B.BtHide), ...allCanvases(B.VScr5)]; }
   onOpen() {
     this.load();
-    this.select(null);
+    this.tab = 0; this.first = 0; this.sel = null;
+    this.dAlive = false; this.dOpen = false; this.slide = null; this.tickAt = null;
   }
+  get wide() { return this.dAlive ? Math.max(this.w, this.panelX() + PANEL.w) : this.w; }
+  contains(x, y) { return x >= this.x && x < this.x + this.wide && y >= this.y && y < this.y + this.h; }
   /** The "Title" area's id, the medal quests' strings and checks. */
   async load() {
     const a = this.g.assets;
@@ -98,14 +108,44 @@ export class MedalWin extends Win {
   fold(g, on) { const k = `${this.tab - 1}:${g}`; if (on) this.folded.add(k); else this.folded.delete(k); }
   setTab(t) {
     if (t === this.tab) return;
-    this.tab = t; this.first = 0; this.select(null);
+    this.tab = t; this.first = 0; this.sel = null;
+    if (this.dOpen) this.slidePanel();
+    const first = t > 0 && this.rows().find((r) => r.kind === 'medal');   // a category picks its first medal
+    if (first) this.pick(first);
   }
-  select(m) {
-    this.sel = m ? m.id : null; this.dfirst = 0; this.desc = null;
-    this.w = this.sel ? PANEL_X + 305 : 260;
-    this.hideBtn.visible = !!this.sel;
+  /** Picks a medal: the panel there shows it, or one slides out with it. */
+  pick(m) {
+    this.sel = m.id;
+    if (this.dAlive) this.fill(); else this.showPanel(true);
+  }
+  fill() { this.did = this.sel; this.dfirst = 0; this.desc = null; }
+  /** The panel's left edge, from the window's, now. */
+  panelX(now = performance.now()) {
+    const s = this.slide;
+    if (!s) return this.dx;
+    if (now >= s.t0 + s.dur) { this.slide = null; return this.dx; }
+    return Math.round(s.from + (s.to - s.from) * (now - s.t0) / s.dur);
+  }
+  /** Slides the panel the other way from where it is: out, or back under the window. */
+  slidePanel() {
+    if (!this.dAlive) return;
+    const from = this.panelX(), to = this.dOpen ? PANEL.shut : PANEL.open;
+    this.dLeft = Math.abs(from - to);
+    this.slide = { from, to, t0: performance.now(), dur: this.dLeft };
+    this.dx = to; this.dOpen = !this.dOpen;
+  }
+  /** Makes the panel for the selection and slides it out (nothing when there is one), or slides it away. */
+  showPanel(open) {
+    if (!this.sel) open = false;
+    if (!open) { this.slidePanel(); return; }
+    if (this.dAlive) return;
+    this.dAlive = true; this.dOpen = false; this.dx = 0; this.slide = null; this.px = this.x; this.py = this.y;
+    this.slidePanel();
+    this.fill();
   }
   get selected() { return this.sel ? this.medals().find((m) => m.id === this.sel) || null : null; }
+  /** The medal on the panel (kept while it slides away). */
+  get shown() { return this.did ? this.medals().find((m) => m.id === this.did) || null : null; }
   startMedal() { const m = this.selected; if (m && m.state === 0) this.g.net?.questAction(1, m.id, m.npc, null); }
   giveUp() { const m = this.selected; if (m && m.state === 1) this.g.net?.questAction(3, m.id); }
 
@@ -126,17 +166,18 @@ export class MedalWin extends Win {
     const rows = this.rows(), sb = this.tab === 0 ? [239, 93, 245] : [239, 48, 290];
     const f = this.scrollClick(lx, ly, sb[0], sb[1], sb[2], this.first, rows.length, 4, this.mgr.B.VScr5);
     if (f !== null) { this.first = f; return; }
-    if (this.sel) {
+    if (this.dAlive && lx >= this.w) {
       const lines = this.descLayout(), max = this.descSteps(lines);
-      const d = this.scrollClick(lx, ly, PANEL_X + 284, DESC.y, DESC.h, this.dfirst, max + 1, 1, this.mgr.B.VScr5);
-      if (d !== null) { this.dfirst = d; return; }
+      const d = this.scrollClick(lx - this.panelX(), ly, 284, DESC.y, DESC.h, this.dfirst, max + 1, 1, this.mgr.B.VScr5);
+      if (d !== null) this.dfirst = d;
+      return;
     }
     if (this.tab === 0 || lx < LIST.x || lx >= LIST.x + LIST.w) return;
-    for (const { r, y } of this.layout(rows)) if (r.kind === 'medal' && ly >= y && ly < y + 46) { this.select(r); return; }
+    for (const { r, y } of this.layout(rows)) if (r.kind === 'medal' && ly >= y && ly < y + 46) { this.pick(r); return; }
   }
   wheel(dy) {
     const m = this.mgr.mouse, lx = m.x - this.x;
-    if (this.sel && lx >= PANEL_X) { this.dfirst = Math.max(0, Math.min(this.descSteps(this.descLayout()), this.dfirst + Math.sign(dy))); return; }
+    if (this.dAlive && lx >= this.w) { this.dfirst = Math.max(0, Math.min(this.descSteps(this.descLayout()), this.dfirst + Math.sign(dy))); return; }
     this.first = Math.max(0, Math.min(Math.max(0, this.rows().length - 4), this.first + Math.sign(dy)));
   }
   tooltip(lx, ly) {
@@ -146,7 +187,7 @@ export class MedalWin extends Win {
 
   /** The panel's text: the medal's QuestInfo text for its state, its records filled in. */
   descLayout() {
-    const m = this.selected;
+    const m = this.shown;
     if (!m) return null;
     const key = `${m.id}:${m.state}:${Math.floor(performance.now() / 500)}`;   // its records may change: built again twice a second
     if (this.desc?.key === key) return this.desc;
@@ -169,6 +210,33 @@ export class MedalWin extends Win {
   /** How many 8px steps the panel's text scrolls. */
   descSteps(lines) { return lines ? Math.max(0, Math.ceil((lines.height - (DESC.h - (DESC.top - DESC.y))) / 8)) : 0; }
 
+  draw(ctx) {
+    const now = performance.now();
+    if (this.sel && !this.rows().some((r) => r.kind === 'medal' && r.id === this.sel)) {   // gone from the tab
+      this.sel = null;
+      if (this.dOpen) this.slidePanel();
+    }
+    // a panel sliding away goes when its slide is over; a selection with no panel gets one
+    if (this.dAlive && !this.dOpen) {
+      this.dLeft -= now - (this.tickAt ?? now);
+      if (this.dLeft < 0) { this.dAlive = false; this.slide = null; this.sel = null; }
+    }
+    this.tickAt = now;
+    if (!this.dAlive && this.sel) this.showPanel(true);
+    if (this.dAlive && (this.x !== this.px || this.y !== this.py)) { this.slide = null; this.dx = PANEL.moved; }
+    this.px = this.x; this.py = this.y;
+    const dx = this.dAlive ? this.panelX(now) : 0;
+    for (const b of this.panelBtns) b.x = b.rx + dx;
+    this.hideBtn.visible = this.dAlive;
+    this.okBtn.visible = this.giveupBtn.visible = false;
+    ctx.save(); ctx.translate(this.x, this.y);
+    if (this.dAlive) { this.drawPanel(ctx, dx); for (const b of this.panelBtns) b.draw(ctx, this.mgr.assets); }
+    const bg = this.mgr.image(this.bg);
+    if (bg) ctx.drawImage(bg, 0, 0);
+    this.body(ctx);
+    for (const b of this.buttons) if (!this.panelBtns.includes(b)) b.draw(ctx, this.mgr.assets);
+    ctx.restore();
+  }
   body(ctx) {
     const m = this.mgr, T = this.T, im = (n) => m.image(n);
     for (let t = 0; t < 5; t++) {
@@ -216,13 +284,11 @@ export class MedalWin extends Win {
     ctx.restore();
     const sb = this.tab === 0 ? [239, 93, 245] : [239, 48, 290];
     this.scrollbar(ctx, sb[0], sb[1], sb[2], this.first, rows.length, 4, m.B.VScr5);
-    this.drawPanel(ctx);
   }
-  drawPanel(ctx) {
-    const sel = this.selected;
-    this.okBtn.visible = this.giveupBtn.visible = false;
-    if (!sel) { if (this.sel) this.select(null); return; }
-    const m = this.mgr, im = (n) => m.image(n), X = PANEL_X;
+  drawPanel(ctx, X) {
+    const sel = this.shown;
+    if (!sel) return;
+    const m = this.mgr, im = (n) => m.image(n);
     const bg = im(this.T.backgrnd3);
     if (bg) ctx.drawImage(bg, X, 0);
     ctx.font = 'bold 12px Arial, sans-serif';

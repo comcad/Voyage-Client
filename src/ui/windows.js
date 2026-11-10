@@ -1177,6 +1177,12 @@ class SkillWin extends Win {
 const QROW_Y = 50, QROW_H = 22, QROWS = 13, QFONT = 12;
 const QDETAIL = { x: 18, y: 127, w: 263, h: 237, hSum: 114, line: 8 }, QLINE = 18;
 const QSUM = { x: 18, y: 249, w: 263, h: 108 };
+/**
+ * The detail panel is a window of its own behind the list, as tall and 305 wide. Made at the list's left edge, it
+ * slides out until it is 244 past it, 1px a millisecond; hidden, it slides back to 4 and goes once it gets there
+ * (the selection with it). Dragging the list puts it 240 past the list's left edge.
+ */
+const QPANEL = { w: 305, open: 244, shut: 4, moved: 240 };
 const MAPLE_ADMIN = 9010000;
 class QuestWin extends Win {
   constructor(mgr) {
@@ -1185,9 +1191,9 @@ class QuestWin extends Win {
     this.W = W; this.tab = 0; this.first = 0; this.sel = null; this.lines = { lines: [], height: 0 }; this.sum = null; this.dfirst = 0; this.sfirst = 0;
     this.folded = [new Set(), new Set(), new Set()];
     this.seen = new Set();          // looked at this session (Available loses its NEW badge)
-    const band = 245, by = 372, U = mgr.W.UtilDlgEx;
-    this.findBtn = this.button(W.BtMarkNpc, band + 217, by, () => this.findNpc());
-    this.giveup = this.button(U.BtQGiveup, band + 242, by, () => {
+    const by = 372, U = mgr.W.UtilDlgEx;   // the detail panel's buttons, placed on the panel
+    this.findBtn = this.button(W.BtMarkNpc, 217, by, () => this.findNpc());
+    this.giveup = this.button(U.BtQGiveup, 242, by, () => {
       const id = this.sel;
       if (!id || this.g.quests.status(id) !== 1) return;
       mgr.confirm('Are you sure you want to quit?').then((ok) => {
@@ -1196,10 +1202,13 @@ class QuestWin extends Win {
         this.g.net?.questAction(3, id);
       });
     });
-    this.alert = this.button(W.BtAlert, band + 150, by, () => { if (this.sel) { mgr.wins.questalarm?.track(this.sel); } });
+    this.alert = this.button(W.BtAlert, 150, by, () => { if (this.sel) { mgr.wins.questalarm?.track(this.sel); } });
     this.alert.tip = () => (this.alarmTip ? { title: this.alarmTip.Title || 'Quest Helper', lines: [String(this.alarmTip.Desc || '')] } : null);
-    this.hideBtn = this.button(mgr.B.BtHide || mgr.B.BtClose, band + 305 - 17, 6, () => { this.sel = null; });
-    for (const b of [this.findBtn, this.giveup, this.alert, this.hideBtn]) b.visible = false;
+    this.hideBtn = this.button(mgr.B.BtHide || mgr.B.BtClose, QPANEL.w - 17, 6, () => this.showDetail(false));
+    this.detailBtns = [this.findBtn, this.giveup, this.alert, this.hideBtn];
+    // under the list only the part out from under it takes the mouse
+    for (const b of this.detailBtns) { b.visible = false; b.rx = b.x; const hit = b.hit.bind(b); b.hit = (px, py) => px >= this.w && hit(px, py); }
+    this.dAlive = false; this.dOpen = false; this.dx = 0; this.slide = null; this.dLeft = 0;
     const a = mgr.assets;
     Promise.all(['Mob', 'Npc', 'Map'].map((k) => a.json(`String/${k}.img`))).then(([mob, npc, map]) => { this.str = { mob, npc, map }; });
     a.json('String/ToolTipHelp.img').then((t) => { this.alarmTip = t?.Game?.Button?.QuestAlarm; });
@@ -1214,12 +1223,13 @@ class QuestWin extends Win {
     return [...super.frames(), W.backgrnd2, W.backgrnd4, W.icon0, W.icon4, W.summary, W.reward, W.prob, W.select, W.basic,
       ...['icon2', 'icon3', 'icon5', 'icon6', 'icon7', 'icon8', 'icon9'].flatMap((k) => allCanvases(W[k])), W.notice0, W.notice1, W.notice2, ...allCanvases(W.Tab)].filter(isCanvas);
   }
-  get wide() { return this.sel ? this.w + 305 : this.w; }
+  get wide() { return this.dAlive ? Math.max(this.w, this.detailX() + QPANEL.w) : this.w; }
   contains(x, y) { return x >= this.x && x < this.x + this.wide && y >= this.y && y < this.y + this.h; }
 
   /** Opened by its key: In Progress on the quest that moved last, else Available on the first new one. */
   onOpen() {
     const book = this.g.quests;
+    this.dAlive = false; this.dOpen = false; this.slide = null; this.tickAt = null;
     if (!book) return;
     this.tab = 1; this.first = 0;
     const prog = this.rows().filter((r) => r.id);
@@ -1302,11 +1312,43 @@ class QuestWin extends Win {
     return i < this.visibleRows && this.first + i < this.rows().length ? this.first + i : -1;
   }
   select(id) {
-    this.sel = id; this.dfirst = 0; this.sfirst = 0; this.selEntry = this.entry(id);
+    this.sel = id;
     if (this.tab === 0) this.seen.add(id);
     if (this.tab === 1) this.lastProgress = id;
+    // no panel: one slides out with it; an open one shows it; one sliding away is left to go
+    if (!this.dAlive) this.showDetail(true);
+    else if (this.dOpen) this.fillDetail();
+  }
+  /** What the panel shows: the selection, as its tab has it. */
+  fillDetail() {
+    this.did = this.sel; this.dtab = this.tab; this.dfirst = 0; this.sfirst = 0; this.selEntry = this.entry(this.sel);
     this.layoutDetail();
-    this.portrait(this.questNpc(id));
+    this.portrait(this.questNpc(this.sel));
+  }
+  /** The panel's left edge, from the list's, now. */
+  detailX(now = performance.now()) {
+    const s = this.slide;
+    if (!s) return this.dx;
+    if (now >= s.t0 + s.dur) { this.slide = null; return this.dx; }
+    return Math.round(s.from + (s.to - s.from) * (now - s.t0) / s.dur);
+  }
+  /** Slides the panel the other way from where it is: out, or back under the list. */
+  slideDetail() {
+    if (!this.dAlive) return;
+    const from = this.detailX(), to = this.dOpen ? QPANEL.shut : QPANEL.open;
+    this.dLeft = Math.abs(from - to);
+    this.slide = { from, to, t0: performance.now(), dur: this.dLeft };
+    this.dx = to; this.dOpen = !this.dOpen;
+  }
+  /** Shows the selection on the panel (made and slid out first when there is none), or slides the panel away. */
+  showDetail(open) {
+    if (!this.sel) open = false;
+    if (!open) { this.slideDetail(); return; }
+    if (!this.dAlive) {
+      this.dAlive = true; this.dOpen = false; this.dx = 0; this.slide = null; this.px = this.x; this.py = this.y;
+      this.slideDetail();
+    }
+    this.fillDetail();
   }
   /** The NPC shown for a quest: the one who starts it, or the Maple Administrator. */
   questNpc(id) { return Number(this.g.quests.check[id]?.['0']?.npc) || MAPLE_ADMIN; }
@@ -1325,7 +1367,7 @@ class QuestWin extends Win {
   /** "Over Level 10" / "Under Level 30" ("No limit" with no start requirements), or for a finished one when it ended. */
   levelLine(e) {
     const book = this.g.quests, id = e.chain ? e.first : e.id, c = book.check[id]?.['0'];
-    if (this.tab === 2 || e.ended) {
+    if (this.dtab === 2 || e.ended) {
       const ft = book.completed[e.ended || e.id];
       try {
         const d = new Date(Number(BigInt(ft) / 10000n - 11644473600000n));
@@ -1340,11 +1382,11 @@ class QuestWin extends Win {
   }
   /** The detail text: the quest's own words for where you are with it - grey, black while it is under way. */
   layoutDetail() {
-    const book = this.g.quests, e = this.selEntry || this.entry(this.sel), id = e.chain ? e.current || e.id : this.sel, info = book.info[id] || {};
+    const book = this.g.quests, e = this.selEntry || this.entry(this.did), id = e.chain ? e.current || e.id : this.did, info = book.info[id] || {}, tab = this.dtab;
     const ctx = document.createElement('canvas').getContext('2d');
-    const text = e.chain ? e.texts.map(([n, t]) => (t ? `${n}\n${t}` : n)).join('\n') : String(info[String(this.tab)] ?? '');
-    const base = this.tab === 1 ? '#000' : '#666666';
-    const sumText = this.tab === 1 ? [info.summary && `#Wsummary#\n${info.summary}`, info.demandSummary, (info.rewardSummary) && ` \n#Wreward#\n${info.rewardSummary}`].filter(Boolean).join('\n') : '';
+    const text = e.chain ? e.texts.map(([n, t]) => (t ? `${n}\n${t}` : n)).join('\n') : String(info[String(tab)] ?? '');
+    const base = tab === 1 ? '#000' : '#666666';
+    const sumText = tab === 1 ? [info.summary && `#Wsummary#\n${info.summary}`, info.demandSummary, (info.rewardSummary) && ` \n#Wreward#\n${info.rewardSummary}`].filter(Boolean).join('\n') : '';
     this.sum = sumText ? richText(ctx, sumText, QSUM.w, this.ref(), { base, size: QFONT, lineH: QLINE }) : null;
     this.lines = richText(ctx, text, QDETAIL.w, this.ref(), { base, size: QFONT, lineH: QLINE });
     this.laidOut = this.mgr.namesVersion;
@@ -1358,15 +1400,15 @@ class QuestWin extends Win {
       skill: (id) => { const g = this.g; if (!g.skills?.strings) return ''; return g.skills.name(id); },
       quest: (id) => this.g.quests?.name(id) ?? '', questState: (id) => QUEST_STATES[this.g.quests?.status(id) ?? 0],
       kills: (n) => this.g.quests?.killText(n) ?? '', record: (id) => this.g.quests?.recordText(id) ?? '',
-      j: (key) => (this.sel ? this.g.quests?.jValue(this.sel, key, { fame: this.g.stats?.fame ?? 0, level: this.g.stats?.level ?? 0 }) : null),
+      j: (key) => (this.did ? this.g.quests?.jValue(this.did, key, { fame: this.g.stats?.fame ?? 0, level: this.g.stats?.level ?? 0 }) : null),
       skillIcon: (id) => { const g = this.g, n = g.skills?.icon(id); if (!n) g.skills?.ensure(id)?.then?.(() => { m.namesVersion++; }); return n; },
       image: (path) => { if (!path.includes('/')) return W[path] || null; const [, file, ...rest] = path.split('/'); let n = file === 'UIWindow.img' ? m.W : file === 'Basic.img' ? m.B : null; for (const k of rest) n = n?.[k]; return n?._canvas ? n : null; },
     };
   }
   /** Mark NPC: point at the NPC if it is here, else say where it lives. */
   findNpc() {
+    if (!this.sel) return;
     const npc = this.questNpc(this.sel), g = this.g;
-    if (!npc) return;
     const name = this.ref().npc(npc);
     const here = g.map?.life.find((e) => e.kind === 'Npc' && Number(e.spawn.id) === npc);
     if (here) { g.markNpc(here, name); return; }
@@ -1376,22 +1418,39 @@ class QuestWin extends Win {
 
   // ---------------------------------------------------------------- frame
   draw(ctx) {
-    const book = this.g.quests, id = this.sel, st = id ? book.status(id) : -1;
-    const row = id && this.rows().find((r) => r.id === id);
-    if (id && !row) this.sel = null;
-    else if (row) {
+    const book = this.g.quests, now = performance.now();
+    const row = this.sel && this.rows().find((r) => r.id === this.sel);
+    if (this.sel && !row) { this.sel = null; this.showDetail(false); }   // gone from the tab: the panel goes too
+    else if (row && this.dOpen && this.did === this.sel) {
       const was = this.selEntry;
       this.selEntry = row.e;
       if (was?.texts?.length !== row.e.texts?.length || was?.id !== row.e.id) this.layoutDetail();
     }
-    const shown = !!this.sel;
-    this.findBtn.visible = shown && this.tab === 0;
-    this.giveup.visible = this.alert.visible = shown && this.tab !== 0;
+    // a panel sliding away goes when its slide is over; a selection with no panel gets one
+    if (this.dAlive && !this.dOpen) {
+      this.dLeft -= now - (this.tickAt ?? now);
+      if (this.dLeft < 0) { this.dAlive = false; this.slide = null; this.sel = null; }
+    }
+    this.tickAt = now;
+    if (!this.dAlive && this.sel) this.showDetail(true);
+    if (this.dAlive && (this.x !== this.px || this.y !== this.py)) { this.slide = null; this.dx = QPANEL.moved; }
+    this.px = this.x; this.py = this.y;
+    const shown = this.dAlive, id = this.did, st = shown && id ? book.status(id) : -1, dx = shown ? this.detailX(now) : 0;
+    for (const b of this.detailBtns) b.x = b.rx + dx;
+    this.findBtn.visible = shown && this.dtab === 0;
+    this.giveup.visible = this.alert.visible = shown && this.dtab !== 0;
     this.giveup.enabled = st === 1 && !isPartyQuest(id);
     this.alert.enabled = st === 1 && !!this.mgr.wins.questalarm?.canAdd(id);
     this.hideBtn.visible = shown;
-    if (shown) this.bg2 = this.tab === 1 && this.sum ? this.W.backgrnd4 : this.W.backgrnd2;
-    super.draw(ctx);
+    if (shown) this.bg2 = this.dtab === 1 && this.sum ? this.W.backgrnd4 : this.W.backgrnd2;
+    if (this.closeBtn && !this.closePinned) this.closeBtn.x = this.w - CLOSE_INSET;
+    ctx.save(); ctx.translate(this.x, this.y);
+    if (shown) { this.drawDetail(ctx, dx); for (const b of this.detailBtns) b.draw(ctx, this.mgr.assets); }
+    const bg = this.mgr.image(this.bg);
+    if (bg) ctx.drawImage(bg, 0, 0);
+    this.body(ctx);
+    for (const b of this.buttons) if (!this.detailBtns.includes(b)) b.draw(ctx, this.mgr.assets);
+    ctx.restore();
   }
   body(ctx) {
     const m = this.mgr, book = this.g.quests;
@@ -1437,12 +1496,11 @@ class QuestWin extends Win {
       if (n) ctx.drawImage(n, ((210 - n.width) >> 1) - 2, ((309 - n.height) >> 1) + 50);
     }
     this.scrollbar(ctx, 229, 46, 324, this.first, rows.length, QROWS);
-    if (this.sel) this.drawDetail(ctx);
   }
-  drawDetail(ctx) {
+  drawDetail(ctx, dx) {
     if (this.laidOut !== this.mgr.namesVersion || (!this.laidStr && this.str)) { this.laidStr = !!this.str; this.layoutDetail(); }
-    const bg = this.mgr.image(this.bg2), book = this.g.quests, id = this.sel, m = this.mgr;
-    ctx.save(); ctx.translate(this.w, 0);
+    const bg = this.mgr.image(this.bg2), book = this.g.quests, id = this.did, m = this.mgr;
+    ctx.save(); ctx.translate(dx, 0);
     if (bg) ctx.drawImage(bg, 0, 0);
     ctx.font = `bold ${QFONT}px Arial, sans-serif`;
     const e = this.selEntry || this.entry(id);
@@ -1475,7 +1533,7 @@ class QuestWin extends Win {
       this.scrollbar(ctx, 285, QSUM.y, QSUM.h, this.sfirst, Math.ceil(this.sum.height / QDETAIL.line), Math.floor(QSUM.h / QDETAIL.line));
     }
     const t = this.g.questTimers?.get(id);
-    if (t && this.tab === 1) {
+    if (t && this.dtab === 1) {
       const left = Math.max(0, Math.round((t.end - performance.now()) / 1000));
       uiText(ctx, `Time Left ${Math.floor(left / 3600)}:${Math.floor(left / 60) % 60}:${left % 60}`, 17, 375, { color: '#ff2020', bold: true, size: QFONT });
     }
@@ -1488,35 +1546,37 @@ class QuestWin extends Win {
         this.tab = t; this.first = 0; this.sel = null; sfx.play('UI/Tab');
         const first = this.rows().find((r) => r.id && (t !== 0 || !this.tooLow(r.id)));
         const keep = t === 1 && this.lastProgress && this.rows().some((r) => r.id === this.lastProgress) ? this.lastProgress : first?.id;
-        if (keep) { this.select(keep); this.scrollTo(keep); }
+        if (keep) { this.select(keep); this.scrollTo(keep); } else this.showDetail(false);
       }
       return;
     }
     if (lx >= this.w) {
-      const sh = this.sum ? QDETAIL.hSum : QDETAIL.h;
-      let s = this.scrollClick(lx - this.w, ly, 285, QDETAIL.y, sh, this.dfirst, Math.ceil(this.lines.height / QDETAIL.line), Math.floor(sh / QDETAIL.line));
+      if (!this.dAlive) return;
+      const dl = lx - this.detailX(), sh = this.sum ? QDETAIL.hSum : QDETAIL.h;
+      let s = this.scrollClick(dl, ly, 285, QDETAIL.y, sh, this.dfirst, Math.ceil(this.lines.height / QDETAIL.line), Math.floor(sh / QDETAIL.line));
       if (s !== null) { this.dfirst = s; return; }
-      if (this.sum) { s = this.scrollClick(lx - this.w, ly, 285, QSUM.y, QSUM.h, this.sfirst, Math.ceil(this.sum.height / QDETAIL.line), Math.floor(QSUM.h / QDETAIL.line)); if (s !== null) this.sfirst = s; }
+      if (this.sum) { s = this.scrollClick(dl, ly, 285, QSUM.y, QSUM.h, this.sfirst, Math.ceil(this.sum.height / QDETAIL.line), Math.floor(QSUM.h / QDETAIL.line)); if (s !== null) this.sfirst = s; }
       return;
     }
     const rows = this.rows();
     const s = this.scrollClick(lx, ly, 229, 46, 324, this.first, rows.length, QROWS);
     if (s !== null) { this.first = s; return; }
     const i = this.rowAt(lx, ly), r = rows[i];
-    if (!r) { if (ly >= 40 && lx < 228) this.sel = null; return; }
+    if (!r) { if (ly >= 40 && lx < 228 && this.sel) { this.sel = null; this.showDetail(false); } return; }
     if (r.head !== undefined) {
       const f = this.folded[this.tab];
       if (f.has(r.head)) f.delete(r.head); else f.add(r.head);
       sfx.play('UI/BtMouseClick');
-    } else this.select(r.id);
+    } else if (r.id !== this.sel) this.select(r.id);
   }
   dblclick(lx, ly) {
     // the NPC's picture: find it
-    if (lx >= this.w + 198 && lx < this.w + 284 && ly >= 28 && ly < 122 && this.sel && this.tab !== 2) this.findNpc();
+    const dl = lx - this.detailX();
+    if (this.dAlive && lx >= this.w && dl >= 198 && dl < 284 && ly >= 28 && ly < 122 && this.sel && this.dtab !== 2) this.findNpc();
   }
   wheel(dy) {
     const lx = this.mgr.mouse.x - this.x, ly = this.mgr.mouse.y - this.y;
-    if (lx >= this.w && this.sel) {
+    if (lx >= this.w && this.dAlive) {
       const step = Math.sign(dy) * 2;
       if (this.sum && ly >= QSUM.y) this.sfirst = Math.max(0, Math.min(Math.ceil(this.sum.height / QDETAIL.line) - Math.floor(QSUM.h / QDETAIL.line), this.sfirst + step));
       else { const h = this.sum ? QDETAIL.hSum : QDETAIL.h; this.dfirst = Math.max(0, Math.min(Math.ceil(this.lines.height / QDETAIL.line) - Math.floor(h / QDETAIL.line), this.dfirst + step)); }
