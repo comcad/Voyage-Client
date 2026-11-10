@@ -651,8 +651,10 @@ export class ChannelSession {
       const ids = Array.from({ length: 6 }, () => r.int()), names = ids.map(() => fixed(r, 13));
       const jobs = ids.map(() => r.int()), levels = ids.map(() => r.int()), channels = ids.map(() => r.int());
       const leader = r.int(), maps = ids.map(() => r.int());
-      const members = ids.map((id, i) => ({ id, name: names[i], job: jobs[i], level: levels[i], channel: channels[i], map: maps[i] })).filter((m) => m.id);
-      return { leader, members };
+      // each slot's Mystic Door: its town, the field it was opened in, and where (16 bytes a slot)
+      const doors = r.available >= 96 ? ids.map(() => ({ town: r.int(), area: r.int(), x: r.int(), y: r.int() })) : null;
+      const members = ids.map((id, i) => ({ id, slot: i, name: names[i], job: jobs[i], level: levels[i], channel: channels[i], map: maps[i] })).filter((m) => m.id);
+      return { leader, members, slots: ids.map((id, i) => ({ id, name: names[i], map: maps[i] })), doors };
     };
     // ---- guilds: GUILD_OPERATION sub-ops (GuildPackets); messages are bare codes, 53-55 add a name
     on(S.GUILD_OPERATION, (r) => {
@@ -706,7 +708,8 @@ export class ChannelSession {
       } else if (op === 0x1B) { const leader = r.int(); this.emit('party', { kind: 'leader', leader, reason: r.available ? r.ubyte() : 0 }); }
       else if (op === 0x23) { if (r.available >= 12) this.emit('party', { kind: 'levelJob', id: r.int(), level: r.int(), job: r.int() }); }
       else if (op === 0x24) { const ok = r.available ? r.ubyte() : 0; this.emit('partyMessage', op, ok && r.available >= 2 ? r.string() : ''); }
-      else if (op === 0x25) { /* a member's Mystic Door */ }
+      // a member's Mystic Door: their slot, then its town, field and place
+      else if (op === 0x25) { const slot = r.ubyte(), town = r.int(), area = r.int(); this.emit('party', { kind: 'door', slot, door: { town, area, x: r.short(), y: r.short() } }); }
       else this.emit('partyMessage', op, r.available >= 2 ? r.string() : '');
     });
     on(S.UPDATE_PARTYMEMBER_HP, (r) => this.emit('partyHp', r.int(), r.int(), r.int()));

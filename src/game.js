@@ -3109,13 +3109,10 @@ export class Game {
         this.addDoor(d.owner, d.x, d.y, false, d.launched);
       }),
       doorRemove: later((owner) => this.doors?.delete(owner)),
-      townPortal: later((from, to, pos) => {
-        // a Mystic Door's record, pointing at its other end. Out in the field (to = this map's town) SPAWN_DOOR
-        // draws the door; in town the door stands on the town's door portal (type 6) - the first one for you alone
-        if (from === 999999999 || !pos) { for (const [k, d] of this.doors || []) if (d.town) this.doors.delete(k); return; }
-        if (from !== this.map?.id || to === this.map.info?.returnMap) return;
-        const tp = this.map.portals.find((q) => q.pt === 6);
-        if (tp) this.addDoor('town', tp.x, tp.y, true, true, to);
+      // your own Mystic Door's record (out of a party): its town and the field it opens on, then the town doors again
+      townPortal: later((town, area, pos) => {
+        this.ownDoor = town === 999999999 || area === 999999999 ? null : { town, area, x: pos?.x ?? 0, y: pos?.y ?? 0 };
+        this.refreshTownDoors(true);
       }),
       showChair: later((id, itemId) => { const rp = this.others.get(id); if (rp) rp.chair = itemId; if (itemId) this.chairArt(itemId); }),
       cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
@@ -3953,8 +3950,12 @@ export class Game {
       if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
+      // a spawn portal with 0x80 set is a Mystic Door's slot: in town its door portal, elsewhere where the door was opened
+      const door = !pos && portalIdx !== null && portalIdx & 0x80 ? this.doorLanding(map, portalIdx & 0x7f) : null;
       if (pos) this.placeAt(pos.x, pos.y);
-      else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
+      else if (door) this.placeAt(door.x, door.y);
+      else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx & 0x7f) : map.spawnPortal(portal));
+      this.refreshTownDoors(false);
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
       if (this.guideSkill) this.guide = new Guide(this, this.guideSkill, this.guide);   // the guide comes along to every map
       this.snapCamera();
@@ -5497,7 +5498,14 @@ export class Game {
     } else if (p.kind === 'levelJob') {
       const m = this.party?.members.find((x) => x.id === p.id);
       if (m) Object.assign(m, { level: p.level, job: p.job });
+    } else if (p.kind === 'door' && this.party?.doors && p.slot < 6) {
+      this.party.doors[p.slot] = p.door;
+      this.refreshTownDoors(true);
+      return;
     }
+    // the party block carries each slot's id, name, map and Mystic Door
+    if (this.party && p.slots) { this.party.slots = p.slots; this.party.doors = p.doors || this.party.doors || null; }
+    if (['update', 'join', 'leave', 'expel', 'disband', 'created'].includes(p.kind)) this.refreshTownDoors(false);
     this.windows.wins.partyhp?.sync();
     this.windows.wins.partysearch?.partyChanged();
   }
@@ -7358,17 +7366,67 @@ export class Game {
     const d = { owner: key === 'town' ? this.player.id : key, x, y, town, to, readyAt: performance.now() + (launched ? 0 : 3000), anim: null };
     this.doors.set(key, d);
     const sk = await this.skills?.ensure(2311002);
-    const node = sk?.[town ? 'cDoor' : 'mDoor'];
+    // a field door just opened plays cDoor once, then pulses as mDoor
+    const open = !launched && sk?.cDoor, node = sk?.mDoor;
     if (!node) return;
-    const anim = new Anim(node, !town);
-    if (town) anim.holdLast = true;
-    await this.assets.preload(anim.frames);
-    d.anim = anim;
+    const loop = new Anim(node, true), first = open ? new Anim(sk.cDoor, false) : null;
+    await this.assets.preload([...loop.frames, ...(first?.frames || [])]);
+    d.anim = first || loop; d.next = first ? loop : null;
+  }
+  /** The record of a party slot's (or, alone, your own) Mystic Door, when its town and field are real. */
+  doorRecord(slot) {
+    const bad = (v) => !v || v === 999999999;
+    const rec = this.party ? (this.party.slots?.[slot]?.id ? this.party.doors?.[slot] : null) : slot === 0 ? this.ownDoor : null;
+    return rec && !bad(rec.town) && !bad(rec.area) ? rec : null;
+  }
+  /** Entering by a Mystic Door's slot: in a town its door portal (type 6, in load order), elsewhere the door's place. */
+  doorLanding(map, slot) {
+    const rec = slot < 6 && this.doorRecord(slot);
+    if (!rec) return null;
+    if (!Number(map.info?.town)) return { x: rec.x, y: rec.y };
+    const pts = map.portals.filter((q) => q.pt === 6);
+    return pts[slot] || map.portals[Math.floor(Math.random() * map.portals.length)] || null;
+  }
+  /**
+   * The town ends of Mystic Doors, on this map's door portals (type 6, in load order): alone, yours on the first
+   * when it leads here; in a party, member i's on the i-th when their door's town is this map (and they are on a map),
+   * with their name 136px above it. Each is the pulsing mDoor over its Frame, set on the floor under it. A door no
+   * longer wanted fades out over a second when a door packet took it away, else goes at once.
+   */
+  async refreshTownDoors(fade) {
+    if (!this.map) return;
+    this.doors ??= new Map();
+    const pts = this.map.portals.filter((q) => q.pt === 6), want = new Map(), here = this.map.id;
+    if (pts.length) {
+      if (!this.party) {
+        if (this.ownDoor && this.ownDoor.town === here) want.set('tdoor0', { slot: 0, owner: this.player.id, name: null });
+      } else {
+        for (let i = 0; i < 6; i++) {
+          const s = this.party.slots?.[i], d = this.party.doors?.[i];
+          if (s?.id && s.map !== 999999999 && d?.town === here) want.set(`tdoor${i}`, { slot: i, owner: s.id, name: s.name });
+        }
+      }
+    }
+    for (const [k, d] of this.doors) {
+      if (!d.town || want.has(k)) continue;
+      if (fade) { d.fadeFrom = performance.now(); d.fadeKey = k; } else this.doors.delete(k);
+    }
+    const sk = want.size ? await this.skills?.ensure(2311002) : null;
+    for (const [k, w] of want) {
+      const old = this.doors.get(k);
+      if (old && old.owner === w.owner && !old.fadeFrom) continue;
+      const p = pts[w.slot] || this.map.portals[Math.floor(Math.random() * this.map.portals.length)];
+      if (!p || !sk?.mDoor) continue;
+      const fh = this.map.fh.below(p.x, p.y - 5, Infinity), y = fh ? Footholds.yAt(fh, p.x) : p.y;
+      const anim = new Anim(sk.mDoor, true), frame = sk.Frame || null;
+      await this.assets.preload([...anim.frames, ...(frame ? [frame] : [])]);
+      this.doors.set(k, { owner: w.owner, x: p.x, y, town: true, name: w.name, frame, anim, readyAt: 0 });
+    }
   }
   /** Up within 20px across and 50px up or down of a door takes you through it (to town, or back out). */
   useDoorAt(p) {
     for (const d of this.doors?.values() || []) {
-      if (Math.abs(p.x - d.x) >= 20 || Math.abs(p.y - d.y) >= 50) continue;
+      if (d.fadeFrom || Math.abs(p.x - d.x) >= 20 || Math.abs(p.y - d.y) >= 50) continue;
       if (performance.now() < d.readyAt) return true;
       this.net?.useDoor(d.owner, d.town);
       return true;
@@ -7376,12 +7434,16 @@ export class Game {
     return false;
   }
   drawDoors(ctx, cam) {
+    const at = (n, d) => { const img = n && this.assets.image(n), o = n?.origin || [0, 0]; if (img) ctx.drawImage(img, Math.round(d.x - o[0] - cam.x), Math.round(d.y - o[1] - cam.y)); };
     for (const d of this.doors?.values() || []) {
-      const n = d.anim?.node, img = n && this.assets.image(n);
-      if (!img) continue;
-      const o = n.origin || [0, 0];
-      ctx.save(); ctx.globalAlpha *= d.anim.alpha;
-      ctx.drawImage(img, Math.round(d.x - o[0] - cam.x), Math.round(d.y - o[1] - cam.y));
+      if (!d.anim?.node) continue;
+      ctx.save();
+      // a town door being taken away fades over a second
+      if (d.fadeFrom) ctx.globalAlpha *= Math.max(0, 1 - (performance.now() - d.fadeFrom) / 1000);
+      if (d.frame) at(d.frame, d);   // a town door's frame, just behind it
+      ctx.save(); ctx.globalAlpha *= d.anim.alpha; at(d.anim.node, d); ctx.restore();
+      // a party member's door has their name over it (its box's fill and colour were lost: drawn as a name tag)
+      if (d.name) nameTag(ctx, d.name, Math.round(d.x - cam.x), Math.round(d.y - 136 - cam.y));
       ctx.restore();
     }
   }
@@ -8530,7 +8592,11 @@ export class Game {
 
   updateFx(dt) {
     for (const f of this.fx) f.anim.update(dt * 1000 / (f.rate || 1));   // rate: an attack's effect runs at its speed
-    for (const d of this.doors?.values() || []) d.anim?.update(dt * 1000);
+    for (const [k, d] of this.doors || []) {
+      d.anim?.update(dt * 1000);
+      if (d.next && d.anim?.done) { d.anim = d.next; d.next = null; }
+      if (d.fadeFrom && performance.now() - d.fadeFrom >= 1000) this.doors.delete(k);
+    }
     for (const m of this.mists?.values() || []) for (const t of m.tiles) t.anim.update(dt * 1000);
     this.fx = this.fx.filter((f) => !f.anim.done && (!f.keep || f.keep()));
     for (const s of this.shots) {
