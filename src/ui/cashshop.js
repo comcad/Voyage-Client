@@ -649,11 +649,15 @@ export class CashShopWin extends Win {
       return;
     }
   }
-  /** Come in from a wish list's PRESENT: that gift is asked for once the cash and the catalogue are both in. */
+  /**
+   * Come in from a wish list's PRESENT: the shop turns to the item's tab, sub-category and page (the client also puts
+   * the mouse on it; here it is selected), and that gift is asked for once the cash and the catalogue are both in.
+   */
   maybeWishGift() {
     const w = this.g.wishGift;
     if (!w || !this.cashKnown || !this.bySN) return;
     this.g.wishGift = null;
+    this.jumpTo(w.sn);
     this.giftWish(w.sn, w.name);
   }
   /**
