@@ -3315,7 +3315,7 @@ export class Game {
       })),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
-      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.block); }),
+      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.index, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
       moveMob: later((oid, start, moves, act, skill, level) => {
         const e = this.lifeByOid.get(oid);
@@ -5900,7 +5900,8 @@ export class Game {
       }
       const skill = this.pressedSkill();
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
-      if (this.holdAction(ACTION.ATTACK)) { if (!this.fieldMode?.attack?.()) this.attack(0); return; }   // an event field swings its own way
+      // an event field swings its own way; then a reactor in reach takes the swing; else the usual attack
+      if (this.holdAction(ACTION.ATTACK)) { if (!this.fieldMode?.attack?.() && !this.reactorAttack()) this.attack(0); return; }
     }
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
@@ -6273,7 +6274,9 @@ export class Game {
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
-    return this.attack(id, kind);
+    const used = this.attack(id, kind);
+    if (used && this.net) this.skillReactors(id);   // a cast can set off reactors waiting for that skill
+    return used;
   }
 
   /** On the Battleship (a vehicle mount that isn't a skill vehicle). */
@@ -6425,7 +6428,6 @@ export class Game {
       targets = first ? [first, ...this.mobsIn(this.skillBox(p, skillId, lv), p.x, p.y, first).slice(0, mobCount - 1)] : [];
     }
     const looks = skillId === BAND_OF_THIEVES ? this.thiefLooks(skillId, targets.length) : [];
-    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
     // Snipe's shot strikes for 199,999 less up to 10,000
     const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
@@ -8263,8 +8265,10 @@ export class Game {
    * monster or reactor, sent as a close-range attack that hit nothing, with where you stand. Returns the first of
    * `rects` the swing's afterimage box reaches (-1 for none: a swing with no afterimage box reaches nothing) and when
    * the blow lands (ms), or null when you couldn't swing.
+   * needHit (reactors): only swings when one of them is in reach, and takes the first that is in front of you (else
+   * the last in reach).
    */
-  fieldAttack(rects) {
+  fieldAttack(rects, needHit = false) {
     const p = this.player;
     if (this.dead || p.ladder) return null;
     const mt = this.morphTpl();
@@ -8279,17 +8283,27 @@ export class Game {
     }
     const prone = !!p.fh && this.input.is('down') && this.look.has('proneStab');
     const pose = prone ? 'proneStab' : this.look.attackAction();
-    p.attack = pose; p.frame = 0; p.frameT = 0; p.action = pose;
-    const scale = p.attackScale = this.attackScale(this.attackSpeed(0)), trailAt = this.hitFrame(pose, 'melee');
-    this.after(this.frameTime(pose, trailAt) * scale, () => { this.playAfterimage(pose, trailAt, 0); this.playWeaponSound(p); });
     let hit = -1;
     const s = this.afterimage?.[this.afterimageLevel()]?.[pose];
     if (s?.lt && s?.rb) {
       const [x1, x2] = p.facingRight ? [p.x - s.rb[0], p.x - s.lt[0]] : [p.x + s.lt[0], p.x + s.rb[0]];
       const top = p.y + s.lt[1], bottom = p.y + s.rb[1];
-      hit = rects.findIndex((r) => r.left < r.right && r.top < r.bottom
-        && Math.max(r.left, x1) < Math.min(r.right, x2) && Math.max(r.top, top) < Math.min(r.bottom, bottom));
+      const reaches = (r) => r && r.left < r.right && r.top < r.bottom
+        && Math.max(r.left, x1) < Math.min(r.right, x2) && Math.max(r.top, top) < Math.min(r.bottom, bottom);
+      if (!needHit) hit = rects.findIndex(reaches);
+      else {
+        for (let i = 0; i < rects.length; i++) {
+          if (!reaches(rects[i])) continue;
+          hit = i;
+          // "in front", as the client works it out: the box's middle (negated facing left) against your x
+          if (Math.trunc((rects[i].left + rects[i].right) / 2) * (p.facingRight ? 1 : -1) - Math.round(p.x) >= 0) break;
+        }
+      }
     }
+    if (needHit && hit < 0) return null;
+    p.attack = pose; p.frame = 0; p.frameT = 0; p.action = pose;
+    const scale = p.attackScale = this.attackScale(this.attackSpeed(0)), trailAt = this.hitFrame(pose, 'melee');
+    this.after(this.frameTime(pose, trailAt) * scale, () => { this.playAfterimage(pose, trailAt, 0); this.playWeaponSound(p); });
     this.net?.attack('melee', { targets: [], lines: 1, stance: this.actionId(pose), facingLeft: !p.facingRight, speed: this.attackSpeed(0), at: p });
     return { hit, delay: Math.round(this.look.attackDelay(pose) * scale) };
   }
@@ -8313,32 +8327,65 @@ export class Game {
   // ------------------------------------------------------------------ reactors
   async spawnReactor(d) {
     (this.reactors ??= new Map());
-    const map = this.map, img = await loadReactorImg(this.assets, d.id);
-    if (!img || this.map !== map) return;
-    const r = new Reactor(d, img, map);
+    const map = this.map, loaded = await loadReactorImg(this.assets, d.id);
+    if (!loaded || this.map !== map) return;
+    const r = new Reactor(d, loaded.img, loaded.info, map);
     r.volumeAt = (x, y) => this.volumeAt(x, y);
     await this.assets.preload(r.frames());
     if (this.map === map) this.reactors.set(d.oid, r);
   }
-  /** Reactors an attack's box reaches when it lands: each gets one hit, whatever the number of damage lines. */
-  hitReactors(kind, skillId, lv, action) {
+  /** The stance a reactor hit carries: on a floor (2), facing left (1). */
+  reactorStance() { const p = this.player; return (p.fh ? 2 : 0) | (p.facingRight ? 0 : 1); }
+  /**
+   * The attack key with a reactor in reach: the plain swing goes at the reactors that can be hit (their current
+   * frame's box) and only at them - no monster is struck that time. The one it takes (DAMAGE_REACTOR: no skill, your
+   * stance, when the swing lands) starts its hit here when the swing lands; one that needs a quest you aren't on takes
+   * nothing. False when none is in reach, for the usual attack.
+   */
+  reactorAttack() {
+    if (!this.net || !this.reactors?.size) return false;
+    const list = [...this.reactors.values()].filter((r) => r.hittable && r.box());
+    if (!list.length) return false;
+    const res = this.fieldAttack(list.map((r) => r.box()), true);
+    if (!res) return false;
+    const r = list[res.hit];
+    if (r.quest && this.quests?.status(r.quest) !== 1) return true;
+    const stance = this.reactorStance();
+    r.struck(stance, res.delay);
+    this.net.damageReactor(r.oid, 0, stance, res.delay, 0);
+    return true;
+  }
+  /**
+   * After a skill: each idle reactor with an event of type 5 for that skill whose box (lt / rb from it) holds you is
+   * set off (DAMAGE_REACTOR with the skill, its hit 800ms on).
+   */
+  skillReactors(skillId) {
     if (!this.reactors?.size) return;
-    const p = this.player, b = this.attackBox(kind, skillId, lv, action);
-    const stance = (p.facingRight ? 1 : 0) + (p.fh ? 2 : 0);
+    const p = this.player, x = Math.round(p.x), y = Math.round(p.y), now = performance.now(), stance = this.reactorStance();
     for (const r of this.reactors.values()) {
-      const box = r.hittable && r.box();
-      if (!box || box.right < b.x1 || box.left > b.x2 || box.bottom < b.top || box.top > b.bottom) continue;
-      this.net.damageReactor(r.oid, (Math.round(p.x) << 16) | (Math.round(p.y) & 0xffff), stance, skillId || 0);
+      if (r.phase !== 0 || now < r.noHitUntil) continue;
+      r.events(r.cur).some((e, i) => {
+        if (Number(e?.type) !== 5 || !Object.values(e.activeSkillID || {}).map(Number).includes(skillId)) return false;
+        const lt = e.lt || [0, 0], rb = e.rb || [0, 0];
+        if (!(x >= r.x + lt[0] && x < r.x + rb[0] && y >= r.y + lt[1] && y < r.y + rb[1])) return false;
+        r.skillStruck(stance, i);
+        this.net.damageReactor(r.oid, 1, stance, 800, skillId);
+        return true;
+      });
     }
   }
-  /** Touch reactors hear when you walk onto them and off them again. */
+  /** Touch reactors hear when your feet go into their current frame and out again, checked once a second. */
   touchReactors() {
     if (!this.reactors?.size) return;
-    const pb = this.playerBody();
+    const now = performance.now();
+    if (now - (this.touchCheckAt || 0) <= 999) return;
+    this.touchCheckAt = now;
+    const p = this.player, x = Math.round(p.x), y = Math.round(p.y);
     for (const r of this.reactors.values()) {
-      if (!r.touch || r.gone) continue;
-      const box = r.box();
-      const inside = !!box && box.right >= pb.left && box.left <= pb.right && box.bottom >= pb.top && box.top <= pb.bottom;
+      if (!r.touch) continue;
+      const b = r.box();
+      if (!b || b.right <= b.left || b.bottom <= b.top) continue;
+      const inside = x >= b.left && x < b.right && y >= b.top && y < b.bottom;
       if (inside !== r.touching) { r.touching = inside; this.net.touchReactor(r.oid, inside); }
     }
   }

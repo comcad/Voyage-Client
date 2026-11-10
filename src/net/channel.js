@@ -1455,14 +1455,18 @@ export class ChannelSession {
       this.emit('drop', d);
     });
     // reactors: spawn (oid, id, state, position, facing), hit (oid, new state, position, stance), destroy (oid, state)
-    on(S.REACTOR_SPAWN, (r) => { const oid = r.int(), id = r.int(), state = r.byte(), pos = r.pos2(); this.emit('reactorSpawn', { oid, id, state, x: pos.x, y: pos.y }); });
+    // a reactor: its object and reactor ids, state, place, whether it is mirrored and its name
+    on(S.REACTOR_SPAWN, (r) => {
+      const oid = r.int(), id = r.int(), state = r.byte(), pos = r.pos2(), flip = r.available ? r.bool() : false, name = r.available >= 2 ? r.string() : '';
+      this.emit('reactorSpawn', { oid, id, state, x: pos.x, y: pos.y, flip, name });
+    });
     // a hit: its new state, where it is, ms before the hit shows, the hit's index, then tenths of a second it can't be hit
     on(S.REACTOR_HIT, (r) => {
       const oid = r.int(), state = r.byte(), pos = r.pos2();
       const delay = r.available >= 2 ? r.ushort() : 0, index = r.available ? r.byte() : 0, block = r.available ? r.byte() : 0;
       this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, delay, index, block });
     });
-    on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(); this.emit('reactorDestroy', { oid, state }); });
+    on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(), pos = r.available >= 4 ? r.pos2() : null; this.emit('reactorDestroy', { oid, state, ...pos }); });
     on(S.REMOVE_ITEM_FROM_MAP, (r) => {
       const anim = r.ubyte(), oid = r.int();
       if (anim === 4) { this.emit('removeDrop', oid, 4, 0, -1, r.short()); return; }   // 4: blown up by Meso Explosion, after a delay
@@ -1748,9 +1752,12 @@ export class ChannelSession {
     this.send(w);
   }
 
-  /** DAMAGE_REACTOR: an attack reached it. stance: 0/1 in the air facing left/right, 2/3 on the ground. */
-  damageReactor(oid, charPos, stance, skill = 0) {
-    this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(charPos).short(stance).int(0).int(skill));
+  /**
+   * DAMAGE_REACTOR: a swing reached it (skill flag 0, skill 0) or a skill set it off (flag 1, the skill), with your
+   * stance (2 on a floor, 1 facing left) and when it shows (ms).
+   */
+  damageReactor(oid, bySkill, stance, delay, skill = 0) {
+    this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(bySkill).int(stance).short(delay).int(skill));
   }
   /** TOUCHING_REACTOR: walked onto (true) or off (false) a reactor set off by touch. */
   touchReactor(oid, touching) { this.send(new PacketWriter(C.TOUCHING_REACTOR).int(oid).byte(touching ? 1 : 0)); }
