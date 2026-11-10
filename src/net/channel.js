@@ -26,6 +26,22 @@ function readCommodityMod(r) {
 
 /** Guild emblem: background, its colour, mark, its colour. */
 const readEmblem = (r) => ({ bg: r.short(), bgColor: r.ubyte(), logo: r.short(), logoColor: r.ubyte() });
+const readGuildMember = (r) => ({ name: r.paddedString(13), job: r.int(), level: r.int(), rank: r.int(), online: r.int() === 1 });
+/** A guild's record as GUILD_OPERATION 0x1A and the alliance packets carry it; a member's last field is their alliance rank. */
+function readGuild(r) {
+  const g = { id: r.int(), name: r.string(), ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] };
+  const ids = []; for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
+  g.members = ids.map((id) => { const m = { id, ...readGuildMember(r) }; r.int(); m.allianceRank = r.int(); return m; });
+  g.capacity = r.int(); g.emblem = readEmblem(r); g.notice = r.string(); g.gp = r.int(); g.alliance = r.int();
+  return g;
+}
+/** A guild alliance's record: id, name, its five rank titles, its guilds' ids, capacity and notice. */
+function readAlliance(r) {
+  const a = { id: r.int(), name: r.string(), ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] };
+  a.guildIds = []; for (let n = r.ubyte(); n > 0; n--) a.guildIds.push(r.int());
+  a.capacity = r.int(); a.notice = r.string();
+  return a;
+}
 
 /** A pet: item id, name, cash SN, position, stance, foothold, Label Ring and Quote Ring on */
 function readPet(r) {
@@ -634,18 +650,17 @@ export class ChannelSession {
     // ---- guilds: GUILD_OPERATION sub-ops (GuildPackets); messages are bare codes, 53-55 add a name
     on(S.GUILD_OPERATION, (r) => {
       const op = r.ubyte(), e = (kind, d = {}) => this.emit('guild', { kind, ...d });
-      const member = () => ({ name: r.paddedString(13), job: r.int(), level: r.int(), rank: r.int(), online: r.int() === 1 });
+      const member = () => readGuildMember(r);
       if (op === 0x01) e('askName');
       else if (op === 0x03) { r.int(); e('agreement', { master: r.string(), name: r.string() }); }
       else if (op === 0x05) e('invite', { id: r.int(), from: r.string() });
       else if (op === 0x1A) {
-        if (!r.ubyte()) { e('info', { guild: null }); return; }
-        const g = { id: r.int(), name: r.string(), ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] };
-        const ids = []; for (let n = r.ubyte(); n > 0; n--) ids.push(r.int());
-        g.members = ids.map((id) => { const m = { id, ...member() }; r.int(); r.int(); return m; });
-        g.capacity = r.int(); g.emblem = readEmblem(r); g.notice = r.string(); g.gp = r.int(); g.alliance = r.int();
-        e('info', { guild: g });
-      } else if (op === 0x27) { const gid = r.int(), id = r.int(); e('join', { gid, member: { id, ...member() } }); }
+        e('info', { guild: r.ubyte() ? readGuild(r) : null });
+      } else if (op === 0x27) {
+        const gid = r.int(), id = r.int(), m = { id, ...member() };
+        if (r.available >= 8) { r.int(); m.allianceRank = r.int(); }
+        e('join', { gid, member: m });
+      }
       else if (op === 0x2C || op === 0x2F) e(op === 0x2F ? 'expel' : 'leave', { gid: r.int(), id: r.int(), name: r.string() });
       else if (op === 0x32) e('disband', { gid: r.int() });
       else if (op === 0x3A) e('capacity', { gid: r.int(), capacity: r.ubyte() });
@@ -657,7 +672,13 @@ export class ChannelSession {
       else if (op === 0x44) { r.int(); e('notice', { notice: r.string() }); }
       else if (op === 0x48) { r.int(); e('gp', { gp: r.int() }); }
       else if (op === 0x11) e('makeMark');
-      else if (op === 0x49) return;                                                   // rank board
+      else if (op === 0x49) {
+        // the ranking board: the NPC's id, then each guild's name, GP and emblem (logo, its colour, background, its colour)
+        r.int();
+        const list = [];
+        for (let n = r.int(); n > 0; n--) list.push({ name: r.string(), gp: r.int(), emblem: { logo: r.int(), logoColor: r.int(), bg: r.int(), bgColor: r.int() } });
+        e('board', { list });
+      }
       // the Guild Quest queue: channel, then place (an int; some servers send a byte)
       else if (op === 0x4C) { const channel = r.ubyte(); e('gpqQueue', { channel, pos: r.available >= 4 ? r.int() : r.ubyte() }); }
       else if (op === 0x4E) { const ok = r.ubyte(); e('message', { code: op, ok, text: r.available >= 2 ? r.string() : '' }); }
@@ -738,12 +759,15 @@ export class ChannelSession {
     // 5 it was declined (name), 6 a line of chat ("name : text"), 7 someone's look changed
     on(S.MESSENGER, (r) => {
       const op = r.ubyte();
-      if (op === 0 || op === 7) { const pos = r.ubyte(), look = readCharLook(r); this.emit('messenger', { op: op === 0 ? 'add' : 'update', pos, look, name: r.string(), channel: r.ubyte() }); }
-      else if (op === 1) this.emit('messenger', { op: 'join', pos: r.ubyte() });
+      if (op === 0 || op === 7) {
+        const pos = r.ubyte(), look = readCharLook(r), name = r.string(), channel = r.ubyte();
+        this.emit('messenger', { op: op === 0 ? 'add' : 'update', pos, look, name, channel, announce: op === 0 && r.ubyte() !== 0 });
+      }
+      else if (op === 1) { const pos = r.ubyte(); this.emit('messenger', { op: 'join', pos: pos > 127 ? pos - 256 : pos }); }
       else if (op === 2) this.emit('messenger', { op: 'remove', pos: r.ubyte() });
       else if (op === 3) { const from = r.string(); r.ubyte(); this.emit('messenger', { op: 'invite', from, id: r.int() }); }
       else if (op === 4) { const name = r.string(); this.emit('messenger', { op: 'invited', name, ok: r.ubyte() === 1 }); }
-      else if (op === 5) this.emit('messenger', { op: 'declined', name: r.string() });
+      else if (op === 5) { const name = r.string(); this.emit('messenger', { op: 'declined', name, mode: r.ubyte() }); }
       else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
     });
     // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
@@ -806,6 +830,17 @@ export class ChannelSession {
       i.medal = r.int();
       i.medalQuests = Array.from({ length: r.short() }, () => r.short());
       this.emit('charInfo', i);
+    });
+    // Report: whether it is open (sent at login), the hours it is open (0 and 0: always), the answer to one
+    on(S.CLAIM_STATUS_CHANGED, (r) => this.emit('claimStatus', r.ubyte() !== 0));
+    on(S.CLAIM_AVAILABLE_TIME, (r) => { const from = r.ubyte(); this.emit('claimHours', from, r.ubyte()); });
+    on(S.SUE_CHARACTER_RESULT, (r) => this.emit('sueResult', r.ubyte()));
+    // CLAIM_RESULT: a code; 2 (made) also carries whether you may report again today and the reports left this week
+    on(S.CLAIM_RESULT, (r) => {
+      const code = r.ubyte();
+      if (code !== 2) { this.emit('claimResult', code); return; }
+      const again = r.ubyte() !== 0;
+      this.emit('claimResult', code, again, r.int());
     });
     // MULTICHAT mode: 0 buddy, 1 party, 2 guild, 3 alliance
     on(S.MULTICHAT, (r) => this.emit('groupChat', { mode: r.ubyte(), name: r.string(), text: r.string() }));
@@ -1253,11 +1288,28 @@ export class ChannelSession {
     // a catch item that didn't work: 0 the monster is too strong, 1 used again too soon; then the item
     // a notice the server sends before it cuts you off (an autoban, a GM's ban): its text in a dialog, unless empty
     on(S.DATA_CRC_CHECK_FAILED, (r) => { const text = r.string(); if (text) this.emit('police', text); });
-    // guild alliances: mode 3 an invitation (the alliance's id, who sent it, their guild's name)
+    // guild alliances: 3 an invitation (the alliance's id, who sent it, their guild's name); the rest keep the
+    // alliance and its other guilds' records (0x0C the alliance, 0x0D guilds, 0x0F both, 0x10 a guild gone, 0x12 one
+    // joined, 0x17 the alliance again, 0x1E one guild again) or change one thing in them
     on(S.ALLIANCE_OPERATION, (r) => {
-      if (r.ubyte() !== 3) return;
-      const id = r.int(), from = r.string(), guildName = r.available >= 2 ? r.string() : '';
-      this.emit('allianceInvite', id, from, guildName);
+      const op = r.ubyte(), e = (kind, d = {}) => this.emit('alliance', { kind, ...d });
+      if (op === 0x03) {
+        const id = r.int(), from = r.string(), guildName = r.available >= 2 ? r.string() : '';
+        this.emit('allianceInvite', id, from, guildName);
+      } else if (op === 0x0C) e('info', { alliance: r.ubyte() ? readAlliance(r) : null });
+      else if (op === 0x0D) { const guilds = []; for (let n = r.int(); n > 0; n--) guilds.push(readGuild(r)); e('guilds', { guilds }); }
+      else if (op === 0x0E) e('online', { aid: r.int(), gid: r.int(), id: r.int(), online: r.ubyte() !== 0 });
+      else if (op === 0x0F) { const alliance = readAlliance(r); e('full', { alliance, guilds: alliance.guildIds.map(() => readGuild(r)) }); }
+      else if (op === 0x10) { const alliance = readAlliance(r), gid = r.int(), guild = readGuild(r); e('removed', { alliance, gid, guild, expelled: r.ubyte() !== 0 }); }
+      else if (op === 0x12) { const alliance = readAlliance(r), gid = r.int(); e('added', { alliance, gid, guild: readGuild(r) }); }
+      else if (op === 0x17) e('update', { alliance: readAlliance(r) });
+      else if (op === 0x18) e('levelJob', { aid: r.int(), gid: r.int(), id: r.int(), level: r.int(), job: r.int() });
+      else if (op === 0x19) e('leader', { aid: r.int(), from: r.int(), to: r.int() });
+      else if (op === 0x1A) { const aid = r.int(); e('titles', { aid, ranks: [r.string(), r.string(), r.string(), r.string(), r.string()] }); }
+      else if (op === 0x1B) e('rank', { id: r.int(), rank: r.ubyte() });
+      else if (op === 0x1C) e('notice', { aid: r.int(), notice: r.string() });
+      else if (op === 0x1D) e('disband', { aid: r.int() });
+      else if (op === 0x1E) { const aid = r.int(), gid = r.int(); e('guild', { aid, gid, guild: readGuild(r) }); }
     });
     on(S.BRIDLE_MOB_CATCH_FAIL, (r) => { const type = r.ubyte(); this.emit('catchFail', type, r.int()); });
     on(S.SHOW_MONSTER_HP, (r) => this.emit('mobHp', r.int(), r.ubyte()));
@@ -1646,6 +1698,12 @@ export class ChannelSession {
     for (const id of recipients) w.int(id);
     this.send(w.string(text));
   }
+  /** REPORT: 0 an illegal program, 1 a conversation (with its chat lines); the name, the reason and the description. */
+  report(type, name, reason, text, chatLog = '') {
+    const w = new PacketWriter(C.REPORT).byte(type).string(name).byte(reason).string(text);
+    if (type) w.string(chatLog);
+    this.send(w);
+  }
   whisper(name, text) { this.send(new PacketWriter(C.WHISPER).byte(0x06).string(name).string(text)); }
   /** A whisper not taken (whispers off in the Game Option, or a Blacklisted sender): 0x22 and their name. */
   whisperBlock(name) { this.send(new PacketWriter(C.WHISPER).byte(0x22).string(name)); }
@@ -1881,6 +1939,14 @@ export class ChannelSession {
   guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
   /** ALLIANCE_OPERATION 4: take a guild alliance's invitation (its id, and the inviter's guild name). */
   allianceAccept(id, guildName = '') { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(4).int(id).string(guildName)); }
+  /**
+   * ALLIANCE_OPERATION from the Alliance tab: 1 ask for the alliance again, 2 leave, 3 invite a guild (its name),
+   * 0x0A the notice. allianceExpel 6 (guild, alliance), allianceLeader 7 (the new leader), allianceRank 9 (who, 1 up / 0 down).
+   */
+  allianceOp(mode, text = null) { const w = new PacketWriter(C.ALLIANCE_OPERATION).byte(mode); if (text !== null) w.string(text); this.send(w); }
+  allianceExpel(gid, aid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(6).int(gid).int(aid)); }
+  allianceLeader(cid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(7).int(cid)); }
+  allianceRank(cid, up) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(9).int(cid).byte(up ? 1 : 0)); }
   /** DENY_ALLIANCE_REQUEST 0x16: turn a guild alliance's invitation down (the inviter, your guild's name). */
   allianceDeny(from, guildName = '') { this.send(new PacketWriter(C.DENY_ALLIANCE_REQUEST).byte(0x16).string(from).string(guildName)); }
   /** DENY_GUILD_REQUEST: 0x37 refused, 0x36 busy with another invitation, 0x35 not taking invitations. */
@@ -1919,6 +1985,12 @@ export class ChannelSession {
   coupon(code) { this.send(new PacketWriter(C.COUPON_CODE).string('').string(code)); }
   /** A gift: paid from NX Prepaid, confirmed with the account's birthday (YYYYMMDD) */
   csGift(birthday, sn, to, message) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(4).int(birthday).int(sn).string(to).string(message)); }
+  /** A gift from someone's wish list: mode 4, or 0x1D / 0x23 for rings (with the paying wallet, 4 NX Prepaid) and 0x1F for packages. */
+  csWishGift(mode, birthday, sn, to, message) {
+    const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(mode).int(birthday);
+    if (mode !== 4 && mode !== 0x1F) w.int(4);
+    this.send(w.int(sn).string(to).string(message));
+  }
   /** A name change / world transfer asks first whether it may go ahead: character id, birthday */
   nameTransfer(cid, birthday) { this.send(new PacketWriter(C.NAME_TRANSFER).int(cid).int(birthday)); }
   worldTransfer(cid, birthday) { this.send(new PacketWriter(C.WORLD_TRANSFER).int(cid).int(birthday)); }
@@ -1929,8 +2001,19 @@ export class ChannelSession {
   csBuyRing(op, birthday, wallet, sn, to, message) {
     this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(op).int(birthday).int(wallet).int(sn).string(to).string(message));
   }
-  /** NOTE_ACTION 1: discard read notes (count, then each id with a 0 fame byte) */
-  discardNotes(ids) { const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(ids.length).byte(0).byte(0); for (const id of ids) w.int(id).byte(0); this.send(w); }
+  /**
+   * NOTE_ACTION 1: the notes discarded: how many, how many are type 3, your free Etc slots, then each id with its type
+   * (a type 3 one, while slots last, adds the number before its text's "_").
+   */
+  discardNotes(notes, freeEtc = 0) {
+    const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(notes.length).byte(notes.filter((n) => n.fame === 3).length).byte(freeEtc);
+    let slots = freeEtc;
+    for (const n of notes) {
+      w.int(n.id).byte(n.fame);
+      if (n.fame === 3 && slots > 0) { w.int(parseInt(String(n.text).split('_')[0], 10) || 0); slots--; }
+    }
+    this.send(w);
+  }
   csWish(sns) { const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(5); for (let i = 0; i < 10; i++) w.int(sns[i] || 0); this.send(w); }
   csTake(cashId, type, slot) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0D).long(cashId).byte(type).short(slot)); }
   csPut(cashId, type) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x0E).long(cashId).byte(type)); }

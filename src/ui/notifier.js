@@ -126,6 +126,23 @@ export function notifyParcel(mgr, sender, quick) {
   return new Promise((resolve) => add(mgr, new ParcelNote(mgr, sender, quick, resolve), () => true));
 }
 
+/**
+ * Notes waiting for you: "You have a new note" (backgrnd3, the words in the art), until it is answered. O (136, 6)
+ * opens the inbox, X (136, 20) leaves the notes for later.
+ */
+class NoteNotice extends Balloon {
+  constructor(mgr, done) {
+    super(mgr, 'note', 'backgrnd3', done, 0x7FFFFFFF);
+    this.button(this.F.BtOK, ...NARROW.ok, () => this.press(true));
+    this.button(this.F.BtCancel, ...NARROW.x, () => this.press(false));
+  }
+}
+/** The new-note balloon, unless one is up already: resolves true for O. */
+export function notifyNote(mgr) {
+  if (balloonsOf(mgr).some((b) => b.kind === 'note' && !b.closing)) return null;
+  return new Promise((resolve) => add(mgr, new NoteNotice(mgr, resolve), () => true));
+}
+
 /** A buddy, guild or family member logging in (pink backgrnd2, icon3), or a buddy on your channel now (icon4): X only, 6s. */
 class LoginNote extends Balloon {
   constructor(mgr, name, sameChannel) {

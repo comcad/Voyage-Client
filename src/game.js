@@ -6,6 +6,8 @@ import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
 import { MedalWin } from './ui/medal.js';
+import { MemoWin } from './ui/memo.js';
+import { ClaimNotice, ClaimForm } from './ui/claim.js';
 import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
@@ -37,10 +39,11 @@ import { QuestAlarmWin } from './ui/questalarm.js';
 import { MonsterBookWin } from './ui/monsterbook.js';
 import { BookWin } from './ui/book.js';
 import { MessengerWin } from './ui/messenger.js';
+import { GuildRankWin } from './ui/guildrank.js';
 import { PartySearchWin } from './ui/partysearch.js';
 import { FamilyWin, FamilyTreeWin, familyResult } from './ui/family.js';
 import { MegaphoneWin } from './ui/megaphone.js';
-import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice, pqNotice } from './ui/notifier.js';
+import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQuestNotice, pqNotice, notifyNote } from './ui/notifier.js';
 import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
@@ -728,6 +731,13 @@ const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 121
 /** How long a pickup takes (s); see updateDrops. */
 const PICKUP_TIME = 0.7;
 
+// SUE_CHARACTER_RESULT: the answer to a report, in the chat log
+const SUE_RESULTS = { 0: 'You have successfully reported the user.', 1: 'Unable to locate the user.', 2: 'You may only report users 10 times a day.',
+  3: "You have been reported to the GM's by a user.", other: 'Your request did not go through for unknown reasons. Please try again later.' };
+// CLAIM_RESULT codes other than 2 (and 0x47, the hours), each in a notice; other codes show nothing
+const CLAIM_RESULTS = { 3: 'You have been reported by a user.', 0x41: 'Please try again later.', 0x42: 'Please re-check the character name, then try again.',
+  0x43: 'You do not have enough mesos to report.', 0x44: 'Unable to connect to the server.', 0x45: 'You have exceeded\r\nthe number of reports available.',
+  0x48: 'Unable to report due to\n\npreviously being cited for a false report.' };
 /** Chat line colours, as in the v83 chat log. */
 const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.error };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
@@ -975,10 +985,67 @@ export class Game {
     await this.hop((net) => net.leaveCashShop(), 'Returning to the game...', 'You cannot leave the Cash Shop right now.', true);
   }
   /** Notes (gift notices and the like): show each once, then let the server drop them. */
+  /**
+   * Report (the player menu's Report row; target: who it was opened on). It must be open (CLAIM_STATUS_CHANGED) and
+   * within its hours (CLAIM_AVAILABLE_TIME, local time; 0 and 0: always). The notice picks the kind: a conversation
+   * report lists who spoke in your chat log (newest first, you aside; with a target, only them if they did, else
+   * "This character is unable to report others."), a program report everyone on the map, by name (with a target, only
+   * them if they are here). Then the form; its answer goes as REPORT, a conversation one with its chat lines.
+   */
+  async openReport(target = '') {
+    const say = (t) => this.windows.notice(t);
+    if (!this.claimOn) { say('The reporting system is currently undergoing maintenence check.'); return; }
+    const [from, to] = this.claimHours || [0, 0], h = new Date().getHours();
+    if (!((from === 0 && to === 0) || (from < to && h >= from && h < to) || (to < from && (h >= from || h < to)))) {
+      if (from !== to) say(`You may only report from ${from} to ${to}.`);
+      return;
+    }
+    const kind = await new Promise((r) => { const w = new ClaimNotice(this.windows, r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); });
+    if (!kind) return;
+    const me = this.player.name;
+    let names;
+    if (kind === 'chat') {
+      const said = [];
+      for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) { const n = this.chatLog[i].name; if (n && n !== me && !said.includes(n)) said.push(n); }
+      if (target && !said.includes(target)) { say('This character is unable to report others.'); return; }
+      names = target ? [target] : said;
+    } else {
+      const here = [...this.others.values()].map((o) => o.name).filter(Boolean);
+      if (target && !here.includes(target)) return;
+      names = target ? [target] : here.sort();
+    }
+    if (!names.length) { say("There's no character can be reported in this map."); return; }
+    const res = await new Promise((r) => { const w = new ClaimForm(this.windows, names, kind === 'chat', r); this.assets.preload(w.frames()).then(() => this.windows.show(w)); });
+    if (!res) return;
+    this.net?.report(kind === 'chat' ? 1 : 0, res.name, res.reason, res.text, kind === 'chat' ? this.reportLog(res.name) : '');
+  }
+  /** The chat lines a conversation report carries: theirs and yours, oldest first, up to 1600 characters. */
+  reportLog(name) {
+    const me = this.player.name;
+    let out = '', n = 0;
+    for (let i = (this.chatLog?.length ?? 0) - 1; i >= 0; i--) {
+      const c = this.chatLog[i];
+      if (c.name !== name && c.name !== me) continue;
+      n += 1 + c.line.length;
+      if (n > 1600) break;
+      out = `${c.line}\n${out}`;
+    }
+    return out;
+  }
+  /**
+   * MEMO_RESULT 3: the notes waiting are kept (the last list replaces the one before) and, if there are any and no
+   * new-note balloon is up, one comes. Its O opens the inbox with them; X leaves them waiting.
+   */
   async showNotes(notes) {
+    this.pendingNotes = notes;
     if (!notes.length) return;
-    for (const n of notes) await this.windows.notice(`#bNote from ${n.from}#k\n${n.text}`);
-    this.net?.discardNotes(notes.map((n) => n.id));
+    const ok = await notifyNote(this.windows);
+    if (!ok || !this.pendingNotes?.length) return;
+    const list = this.pendingNotes;
+    this.pendingNotes = [];
+    const w = new MemoWin(this.windows, list);
+    await this.assets.preload(w.frames());
+    this.windows.show(w);
   }
   /** After weather music: the field's music back (a changed one is restarted), or the map's. */
   restoreFieldMusic() {
@@ -2839,6 +2906,22 @@ export class Game {
         this.hud.message(`${c.name} : ${c.text}`, CHAT_COLORS[GROUP_KEYS[c.mode]] || '#fff');
       },
       whisper: (w) => this.onWhisper(w),
+      claimStatus: (on) => { this.claimOn = on; },
+      claimHours: (from, to) => { this.claimHours = [from, to]; },
+      sueResult: (code) => this.hud.message(SUE_RESULTS[code] ?? SUE_RESULTS.other, CHAT_COLOR.error),
+      claimResult: (code, again, left) => {
+        let t = CLAIM_RESULTS[code];
+        if (code === 2) {
+          const made = 'Your report has been successfully registered.\r\n';
+          t = this.gm ? 'You have successfully registered.'
+            : !again ? 'The report has been successfully made.\r\nYou may not report for the rest of the day.'
+              : left < 1 ? `${made}You have no report left this week.` : `${made}You have ${left} reports left this week.`;
+        } else if (code === 0x47) {
+          const [from, to] = this.claimHours || [0, 0];
+          t = `You may only report from ${from} to ${to}.`;
+        }
+        if (t) this.windows.notice(t);
+      },
       whisperResult: (r) => this.onWhisperResult(r),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
@@ -2856,6 +2939,7 @@ export class Game {
         .then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id))),
       party: (p) => this.onParty(p),
       guild: (d) => this.onGuild(d),
+      alliance: (d) => this.onAlliance(d),
       // other players' guild tags: held for one still spawning
       guildName: later((id, name) => this.onOther(id, (o) => { o.guild = name; if (!name) o.emblem = null; })),
       guildMark: later((id, emblem) => this.onOther(id, (o) => { o.emblem = emblem; })),
@@ -4045,6 +4129,9 @@ export class Game {
     const ent = c.id === this.player.id ? this.player : this.others.get(c.id);
     const name = ent?.name || '?';
     if (ent) ent.chat = { text: c.text, t: 5 };
+    // kept for a conversation report: who said what, the last 64 lines
+    (this.chatLog ??= []).push({ name, line: `${name} : ${c.text}` });
+    if (this.chatLog.length > 64) this.chatLog.shift();
     if (c.show) return;   // a balloon only
     if (c.gm) this.statusBar?.message(`${name} : ${c.text}`, CHAT_BAR.gm.color, { bg: CHAT_BAR.gm.bg });
     else this.hud.message(`${name} : ${c.text}`, CHAT_COLOR.all);
@@ -5177,6 +5264,78 @@ export class Game {
    * GUILD_OPERATION results: this.guild = { id, name, ranks[5], members[{ id, name, job, level, rank, online }],
    * capacity, emblem, notice, gp }, plus the prompts Heracle and inviters start.
    */
+  /** No alliance (and none of its other guilds) any more. */
+  leftAlliance() { this.alliance = null; this.allianceGuilds = []; }
+  /**
+   * Guild alliance packets: the alliance's record, the other guilds' records beside yours, and the changes to them.
+   * Its lines go to the chat log as the guild's do.
+   */
+  onAlliance(d) {
+    const me = this.player.id, msg = (t) => this.hud.message(t, CHAT_COLORS.guild), mine = this.guild;
+    const others = () => (this.allianceGuilds ??= []), here = (aid) => !!this.alliance && this.alliance.id === aid;
+    // a guild's record: yours replaces your guild's, another replaces its old record or joins the list
+    const putGuild = (g) => {
+      if (mine && g.id === mine.id) { this.guild = g; return; }
+      const list = others(), i = list.findIndex((x) => x.id === g.id);
+      if (i >= 0) list[i] = g; else list.push(g);
+    };
+    const everyone = () => [...(this.guild?.members || []), ...others().flatMap((g) => g.members)];
+    switch (d.kind) {
+      case 'info': this.alliance = d.alliance; break;
+      case 'guilds': d.guilds.forEach(putGuild); break;
+      case 'full': this.alliance = d.alliance; d.guilds.forEach(putGuild); break;
+      case 'online': {
+        if (d.id === me) break;
+        const m = others().find((g) => g.id === d.gid)?.members.find((x) => x.id === d.id);
+        if (!m) break;
+        m.online = d.online;
+        if (d.online) notifyLogin(this.windows, m.name);
+        break;
+      }
+      case 'removed':
+        if (!here(d.alliance.id)) break;
+        if (mine && d.gid === mine.id) {
+          this.leftAlliance(); this.guild = d.guild;
+          msg(d.expelled ? 'You are dismissed from the guild alliance.' : 'You leaved the guild alliance.');
+        } else {
+          this.alliance = d.alliance;
+          this.allianceGuilds = others().filter((g) => g.id !== d.gid);
+        }
+        break;
+      case 'added':
+        this.alliance = d.alliance;
+        if (mine && d.gid === mine.id) {
+          this.guild = d.guild;
+          msg(`You joined [${d.alliance.name}] guild alliance.`);
+          this.net?.allianceOp(1);
+        } else {
+          putGuild(d.guild);
+          msg(`[${d.guild.name}] guild joined in your guild alliance.`);
+        }
+        break;
+      case 'update': if (here(d.alliance.id)) this.alliance = d.alliance; break;
+      case 'levelJob': {
+        if (!here(d.aid) || (mine && d.gid === mine.id)) break;
+        const m = others().find((g) => g.id === d.gid)?.members.find((x) => x.id === d.id);
+        if (m) Object.assign(m, { level: d.level, job: d.job });
+        break;
+      }
+      case 'leader':
+        if (!here(d.aid)) break;
+        for (const m of everyone()) { if (m.id === d.from) m.allianceRank = 2; if (m.id === d.to) m.allianceRank = 1; }
+        break;
+      case 'titles': if (here(d.aid)) this.alliance.ranks = d.ranks; break;
+      case 'rank': { const m = everyone().find((x) => x.id === d.id); if (m) m.allianceRank = d.rank; break; }
+      case 'notice': if (here(d.aid)) this.alliance.notice = d.notice; break;
+      case 'disband':
+        if (!here(d.aid)) break;
+        this.leftAlliance();
+        if (this.guild) { this.guild.alliance = 0; for (const m of this.guild.members) m.allianceRank = 3; }
+        break;
+      case 'guild': if (here(d.aid)) putGuild(d.guild); break;
+      default: break;
+    }
+  }
   onGuild(d) {
     const me = this.player.id, g = this.guild, msg = (t) => this.hud.message(t, CHAT_COLORS.guild);
     const member = (id) => g?.members.find((m) => m.id === id), master = g?.members[0]?.id === me;
@@ -5194,7 +5353,7 @@ export class Game {
           .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from, 0x37, this.player.name)));
         break;
       }
-      case 'info': this.guild = d.guild; break;
+      case 'info': this.guild = d.guild; if (!d.guild) this.leftAlliance(); break;
       case 'join':
         if (d.member.id === me) { msg('You have entered the guild.'); this.net.guildOp(0); break; }
         if (!g) break;
@@ -5202,13 +5361,13 @@ export class Game {
         msg(`'${d.member.name}' has joined the guild.`);
         break;
       case 'leave': case 'expel':
-        if (d.id === me) { this.guild = null; msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have quit the guild.'); break; }
+        if (d.id === me) { this.guild = null; this.leftAlliance(); msg(d.kind === 'expel' ? 'You have been expelled from the guild.' : 'You have quit the guild.'); break; }
         if (g) g.members = g.members.filter((m) => m.id !== d.id);
         if (d.kind === 'leave') msg(`'${d.name}' quitted the guild.`);
         else msg(d.name ? `'${d.name}' has been expelled from the guild.` : 'Deleted Chracters have been expelled.');
         break;
       case 'disband':
-        this.guild = null;
+        this.guild = null; this.leftAlliance();
         if (master) heracleSays(this.windows, 'The guild has been disbanded..  Please come back to me when you want to make a guild, again..');
         else msg('The guild has been disbanded.');
         break;
@@ -5223,6 +5382,7 @@ export class Game {
       case 'emblem': if (g) { g.emblem = d.emblem; if (master) this.windows.notice('It is completed.'); } break;
       case 'notice': if (g) { g.notice = d.notice; if (d.notice) msg(`* Guild Notice : ${d.notice}`); } break;
       case 'gp': if (g) g.gp = d.gp; break;
+      case 'board': this.showModal(new GuildRankWin(this.windows, d.list)); break;
       case 'makeMark':
         if (master) this.showModal(new GuildMarkWin(this.windows, g.emblem, (e) => { if (e) this.net.guildEmblem(e); }));
         break;

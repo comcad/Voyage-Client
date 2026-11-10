@@ -4,7 +4,8 @@ import { Win, allCanvases } from './windows.js';
 import { localTalk } from './dialogs.js';
 import { drawEmblem } from './social.js';
 import { CHAT_COLOR } from './statusbar.js';
-import { UI_W } from '../view.js';
+import { UI_W, UI_H } from '../view.js';
+import { TextField } from './wzui.js';
 
 /**
  * The community window (UI/UIWindow.img/UserList, 312x389): Buddy, Party, Guild, Guild Alliance and Blacklist tabs,
@@ -28,6 +29,14 @@ const GUILD_COLS = [[1, 96, 'Name'], [96, 165, 'Job'], [165, 205, 'Level'], [205
 // the Guild Information panel beside the window: Guild/backgrnd, sliding out 40px a tick
 const PANEL = { x: 311, y: 86, w: 233, h: 304 };
 const isBeginner = (job) => job === 0 || job === 1000 || job === 2000;
+/**
+ * The Alliance tab: a section for your guild and then each other guild in the alliance. Its bar holds the guild's mark
+ * at 5, its name at 27, [online/total] at 155 and the page right-aligned to 261, all 8 down; open, a 4px gap, the
+ * column head, 5 members a page in the Guild tab's columns (their alliance title last), the closing line and 10px.
+ * The buttons sit where the Guild tab's do (they come in the same order), Change in Where's place; the fold toggle
+ * sits 13px before the count, as on the Guild tab.
+ */
+const ALLY_PAGE = 5, ALLY_COUNT_X = 155, ALLY_FOLD_X = 142;
 const NAME_RE = /^[A-Za-z0-9]{4,12}$/;
 // a name as the client takes one: 4-12 letters and digits, fewer than four I / l in all
 const NAME_OK = { test: (n) => NAME_RE.test(n) && (String(n).match(/[Il]/g) || []).length < 4 };
@@ -80,11 +89,21 @@ export class UserListWin extends Win {
       edit: at(GG.BtModf, PANEL.x + 25, PANEL.y + 268, () => this.editRank()), save: at(GG.BtSave, PANEL.x + 125, PANEL.y + 268, () => this.saveRanks()),
     };
     this.lb = { add: at(BL.BtAdd, 85, 350, () => this.addBlack()), del: at(BL.BtDelete, 159, 350, () => this.deleteBlack()) };
+    const GU = U.GuildUnion;
+    this.asecs = new Map();
+    this.ab = {
+      invite: at(GU.BtInvite, 8, 317, () => this.allyInvite()), leave: at(GU.BtWithdraw, 80, 317, () => this.allyLeave()),
+      change: at(GU.BtChange, 160, 317, () => this.allyLeader()), whisper: at(GU.BtWhisper, 239, 317, () => this.whisper()),
+      up: at(GU.BtUp, 8, 337, () => this.allyRank(true)), down: at(GU.BtDown, 80, 337, () => this.allyRank(false)),
+      kick: at(GU.BtKick, 160, 337, () => this.allyExpel()), talk: at(GU.BtChat, 239, 337, () => this.talk()),
+      party: at(GU.BtPartyInvite, 160, 364, () => this.partyInvite()), info: at(GU.BtInfo, 239, 364, () => {}),
+      notice: at(GU.Btnotice, 288, 79, () => this.allyNotice()),
+    };
   }
   frames() {
     const U = this.U, B = this.mgr.B;
     return [...super.frames(), U.backgrnd2, U.backgrnd3, U.Guild.backgrnd, ...allCanvases(U.Tab), ...allCanvases(U.Friend), ...allCanvases(U.Party),
-      ...allCanvases(U.Guild.GuildInfo), ...allCanvases(U.Guild.GuildGrade), ...allCanvases(U.BlackList), ...allCanvases(B.Tab2), ...allCanvases(B.VScr4),
+      ...allCanvases(U.Guild.GuildInfo), ...allCanvases(U.Guild.GuildGrade), ...allCanvases(U.GuildUnion), ...allCanvases(U.BlackList), ...allCanvases(B.Tab2), ...allCanvases(B.VScr4),
       ...allCanvases(B.BtMin), ...allCanvases(B.BtMax), ...allCanvases(this.mgr.W.itemSearch?.BtLeft), ...allCanvases(this.mgr.W.itemSearch?.BtRight)];
   }
   save() { saveKey(KEY, { x: this.x, y: this.y, tab: this.tab, showOnline: this.showOnline, closedGroups: [...this.closedGroups] }); }
@@ -121,7 +140,7 @@ export class UserListWin extends Win {
   im(n) { return this.mgr.image(n); }
 
   // ---------------------------------------------------------------- list models: rows in list coordinates
-  model() { return [this.buddyModel, this.partyModel, this.guildModel, () => ({ rows: [], h: 0 }), this.blackModel][this.tab].call(this); }
+  model() { return [this.buddyModel, this.partyModel, this.guildModel, this.allianceModel, this.blackModel][this.tab].call(this); }
   /** Buddies by group: groups sorted by name, Default Group last (always there); each group's buddies by name. */
   buddyGroups() {
     const map = new Map([[DEFAULT_GROUP, []]]);
@@ -283,6 +302,83 @@ export class UserListWin extends Win {
     this.t(ctx, m.level < 0 ? '??' : String(m.level), 170, r.y + 4, c);
     this.t(ctx, this.guild.ranks[m.rank - 1] || '', 210, r.y + 4, c);
   }
+  /** Alliance: your guild's section, then each other guild's (see ALLY_PAGE). */
+  allianceModel() {
+    const GU = this.U.GuildUnion, rows = [], a = this.g.alliance;
+    if (!a || !this.guild) return { rows, h: 0 };
+    let y = 0;
+    for (const guild of [this.guild, ...(this.g.allianceGuilds || [])]) {
+      const sec = this.allySec(guild.id), list = this.sortGuild(guild.members, sec);
+      const pages = list.length < 2 ? 1 : Math.floor((list.length - 1) / ALLY_PAGE) + 1;
+      if (sec.page >= pages) sec.page = pages - 1;
+      const online = guild.members.filter((m) => m.online).length;
+      const bar = { y, h: 27, kind: 'abar', guild, sec, pages, count: `[${online}/${guild.members.length}]`, page: `[${sec.page + 1}/${pages}]`, draw: this.drawAllyBar };
+      bar.click = (x, ly) => this.allyBarClick(bar, x, ly);
+      rows.push(bar);
+      y += 27;
+      if (sec.open) {
+        y += 4;
+        rows.push({ y, h: 18, kind: 'ahead', sec, draw: this.drawAllyHead, click: (x) => this.allySort(sec, x) });
+        y += 18;
+        const page = list.slice(sec.page * ALLY_PAGE, (sec.page + 1) * ALLY_PAGE);
+        if (!page.length) { rows.push({ y, h: ROW, kind: 'none', draw: (ctx, r) => { this.drawArt(ctx, { ...r, node: GU.guildinfo3 }); this.t(ctx, 'none', 10, r.y + 4); } }); y += ROW; }
+        for (const m of page) { rows.push({ y, h: ROW, kind: 'member', key: `a:${m.id}`, item: m, guild, draw: this.drawAllyRow }); y += ROW; }
+      }
+      rows.push({ y, h: 1, kind: 'art', node: GU.guildinfo4, draw: this.drawArt });
+      y += 1 + 10;
+    }
+    return { rows, h: y };
+  }
+  allySec(id) {
+    if (!this.asecs.has(id)) this.asecs.set(id, { open: true, page: 0, sort: -1, desc: false });
+    return this.asecs.get(id);
+  }
+  /** A bar's fold toggle and page arrows, in list coordinates within the bar. */
+  allyBarButtons(r) {
+    const pw = textW(r.page);
+    return { fold: { x: ALLY_FOLD_X, y: 8, w: 12, h: 12 }, left: { x: 248 - pw, y: 8, w: 13, h: 13 }, right: { x: 261, y: 8, w: 13, h: 13 } };
+  }
+  drawAllyBar(ctx, r) {
+    const GU = this.U.GuildUnion, GI = this.U.Guild.GuildInfo, B = this.mgr.B, I = this.mgr.W.itemSearch, bt = this.allyBarButtons(r);
+    this.drawArt(ctx, { ...r, node: GU.guildinfo0 });
+    if (!drawEmblem(ctx, this.g, r.guild.emblem, 5, r.y + 6)) { const gm = this.im(GI.guildmark); if (gm) ctx.drawImage(gm, 5, r.y + 5); }
+    this.t(ctx, r.guild.name, 27, r.y + 8, COL.white);
+    this.t(ctx, r.count, ALLY_COUNT_X, r.y + 8, COL.white);
+    this.t(ctx, r.page, 261, r.y + 8, COL.white, { align: 'right' });
+    const put = (node, b, on = true) => { const st = on ? node?.normal : node?.disabled, im = this.im(st?.[0] || st); if (im) ctx.drawImage(im, b.x, r.y + b.y); };
+    put(r.sec.open ? B.BtMin : B.BtMax, bt.fold);
+    put(I?.BtLeft, bt.left, r.sec.page > 0);
+    put(I?.BtRight, bt.right, r.sec.page < r.pages - 1);
+  }
+  allyBarClick(r, x, y) {
+    const sec = r.sec, bt = this.allyBarButtons(r), inside = (b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
+    if (inside(bt.fold)) { sec.open = !sec.open; sfx.play('UI/BtMouseClick'); }
+    else if (inside(bt.left) && sec.page > 0) { sec.page--; sfx.play('UI/BtMouseClick'); }
+    else if (inside(bt.right) && sec.page < r.pages - 1) { sec.page++; sfx.play('UI/BtMouseClick'); }
+    return true;
+  }
+  drawAllyHead(ctx, r) {
+    const GU = this.U.GuildUnion;
+    this.drawArt(ctx, { ...r, node: GU.guildinfo2 });
+    const lit = r.sec.sort >= 0 && this.im(GU.guildinfo7);
+    if (lit) { const [x0, x1] = GUILD_COLS[r.sec.sort]; ctx.drawImage(lit, x0, 0, x1 - x0, 18, x0, r.y, x1 - x0, 18); }
+  }
+  allySort(sec, x) {
+    const c = GUILD_COLS.findIndex(([x0, x1]) => x >= x0 && x < x1);
+    if (c < 0) return true;
+    if (sec.sort === c) sec.desc = !sec.desc; else { sec.sort = c; sec.desc = false; }
+    sfx.play('UI/BtMouseClick');
+    return true;
+  }
+  drawAllyRow(ctx, r, sel) {
+    const m = r.item, c = sel ? COL.white : COL.black;
+    this.drawArt(ctx, { ...r, node: this.U.GuildUnion.guildinfo3 });
+    if (sel) { ctx.fillStyle = SEL; ctx.fillRect(0, r.y, LIST_W, ROW); }
+    this.t(ctx, m.name, 10, r.y + 4, c);
+    this.t(ctx, m.job < 0 ? '??' : fit(jobName(m.job), 67), 100, r.y + 4, c);
+    this.t(ctx, m.level < 0 ? '??' : String(m.level), 170, r.y + 4, c);
+    this.t(ctx, this.g.alliance?.ranks[m.allianceRank - 1] || '', 210, r.y + 4, c);
+  }
   /** Blacklist: the BLACKLIST bar, then two names a row (or "none"), closed by blacklist2. */
   blackModel() {
     const BL = this.U.BlackList, names = this.mine.black, rows = [{ y: 0, h: 27, kind: 'art', node: BL.blacklist0, draw: (ctx, r) => {
@@ -313,7 +409,7 @@ export class UserListWin extends Win {
   }
   isOnline(c) {
     if (!c) return false;
-    if (this.tab === 2) return !!c.online;
+    if (this.tab === 2 || this.tab === 3) return !!c.online;
     return c.channel >= 0 && !(this.tab === 0 && this.isBlocked(c));
   }
 
@@ -348,12 +444,22 @@ export class UserListWin extends Win {
     if ((this.g.buddies || []).some((b) => b.name.toLowerCase() === name.toLowerCase() && (b.group || DEFAULT_GROUP) === group)) { this.mgr.notice('The buddy is already registered.'); return; }
     this.g.net?.buddyAdd(name, group);
   }
-  /** Puts the selected buddy in a new group. */
-  async addGroup() {
-    const r = this.selected();
-    if (r?.kind !== 'buddy') { this.mgr.notice('You have not selected any friends.'); return; }
-    const group = await this.askGroup('');
-    if (group) this.g.net?.buddyAdd(r.item.name, group);
+  /** ADD GROUP: Edit Group for a new group. */
+  addGroup() { this.groupMod('', true); }
+  /**
+   * Edit Group over every buddy, those in this group checked. On OK each checked buddy is added to the group under
+   * its (new) name, and each unchecked one already in a group of that name goes back to Default Group.
+   */
+  groupMod(name, isNew) {
+    const groups = this.buddyGroups();
+    const entries = groups.flatMap((grp) => grp.list.map((b) => ({ name: b.name, group: b.group || DEFAULT_GROUP, checked: (b.group || DEFAULT_GROUP) === name })));
+    this.g.showModal(new GroupModWin(this.mgr, name, entries, isNew, groups.map((grp) => grp.name), (newName, list) => {
+      if (!newName) return;
+      for (const e of list) {
+        if (e.checked) this.g.net?.buddyAdd(e.name, newName);
+        else if (e.group === newName) this.g.net?.buddyAdd(e.name, DEFAULT_GROUP);
+      }
+    }));
   }
   async askGroup(def) {
     const name = (await this.mgr.askText('Please enter the group name.', def, { max: 16 }))?.trim();
@@ -366,10 +472,7 @@ export class UserListWin extends Win {
     if (!r) return;
     if (r.kind === 'buddy') { const group = await this.askGroup(r.item.group || DEFAULT_GROUP); if (group) this.g.net?.buddyAdd(r.item.name, group); return; }
     if (r.item.name === DEFAULT_GROUP) { this.mgr.notice(`${DEFAULT_GROUP} cannot be changed or deleted.`); return; }
-    const group = await this.askGroup(r.item.name);
-    if (!group) return;
-    if (this.buddyGroups().some((x) => x.name === group)) { this.mgr.notice('This name already exists.'); return; }
-    for (const b of r.item.list) this.g.net?.buddyAdd(b.name, group);
+    this.groupMod(r.item.name, false);
   }
   async deleteBuddy() {
     const r = this.selected();
@@ -535,6 +638,33 @@ export class UserListWin extends Win {
     if (ranks.some((r, k) => r !== (this.guild?.ranks[k] || ''))) this.g.net?.guildOp(0x0D, ...ranks); else this.mgr.notice('It is saved.');
   }
 
+  // ---------------------------------------------------------------- alliance
+  /** Your alliance rank: 1 the alliance's master, 2 another guild's master, 3-5 the rest. */
+  myAllyRank() { return this.guild?.members.find((m) => m.id === this.me)?.allianceRank ?? 0; }
+  /** The lowest alliance rank in use: 3 when title 4 is empty, 4 when title 5 is, else 5. */
+  lowestAllyRank() { const r = this.g.alliance?.ranks || []; return !r[3] ? 3 : !r[4] ? 4 : 5; }
+  async allyInvite() {
+    const name = (await this.mgr.askText('Please enter the Guild name\r\nto send the invitation for the Union.', '', { max: 14 }))?.trim();
+    if (name && name.length >= 4) this.g.net?.allianceOp(3, name);
+  }
+  async allyLeave() { if (await this.mgr.confirm('Are you sure you want to leave the Union?')) this.g.net?.allianceOp(2); }
+  /** Kick: the selected member's guild leaves the alliance. */
+  async allyExpel() {
+    const m = this.other(), a = this.g.alliance;
+    const guild = m && (this.g.allianceGuilds || []).find((g) => g.members.some((x) => x.id === m.id));
+    if (!guild || !a) return;
+    if (await this.mgr.confirm(`Do you wish to remove [${guild.name}] Guild\r\nfrom the Union?`)) this.g.net?.allianceExpel(guild.id, a.id);
+  }
+  allyRank(up) { const m = this.other(); if (m) this.g.net?.allianceRank(m.id, up); }
+  allyLeader() { const m = this.other(); if (m) this.g.net?.allianceLeader(m.id); }
+  /** The notice: 1-100 letters once trimmed, and no cursing. */
+  async allyNotice() {
+    const t = await this.mgr.askText('Enter the Guild Union notice.', '', { max: 100, width: 220 });
+    if (!t?.trim() || t.length > 100) return;
+    if (await this.g.cursed?.(t)) { this.mgr.notice('Cursing is not allowed.'); return; }
+    this.g.net?.allianceOp(10, t);
+  }
+
   // ---------------------------------------------------------------- blacklist
   async addBlack() {
     const name = (await this.mgr.askText("Please enter the name of the character you'd like to add to the Blacklist.", '', { max: 12 }))?.trim();
@@ -558,7 +688,7 @@ export class UserListWin extends Win {
   // ---------------------------------------------------------------- frame
   updateButtons() {
     const t = this.tab, r = this.selected(), c = this.other(), on = this.isOnline(c);
-    for (const [i, set] of [[0, this.bb], [1, this.pb], [2, this.gb], [4, this.lb]]) for (const b of Object.values(set)) b.visible = t === i;
+    for (const [i, set] of [[0, this.bb], [1, this.pb], [2, this.gb], [3, this.ab], [4, this.lb]]) for (const b of Object.values(set)) b.visible = t === i;
     // buddy: nothing selected leaves only ADD BUDDY / ADD GROUP / SHOW lit
     const B = this.bb, grp = r?.kind === 'group', bud = r?.kind === 'buddy', blocked = bud && this.isBlocked(r.item);
     B.online.visible = t === 0 && !this.showOnline; B.all.visible = t === 0 && this.showOnline;
@@ -593,6 +723,21 @@ export class UserListWin extends Win {
     G.edit.visible = G.save.visible = panel;
     G.edit.enabled = this.isMaster() && (this.info?.sel ?? -1) >= 0;
     G.save.enabled = this.isMaster();
+    // alliance: nothing without one; Kick and Change need the master and another guild's master selected; Up and Down
+    // a member of rank 3-5, from the master or a guild master; Notice the master or a guild master
+    const A = this.ab, a = this.g.alliance && this.guild, my = this.myAllyRank(), sr = c?.allianceRank ?? 0;
+    for (const b of Object.values(A)) b.enabled = false;
+    if (a) {
+      A.invite.enabled = my === 1;
+      A.leave.enabled = my === 2;
+      A.kick.enabled = A.change.enabled = my === 1 && !!c && c.rank === 1;
+      const ranker = (my === 1 || my === 2) && sr >= 3;
+      A.up.enabled = ranker && sr >= 4;
+      A.down.enabled = ranker && sr < this.lowestAllyRank();
+      A.whisper.enabled = A.party.enabled = !!c && on;
+      A.talk.enabled = A.whisper.enabled && !this.mgr.isOpen('messenger');
+      A.notice.enabled = my === 1 || my === 2;
+    }
     // blacklist
     this.lb.add.enabled = this.mine.black.length < BLACK_MAX;
     this.lb.del.enabled = this.mine.black.length > 0;
@@ -656,9 +801,22 @@ export class UserListWin extends Win {
     this.t(ctx, g.notice, 10 + x, 85);
     ctx.restore();
   }
+  /** The alliance's name (or that there's none), then its notice: crawling, or "Guild Union notice." when empty. */
   allianceHead(ctx) {
-    const s = 'This guild is not affiliated with any Guild Union.';
-    this.t(ctx, s, 5 + Math.floor((306 - textW(s)) / 2), 60);
+    const a = this.guild && this.g.alliance;
+    if (!a) { const s = 'This guild is not affiliated with any Guild Union.'; this.t(ctx, s, 5 + Math.floor((306 - textW(s)) / 2), 60); return; }
+    this.t(ctx, a.name, 5 + Math.floor((306 - (textW(a.name) + 26)) / 2), 60);
+    const box = this.im(this.U.GuildUnion.guildinfo6);
+    if (box) ctx.drawImage(box, 5, 80);
+    if (!a.notice) { this.t(ctx, 'Guild Union notice.', 13, 85); return; }
+    this.crawl(ctx, a.notice);
+  }
+  /** A notice crawling left through a 270px strip, 1px a tick, starting again at 250 once it has gone. */
+  crawl(ctx, text) {
+    const w = Math.ceil(textW(text)), x = 250 - (Math.floor(performance.now() / 30) % (250 + w + 1));
+    ctx.save(); ctx.beginPath(); ctx.rect(10, 85, 270, 15); ctx.clip();
+    this.t(ctx, text, 10 + x, 85);
+    ctx.restore();
   }
   drawPanel(ctx) {
     const g = this.guild, GG = this.U.Guild.GuildGrade, ranks = this.info.ranks, ox = PANEL.x - (PANEL.w - this.panelReveal());
@@ -737,7 +895,7 @@ export class UserListWin extends Win {
     const hit = this.rowAt(lx, ly);
     if (!hit?.r.key) return;
     if (this.tab === 0) this.openBuddy(hit.r);
-    else if (this.tab === 2 && hit.r.item.id !== this.me) this.g.requestCharInfo(hit.r.item.id);
+    else if ((this.tab === 2 || this.tab === 3) && hit.r.item.id !== this.me) this.g.requestCharInfo(hit.r.item.id);
   }
   wheel(dy) {
     const max = this.maxScroll(this.model().h);
@@ -746,6 +904,7 @@ export class UserListWin extends Win {
   tooltip(lx, ly) {
     const tip = (title) => ({ title, lines: [] });
     if (this.tab === 2 && this.guild?.notice && lx >= 5 && lx < 280 && ly >= 83 && ly < 99) return tip(this.guild.notice);
+    if (this.tab === 3 && this.guild && this.g.alliance?.notice && lx >= 5 && lx < 280 && ly >= 83 && ly < 99) return tip(this.g.alliance.notice);
     const hit = this.rowAt(lx, ly);
     if (!hit) return null;
     const { r, x } = hit;
@@ -776,6 +935,17 @@ export class UserListWin extends Win {
       if (x >= 205) return tip(RANK_NAMES[m.rank - 1] || 'Member');
       if (x >= 165 && m.level < 0) return tip('\tUnknown');
       if (x >= 96 && x < 165 && m.job >= 0 && textW(jobName(m.job)) > 67) return tip(jobName(m.job));
+      return null;
+    }
+    if (this.tab === 3) {
+      // the count's box runs from 70 to 110 + its width, 3-25 down the bar
+      if (r.kind === 'abar') return x >= 70 && x < 110 + textW(r.count) && hit.y >= 3 && hit.y < 25 ? tip('Online Guild Members / Total Registered Guild Members') : null;
+      if (r.kind === 'ahead') { const c = GUILD_COLS.find(([x0, x1]) => x >= x0 && x < x1); return c ? tip(`Sort thru ${c[2]}`) : null; }
+      if (r.kind !== 'member') return null;
+      const m = r.item;
+      if (x > 219) return tip(RANK_NAMES[m.allianceRank - 1] || 'Member');
+      if (x > 96 && x < 205 && m.level < 0) return tip('\tUnknown');
+      if (x >= 97 && x < 164 && m.job >= 0 && textW(jobName(m.job)) > 67) return tip(jobName(m.job));
       return null;
     }
     if (this.tab === 4 && r.kind === 'art' && r.y === 0 && x >= 230) return tip('Currently Registered Users / Maximum Capacity');
@@ -846,6 +1016,74 @@ export class PartyHpWin extends Win {
  * contract (message) fades in at (31, 51) with the master and guild names in yellow Arial 12, right-aligned at x 105
  * on its blanks, and two seconds after that AGREE / DISAGREE. Left alone for 30s it refuses.
  */
+/**
+ * Edit Group (UserList/Friend/GroupMod, 268x364, centred and modal), from ADD GROUP (a new group, no name) and from
+ * MODIFY on a group. The group's name (16 letters at most) goes in the box at the top; every buddy is listed below,
+ * seven rows from y 137, 20px apart, each a check box with the buddy's name and, at x 113 in grey (#909090), the group
+ * they are in now; its scrollbar is at (243, 113), 164 tall. OK needs a name, a checked row among the seven showing,
+ * and - for a new or renamed group - a name no other group has. The name box, the check boxes and the buttons sit in
+ * the art's box, its NAME column and its bottom strip.
+ */
+const GM_ROW_Y = 137, GM_ROW_H = 20, GM_ROWS = 7, GM_BAR = { x: 243, y: 113, h: 164 }, GM_BOX_X = 12;
+export class GroupModWin extends Win {
+  constructor(mgr, groupName, entries, isNew, groups, done) {
+    const G = mgr.W.UserList.Friend.GroupMod;
+    super(mgr, G.backgrnd, (UI_W - 268) >> 1, (UI_H - 364) >> 1);
+    this.buttons = []; this.closeBtn = null;
+    Object.assign(this, { G, modal: true, original: groupName, entries, isNew, groups, done, first: 0 });
+    this.field = new TextField(mgr.game.statusBar.layer, 0, 0, 246, 15, { max: 16, color: '#000' });
+    this.field.value = groupName;
+    this.field.el.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') this.ok();
+      else if (e.key === 'Escape') this.finish(null);
+    });
+    this.button(mgr.B.BtClose, 249, 6, () => this.finish(null));
+    this.button(G.BtOk, 70, 327, () => this.ok());
+    this.button(G.BtCancel, 138, 327, () => this.finish(null));
+  }
+  frames() { return [...super.frames(), ...allCanvases(this.G), this.mgr.B.CheckBox?.[0], this.mgr.B.CheckBox?.[1]].filter(Boolean); }
+  async ok() {
+    const name = this.field.value, say = (t) => this.mgr.notice(t).then(() => this.field.focus());
+    if (!name) { say('Please enter the group name.'); return; }
+    if (!this.entries.slice(this.first, this.first + GM_ROWS).some((e) => e.checked)) { say('You have not selected any friends.'); return; }
+    if ((this.isNew || name !== this.original) && this.groups.includes(name)) { say('This name already exists.'); return; }
+    this.finish(name);
+  }
+  finish(v) {
+    if (this.answered) return;
+    this.answered = true; this.field.remove(); this.mgr.close(this);
+    this.done(v, this.entries);
+  }
+  onClose() { this.field.remove(); }
+  key(e) { if (e.key === 'Escape') this.finish(null); else if (e.key === 'Enter') this.ok(); }
+  draw(ctx) {
+    super.draw(ctx);
+    this.field.rect.x = this.x + 10; this.field.rect.y = this.y + 64;
+    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
+    if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
+  }
+  body(ctx) {
+    for (let k = 0; k < GM_ROWS; k++) {
+      const e = this.entries[this.first + k];
+      if (!e) break;
+      const y = GM_ROW_Y + k * GM_ROW_H, box = this.mgr.image(this.mgr.B.CheckBox?.[e.checked ? 1 : 0]);
+      if (box) ctx.drawImage(box, GM_BOX_X, y + 1);
+      this.text(ctx, e.name, GM_BOX_X + 16, y + 2, { size: 12, color: '#000' });
+      this.text(ctx, e.group, 113, y + 2, { size: 12, color: '#909090' });
+    }
+    this.scrollbar(ctx, GM_BAR.x, GM_BAR.y, GM_BAR.h, this.first, this.entries.length, GM_ROWS);
+  }
+  down(lx, ly) {
+    const s = this.scrollClick(lx, ly, GM_BAR.x, GM_BAR.y, GM_BAR.h, this.first, this.entries.length, GM_ROWS);
+    if (s !== null) { this.first = s; return; }
+    const k = Math.floor((ly - GM_ROW_Y) / GM_ROW_H), e = this.entries[this.first + k];
+    // a row's check box control is 93x14 from the box
+    if (e && k >= 0 && k < GM_ROWS && lx >= GM_BOX_X && lx < GM_BOX_X + 93 && ly - GM_ROW_Y - k * GM_ROW_H < 14) { e.checked = !e.checked; sfx.play('UI/BtMouseClick'); }
+  }
+  wheel(dy) { this.first = Math.max(0, Math.min(Math.max(0, this.entries.length - GM_ROWS), this.first + Math.sign(dy))); }
+}
+
 export class GuildContractWin extends Win {
   constructor(mgr, master, guildName, done) {
     super(mgr, null, 275, 100);
