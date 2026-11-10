@@ -4291,6 +4291,9 @@ export class Game {
   async spawnDrop(d) {
     // the server announces a player's drop twice (mode 1, then 0): keep the first, even while its icon loads
     const pending = this.pendingDrops;
+    // one announced again as 1 or 2 (after a 0) may be picked up from now on, as the client marks it
+    const known = this.drops.get(d.oid) || (pending.get(d.oid) !== d ? pending.get(d.oid) : null);
+    if (known && (d.mode === 1 || d.mode === 2)) known.pickable = true;
     if (d.gone || this.drops.has(d.oid) || (pending.has(d.oid) && pending.get(d.oid) !== d)) return;
     pending.set(d.oid, d);
     // the server drops loot as soon as it counts the kill; hold it until our hit lands and it dies
@@ -9280,7 +9283,7 @@ export class Game {
     if (now < (this.pickupFree || 0)) return;
     const p = this.player, me = p.id;
     for (const [oid, d] of this.drops) {
-      if (d.pickedBy || !d.landed || (d.mode !== 1 && d.mode !== 2)) continue;
+      if (d.pickedBy || !d.landed || (d.mode !== 1 && d.mode !== 2 && !d.pickable)) continue;
       if (d.x < p.x - 25 || d.x >= p.x + 25 || d.y < p.y - 50 || d.y >= p.y + 10) continue;
       if (now - (d.tryAt || -Infinity) < 3000) continue;
       if (!d.meso && Number(this.windows.info(d.id)?.pickUpBlock)) continue;
