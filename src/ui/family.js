@@ -13,14 +13,39 @@ import { Win, allCanvases } from './windows.js';
  *   its description and RightIcon below (y 213-340); the button band y 360-390: ADD JUNIOR, PEDIGREE, USE THIS.
  * Reputation comes from your juniors hunting and levelling; privileges spend it.
  */
+// FAMILY_RESULT codes, in the client's words: notices, but for 0x4B / 0x4C (chat lines); 1 names the member you cut
+// off, 0x50 / 0x51 the mesos needed, and 0x52 is followed by 0x4E's notice
 const RESULTS = {
-  65: 'That character could not be found.', 67: 'That character is not in your family.',
-  69: 'Your junior has to be in the same map as you.', 72: 'Your junior must be within 20 levels of you.',
-  73: 'That character is already considering another family invitation.', 74: 'That character is already being summoned.',
-  75: 'You cannot use that here.', 76: 'The family would have too many generations.', 77: 'Your junior must be above level 10.',
-  80: 'You need %d mesos to leave your senior.', 81: 'You need %d mesos to let your junior go.',
+  0x40: 'You cannot add this character as a Junior.',
+  0x41: 'The name you entered is incorrect or he/she is currently not logged in.',
+  0x42: 'You belong to the same family.', 0x43: 'You do not belong to the same family.',
+  0x45: 'The character you wish to add as\r\na Junior must be in the same map.',
+  0x46: 'This character is already a Junior of another character.',
+  0x47: 'The Junior you wish to add\r\nmust be at a lower rank.',
+  0x48: 'The gap between you and your\r\njunior must be within 20 levels.',
+  0x49: 'Another character has requested to add this character.\r\nPlease try again later.',
+  0x4A: 'Another character has requested a summon.\r\nPlease try again later.',
+  0x4D: 'The Junior you wish to add\r\nmust be over Level 10.',
+  0x4E: "You cannot add a Junior \r\nthat has requested to change worlds.",
+  0x4F: "You cannot add a Junior \r\nsince you've requested to change worlds.",
+  0x50: 'Separation is not possible due to insufficient Mesos.\r\nYou will need %d Mesos to\r\nseparate with a Senior.',
+  0x51: 'Separation is not possible due to insufficient Mesos.\r\nYou will need %d Mesos to\r\nseparate with a Junior.',
+  0x52: 'The Entitlement does not apply because your level does not match the corresponding area.',
 };
-export const familyResult = (code, mesos) => RESULTS[code]?.replace('%d', mesos.toLocaleString('en-US'));
+const RESULT_CHAT = {
+  0x4B: 'The summons has failed. Your current location or state does not allow a summons.',
+  0x4C: 'The family cannot extend more than 1000 generations from above and below.',
+};
+/** A FAMILY_RESULT as [notices], [chat lines]; severed is the name of the member you last cut off. */
+export function familyResult(code, mesos, severed = '') {
+  if (code === 1) return [[`You have severed ties with ${severed}.\r\nYour family relationship has ended.`], []];
+  if (RESULT_CHAT[code]) return [[], [RESULT_CHAT[code]]];
+  const t = RESULTS[code];
+  if (!t) return [[], []];
+  const notices = [t.replace('%d', String(mesos))];
+  if (code === 0x52) notices.push(RESULTS[0x4E]);
+  return [notices, []];
+}
 const plain = (t) => (t || '').replace(/\\n/g, '\n').replace(/#[a-z]/g, '').replace(/#/g, '');
 // RightIcon per privilege (Cosmic FamilyEntitlement order): 2 EXP, 3 DROP, 4 the family ones (reunion, summon, bonding)
 const ICONS = [4, 4, 3, 2, 4, 3, 2, 3, 2, 3, 2];
@@ -137,9 +162,9 @@ export class FamilyTreeWin extends Win {
     if (!c) return;
     const sel = c.members.find((m) => m.id === this.sel);
     if (sel && sel.senior === me && sel.id !== me) {
-      if (await this.mgr.confirm(`Let ${sel.name} go from your family?\nIt costs mesos and reputation.`)) this.g.net?.familyDropJunior(sel.id);
+      if (await this.mgr.confirm(`Let ${sel.name} go from your family?\nIt costs mesos and reputation.`)) { this.g.familySevered = sel.name; this.g.net?.familyDropJunior(sel.id); }
     } else if (sel?.id === me && this.place.senior) {
-      if (await this.mgr.confirm(`Leave your senior ${this.place.senior.name}?\nIt costs mesos, and your juniors leave with you.`)) this.g.net?.familyLeaveSenior();
+      if (await this.mgr.confirm(`Leave your senior ${this.place.senior.name}?\nIt costs mesos, and your juniors leave with you.`)) { this.g.familySevered = this.place.senior.name; this.g.net?.familyLeaveSenior(); }
     } else this.mgr.notice('Select one of your juniors, or yourself to leave your senior.');
   }
 

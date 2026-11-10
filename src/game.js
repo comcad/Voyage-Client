@@ -1344,7 +1344,7 @@ export class Game {
 
   /** Family traffic: your info and the pedigree go to their windows; invitations and summons ask you. */
   async onFamily(e) {
-    const say = (t) => this.hud?.message(t, CHAT_COLORS.notice), refresh = () => {
+    const line = (t) => this.hud?.message(t, CHAT_COLORS.guild), refresh = () => {
       if (this.windows.isOpen('family')) this.net?.familyOpen();
       const tree = this.windows.wins.familytree;
       if (this.windows.isOpen('familytree') && tree.chart) tree.load(tree.chart.members.find((m) => m.id === tree.chart.self)?.name || this.player.name);
@@ -1352,16 +1352,29 @@ export class Game {
     if (e.op === 'privileges') this.familyPrivileges = e.list;
     else if (e.op === 'info') this.family = e.info;
     else if (e.op === 'chart') this.windows.wins.familytree.setChart(e);
-    else if (e.op === 'result') { const t = familyResult(e.code, e.mesos); if (t) this.windows.notice(t); refresh(); }
+    else if (e.op === 'result') {
+      const [notices, lines] = familyResult(e.code, e.mesos, this.familySevered || '');
+      for (const t of lines) line(t);
+      for (const t of notices) await this.windows.notice(t);
+      refresh();
+    }
     else if (e.op === 'invite') {
       // Family invitations off in the Game Option, or from someone on the Blacklist: ignored
       if (!this.optionAllowed('familyInvite') || this.windows.wins.userlist?.blacklisted(e.name)) return;
       const ok = await notify(this.windows, 'family', e.name);
       this.net?.familyAnswer(e.id, e.name, ok);
-    } else if (e.op === 'joined') { say(e.ok ? `${e.name} has joined the family.` : `${e.name} has declined your family invitation.`); refresh(); }
-    else if (e.op === 'senior') { say(`You are now a junior of ${e.name}.`); this.net?.familyOpen(); refresh(); }
-    else if (e.op === 'rep') say(`You have gained ${e.gain} reputation${e.from ? ` from ${e.from}` : ''}.`);
-    else if (e.op === 'login') { if (e.online) notifyLogin(this.windows, e.name); }
+    } else if (e.op === 'joined') {
+      if (e.ok) line(`You have added ${e.name} as a Junior. Please do your best to guide the Junior in his/her game play.`);
+      else this.windows.notice(`${e.name} has declined your Junior request.`);
+      refresh();
+    } else if (e.op === 'senior') { line(`${e.name} has become your Senior. He/she will guide you in your game play.`); this.net?.familyOpen(); refresh(); }
+    else if (e.op === 'rep') line(e.gain < 0 ? `You have used ${-e.gain} Rep Points.` : `Your Rep has increased (${e.from}, +${e.gain})`);
+    else if (e.op === 'login') {
+      if (e.online) notifyLogin(this.windows, e.name);
+      // an open family tree lights or dims that member's plate
+      const tree = this.windows.wins.familytree, m = this.windows.isOpen('familytree') && tree.chart?.members.find((x) => x.name === e.name);
+      if (m) m.online = e.online;
+    }
     else if (e.op === 'summon') {
       const ok = await notify(this.windows, 'familySummon', e.from);
       this.net?.familySummonAnswer(e.family, ok);
