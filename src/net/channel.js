@@ -1400,8 +1400,19 @@ export class ChannelSession {
       this.emit('rpsGame', mode, d);
     });
     on(S.RESET_MONSTER_ANIMATION, (r) => { const oid = r.int(); if (r.ubyte()) this.emit('mobResetAnim', oid); });
-    // a Monster Carnival starts: your team (the CP counts after it aren't shown yet)
-    on(S.MONSTER_CARNIVAL_START, (r) => this.emit('carnivalTeam', r.ubyte()));
+    // a Monster Carnival starts: your team, then (on the field itself) your CP, your team's and the other's (available,
+    // earned), and a byte per monster: how many times it has been summoned
+    on(S.MONSTER_CARNIVAL_START, (r) => {
+      const team = r.ubyte(), cp = r.available >= 12 ? [0, 1, 2, 3, 4, 5].map(() => r.ushort()) : null;
+      this.emit('carnivalStart', { team, cp, counts: Array.from(r.rest()) });
+    });
+    on(S.MONSTER_CARNIVAL_OBTAINED_CP, (r) => { const a = r.ushort(), b = r.ushort(); this.emit('carnivalCP', a, b); });
+    on(S.MONSTER_CARNIVAL_PARTY_CP, (r) => { const t = r.ubyte(), a = r.ushort(), b = r.ushort(); this.emit('carnivalPartyCP', t, a, b); });
+    on(S.MONSTER_CARNIVAL_SUMMON, (r) => { const tab = r.ubyte(), index = r.ubyte(); this.emit('carnivalSummon', tab, index, r.string()); });
+    on(S.MONSTER_CARNIVAL_MESSAGE, (r) => this.emit('carnivalMessage', r.ubyte()));
+    on(S.MONSTER_CARNIVAL_DIED, (r) => { const team = r.ubyte(), name = r.string(); this.emit('carnivalDied', team, name, r.ubyte()); });
+    on(S.MONSTER_CARNIVAL_LEAVE, (r) => { const code = r.ubyte(), team = r.ubyte(); this.emit('carnivalLeave', code, team, r.string()); });
+    on(S.MONSTER_CARNIVAL_RESULT, (r) => this.emit('carnivalResult', r.ubyte()));
 
     // a move or a door turned down (BLOCKED_MAP), or a channel / shop the server won't let you into (BLOCKED_SERVER):
     // both answer the request, and say why
@@ -1756,6 +1767,8 @@ export class ChannelSession {
   /** COCONUT: your swing reached coconut `id`, landing after `delay` ms. */
   coconut(id, delay) { this.send(new PacketWriter(C.COCONUT).short(id).short(delay)); }
   /** RPS_ACTION: 0 START, 1 a hand (0 rock, 1 paper, 2 scissors), 2 time up, 3 CONTINUE, 4 EXIT, 5 RETRY. */
+  /** MONSTER_CARNIVAL: summon / use / call the row (from 0) of a tab (0 monsters, 1 skills, 2 guardians). */
+  carnival(tab, index) { this.send(new PacketWriter(C.MONSTER_CARNIVAL).byte(tab).int(index)); }
   rpsAction(mode, sel = 0) { const w = new PacketWriter(C.RPS_ACTION).byte(mode); if (mode === 1) w.byte(sel); this.send(w); }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));

@@ -53,12 +53,26 @@
  *     - rank at x 63 (players who tie share the lower place);
  *     - the name centred on 140, the score centred on 235;
  *     - 12px Arial in black.
+ *
+ * Monster Carnival (fieldType 10, and 15; 11 is its waiting room), from the map's `monsterCarnival` node:
+ * - Its lists: mob (name from String/Mob.img, spendCP), skill and guardian (name, desc, spendCP from
+ *   Skill/MCSkill.img / MCGuardian.img).
+ * - MONSTER_CARNIVAL_START: your team, then your CP, your team's and the other's (available, earned). The first one
+ *   makes the Carnival window (ui/carnival.js) with the three lists; a byte per monster gives its summons so far.
+ *   In the waiting room only the team is read.
+ * - OBTAINED_CP / PARTY_CP: the numbers.
+ * - SUMMON: "[who] has summoned a being. [what]" (a skill: "has used a skill."; a guardian: "has summoned the
+ *   being."); a monster goes on the Summon List.
+ * - MESSAGE (why it was refused), DIED, LEAVE: grey lines (LEAVE in pink), as is the result.
+ * - Your answer back (MESSAGE, or your own SUMMON) lets the window ask again.
+ * - Each player's team ("Maple Red" for 0, "Maple Blue" for 1) takes their guild line's place in their tags.
  */
 import { frames, nodeAt } from './assets.js';
 import { sfx } from './audio.js';
 import { CHAT_COLOR } from './ui/statusbar.js';
 import { UI_W } from './view.js';
 import { uiText } from './ui/wzui.js';
+import { CarnivalWin, TEAM_NAMES } from './ui/carnival.js';
 
 const TICK = 30;
 const STUN = 123;
@@ -80,6 +94,8 @@ export async function loadFieldMode(game, map) {
   if (type === 1 && map.data?.snowBall) mode = new SnowballField(game, map.data.snowBall);
   else if (type === 4 && map.data?.coconut) mode = new CoconutField(game, map, map.data.coconut);
   else if (type === 13) mode = new AriantField(game);
+  else if (type === 10 || type === 15) mode = new CarnivalField(game, map.data?.monsterCarnival || {});
+  else if (type === 11) mode = new CarnivalWaitField(game);
   if (mode) await mode.load();
   return mode;
 }
@@ -457,4 +473,85 @@ export class AriantField {
     });
     ctx.restore();
   }
+}
+
+const CARNIVAL_SUMMONED = ['[%s] has summoned a being. [%s]', '[%s] has used a skill. [%s]', '[%s] has summoned the being. [%s]'];
+const CARNIVAL_REFUSED = { 1: "You don't have enough CP to continue.", 2: 'You can no longer summon the Monster.', 3: 'You can no longer summon the being.',
+  4: 'This being is already summoned.', 5: '\t\tThis request has failed due to an unknown error.' };
+const CARNIVAL_RESULT = {
+  8: "\tYou have won the Monster Carnival. Please wait as you'll be transported out of here shortly.",
+  9: "Unfortunately, you have lost the Monster Carnival. Please wait as you'll be transported out of here shortly.",
+  10: "Despite the Overtime, the carnival ended in a draw. Please wait as you'll be transported out of here shortly.",
+  11: "Monster Carnival has ended abruptly due to the opposing team leaving the game too early. Please wait as you'll be transported out of here shortly.",
+};
+const fill = (t, ...a) => a.reduce((s, v) => s.replace(/%[sd]/, v), t);   // each value into the next %s / %d
+
+/** The waiting room (fieldType 11): MONSTER_CARNIVAL_START only gives your team; the result is said here too. */
+class CarnivalWaitField {
+  constructor(game) { this.game = game; }
+  async load() {}
+  carnivalStart(d) { this.game.setCarnivalTeam?.(d.team); }
+  carnivalResult(code) { const t = CARNIVAL_RESULT[code]; if (t) this.game.hud?.message(t, CHAT_COLOR.error); }
+}
+
+export class CarnivalField extends CarnivalWaitField {
+  constructor(game, node) { super(game); this.node = node; this.lists = [[], [], []]; this.win = null; }
+  async load() {
+    const a = this.game.assets, N = this.node;
+    const [mobs, skills, guards] = await Promise.all([a.json('String/Mob.img'), a.json('Skill/MCSkill.img'), a.json('Skill/MCGuardian.img')]);
+    for (let i = 0; N.mob?.[i]; i++) {
+      const id = Number(N.mob[i].id);
+      this.lists[0].push({ id, name: mobs?.[id]?.name || '', cp: Number(N.mob[i].spendCP) || 0, desc: '' });
+    }
+    for (let i = 0; N.skill?.[i] !== undefined; i++) { const s = skills?.[Number(N.skill[i])]; if (s) this.lists[1].push({ id: Number(N.skill[i]), name: s.name || '', cp: Number(s.spendCP) || 0, desc: s.desc || '' }); }
+    for (let i = 0; N.guardian?.[i] !== undefined; i++) { const s = guards?.[Number(N.guardian[i])]; if (s) this.lists[2].push({ id: Number(N.guardian[i]), name: s.name || '', cp: Number(s.spendCP) || 0, desc: s.desc || '' }); }
+  }
+  leave() {
+    const g = this.game;
+    if (this.win) { if (this.win.side) g.windows.close(this.win.side); g.windows.close(this.win); g.carnivalSaved = { x: this.win.x, y: this.win.y, tab: this.win.tab }; }
+    this.win = null;
+  }
+  /** MONSTER_CARNIVAL_START: { team, cp: [mine, total, team, total, other, total] | null, counts: [per monster] }. */
+  async carnivalStart(d) {
+    const g = this.game;
+    super.carnivalStart(d);
+    if (!this.win) {
+      const w = new CarnivalWin(g.windows, g.carnivalSaved || {});
+      await g.assets.preload(w.frames());
+      this.win = g.windows.show(w, null);
+      this.lists.forEach((list, t) => list.forEach((e, k) => w.addRow(t, { index: k + 1, name: e.name, cp: e.cp, desc: e.desc })));
+    }
+    const w = this.win;
+    w.setMyTeam(d.team);
+    if (d.cp) { w.setMine(d.cp[0], d.cp[1]); w.setTeam(d.team, d.cp[2], d.cp[3]); w.setTeam(d.team === 0 ? 1 : 0, d.cp[4], d.cp[5]); }
+    (d.counts || []).slice(0, this.lists[0].length).forEach((n, k) => { if (n && this.lists[0][k].name) w.summoned(this.lists[0][k].name, n); });
+  }
+  carnivalCP(avail, total) { this.win?.setMine(avail, total); }
+  carnivalPartyCP(team, avail, total) { this.win?.setTeam(team, avail, total); }
+  carnivalSummon(tab, index, name) {
+    const g = this.game, row = this.win?.rows[tab]?.[index];   // the row at that place in the tab's list
+    if (row?.name) {
+      g.hud?.message(fill(CARNIVAL_SUMMONED[tab] || CARNIVAL_SUMMONED[0], name, row.name), CHAT_COLOR.grey);
+      if (tab === 0) this.win.summoned(row.name);
+    }
+    if (this.win && name === g.player?.name) this.win.answered();
+  }
+  carnivalMessage(code) {
+    const t = CARNIVAL_REFUSED[code];
+    if (t) this.game.hud?.message(t, CHAT_COLOR.grey);
+    this.win?.answered();
+  }
+  carnivalDied(team, name, lost) {
+    const tn = team === 0 ? TEAM_NAMES[0] : TEAM_NAMES[1];
+    const t = lost ? fill('[%s] has become unable to fight and [%s]team has lost %d CP.', name, tn, lost)
+      : fill('\t\t[%s] has become unable to fight but [%s] has no CP so [%s] team did not lose any CP', name, name, tn);
+    this.game.hud?.message(t, CHAT_COLOR.grey);
+  }
+  carnivalLeave(code, team, name) {
+    const tn = team ? TEAM_NAMES[1] : TEAM_NAMES[0];
+    const t = code === 6 ? fill('Since the leader of the Team [%s] quit the Monster Carnival, [%s] has been appointed as the new leader of the team.', tn, name)
+      : fill('[%s] of Team [%s] has quit the Monster Carnival.', tn, name);
+    this.game.hud?.message(t, CHAT_COLOR.error);
+  }
+  key(k) { return this.win && this.game.windows.order.includes(this.win) ? this.win.key(k) : false; }
 }

@@ -849,7 +849,7 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
-    this.input.filter = (k, down) => this.dojoKey(k, down);
+    this.input.filter = (k, down) => (down && !!this.fieldMode?.key?.(k)) || this.dojoKey(k, down);   // the Carnival window's Tab / F1-F12 first
     this.controls = loadControls();          // controller and touch layouts, kept in this browser
     this.padInput = new PadInput(this.input, () => this.controls?.padMove || 'ls');
     this.cam = { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
@@ -2903,7 +2903,7 @@ export class Game {
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
-      exclusiveAnswered: () => this.releaseExclusive(),
+      exclusiveAnswered: () => { this.releaseExclusive(); this.fieldMode?.win?.answered?.(); },
       skillBookResult: (d) => this.onSkillBookResult(d),
       inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
       sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
@@ -3229,7 +3229,15 @@ export class Game {
         if (!e || e.pending) return;
         e.appearing = false; delete e.fadeInAt; e.state = ''; e.setState(e.flying ? 'fly' : 'stand');
       }),
-      carnivalTeam: (team) => { this.carnivalTeam = team; },
+      // the Monster Carnival (fieldmodes.js, ui/carnival.js)
+      carnivalStart: later((d) => (this.fieldMode?.carnivalStart ? this.fieldMode.carnivalStart(d) : this.setCarnivalTeam(d.team))),
+      carnivalCP: later((...a) => this.fieldMode?.carnivalCP?.(...a)),
+      carnivalPartyCP: later((...a) => this.fieldMode?.carnivalPartyCP?.(...a)),
+      carnivalSummon: later((...a) => this.fieldMode?.carnivalSummon?.(...a)),
+      carnivalMessage: later((...a) => this.fieldMode?.carnivalMessage?.(...a)),
+      carnivalDied: later((...a) => this.fieldMode?.carnivalDied?.(...a)),
+      carnivalLeave: later((...a) => this.fieldMode?.carnivalLeave?.(...a)),
+      carnivalResult: later((...a) => this.fieldMode?.carnivalResult?.(...a)),
       // the Snowball event (fieldmodes.js)
       snowState: later((...a) => this.fieldMode?.snowState?.(...a)),
       snowHit: later((...a) => this.fieldMode?.snowHit?.(...a)),
@@ -3941,6 +3949,7 @@ export class Game {
       if (!current()) return;
       const fieldMode = await loadFieldMode(this, map);   // an event field's own game
       if (!current()) return;
+      this.fieldMode?.leave?.();
       this.map = map; this.fieldMode = fieldMode;
       this.questLayerTags();
       for (const { tag, on } of this.objVisQueue || []) map.setObjectVisible(tag, on);
@@ -4712,8 +4721,9 @@ export class Game {
   /** A character's tags from y down, 1px apart: name, guild, medal. */
   drawCharTags(ctx, ent, look, local, x, y) {
     y += (this.drawLabelTag(ctx, look, ent.name, x, y) || nameTag(ctx, ent.name, x, y).h) + 1;
-    const guild = local ? this.guild?.name : ent.guild;
-    if (guild) y += drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, x, y) + 1;
+    const guild = local ? this.guild?.name : ent.guild, team = this.carnivalTag(ent, local);
+    if (team) y += drawGuildTag(ctx, this, team, null, x, y) + 1;   // a Monster Carnival team takes the guild line's place
+    else if (guild) y += drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, x, y) + 1;
     const name = look?.medal ? (this.windows.itemName(look.medal) || '').replace("'s Medal", '') : '', art = name && this.nameTagArt();
     if (art && artTag(ctx, this.assets, art.medal?.[look.medalTag], name, x, y) < 0) nameTag(ctx, name, x, y);
   }
@@ -5613,7 +5623,7 @@ export class Game {
     this.vfx?.update(dt);
     this.weather.update(dt);
     this.kites.update(dt);
-    this.fieldMode?.update(dt);
+    this.fieldMode?.update?.(dt);
     const p = this.player;
     if (p.morphView) p.morphView.update(p, p.action, !!p.attack, dt, p.attack ? p.attackScale || 1 : 1);
     for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
@@ -8017,7 +8027,7 @@ export class Game {
     return false;
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !this.carnivalAlly(m)); }
   /** A monster within a ranged weapon's swing, so a held shot gives way to the swing (never with Combat.NoWhack). */
   swingsClose() { return !config.noWhack && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length > 0; }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
@@ -9303,6 +9313,18 @@ export class Game {
    * (type 2) when the ball, flying from its start point, reaches you. Whoever controls the monster, each client
    * checks itself, as in the original.
    */
+  setCarnivalTeam(team) { this.carnivalTeam = team; }
+  /** "Maple Red" / "Maple Blue" on a Monster Carnival field (types 10, 11, 15) for someone on team 0 / 1. */
+  carnivalTag(ent, local) {
+    if (![10, 11, 15].includes(Number(this.map?.info?.fieldType))) return null;
+    const team = local ? this.carnivalTeam : ent.team;
+    return team === 0 ? 'Maple Red' : team === 1 ? 'Maple Blue' : null;
+  }
+  /** A monster on your Monster Carnival team: your attacks pass it by. */
+  carnivalAlly(m) {
+    const type = Number(this.map?.info?.fieldType);
+    return (type === 10 || type === 15) && this.carnivalTeam !== undefined && m.team === this.carnivalTeam;
+  }
   /** A Hypnotized monster, or in a Monster Carnival one on your team: it doesn't hurt you. */
   friendlyToYou(m) {
     if (hypnotized(m)) return true;
