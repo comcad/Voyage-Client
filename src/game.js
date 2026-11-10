@@ -738,6 +738,14 @@ const SUE_RESULTS = { 0: 'You have successfully reported the user.', 1: 'Unable 
 const CLAIM_RESULTS = { 3: 'You have been reported by a user.', 0x41: 'Please try again later.', 0x42: 'Please re-check the character name, then try again.',
   0x43: 'You do not have enough mesos to report.', 0x44: 'Unable to connect to the server.', 0x45: 'You have exceeded\r\nthe number of reports available.',
   0x48: 'Unable to report due to\n\npreviously being cited for a false report.' };
+// REAL_CLOSE_MERCHANT's result byte, each a notice
+const MERCHANT_CLOSED = {
+  0: 'Both the items and mesos\r\nare successfully retrieved.',
+  1: 'Unable to retrieve the items and mesos due to the store having too much money.\r\nPlease go see Fredrick at the Free Market entrance.',
+  2: 'Unable to retrieve the items because one of the items ___________, but the Mesos were retrieved.\r\nPlease go see Fredrick at the Free Market entrance.',
+  3: 'Unable to retrieve the items due to full inventory, but the Mesos were retrieved.\r\nthe item could not be retrieved.\r\nPlease go see Fredrick at the Free Market entrance.',
+  4: 'Unable to retrieve the items for unknown reasons, but the Mesos were retrieved.\r\nPlease go see Fredrick at the Free Market entrance.',
+};
 /** Chat line colours, as in the v83 chat log. */
 const CHAT_COLORS = { ...CHAT_COLOR, find: CHAT_COLOR.grey, notice: CHAT_COLOR.error };
 const GROUP_KEYS = ['buddy', 'party', 'guild', 'alliance'];
@@ -946,7 +954,7 @@ export class Game {
       const kite = this.kites.at(wx, wy);
       if (kite) { this.openKiteMessage(kite); return; }
       const stall = this.boards.at(p[0] + this.cam.x, p[1] + this.cam.y);
-      if (stall?.merchant && stall.merchant.owner !== this.player.id) { this.net.pshopVisit(stall.merchant.oid); return; }
+      if (stall?.merchant) { this.visitMerchant(stall.merchant); return; }
       const rp = this.playerAt(...p) || (this.hitsChar(this.player, ...p) ? this.player : null);
       if (rp) { this.requestCharInfo(rp.id); return; }
       // a pet: its owner's
@@ -1987,6 +1995,11 @@ export class Game {
     ent.chalkRect = { x: x - 18 + this.cam.x, y: y - 19 + this.cam.y, w: w + 36, h: h + 38 };
   }
 
+  /** A Hired Merchant clicked: your own asks before you go in to manage it; either way VISIT with two 0 bytes. */
+  async visitMerchant(m) {
+    if (m.owner === this.player.id && !(await this.windows.confirm("You can't sell items while managing the store.\r\nWould you like to start managing the store?"))) return;
+    this.net.merchantVisit(m.oid);
+  }
   /** A Hired Merchant: ask the server whether one may open here; merchantCheck carries on. */
   openMerchant(itemId) {
     if (this.playerShop || this.tradeWin) return;
@@ -3001,7 +3014,11 @@ export class Game {
       shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
       shopChat: later((slot, text) => this.playerShop?.say(text)),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
-      shopClosed: later((reason) => this.playerShop?.end(reason)),
+      shopClosed: later((reason, result) => {
+        this.playerShop?.end(reason);
+        // REAL_CLOSE_MERCHANT's result: what came back to you when the store closed
+        if (MERCHANT_CLOSED[result]) this.windows.notice(MERCHANT_CLOSED[result]);
+      }),
       roomError: later((code) => { if (ROOM_ERRORS[code]) this.windows.notice(ROOM_ERRORS[code]); }),
       merchantSpawn: later((m) => this.boards.spawn(m)),
       merchantUpdate: later((owner, info) => this.boards.update(owner, info)),
