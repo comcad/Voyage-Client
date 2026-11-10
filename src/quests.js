@@ -88,10 +88,16 @@ export class QuestBook {
     this.started = {};   // id -> progress string
     this.completed = {}; // id -> filetime
     this.ex = {};        // id -> record-ex value (SHOW_STATUS_INFO mode 0x0A)
+    this.timeOverride = new Map();   // id -> { start, end } (ms) from SET_QUEST_TIME
     this.now = null;     // the server's wall clock (Game.serverNow), set once in game
   }
   /** Dates, repeat intervals and dayByDay go by the server's clock; with none, this computer's wall clock. */
   clock() { return this.now ? this.now() : Date.now() - new Date().getTimezoneOffset() * 60000; }
+  /** SET_QUEST_TIME: start / end FILETIMEs that replace those quests' Check.img dates; null (SET_QUEST_CLEAR) drops them all. */
+  setTimes(list) {
+    if (!list) { this.timeOverride.clear(); return; }
+    for (const t of list) this.timeOverride.set(t.id, { start: ftMs(t.start), end: ftMs(t.end) });
+  }
 
   async load() {
     [this.info, this.check, this.act, this.say] = await Promise.all(
@@ -300,7 +306,8 @@ export class QuestBook {
     if (c.lvmax && s.level > c.lvmax) return false;
     if (c.lvmin && s.level < c.lvmin - (isPartyQuest(id) ? 5 : 0)) return false;
     if (c.pop && (s.fame ?? 0) < c.pop) return false;
-    const now = this.clock(), start = wzDate(c.start), end = wzDate(c.end);
+    // dates the server set (SET_QUEST_TIME) win over Check.img's, both of them
+    const ov = this.timeOverride.get(id), now = this.clock(), start = ov ? ov.start : wzDate(c.start), end = ov ? ov.end : wzDate(c.end);
     if ((start !== null && start > now) || (end !== null && end < now)) return false;
     const jobs = list(c.job);
     if (jobs.length && Math.floor((s.job % 1000) / 100) !== 9 && !jobs.includes(s.job)) return false;

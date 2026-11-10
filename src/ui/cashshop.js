@@ -329,6 +329,34 @@ export class CashShopWin extends Win {
     this.inv.push(...c.items);
     this.alert(`You have received ${c.items.length + c.got.length} item(s), ${fmt(c.maplePoints)} MaplePoints and ${fmt(c.mesos)} mesos using the coupon.`);
   }
+  /** A cash item deleted from the locker (CASHSHOP_OPERATION 0x6C, or 0x85 with the Maple Points it was worth). */
+  deleted(cashId, mp) {
+    this.inv = this.inv.filter((c) => String(c.cashId) !== String(cashId));
+    if (mp === null || mp === undefined) { this.done(); this.alert('The cash item has been deleted.'); }
+    else this.alert(`Cash item has been deleted.\r\n(${mp} accumulated as MaplePoints)`);
+  }
+  /** A package sent as a gift (0x8B). */
+  async packageGift(to, itemId, price) {
+    this.done(); sfx.play('UI/BuyShopItem');
+    this.alert(`[ ${await this.name(itemId)} ] \r\nwas sent to ${to}. \r\n${price} NX Prepaid \r\nwere spent in the process.`);
+  }
+  /** A gift coupon used (0x5B): the client's own words, broken English and all. */
+  async couponGift(to, items, mp) {
+    this.done(); sfx.play('UI/BuyShopItem');
+    let t = `You have receivedTo ${to}\r\n`;
+    for (const it of items) t += `\r\n${it.quantity} ${await this.name(it.itemId)}`;
+    if (items.length && mp) t += 'and \r\n';
+    if (mp) t += `${mp} MaplePoints`;
+    this.alert(`${t}You have given a gift to`);
+  }
+  /** Gachapon Stamps from a Gachapon Ticket (0x14C): no room, or so many, the locker turning to Etc. */
+  stamps(ok, n) {
+    if (!ok) { this.alert('You cannot receive any Gachapon Stamps\r\nbecause you do not have enough room in\r\nyour Etc window.'); return; }
+    this.itab = 4;
+    this.alert(`You have acquired ${n} Gachapon Stamps\r\nby purchasing the Gachapon Ticket.`);
+  }
+  /** CHARGE_PARAM_RESULT: the client would open its billing page; here, the usual pointer to the website. */
+  charge() { this.done(); this.alert('Please visit the website to charge your account.'); }
   async expired(cashId) {
     const it = this.inv.find((c) => String(c.cashId) === String(cashId));
     this.inv = this.inv.filter((c) => c !== it);

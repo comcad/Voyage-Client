@@ -306,6 +306,34 @@ export class ChannelSession {
       this.emit('notes', notes);
     });
     on(S.QUERY_CASH_RESULT, (r) => this.emit('csCash', { credit: r.int(), maplePoint: r.int(), prepaid: r.int() }));
+    // the Zakum Shrine / Horntail's Cave closing: a kind (0: unless the boss is summoned) and the minutes left (0: closed)
+    on(S.ZAKUM_SHRINE, (r) => { const kind = r.ubyte(); this.emit('bossShrine', 'zakum', kind, r.int()); });
+    on(S.HORNTAIL_CAVE, (r) => { const kind = r.ubyte(); this.emit('bossShrine', 'horntail', kind, r.int()); });
+    // a random transform potion that failed: 1, then 2 (with the name not found) or 3 (only in town)
+    on(S.RANDOM_MORPH_RES, (r) => {
+      this.emit('exclusiveAnswered');
+      if (r.ubyte() !== 1) return;
+      const reason = r.ubyte();
+      this.emit('randomMorph', reason, reason === 2 ? r.string() : '');
+    });
+    // trading mesos past the daily limit (0: the notice); either way the request is answered
+    on(S.TRADE_MONEY_LIMIT, (r) => { const flag = r.available ? r.ubyte() : 1; this.emit('exclusiveAnswered'); if (flag === 0) this.emit('tradeMoneyLimit'); });
+    on(S.ARIANT_RESULT, (r) => this.emit('serverNotice', r.string()));
+    // quest start / end dates the server overrides (SET_QUEST_TIME), or all of them dropped (SET_QUEST_CLEAR)
+    on(S.SET_QUEST_CLEAR, () => this.emit('questTimes', null));
+    on(S.SET_QUEST_TIME, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0; n--) { const id = r.int(); list.push({ id, start: r.long(), end: r.long() }); }
+      this.emit('questTimes', list);
+    });
+    on(S.SET_POTION_DISCOUNT_RATE, (r) => this.emit('potionDiscount', r.ubyte()));
+    on(S.GMEVENT_INSTRUCTIONS, (r) => this.emit('eventHelp', r.ubyte()));
+    // party-raid values: PRaid_Point (PARTY_VALUE); Red_Stage / Blue_Stage / Bamboo_Used (FIELD_SET_VARIABLE)
+    on(S.PARTY_VALUE, (r) => { const key = r.string(); this.emit('partyValue', key, r.string()); });
+    on(S.FIELD_SET_VARIABLE, (r) => { const key = r.string(); this.emit('fieldVariable', key, r.string()); });
+    on(S.CASHSHOP_PURCHASE_EXP_CHANGED, (r) => this.emit('csPurchaseExp', r.ubyte()));
+    on(S.CASHSHOP_GACHAPON_STAMP_RESULT, (r) => { const ok = r.ubyte(); this.emit('csStamps', ok, ok && r.available >= 4 ? r.int() : 0); });
+    on(S.CHARGE_PARAM_RESULT, () => this.emit('csCharge'));
     on(S.CASHSHOP_OPERATION, (r) => {
       const op = r.ubyte(), list = (n) => { const out = []; for (; n > 0; n--) out.push(readCashItem(r)); return out; };
       if (op === 0x4B) { const items = list(r.short()); this.emit('csInventory', items, r.available >= 4 ? r.short() : null, r.available >= 2 ? r.short() : null); }
@@ -337,6 +365,14 @@ export class ChannelSession {
       else if (op === 0x62) this.emit('csSlots', 'storage', r.short());
       else if (op === 0x64) this.emit('csSlots', 'character', r.short());
       else if (op === 0x9E || op === 0xA0) this.emit('csTransferBought', op === 0x9E ? 'name' : 'world', readCashItem(r));
+      else if (op === 0x9B) r.ubyte();
+      // a cash item deleted from the locker (0x85: with the Maple Points it was worth)
+      else if (op === 0x6C) this.emit('csDeleted', r.long(), null);
+      else if (op === 0x85) { const sn = r.long(); this.emit('csDeleted', sn, r.int()); }
+      // a package sent as a gift: to whom, the package, then what it cost
+      else if (op === 0x8B) { const to = r.string(), itemId = r.int(); r.short(); r.short(); this.emit('csPackageGift', to, itemId, r.int()); }
+      // a gift coupon used: for whom, the items, the Maple Points
+      else if (op === 0x5B) { const to = r.string(), items = list(r.ubyte()); this.emit('csCouponGift', to, items, r.int()); }
     });
     // a name change or world transfer: may it go ahead (an error code, then for a transfer the worlds), and is a new name free
     on(S.CASHSHOP_CHECK_NAME_CHANGE_POSSIBLE_RESULT, (r) => { r.int(); const error = r.ubyte(); this.emit('csNameChangeRules', error, r.int()); });
@@ -1220,6 +1256,8 @@ export class ChannelSession {
         this.emit('foreignSkill', id, skill, level, r.available >= 1 ? r.ubyte() : 0);
       }
       else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
+      // a quest's effect on them: with no items, its message (into your log) and Effect/Quest.img/<effect>
+      else if (effect === 3 && r.available >= 1) { if (r.ubyte() === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : -1, id); } }
       else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
@@ -1266,7 +1304,7 @@ export class ChannelSession {
       // 3: a quest's effect (0 items: message + Effect/Quest.img id) or the items it gave / took
       else if (type === 3 && r.available >= 1) {
         const n = r.ubyte();
-        if (n === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : 0); }
+        if (n === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : -1); }
         else this.emit('questItems', Array.from({ length: n }, () => ({ id: r.int(), qty: r.int() })));
       }
     });

@@ -675,6 +675,17 @@ const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
 // Use / Set-up / Etc items other than stars and bullets: these ask how many
 const isStackable = (id) => [2, 3, 4].includes(invType(id)) && !isRechargeable(id);
 const commas = (n) => n.toLocaleString('en-US');
+/**
+ * A potion's discounted price (SET_POTION_DISCOUNT_RATE), for 200xxxx-202xxxx items: (100 - rate)% of the price,
+ * rounded half up; 0 for no discount.
+ */
+function potionPrice(g, price, id) {
+  const rate = g?.potionRate || 0, k = Math.floor(id / 10000);
+  if (!rate || k < 200 || k > 202) return 0;
+  let x = (100 - rate) * price * 0.01;
+  if (Math.trunc(x * 10) % 10 >= 5) x += 1;
+  return Math.trunc(x);
+}
 /** An item name cut to the row's 152px, ending in "..". */
 function rowName(ctx, s) {
   ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';
@@ -779,7 +790,8 @@ export class ShopWin extends Win {
         qty = await this.askQty(`${timed}How many are you willing to buy?`, 1, 1, it.max);
         if (!qty || qty < 1 || qty > it.max) return;
       } else if (!(await this.ask(`${timed}Are you sure you want to buy it?`))) return;
-      const cost = it.price * qty;
+      // a potion discount (SET_POTION_DISCOUNT_RATE) lowers what you need; the packet keeps the base price
+      const cost = (potionPrice(this.g, it.price, it.id) || it.price) * qty;
       if (cost <= 0 || cost > this.g.meso) { m.notice(NO_MESOS); return; }
     }
     if (this.pending || !this.open) return;
@@ -867,7 +879,14 @@ export class ShopWin extends Win {
     this.rowText(ctx, rowName(ctx, m.itemName(it.id)), 49, y - 20);
     const mark = im(it.price ? this.S.meso : this.S.token);
     if (mark) ctx.drawImage(mark, 49, y - 1);
-    this.rowText(ctx, it.price ? `${commas(it.price)}meso` : commas(it.token), 64, y);
+    const text = it.price ? `${commas(it.price)}meso` : commas(it.token);
+    this.rowText(ctx, text, 64, y);
+    // a potion discount: the lower price in red, at the normal price's width + 54 as the client places it
+    const d = it.price ? potionPrice(this.g, it.price, it.id) : 0;
+    if (d) {
+      ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif'; const w = ctx.measureText(text).width; ctx.restore();
+      uiText(ctx, `${commas(d)}meso`, Math.round(w + 54), y, { color: '#ff2020', size: 12 });
+    }
   }
   /** One of your items: icon (with its count for Use / Set-up / Etc), name and price; no coin on this side. */
   sellRow(ctx, i, r, selected) {

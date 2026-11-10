@@ -1450,6 +1450,25 @@ export class Game {
     if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text)) return true;
     return (await this.maskCurses(text)) !== text;
   }
+  /** GMEVENT_INSTRUCTIONS: this map's String/Map.img help<n> in the NPC dialog, OK only (\n in the text a line break). */
+  async eventHelp(i) {
+    const s = await this.assets.json('String/Map.img'), id = this.map?.id;
+    let node = null;
+    for (const r of Object.values(s || {})) if (r?.[id]) { node = r[id]; break; }
+    const text = node?.[`help${i}`];
+    if (typeof text !== 'string') return;
+    localTalk(this.windows, 0, text.replace(/\\n/g, '\r\n'), ['OK']);
+  }
+  /**
+   * FIELD_SET_VARIABLE (party raids): Red_Stage / Blue_Stage as your team's stage and the other's (by PRaid_Team), and
+   * Bamboo_Used. Kept for the party-raid field, which Voyage doesn't draw yet.
+   */
+  fieldVariable(key, value) {
+    const n = parseInt(value, 10) || 0;
+    if (key === 'Red_Stage') { if (this.praidTeam === 0) this.praidStage = n; else if (this.praidTeam === 1) this.praidOtherStage = n; }
+    else if (key === 'Blue_Stage') { if (this.praidTeam === 1) this.praidStage = n; else if (this.praidTeam === 0) this.praidOtherStage = n; }
+    else if (key === 'Bamboo_Used') this.bambooUsed = n;
+  }
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
     const open = (w) => w && this.windows.order.includes(w);
@@ -2905,6 +2924,31 @@ export class Game {
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
       exclusiveAnswered: () => this.releaseExclusive(),
+      // the Zakum Shrine / Horntail's Cave closing (a pink line); a random transform potion that failed
+      bossShrine: later((which, kind, min) => {
+        if (min < 0) return;
+        const place = which === 'zakum' ? ['The Zakum Shrine', 'Zakum'] : ["The Horntail's Cave", 'Horntail'];
+        this.hud.message(min === 0 ? `${place[0]} has closed.` : kind === 0 ? `${place[0]} will close if you do not summon ${place[1]} in ${min} minutes.` : `${place[0]} will close in ${min} minutes.`, CHAT_COLOR.error);
+      }),
+      randomMorph: later((reason, name) => {
+        if (reason === 2) this.hud.message(`Failed to find user ${name}.`, CHAT_COLOR.error);
+        else if (reason === 3) this.hud.message('\tYou can use random transform potion only in the town.', CHAT_COLOR.error);
+      }),
+      tradeMoneyLimit: () => this.windows.notice('Players that are Level 15 and below \r\nmay only trade 1 million mesos per day. \r\nYou have reached the limit today,\r\nplease try again tomorrow.'),
+      serverNotice: (text) => this.windows.notice(text),
+      questTimes: (list) => { this.quests?.setTimes(list); this.refreshQuestBlink?.(); },
+      potionDiscount: (rate) => { this.potionRate = rate; },
+      eventHelp: later((i) => this.eventHelp(i)),
+      partyValue: (key, value) => { if (key === 'PRaid_Point') this.praidPoint = parseInt(value, 10) || 0; },
+      fieldVariable: (key, value) => this.fieldVariable(key, value),
+      csPurchaseExp: (v) => { if (this.account) this.account.purchaseExp = v; },
+      csStamps: (ok, n) => this.csWin?.stamps(ok, n),
+      csCharge: () => this.csWin?.charge(),
+      csDeleted: (cashId, mp) => this.csWin?.deleted(cashId, mp),
+      csPackageGift: (to, itemId, price) => this.csWin?.packageGift(to, itemId, price),
+      csCouponGift: (to, items, mp) => this.csWin?.couponGift(to, items, mp),
+      // a quest's effect: its message in your log, light blue (its art, Effect/Quest.img / Sound/Quest.img, isn't in v83's data)
+      questEffect: later((msg) => { if (msg) this.hud.gain(msg, '#64B4F0'); }),
       skillBookResult: (d) => this.onSkillBookResult(d),
       inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
       sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
