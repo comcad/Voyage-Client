@@ -1,6 +1,5 @@
 import { drawParts } from '../character.js';
-import { sfx } from '../audio.js';
-import { TextField, uiText, wrapText } from './wzui.js';
+import { TextField, uiText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
 import { UI_W } from '../view.js';
 
@@ -10,10 +9,29 @@ import { UI_W } from '../view.js';
  *   title bar y 0-20; the portrait panel x 2-290 y 24-142 with three spots (shadows centred on x 52 / 146 / 240
  *   at y 120), a NameBar (89x19) under each
  *   chat x 8-266 y 148-302, its scrollbar at 272; the input line x 12-220 y 318-334, BtEnter beside it
- * Opening it starts a messenger (you take spot 0); double-click an empty spot or type /invite <name> to ask
- * someone in. When someone talks, chatBalloon plays over their portrait. Closing it leaves.
+ * Opening it starts a messenger (you take spot 0); type /invite <name> to ask someone in, /q (or Escape and
+ * yes) to leave. When someone talks, chatBalloon plays over their portrait. Closing it leaves.
+ *
+ * The chat is 12px Arial, cut to 240 wide by letters, each following piece of a long line indented by four
+ * spaces. Notices are black; each spot's lines have their own colour.
  */
-const SPOTS = [52, 146, 240], FEET = 120, CHAT = { x: 10, y: 150, w: 254, rows: 10, line: 15 };
+const SPOTS = [52, 146, 240], FEET = 120, CHAT = { x: 10, y: 150, wrap: 240, rows: 10, line: 15 };
+const NOTICE = '#000000', SPOT_COLORS = ['#006699', '#ff2020', '#336600'];
+const HELP = ['[ Maple Messenger Help ]', '-------------------------', 'Invite : /invite character-name', 'End : /q', '-------------------------'];
+
+/** A chat line cut to the chat's width by letters; the pieces after the first are indented by four spaces. */
+function wrapLine(ctx, text) {
+  const out = [], indent = '    ', iw = ctx.measureText(indent).width;
+  let rest = text;
+  do {
+    const w = out.length ? CHAT.wrap - iw : CHAT.wrap;
+    let n = rest.length;
+    while (n > 1 && ctx.measureText(rest.slice(0, n)).width > w) n--;
+    out.push(out.length ? indent + rest.slice(0, n) : rest.slice(0, n));
+    rest = rest.slice(n);
+  } while (rest);
+  return out;
+}
 
 export class MessengerWin extends Win {
   constructor(mgr) {
@@ -27,11 +45,16 @@ export class MessengerWin extends Win {
     this.field.el.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') this.send();
-      else if (e.key === 'Escape') this.field.el.blur();
+      else if (e.key === 'Escape') this.askLeave();
+      else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); this.recall(e.key === 'ArrowUp' ? -1 : 1); }
     });
   }
   frames() { return [...super.frames(), ...allCanvases(this.M)]; }
-  reset() { this.members = []; this.myPos = 0; this.seated = false; this.lines = []; this.first = null; this.talk = {}; this.active = false; }
+  reset() {
+    this.members = []; this.myPos = 0; this.seated = false; this.lines = []; this.first = null; this.talk = {}; this.active = false;
+    // the window's own chat checks and sent-line history, apart from the chat bar's
+    this.guard = { game: this.g, history: [], historyAt: 0 };
+  }
 
   // ---------------------------------------------------------------- open / close
   onOpen() {
@@ -39,7 +62,8 @@ export class MessengerWin extends Win {
     if (this.active) return;
     this.reset();
     this.active = true;
-    if (this.joining) { this.joining = false; return; }      // accepting: the server seats you
+    for (const t of HELP) this.say(t);
+    if (this.joining) { this.joining = false; this.myPos = -1; return; }      // accepting: the server seats you
     // opening it starts a messenger with you in spot 0 (the server sends nothing back for that)
     this.g.net?.messengerJoin(0);
     this.members[0] = this.self(); this.seated = true;
@@ -60,43 +84,76 @@ export class MessengerWin extends Win {
 
   // ---------------------------------------------------------------- server events
   event(e) {
-    const name = (p) => this.members[p]?.name;
-    // joining someone's messenger: those already there arrive first, then your own spot
-    if (e.op === 'join') { this.myPos = e.pos; this.members[e.pos] = this.self(); this.seated = true; }
-    else if (e.op === 'add' || e.op === 'update') {
-      const known = this.members[e.pos]?.name === e.name;
+    const name = (p) => this.members[p]?.name ?? '';
+    if (e.op === 'join') {
+      // a spot below 0: the room couldn't be joined, and you sit alone in spot 0
+      if (e.pos < 0) this.say('- You have been unable to join the invited chat room.');
+      this.myPos = Math.max(0, e.pos); this.members[this.myPos] = this.self(); this.seated = true;
+      if (e.pos >= 0) this.say(`- '${this.g.player.name}' has entered.`);
+    } else if (e.op === 'add' || e.op === 'update') {
       this.members[e.pos] = { name: e.name, look: this.g.lookFrom(e.look), channel: e.channel };
-      if (e.op === 'add' && !known && this.seated) { this.say(`${e.name} has joined.`, '#555'); sfx.play('UI/BtMouseClick'); }
+      if (e.announce) this.say(`- '${e.name}' has entered.`);
     } else if (e.op === 'remove') {
-      if (name(e.pos)) this.say(`${name(e.pos)} has left.`, '#555');
+      if (e.pos >= 0 && e.pos < 3) this.say(`- '${name(e.pos)}' have left the room.`);
       delete this.members[e.pos];
-    } else if (e.op === 'invited') this.say(e.ok ? `You have sent an invitation to ${e.name}.` : `${e.name} could not be found.`, '#555');
-    else if (e.op === 'declined') this.say(`${e.name} has declined your invitation.`, '#555');
+    } else if (e.op === 'invited') this.say(e.ok ? `- You have sent the invite to '${e.name}'.` : `- '${e.name}' can't be found.`);
+    else if (e.op === 'declined') this.say(e.mode ? `'${e.name}' is currently not accepting chat.` : `'${e.name}' denied the request.`);
     else if (e.op === 'chat') {
-      this.say(e.text);
-      const who = e.text.split(' : ')[0], pos = this.members.findIndex((m) => m?.name === who);
-      if (pos >= 0) this.talk[pos] = performance.now();
+      // "name : text" from someone in the room, its words from Etc/Curse.img masked; a line with no " : " is a
+      // typing notice (the name and 0 or 1), not chat
+      const at = e.text.indexOf(' : ');
+      if (at < 0) return;
+      const who = e.text.slice(0, at), pos = this.members.findIndex((m) => m?.name?.toLowerCase() === who.toLowerCase());
+      if (pos < 0) return;
+      this.g.maskCurses(e.text.slice(at + 3)).then((t) => this.say(`${who} : ${t}`, SPOT_COLORS[pos]));
+      this.talk[pos] = performance.now();
     }
   }
-  say(text, color = '#000') { this.lines.push({ text, color }); if (this.lines.length > 100) this.lines.shift(); this.first = null; }
+  say(text, color = NOTICE) { this.lines.push({ text, color }); if (this.lines.length > 100) this.lines.shift(); this.first = null; }
 
   // ---------------------------------------------------------------- your actions
-  send() {
-    const text = this.field.value.trim();
-    if (!text) return;
+  /**
+   * Enter: a line starting with '/' is a command; anything else goes through the same checks as the chat bar
+   * (its quiet time after a warning, cursing, then the repeat and flood checks) and is kept for Up / Down.
+   */
+  async send() {
+    const text = this.field.value;
+    if (!text || this.myPos < 0) return;
     this.field.value = '';
-    const inv = text.match(/^\/invite\s+(\S+)/i);
-    if (inv) { this.invite(inv[1]); return; }
+    if (text[0] === '/') { this.command(text); return; }
+    const sb = this.g.statusBar, checks = Object.getPrototypeOf(sb), guard = this.guard;
+    if (performance.now() - (guard.spamAt ?? -Infinity) >= 2800 && await this.g.cursed?.(text)) { this.mgr.notice('Cursing is not allowed.'); return; }
+    if (!checks.canSay.call(guard, text)) return;
+    checks.remember.call(guard, text);
     const line = `${this.g.player.name} : ${text}`;
     this.g.net?.messengerChat(line);
-    this.say(line);
+    this.say(line, SPOT_COLORS[this.myPos]);
     this.talk[this.myPos] = performance.now();
   }
-  async invite(name) {
-    if (!name) name = (await this.mgr.askText('Enter the name of the character you want to invite to the Maple Messenger.'))?.trim();
-    if (!name) return;
-    if (this.members.filter(Boolean).length >= 3) { this.say('The Maple Messenger is full.', '#555'); return; }
+  /** A line starting with '/': /q leaves, "/invite name" asks someone in; anything else does nothing. */
+  command(text) {
+    if (text.toLowerCase() === '/q') { this.mgr.close(this); return; }
+    const pre = '/invite ';
+    if (text.length > pre.length && text.slice(0, pre.length).toLowerCase() === pre) this.inviteByName(text.slice(pre.length));
+  }
+  /** /invite: not yourself, and not a name holding a word from Etc/ForbiddenName.img. */
+  async inviteByName(name) {
+    const me = this.g.player.name;
+    if (!me || name.toLowerCase() === me.toLowerCase()) { this.say("- Please enter the user's name."); return; }
+    const bad = Object.values((await this.g.assets.json('Etc/ForbiddenName.img')) || {}).map((v) => String(v).toLowerCase());
+    if (bad.some((b) => b && name.toLowerCase().includes(b))) { this.say('- The character name is invalid.'); return; }
     this.g.net?.messengerInvite(name);
+  }
+  /** Escape in the input line: "Will you exit this chat room?", and yes leaves. */
+  async askLeave() {
+    if (await this.mgr.confirm('Will you exit this chat room?')) this.mgr.close(this);
+  }
+  /** Up / Down: the lines sent before. */
+  recall(d) {
+    const g = this.guard, n = g.history.length;
+    if (!n) return;
+    g.historyAt = Math.max(0, Math.min(n, g.historyAt + d));
+    this.field.value = g.history[g.historyAt] ?? '';
   }
 
   // ---------------------------------------------------------------- frame
@@ -126,12 +183,12 @@ export class MessengerWin extends Win {
       }
     });
     // chat, newest at the bottom unless scrolled up
-    ctx.save(); ctx.font = '11px Arial, sans-serif';
-    const rows = this.lines.flatMap((l) => wrapText(ctx, l.text, CHAT.w - 4, 11).map((text) => ({ text, color: l.color })));
+    ctx.save(); ctx.font = '12px Arial, sans-serif';
+    const rows = this.lines.flatMap((l) => wrapLine(ctx, l.text).map((text) => ({ text, color: l.color })));
     ctx.restore();
     this.rowCount = rows.length;
     const max = Math.max(0, rows.length - CHAT.rows), first = this.first === null ? max : Math.min(this.first, max);
-    rows.slice(first, first + CHAT.rows).forEach((l, i) => uiText(ctx, l.text, CHAT.x, CHAT.y + i * CHAT.line, { color: l.color, size: 11 }));
+    rows.slice(first, first + CHAT.rows).forEach((l, i) => uiText(ctx, l.text, CHAT.x, CHAT.y + i * CHAT.line, { color: l.color, size: 12 }));
     this.scrollbar(ctx, 272, 148, 156, first, rows.length, CHAT.rows);
   }
   down(lx, ly) {
@@ -143,11 +200,5 @@ export class MessengerWin extends Win {
     const max = Math.max(0, (this.rowCount || 0) - CHAT.rows), cur = this.first ?? max;
     const next = Math.max(0, Math.min(max, cur + Math.sign(dy)));
     this.first = next >= max ? null : next;
-  }
-  dblclick(lx, ly) {
-    // an empty spot: invite someone into it
-    if (ly < 26 || ly > 142) return;
-    const pos = SPOTS.findIndex((x) => Math.abs(lx - x) < 46);
-    if (pos >= 0 && !this.members[pos]) this.invite();
   }
 }

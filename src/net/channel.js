@@ -738,12 +738,15 @@ export class ChannelSession {
     // 5 it was declined (name), 6 a line of chat ("name : text"), 7 someone's look changed
     on(S.MESSENGER, (r) => {
       const op = r.ubyte();
-      if (op === 0 || op === 7) { const pos = r.ubyte(), look = readCharLook(r); this.emit('messenger', { op: op === 0 ? 'add' : 'update', pos, look, name: r.string(), channel: r.ubyte() }); }
-      else if (op === 1) this.emit('messenger', { op: 'join', pos: r.ubyte() });
+      if (op === 0 || op === 7) {
+        const pos = r.ubyte(), look = readCharLook(r), name = r.string(), channel = r.ubyte();
+        this.emit('messenger', { op: op === 0 ? 'add' : 'update', pos, look, name, channel, announce: op === 0 && r.ubyte() !== 0 });
+      }
+      else if (op === 1) { const pos = r.ubyte(); this.emit('messenger', { op: 'join', pos: pos > 127 ? pos - 256 : pos }); }
       else if (op === 2) this.emit('messenger', { op: 'remove', pos: r.ubyte() });
       else if (op === 3) { const from = r.string(); r.ubyte(); this.emit('messenger', { op: 'invite', from, id: r.int() }); }
       else if (op === 4) { const name = r.string(); this.emit('messenger', { op: 'invited', name, ok: r.ubyte() === 1 }); }
-      else if (op === 5) this.emit('messenger', { op: 'declined', name: r.string() });
+      else if (op === 5) { const name = r.string(); this.emit('messenger', { op: 'declined', name, mode: r.ubyte() }); }
       else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
     });
     // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
