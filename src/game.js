@@ -5685,7 +5685,31 @@ export class Game {
     // /fps: the performance meter on or off (a Voyage tool, kept with the System Option choices)
     if (/^\/fps$/i.test(text.trim())) {
       settings.fpsMeter = !settings.fpsMeter; saveSettings();
+      if (!settings.fpsMeter) { this.perf?.detach(this); this.perf = null; }
       this.hud?.message?.(`The performance meter is ${settings.fpsMeter ? 'on' : 'off'}. Type /fps again to ${settings.fpsMeter ? 'hide' : 'show'} it.`, CHAT_COLORS.notice);
+      return;
+    }
+    // /fps copy: the meter's report of recent hitches onto the clipboard (and into the browser console)
+    if (/^\/fps\s+copy$/i.test(text.trim())) {
+      const say = (m) => this.hud?.message?.(m, CHAT_COLORS.notice);
+      if (!settings.fpsMeter || !this.perf) {
+        settings.fpsMeter = true; saveSettings();
+        say('The performance meter is on now. Play until it hitches, then type /fps copy again.');
+        return;
+      }
+      const report = this.perf.report(this);
+      console.log(report);
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = report; ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+        document.body.appendChild(ta); ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch { /* blocked */ }
+        ta.remove();
+        say(ok ? 'Copied the /fps report.' : "Couldn't copy the /fps report: it's in the browser console (F12).");
+      };
+      if (navigator.clipboard?.writeText && window.isSecureContext) navigator.clipboard.writeText(report).then(() => say('Copied the /fps report.'), fallback);
+      else fallback();
       return;
     }
     if (!this.net) { this.player.chat = { text, t: 5 }; return; }
@@ -5994,7 +6018,7 @@ export class Game {
         try {
           if (gap > 0.25) this.catchUpPaths(gap - dt);
           const u0 = performance.now(); this.update(dt); const u1 = performance.now(); this.render();
-          if (meter) { meter.frame(t, u1 - u0, performance.now() - u1); meter.draw(this.ctx, this); }
+          if (meter) { meter.frame(t, u1 - u0, performance.now() - u1, this); meter.draw(this.ctx, this); }
         } catch (e) {
           const key = String(e?.message);
           if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }

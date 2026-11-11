@@ -43,6 +43,7 @@ export class Assets {
     this.base = base;
     this.jsonCache = new Map();
     this.imgCache = new Map();
+    this.loaded = 0; this.loadedPx = 0;   // images loaded so far and their pixels (the /fps report)
   }
 
   json(path) {
@@ -64,7 +65,7 @@ export class Assets {
       e = { img, ready: false };
       e.promise = new Promise((res) => {
         // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
-        img.onload = () => { const done = () => { e.ready = true; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
+        img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
         img.onerror = () => res(null);
       });
       img.src = `${this.base}/${node._canvas}`;
