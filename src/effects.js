@@ -249,10 +249,18 @@ export class WorldFx {
    */
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
-    // over the body it struck: a monster's own lt/rb (a boss part's, not the whole boss's), else its picture
-    const body = typeof n.target.bodyBox === 'function' ? n.target.bodyBox() : null;
-    const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
-    n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    // a monster's numbers stand on its current frame's head point (mirrored as it faces; its feet in a frame without
+    // one); anyone else's over the body struck - its own lt/rb, else its picture
+    const node = n.target.kind === 'Mob' ? n.target.node : null;
+    if (node) {
+      const head = node.head || [0, 0];
+      n.x = Math.round(n.target.x + (n.target.facesRight ? -head[0] : head[0]));
+      n.y = n.target.y + head[1] - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    } else {
+      const body = typeof n.target.bodyBox === 'function' ? n.target.bodyBox() : null;
+      const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
+      n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    }
     if (!n.v) {
       const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
       if (!img) return false;

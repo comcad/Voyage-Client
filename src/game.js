@@ -2190,7 +2190,8 @@ export class Game {
   /**
    * Heart-Shaped Chocolates (5110000): n % 10 small hearts (ItemEff.img/5110000/0) and n / 10 big ones (/1) over their
    * head, the small ones in rows of five 10px apart, the big ones above them 15px apart, each circling its place 5px
-   * out from a random start. Not while morphed.
+   * out from a random start, once every 2 seconds. Not while morphed. (The client's anchor point isn't read: 65px
+   * over the feet here.)
    */
   async setHearts(ent, n) {
     ent.hearts = null;
@@ -2215,7 +2216,7 @@ export class Game {
   drawHearts(ctx, cam, ent, dt) {
     if (!ent.hearts || ent.morph) return;
     for (const h of ent.hearts) {
-      h.a += (dt || 0) * Math.PI;   // (how fast they go round isn't read from the client yet)
+      h.a += (dt || 0) * Math.PI;   // once round every 2000ms
       const img = this.assets.image(h.node);
       if (!img) continue;
       const o = h.node.origin || [0, 0], x = ent.x + h.x + Math.cos(h.a) * 5, y = ent.y - 65 + h.y + Math.sin(h.a) * 5;
@@ -4042,10 +4043,11 @@ export class Game {
     if (fresh) sfx.play('Game/Tombstone');
     await new Promise((r) => setTimeout(r, 2200));
     if (this.death !== death) return;   // brought back meanwhile
-    // a Wheel of Destiny asks to use it (Notice/2); playing from an Internet café asks to revive here (Notice/1)
-    const wheel = this.wheelRevivable();
+    // a Wheel of Destiny asks to use it (Notice/2); playing from an Internet café asks to revive here (Notice/1), but
+    // not on a map with a forcedReturn
+    const wheel = this.wheelRevivable(), fr = this.map?.info?.forcedReturn, cafe = this.cafe && (fr === undefined || Number(fr) === 999999999);
     const answer = await new Promise((done) => {
-      const w = death.notice = new DeathNotice(this.windows, wheel ? 'wheel' : this.cafe ? 'cafe' : 'ok', (yes) => done({ yes }));
+      const w = death.notice = new DeathNotice(this.windows, wheel ? 'wheel' : cafe ? 'cafe' : 'ok', (yes) => done({ yes }));
       death.cancel = () => done(null);
       this.assets.preload(w.frames()).then(() => {
         if (this.death !== death) return;
@@ -6605,12 +6607,15 @@ export class Game {
     // a shot that stops at the first monster on its line doesn't go through the ground or a wall on the way there
     // (nor do the blast or the orb's hops that start from it)
     const lineShot = plan && !opts.mobs && !RAIN_SHOTS.has(skillId) && !PIERCING_SHOTS.has(skillId) && !BOX_LINE_SHOTS.has(skillId);
+    // (its target is dropped and the shot flies only as far as where it crosses)
+    let clip = null;
     if (lineShot && plan.targets.length) {
-      const h = plan.targets[0];
-      if (this.shotBlocked(plan.sx, plan.sy, h.hx ?? h.x, h.hy ?? h.y)) { plan.targets = []; plan.orb = null; plan.blast = null; targets = []; }
+      const h = plan.targets[0], c = this.shotBlocked(plan.sx, plan.sy, h.hx ?? h.x, h.hy ?? h.y);
+      if (c) { plan.targets = []; plan.orb = null; plan.blast = null; targets = []; plan.ex = c.x; plan.ey = c.y; }
     } else if (kind === 'ranged' && mobCount === 1 && !plan && targets.length === 1) {
       const b = targets[0].hitBox();
-      if (this.shotBlocked(p.x, p.y - 28, (b.left + b.right) / 2, (b.top + b.bottom) / 2)) targets = [];
+      clip = this.shotBlocked(p.x, p.y - 28, (b.left + b.right) / 2, (b.top + b.bottom) / 2);
+      if (clip) targets = [];
     }
     // Band of Thieves: a monster in reach of your plain swing first, then the rest of its box
     if (skillId === BAND_OF_THIEVES) {
@@ -6657,6 +6662,8 @@ export class Game {
         const maxHp = Number(m.src?.info?.maxHP) || 0, boss = !!Number(m.src?.info?.boss);
         if (BAMBOO_RAINS.has(skillId)) { dmg.push(boss ? Math.trunc(maxHp * 0.3) : maxHp); crits.push(false); continue; }
         if (PHARAOHS.has(skillId)) { dmg.push(maxHp); crits.push(false); continue; }
+        // a monster Combo Tempest froze takes its max HP from any physical blow, which can't miss
+        if ((phys || skillId === COMBO_TEMPEST) && m.frozen && m.statusArt?.get(COMBO_TEMPEST)?.second & 0x100) { dmg.push(maxHp); crits.push(false); continue; }
         if (skillId === COMBO_TEMPEST && !boss) { dmg.push(1); crits.push(false); continue; }
         if (mx) { dmg.push(...mx.damage(m)); crits.push(...dmg.map(() => false)); break; }
         if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, cbLd || ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
@@ -6713,7 +6720,7 @@ export class Game {
       if (skillId === CHAIN_LIGHTNING) this.boltAt(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : p, t.mob, skillId);
     }
     if (plan) { plan.partner = !!sp; this.shotFx(plan, p, skillId, ld, ammo, hitDelay); }
-    else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, null, kind === 'ranged' ? ammo : 0, null));
+    else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, clip && { ...clip, point: true }, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
@@ -8258,20 +8265,24 @@ export class Game {
     return Math.min(1999, w);
   }
   /**
-   * Whether a shot from (sx, sy) to (ex, ey) is stopped by a foothold (on layer 0 or yours): one it crosses from its
-   * one side to the other, its ends on either side of the shot's line (touching an end doesn't stop it here).
+   * Where a shot from (sx, sy) to (ex, ey) is stopped by a foothold (on layer 0 or yours): the nearest one it crosses
+   * from its one side to the other, its ends on either side of the shot's line (touching an end doesn't stop it
+   * here). Null when nothing stops it.
    */
   shotBlocked(sx, sy, ex, ey) {
     const layer = this.player.fh?.layer ?? (Number(this.player.ladder?.page) || 0);
+    let best = null;
     for (const f of this.map.fh.all) {
       if (f.layer !== 0 && f.layer !== layer) continue;
       const dx = f.x2 - f.x1, dy = f.y2 - f.y1;
       const cs = (sy - f.y1) * dx - (sx - f.x1) * dy, ce = (ey - f.y1) * dx - (ex - f.x1) * dy;
       if (!(cs <= 0 && ce >= 0 && (cs !== 0 || ce !== 0))) continue;
       const d1 = (f.y1 - sy) * (ex - sx) - (f.x1 - sx) * (ey - sy), d2 = (f.y2 - sy) * (ex - sx) - (f.x2 - sx) * (ey - sy);
-      if (d1 !== 0 && d2 !== 0 && (d1 > 0) !== (d2 > 0)) return true;
+      if (d1 === 0 || d2 === 0 || (d1 > 0) === (d2 > 0)) continue;
+      const t = cs - ce ? cs / (cs - ce) : 0;   // how far along the shot it crosses
+      if (!best || t < best.t) best = { t, x: sx + (ex - sx) * t, y: sy + (ey - sy) * t };
     }
-    return false;
+    return best && { x: Math.round(best.x), y: Math.round(best.y) };
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
   /** The monsters your attacks can reach: alive, never a Hypnotized one, nor one only monsters hurt (info/damagedByMob). */
@@ -8787,9 +8798,10 @@ export class Game {
     if (anim) await this.assets.preload(anim.frames);
     const sx = from.x + (from.facingRight ? 20 : -20), sy = from.y - 30;
     // it flies to the middle of the target's body (a boss part's own, not the whole boss's)
+    // (or to a point: where a wall stopped it)
     const body = to?.node?.lt && typeof to.hitBox === 'function' ? to.hitBox() : null;
     const tx = body ? (body.left + body.right) / 2 : to ? to.x : from.x + (from.facingRight ? 400 : -400);
-    const ty = body ? (body.top + body.bottom) / 2 : to ? to.y - (to.node?._h || 40) / 2 : sy;
+    const ty = body ? (body.top + body.bottom) / 2 : to?.point ? to.y : to ? to.y - (to.node?._h || 40) / 2 : sy;
     const dur = Math.min(0.45, Math.max(0.12, Math.abs(tx - sx) / 1200));
     this.shotSound(from, skillId, ammoId, sx, sy);
     this.shots.push({ anim, sx, sy, tx, ty, t: 0, dur, flip: tx > sx, onHit });
@@ -9870,7 +9882,7 @@ export class Game {
     const mobs = map.life.filter((e) => e.kind !== 'Npc').map((e) => ({ e, k: mobDepth(e) })).sort((a, b) => a.k - b.k).map((x) => x.e);
     for (let l = 0; l < 8; l++) {
       map.drawLayer(ctx, cam, l);
-      for (const e of mobs) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
+      for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
@@ -9886,6 +9898,7 @@ export class Game {
       for (const c of chars) if (c.page === l) c.draw();
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
+    for (const e of mobs) if (e.flying && !e.doomArt) e.draw(ctx, cam, this.assets);   // flyers go over every layer
     for (const sm of this.summons.values()) sm.draw(ctx, cam);
     this.guide?.draw(ctx, cam);
     this.drawDrops(ctx, cam);

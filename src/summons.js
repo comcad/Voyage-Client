@@ -21,7 +21,7 @@ const PIRATE_EVERY = { 5211001: 3, 5211002: 1.5, 5220002: 1.5 };
 const WRATH = 5220002;
 /** A summon attack's action (attack1 is 4, attack2 5), sent with facing left in the top bit. */
 export const SUMMON_ACTIONS = { attack1: 4, attack2: 5 };
-const BEHOLDER = 1321007, AURA = 1320008, BERSERK = 1320006;
+const BEHOLDER = 1321007, AURA = 1320008, BERSERK = 1320006, HEX = 1320009;
 
 export class Summon {
   constructor(game, d) {
@@ -71,7 +71,7 @@ export class Summon {
         }
       }
     }
-    if (this.mine && !this.dying) { this.tryAttack(dt); this.beholderHeal(); this.sync(dt); }
+    if (this.mine && !this.dying) { this.tryAttack(dt); this.beholderHeal(); this.beholderHex(); this.sync(dt); }
   }
 
   /**
@@ -138,6 +138,33 @@ export class Summon {
     g.net?.beholder(this.oid, AURA, (this.facingRight ? 0 : 0x80) | 6);
     this.healAt = performance.now() + (Number(aura.x) || 0) * 1000;
     this.play('skill1');
+  }
+  /**
+   * Hex of the Beholder (1320009): every x seconds it buffs you with one of the skill level's stats (0 pdd, 1 mdd,
+   * 2 acc, 3 eva, 4 pad, among those it has): a random pick, each likelier by one than the one before, then the
+   * highest up to that pick that your buffs give you less of now (pdd whatever the pick). It plays skill2 + the pick
+   * and sends BEHOLDER with action 7 + the pick (facing left in bit 7) and the pick.
+   */
+  beholderHex() {
+    const g = this.g, sb = g.skills, now = performance.now();
+    if (this.skill !== BEHOLDER || this.state !== 'idle' || now < (this.hexAt || 0)) return;
+    const ld = sb?.level(HEX) && sb.levelData(HEX);
+    if (!ld) return;
+    const [pdd, mdd, acc, eva, pad] = ['pdd', 'mdd', 'acc', 'eva', 'pad'].map((k) => Number(ld[k]) || 0);
+    const vals = [pdd, mdd, acc, eva, pad], n = vals.filter(Boolean).length, W = vals.reduce((s, v, i) => s + (v ? i + 1 : 0), 0);
+    if (!n) return;
+    const r = Math.floor(Math.random() * W) + 1;
+    let k = 0;
+    while (k < n - 1 && r > ((k + 1) * (k + 2)) / 2) k++;
+    const t = Date.now(), buff = (key) => Math.max(0, ...(g.buffs || []).filter((b) => b[key] && b.until > t).map((b) => b[key]));
+    if (pad && buff('watk') < pad && k >= 4) k = 4;
+    else if (eva && buff('avoid') < eva && k >= 3) k = 3;
+    else if (acc && buff('acc') < acc && k >= 2) k = 2;
+    else if (mdd && buff('mdef') < mdd && k >= 1) k = 1;
+    else if (pdd && buff('wdef') < pdd) k = 0;
+    g.net?.beholder(this.oid, HEX, (this.facingRight ? 0 : 0x80) | ((k + 7) & 0x7f), k);
+    this.hexAt = now + (Number(ld.x) || 0) * 1000;
+    this.play(`skill${k + 2}`);
   }
   tryAttack(dt) {
     if (!this.canAttack || !this.node?.attack1 || this.state === 'summoned') return;
