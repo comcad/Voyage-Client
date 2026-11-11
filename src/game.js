@@ -51,6 +51,7 @@ import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.
 import { UserListWin, PartyHpWin, GuildContractWin, GuildMarkWin, heracleSays } from './ui/userlist.js';
 import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
+import { WishListInputWin, WeddingGiftWin } from './ui/weddinggifts.js';
 import { uiText, TextField } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
 import { Kites } from './kites.js';
@@ -1050,8 +1051,10 @@ export class Game {
    */
   async showNotes(notes) {
     this.pendingNotes = notes;
-    if (!notes.length) return;
-    const ok = await notifyNote(this.windows);
+    if (!notes.length || this.noteAsking) return;
+    this.noteAsking = true;
+    let ok;
+    try { ok = await notifyNote(this.windows); } finally { this.noteAsking = false; }
     if (!ok || !this.pendingNotes?.length) return;
     const list = this.pendingNotes;
     this.pendingNotes = [];
@@ -1455,6 +1458,35 @@ export class Game {
   async cursed(text) {
     if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text)) return true;
     return (await this.maskCurses(text)) !== text;
+  }
+  /** MARRIAGE_REQUEST 9: the couple's wish-list window (the bride's art for a female account). */
+  async openWishListInput() {
+    if (this.tradeOpen()) return;
+    const w = new WishListInputWin(this.windows, (this.accountGender ?? 0) !== 0);
+    await this.assets.preload(w.frames());
+    this.windows.show(w, null);
+  }
+  /** WEDDING_GIFT_RESULT: the give / receive windows and their answers (one request at a time). */
+  async onWeddingGifts(e) {
+    const w = this.weddingGifts && this.windows.order.includes(this.weddingGifts) ? this.weddingGifts : null;
+    if (e.mode === 9 || e.mode === 10) {
+      if (w || this.tradeOpen()) return;
+      const win = new WeddingGiftWin(this.windows, e.mode === 9, { names: e.names, items: e.block?.items });
+      await this.assets.preload(win.frames());
+      this.weddingGifts = this.windows.show(win, null);
+      return;
+    }
+    if (!w) return;
+    if (e.mode === 11 && w.give) {
+      w.pending = false; w.names = e.names; w.merge(e.block);
+      await this.windows.notice('You have sent a gift.');
+      w.exit();
+    } else if (e.mode === 12) this.windows.notice('You cannot give more than one present for each wishlist.');
+    else if ((e.mode === 13 || e.mode === 14) && w.give) { w.pending = false; this.windows.notice('Failed to send the gift.'); }
+    else if (e.mode === 15 && !w.give) {
+      w.pending = false; w.merge(e.block);
+      if (w.takeType >= 1 && w.takeType <= 5) w.tab = w.takeType - 1;
+    } else if (e.mode === 16 && !w.give) w.pending = false;
   }
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
@@ -3043,6 +3075,8 @@ export class Game {
       vega: (v) => { if (this.vegaWin && this.windows.order.includes(this.vegaWin)) this.vegaWin.onResult(v); },
       treasureBoxOpened: later((id) => this.openStep(TreasureBoxWin, 1, id === 4280000 || id === 4280002)),
       proposal: later((name, id) => this.onProposal(name, id)),
+      wishListInput: later(() => this.openWishListInput()),
+      weddingGifts: later((e) => this.onWeddingGifts(e)),
       marriageResult: later((e) => this.onMarriageResult(e)),
       newYearCard: later((e) => this.onNewYearCard(e)),
       kite: later((k) => this.kites.spawn(k)),
@@ -4037,6 +4071,7 @@ export class Game {
       if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
+      if (this.pendingNotes?.length) this.showNotes(this.pendingNotes);   // notes still waiting: the balloon on every map
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here

@@ -534,7 +534,33 @@ export class ChannelSession {
     // a wedding hall's ceremony: the step reached (with the groom's and bride's ids), and its end
     on(S.WEDDING_PROGRESS, (r) => { const step = r.ubyte(), groom = r.int(), bride = r.int(); this.emit('weddingProgress', step, groom, bride); });
     on(S.WEDDING_CEREMONY_END, () => this.emit('weddingEnd'));
-    on(S.MARRIAGE_REQUEST, (r) => { if (r.ubyte() === 0) { const name = r.string(); this.emit('proposal', name, r.int()); } });
+    on(S.MARRIAGE_REQUEST, (r) => {
+      const mode = r.ubyte();
+      if (mode === 0) { const name = r.string(); this.emit('proposal', name, r.int()); }
+      else if (mode === 9) this.emit('wishListInput');   // the couple writes their wish list
+    });
+    // WEDDING_GIFT_RESULT: 9 / 11 the couple's wishes (11 with what they were given), 10 / 15 what you were given, 12-14 / 16
+    // answers. An item block: a mask (equip 4, use 8, setup 0x10, etc 0x20, cash 0x40), then for each type set a count
+    // and the items; the types not set are kept as they were.
+    on(S.WEDDING_GIFT_RESULT, (r) => {
+      const mode = r.ubyte(), names = () => { const l = []; for (let n = r.ubyte(); n > 0; n--) l.push(r.string()); return l; };
+      const block = () => {
+        const mask = r.int(); r.int();
+        const types = [], items = [];
+        for (let t = 1; t <= 5; t++) {
+          if (!(mask & (1 << (t + 1)))) continue;
+          types.push(t);
+          for (let n = r.ubyte(), i = 0; i < n; i++) items.push({ ...readItem(r, false), groupIndex: i });
+        }
+        return { types, items };
+      };
+      const e = { mode };
+      if (mode === 9) e.names = names();
+      else if (mode === 11) { e.names = names(); e.block = block(); }
+      else if (mode === 10 || mode === 15) e.block = block();
+      else if (![12, 13, 14, 16].includes(mode)) return;
+      this.emit('weddingGifts', e);
+    });
     // MARRIAGE_RESULT: 0x0b / 0x0c the record (engaged / married), 0x0f an invitation (groom, bride, type), 0x24 a message
     on(S.MARRIAGE_RESULT, (r) => {
       const mode = r.ubyte(), e = { mode };
@@ -1781,6 +1807,11 @@ export class ChannelSession {
   breakEngagement(itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(3).int(itemId)); }
   /** WEDDING_TALK: the couple read the officiant's line for this step. WEDDING_TALK_MORE: a guest blesses them. */
   weddingTalk(step) { this.send(new PacketWriter(C.WEDDING_TALK).byte(step)); }
+  /** RING_ACTION 9: the couple's wish list. WEDDING_ACTION 6 give (slot, item, count), 7 take (type, index), 8 close. */
+  weddingWishList(list) { const w = new PacketWriter(C.RING_ACTION).byte(9).short(list.length); for (const s of list) w.string(s); this.send(w); }
+  weddingGive(slot, itemId, qty) { this.send(new PacketWriter(C.WEDDING_ACTION).byte(6).short(slot).int(itemId).short(qty)); }
+  weddingTake(type, index) { this.send(new PacketWriter(C.WEDDING_ACTION).byte(7).byte(type).byte(index)); }
+  weddingAction(mode) { this.send(new PacketWriter(C.WEDDING_ACTION).byte(mode)); }
   weddingBless() { this.send(new PacketWriter(C.WEDDING_TALK_MORE)); }
   answerProposal(ok, name, id) { this.send(new PacketWriter(C.RING_ACTION).byte(2).byte(ok ? 1 : 0).string(name).int(id)); }
   inviteGuest(name, marriageId, slot) { this.send(new PacketWriter(C.RING_ACTION).byte(5).string(name).int(marriageId).int(slot)); }
@@ -2095,6 +2126,8 @@ export class ChannelSession {
    * NOTE_ACTION 1: the notes discarded: how many, how many are type 3, your free Etc slots, then each id with its type
    * (a type 3 one, while slots last, adds the number before its text's "_").
    */
+  /** NOTE_ACTION 0: a gift's thank-you note to its sender (the reply, the gift's place in the list, its cash serial). */
+  giftReply(sender, reply, index, cashId) { this.send(new PacketWriter(C.NOTE_ACTION).byte(0).string(sender).string(reply).byte(1).int(index).long(cashId ?? 0)); }
   discardNotes(notes, freeEtc = 0) {
     const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(notes.length).byte(notes.filter((n) => n.fame === 3).length).byte(freeEtc);
     let slots = freeEtc;
