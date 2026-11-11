@@ -466,9 +466,13 @@ export class ChannelSession {
     // Surprise, the town, the item)
     on(S.SERVERMESSAGE, (r) => {
       const type = r.ubyte();
-      if (type === 4) r.ubyte();
+      // the scrolling notice: a flag, and the text only when it is set (0 takes it down)
+      if (type === 4) { const on = r.ubyte(); if (!on) { this.emit('notice', { type, msg: '' }); return; } }
       const n = { type, msg: r.string() };
       try {
+        if (type === 6) n.item = r.int();          // a notice with an item attached
+        else if (type === 7) n.npc = r.int();      // a notice in an NPC's dialog
+        else if (type === 9) n.channel = r.ubyte() + 1;
         if (type === 3) { n.channel = r.ubyte() + 1; n.ear = r.bool(); }
         else if (type === 8) { n.channel = r.ubyte() + 1; n.ear = r.bool(); if (r.ubyte()) n.item = readItem(r, false); }
         else if (type === 0x0B) { n.channel = r.int(); n.town = r.string(); n.item = readItem(r, false); }

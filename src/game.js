@@ -1448,7 +1448,8 @@ export class Game {
   /** Whether a line holds a word from Etc/Curse.img (ignoring case), or a control character. */
   async cursed(text) {
     if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text)) return true;
-    return (await this.maskCurses(text)) !== text;
+    await this.maskCurses('');
+    return this.maskPlain(text) !== text;
   }
   /** GMEVENT_INSTRUCTIONS: this map's String/Map.img help<n> in the NPC dialog, OK only (\n in the text a line break). */
   async eventHelp(i) {
@@ -2550,8 +2551,16 @@ export class Game {
   }
   /** Words from Etc/Curse.img in a line, ignoring case, replaced with '*'. */
   async maskCurses(text) {
-    this.curses ??= await this.assets.json('Etc/Curse.img').then((l) => Object.values(l || {}).filter((w) => typeof w === 'string' && w).map((w) => w.toLowerCase()));
+    this.curses ??= await this.assets.json('Etc/Curse.img').then((l) => Object.values(l || {}).filter((w) => typeof w === 'string').map((w) => w.trim().toLowerCase()).filter(Boolean));
     return this.masked(text);
+  }
+  /** Your own line's check: a plain search for each word, ignoring case. */
+  maskPlain(text) {
+    let out = text;
+    for (const w of this.curses || []) {
+      for (let i = out.toLowerCase().indexOf(w); i >= 0; i = out.toLowerCase().indexOf(w, i + w.length)) out = out.slice(0, i) + '*'.repeat(w.length) + out.slice(i + w.length);
+    }
+    return out;
   }
   /**
    * The same for a line that came in (others' chat, whispers, group and spouse chat, chalkboards), as the client shows
@@ -2562,12 +2571,52 @@ export class Game {
     const at = line.indexOf(' : ');
     return at < 0 ? this.masked(line) : line.slice(0, at + 3) + this.masked(line.slice(at + 3));
   }
+  /**
+   * An incoming line masked as the client masks it: left alone with a control character (other than CR / LF) or at
+   * 1023 or more letters; otherwise the characters " _-:\t^.,*\/;!\\'\"+" and line breaks are set aside, each word is
+   * searched for in what is left (ignoring case) and starred until none is left, and the set-aside characters go
+   * back in their places - so "an alpha" becomes "** **pha".
+   */
   masked(text) {
-    let out = text;
-    for (const w of this.curses || []) {
-      for (let i = out.toLowerCase().indexOf(w); i >= 0; i = out.toLowerCase().indexOf(w, i + w.length)) out = out.slice(0, i) + '*'.repeat(w.length) + out.slice(i + w.length);
+    const words = this.curses || [];
+    if (!text || !words.length || /[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text) || text.length >= 0x3ff) return text;
+    const set = ' _-:\t^.,*/;!\\\'"+\r\n', map = [], chars = [];
+    for (let i = 0; i < text.length; i++) if (!set.includes(text[i])) { map.push(i); chars.push(text[i]); }
+    let low = chars.join('').toLowerCase(), changed = false;
+    for (const w of words) {
+      for (let at = low.indexOf(w); at >= 0; at = low.indexOf(w)) {
+        for (let k = 0; k < w.length; k++) chars[at + k] = '*';
+        low = low.slice(0, at) + '*'.repeat(w.length) + low.slice(at + w.length);
+        changed = true;
+      }
     }
-    return out;
+    if (!changed) return text;
+    const out = text.split('');
+    map.forEach((i, k) => { out[i] = chars[k]; });
+    return out.join('');
+  }
+  /** A megaphone's "name : text": the text masked unless the name is yours (the whole line with no name in it). */
+  megaphoneMasked(line) {
+    const at = line.indexOf(' : ');
+    if (at < 0) return this.masked(line);
+    return line.slice(0, at).toLowerCase() === String(this.player?.name || '').toLowerCase() ? line : line.slice(0, at + 3) + this.masked(line.slice(at + 3));
+  }
+  /**
+   * Etc/Swindle.img: a megaphone or Gachapon line holding one of a group's words (its ignored characters set aside)
+   * logs one of that group's warnings in yellow, at most once in 10 seconds.
+   */
+  async swindleCheck(text) {
+    this.swindle ??= await this.assets.json('Etc/Swindle.img');
+    const now = performance.now();
+    if (now - (this.swindleAt ?? -Infinity) < 10000) return;
+    const flat = String(text).replace(/[ _\-:\t^.,*/;!\\'"+\r\n]/g, '').toLowerCase();
+    for (const g of Object.values(this.swindle || {})) {
+      const words = Object.values(g?.word || {}).filter((w) => typeof w === 'string');
+      if (!words.some((w) => w && flat.includes(w.replace(/[ _\-:\t^.,*/;!\\'"+\r\n]/g, '').toLowerCase()))) continue;
+      const warns = Object.values(g?.warn || {}).filter((w) => typeof w === 'string');
+      if (warns.length) { this.swindleAt = now; this.hud.message(warns[Math.floor(Math.random() * warns.length)], CHAT_COLOR.yellow); }
+      return;
+    }
   }
 
   /** Pet food: the server feeds the hungriest; it is the one heard eating. */
