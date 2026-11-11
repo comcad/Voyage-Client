@@ -4366,6 +4366,7 @@ export class Game {
       this.hooks.onLoading?.(false);
       this.drainQueue();
       this.questAlert?.refresh();   // what this map, your items and your level offer
+      this.assets.release();   // images not drawn in the last minute
       this.preloadOwn();
     }
   }

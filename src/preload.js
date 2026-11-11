@@ -8,8 +8,9 @@ import { jobBooks, bookFile } from './skills.js';
  * - A character who comes within about a screen of you (and again after a change of clothes): everything their look
  *   draws moving about and attacking with their weapon, and their hair; then every skill effect of their job line and
  *   the poses those skills use (see Game.preloadNear).
- * It all goes through the assets' queue (Assets.enqueue): a few files at a time, behind whatever is needed to draw
- * now, characters first, and held while a map loads.
+ * It all goes through the assets' queue (Assets.enqueue) at the lowest priority ('ahead'): a few files at a time,
+ * behind whatever is needed now, characters first, and held while a map loads. Where there is a local copy of the
+ * files the images go there rather than into memory.
  */
 
 /** The poses anyone uses moving about. */
@@ -42,7 +43,7 @@ export class Preloader {
   player(look, job) {
     if (!look?.body) return;
     this.poses(look, [...new Set([...MOVES, ...weaponPoses(look)])], 0);
-    this.a.slicer.add(() => this.a.enqueue(canvases(look.hair), 0));
+    this.a.slicer.add(() => this.a.enqueue(canvases(look.hair), 0), 'ahead');
     this.job(job, look);
   }
 
@@ -51,7 +52,7 @@ export class Preloader {
    * of every part of every pose, so it goes a pose to a slice (Assets.slicer) rather than holding up a frame.
    */
   poses(look, list, pri) {
-    for (const p of list) if (look.has(p)) this.a.slicer.add(() => this.a.enqueue(lookCanvases(look, [p]), pri));
+    for (const p of list) if (look.has(p)) this.a.slicer.add(() => this.a.enqueue(lookCanvases(look, [p]), pri), 'ahead');
   }
 
   /** Every skill effect of a job line (once per job), and the poses its skills use in this look. */
@@ -59,13 +60,13 @@ export class Preloader {
     if (job === undefined || job === null || !Number.isFinite(Number(job))) return;
     const first = !this.jobs.has(job);   // marked before the files load: several of one job arriving queue its art once
     this.jobs.add(job);
-    const trees = await Promise.all(jobBooks(Number(job)).map((b) => this.a.json(bookFile(b))));
+    const trees = await Promise.all(jobBooks(Number(job)).map((b) => this.a.json(bookFile(b), 'ahead')));
     const poses = new Set();
     for (const t of trees) {
       for (const s of Object.values(t?.skill || {})) {
         for (const p of Object.values(s?.action || {})) if (typeof p === 'string') poses.add(p);
         // each skill's art is gathered in a slice of its own
-        if (first) this.a.slicer.add(() => { const art = []; for (const [k, v] of Object.entries(s || {})) if (!NOT_ART.has(k)) canvases(v, art); this.a.enqueue(art, 1); });
+        if (first) this.a.slicer.add(() => { const art = []; for (const [k, v] of Object.entries(s || {})) if (!NOT_ART.has(k)) canvases(v, art); this.a.enqueue(art, 1); }, 'ahead');
       }
     }
     if (look?.body) this.poses(look, [...poses], 1);
@@ -79,7 +80,7 @@ export class Preloader {
     if (!index) return;
     const load = async (path, pri, keep = true) => {
       while (this.a.waiting(pri) > AHEAD || this.g.loading) await sleep(200);
-      const tree = await this.a.json(path);
+      const tree = await this.a.json(path, 'ahead');
       this.a.enqueue(canvases(tree), pri);
       // two thousand faces and hairs are a lot to hold (and to sweep in every garbage collection): only their images
       // stay; the data comes back from the local cache when someone wears it

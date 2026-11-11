@@ -43,28 +43,35 @@ const NO_BYTES = Promise.resolve(null);
 /** How many canvases loaded ahead (Assets.enqueue) are out at once: about one batch's worth. */
 const QUEUE_LOADS = 40;
 /**
- * How many downloads (images and data alike) run at once; the rest wait their turn. Started all at once, a crowd
- * arriving (each player's look is a dozen data files and a few hundred images) is thousands of requests, and the
- * browser refuses them (ERR_INSUFFICIENT_RESOURCES).
+ * How many batches download at once; the rest wait their turn. Started all at once, a crowd arriving (each player's
+ * look is a dozen data files and a few hundred images) is thousands of requests, and the browser refuses them
+ * (ERR_INSUFFICIENT_RESOURCES). Loading ahead leaves AHEAD_FREE of them for what is wanted now.
  */
 const MAX_LOADS = 8;
-/** Files asked for at the same moment go out together, this many to a request (server.js /assets-batch). */
+const AHEAD_FREE = 2;
+/** Files go out together, up to this many to a request (server.js /assets-batch). */
 const BATCH_FILES = 40;
 /**
- * Download priorities, first first: what is drawn now; a player arriving (their look, the pose they arrive in); and
- * everything else (a map's art, windows, loading ahead).
+ * Priorities, first first: what is drawn now; a player arriving (their look, the pose they arrive in); everything else
+ * (a map's art, windows); and loading ahead (preload.js), which never holds up the others.
  */
-const PRI = { urgent: 0, spawn: 1, normal: 2 };
+const PRI = { urgent: 0, spawn: 1, normal: 2, ahead: 3 };
 const PRI_NAMES = Object.keys(PRI);
 
+/** A first-in first-out list that doesn't shift its array (it can hold thousands). */
+class Line {
+  constructor() { this.list = []; this.head = 0; }
+  get size() { return this.list.length - this.head; }
+  push(v) { this.list.push(v); }
+  take() { const v = this.list[this.head++]; if (this.head === this.list.length) { this.list.length = 0; this.head = 0; } return v; }
+}
+
 /**
- * Downloads asset files in batches. Everything asked for within a few ms goes out together, one request per BATCH_FILES
- * at each priority, each request taking a slot (Assets.slot): one round trip per batch instead of one per file. A
- * player's look is about fifty files, and plain HTTP runs six requests at a time, so a crowd arriving one file at a
- * time took tens of seconds over a network with any delay.
- * Batched files don't go through the browser's own cache, so where the browser allows a local one (localhost, https)
- * they are kept there for the next visit, under the server's asset version.
+ * Main-thread work after downloads (unpacking a batch, parsing a data file, working out what a look draws) runs
+ * SLICE_MS at a time, by priority, so a burst of arrivals is spread over frames rather than stalling one: batching
+ * makes a crowd's files land together.
  */
+const SLICE_MS = 4;
 class Slicer {
   constructor() {
     this.lines = PRI_NAMES.map(() => new Line()); this.running = false;
@@ -86,16 +93,45 @@ class Slicer {
   }
 }
 
+/**
+ * The local copy of downloaded files, under the server's asset version. It is IndexedDB, which a page on plain http
+ * has too (a LAN address): the Cache API is only there on https and localhost, and without a local copy every map
+ * downloaded everything again. Copies under other versions are deleted, as is what earlier clients kept in the Cache
+ * API. Resolves null where there is none (a private window, say).
+ */
+function openStore(name) {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  indexedDB.databases?.().then((dbs) => { for (const d of dbs) if (d.name?.startsWith('voyage-assets-') && d.name !== name) indexedDB.deleteDatabase(d.name); }).catch(() => {});
+  if (globalThis.caches) caches.keys().then((keys) => { for (const k of keys) if (k.startsWith('voyage-assets-')) caches.delete(k); }).catch(() => {});
+  return new Promise((resolve) => {
+    let req;
+    try { req = indexedDB.open(name, 1); } catch { resolve(null); return; }
+    req.onupgradeneeded = () => req.result.createObjectStore('files');
+    req.onsuccess = () => { const db = req.result; db.onversionchange = () => db.close(); resolve(db); };
+    req.onerror = req.onblocked = () => resolve(null);
+  });
+}
+
+/**
+ * Downloads asset files in batches: one round trip per BATCH_FILES files instead of one per file. A player's look is
+ * about fifty files, and plain HTTP runs six requests at a time, so a crowd arriving one file at a time took tens of
+ * seconds over a network with any delay. A batch is made up when a download slot frees, from the most urgent files
+ * waiting, so a busy moment sends full batches and what is wanted now goes first.
+ * Batched files don't go through the browser's own cache, so they are kept in a local copy (openStore): files asked
+ * for together are looked up there in one go, and only those it lacks are downloaded.
+ */
 class Batcher {
   constructor(assets) {
     this.a = assets;
-    this.files = new Map();   // path -> { pri, sent, promise, resolve, reject }
-    this.pending = PRI_NAMES.map(() => new Set());
-    this.timer = 0;
-    this.writes = [];   // files waiting to go into the local cache, written in idle time
-    this.cache = typeof caches !== 'undefined' && globalThis.isSecureContext
-      ? fetch(`${assets.base}-version`).then((r) => r.json()).then((v) => caches.open(`voyage-assets-${v.v}`)).catch(() => null)
-      : Promise.resolve(null);
+    this.files = new Map();      // path -> { pri, sent, promise, resolve, reject }
+    this.lookups = new Map();    // path -> its file, to be looked up in the local copy
+    this.pending = PRI_NAMES.map(() => new Set());   // to download, by priority
+    this.active = 0; this.timer = 0;
+    this.have = new Set();       // paths the local copy has (or is being given)
+    this.writes = []; this.writing = false;   // files waiting to go into the local copy, written in idle time
+    this.stored = false;         // there is a local copy
+    this.db = fetch(`${assets.base}-version`).then((r) => r.json()).then((v) => openStore(`voyage-assets-${v.v}`)).catch(() => null)
+      .then((db) => { this.stored = !!db; return db; });
   }
   url(path) { return `${this.a.base}/${path}`; }
   /** A file's bytes as a Blob, or null when the server has no such file; it rejects on a dropped connection. */
@@ -105,32 +141,58 @@ class Batcher {
     f = { pri, sent: false };
     f.promise = new Promise((resolve, reject) => { f.resolve = resolve; f.reject = reject; });
     this.files.set(path, f);
-    const queue = () => { this.pending[PRI[f.pri] ?? 2].add(path); this.schedule(); };
-    // each hit read in a slice of its own: a crowd arriving is thousands of reads, each a call into the browser
-    this.cache.then((c) => (c ? c.match(this.url(path)) : null)).then((hit) => (hit ? this.a.slicer.add(() => hit.blob(), f.pri) : null)).then((blob) => {
-      if (!blob) { queue(); return; }
-      this.files.delete(path); f.resolve(blob);
-    }, queue);
+    this.lookups.set(path, f);
+    if (this.lookups.size === 1) queueMicrotask(() => this.lookUp());
     return f.promise;
   }
-  /** Asked for again at a higher priority: moved up if it hasn't gone out yet, sent again ahead if it has. */
+  /** The files asked for since the last look, looked for in the local copy in one go; what it lacks is downloaded. */
+  async lookUp() {
+    const list = [...this.lookups];
+    this.lookups.clear();
+    const db = await this.db;
+    let store = null;
+    try { store = db?.transaction('files', 'readonly').objectStore('files'); } catch { store = null; }
+    if (!store) { for (const [p, f] of list) this.queue(p, f); return; }
+    for (const [p, f] of list) {
+      const req = store.get(p);
+      req.onsuccess = () => {
+        if (!(req.result instanceof Blob)) { this.queue(p, f); return; }
+        this.have.add(p);
+        if (this.files.get(p) === f) this.files.delete(p);
+        f.resolve(req.result);
+      };
+      req.onerror = (ev) => { ev.preventDefault(); this.queue(p, f); };
+    }
+  }
+  queue(path, f) {
+    if (this.files.get(path) !== f) return;
+    this.pending[PRI[f.pri] ?? 2].add(path);
+    if (!this.timer) this.timer = setTimeout(() => { this.timer = 0; this.send(); }, 4);
+  }
+  /** Asked for again at a higher priority: moved up if it hasn't gone out yet. */
   bump(path, pri) {
     const f = this.files.get(path), to = PRI[pri] ?? 2, from = PRI[f?.pri] ?? 2;
     if (!f || to >= from) return;
     f.pri = pri;
-    if (this.pending[from].delete(path) || f.sent) { this.pending[to].add(path); this.schedule(); }
+    if (this.pending[from].delete(path)) this.pending[to].add(path);
   }
-  schedule() { if (!this.timer) this.timer = setTimeout(() => { this.timer = 0; this.flush(); }, 4); }
-  flush() {
-    PRI_NAMES.forEach((pri, i) => {
-      const paths = [...this.pending[i]];
-      this.pending[i].clear();
-      for (let k = 0; k < paths.length; k += BATCH_FILES) {
-        const batch = paths.slice(k, k + BATCH_FILES);
-        for (const p of batch) { const f = this.files.get(p); if (f) f.sent = true; }
-        this.a.slot(() => this.fetchBatch(batch), pri);
+  /** A batch for each free slot, the most urgent files first; loading ahead leaves AHEAD_FREE slots free. */
+  send() {
+    while (this.active < MAX_LOADS) {
+      const first = this.pending.findIndex((set) => set.size);
+      if (first < 0 || (first === PRI.ahead && this.active >= MAX_LOADS - AHEAD_FREE)) return;
+      const batch = [];
+      for (let i = first; i < this.pending.length && batch.length < BATCH_FILES; i++) {
+        for (const p of this.pending[i]) { batch.push(p); if (batch.length === BATCH_FILES) break; }
       }
-    });
+      for (const p of batch) {
+        for (const set of this.pending) set.delete(p);
+        const f = this.files.get(p);
+        if (f) f.sent = true;
+      }
+      this.active++;
+      this.fetchBatch(batch).finally(() => { this.active--; this.send(); });
+    }
   }
   async fetchBatch(paths) {
     let buf;
@@ -142,48 +204,40 @@ class Batcher {
       for (const p of paths) { const f = this.files.get(p); if (f) { this.files.delete(p); f.reject(err); } }
       return;
     }
-    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), cache = await this.cache;
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     let off = 0;
     for (const p of paths) {
       const len = view.getUint32(off), at = off + 4;
       off = at + (len === 0xffffffff ? 0 : len);
-      // each file is handed on in a slice of its own (what is waiting on it runs then too)
+      // each file is handed on in a slice of its own (what is waiting on it runs then too); one loaded ahead no later
+      // than a map's own files, as something may be waiting on it by now
+      const pri = this.files.get(p)?.pri;
       this.a.slicer.add(() => {
         const f = this.files.get(p);
         if (len === 0xffffffff) { if (f) { this.files.delete(p); f.resolve(null); } return; }
         const blob = new Blob([buf.subarray(at, at + len)], { type: p.endsWith('.json') ? 'application/json' : 'image/png' });
         if (f) { this.files.delete(p); f.resolve(blob); }
-        if (cache) this.write(cache, p, blob);
-      }, this.files.get(p)?.pri);
+        if (this.stored) { this.have.add(p); this.write(p, blob); }
+      }, pri === 'ahead' ? 'normal' : pri);
     }
   }
-  /** Into the local cache when the browser is idle, a few at a time. */
-  write(cache, path, blob) {
+  /** Into the local copy when the browser is idle, in one transaction a go. */
+  write(path, blob) {
     this.writes.push([path, blob]);
     if (this.writing) return;
     this.writing = true;
-    const idle = globalThis.requestIdleCallback || ((fn) => setTimeout(() => fn({ timeRemaining: () => 5 }), 50));
-    const drain = (deadline) => {
-      while (this.writes.length && deadline.timeRemaining() > 2) {
-        const [p, b] = this.writes.shift();
-        cache.put(this.url(p), new Response(b)).catch(() => {});
-      }
+    const idle = globalThis.requestIdleCallback || ((fn) => setTimeout(fn, 50));
+    const drain = async () => {
+      const db = await this.db;
+      try {
+        const tx = db.transaction('files', 'readwrite'), store = tx.objectStore('files');
+        for (const [p, b] of this.writes.splice(0, 200)) store.put(b, p);
+        await new Promise((r) => { tx.oncomplete = tx.onerror = tx.onabort = r; });
+      } catch { this.writes.length = 0; }   // no room, or the copy went away: those are downloaded again when wanted
       if (this.writes.length) idle(drain); else this.writing = false;
     };
     idle(drain);
   }
-}
-/**
- * Main-thread work after downloads (unpacking a batch, parsing a data file) runs SLICE_MS at a time, by priority, so a
- * burst of arrivals is spread over frames rather than stalling one: batching makes a crowd's files land together.
- */
-const SLICE_MS = 4;
-/** A first-in first-out list that doesn't shift its array (it can hold thousands). */
-class Line {
-  constructor() { this.list = []; this.head = 0; }
-  get size() { return this.list.length - this.head; }
-  push(v) { this.list.push(v); }
-  take() { const v = this.list[this.head++]; if (this.head === this.list.length) { this.list.length = 0; this.head = 0; } return v; }
 }
 
 export class Assets {
@@ -192,32 +246,8 @@ export class Assets {
     this.jsonCache = new Map();
     this.imgCache = new Map();
     this.loaded = 0; this.loadedPx = 0;   // images loaded so far and their pixels (the /fps report)
-    this.slots = { active: 0, lines: [new Line(), new Line(), new Line()] };
     this.slicer = new Slicer();
     this.files = new Batcher(this);
-  }
-
-  /**
-   * Runs a download (fn returns its promise) once one of the MAX_LOADS slots is free, by priority (PRI). Resolves or
-   * rejects as fn does.
-   */
-  slot(fn, pri = 'normal') {
-    return new Promise((resolve, reject) => {
-      const s = this.slots;
-      s.lines[PRI[pri] ?? PRI.normal].push(() => {
-        s.active++;
-        Promise.resolve().then(fn).then(resolve, reject).finally(() => { s.active--; this.nextSlot(); });
-      });
-      this.nextSlot();
-    });
-  }
-  nextSlot() {
-    const s = this.slots;
-    while (s.active < MAX_LOADS) {
-      const line = s.lines.find((l) => l.size);
-      if (!line) return;
-      line.take()();
-    }
   }
 
   /** A data file (pri: see PRI); one still waiting is moved up when it is asked for at a higher priority. */
@@ -227,8 +257,9 @@ export class Assets {
       const wz = path.split('/')[0];
       p = this.files.get(`${path}.json`, pri)
         .then((blob) => (blob ? blob.text() : null))
-        // parsed in a slice of its own; a file without links (no "_uol") needs no link passes
-        .then((text) => (text ? this.slicer.add(() => prepare(JSON.parse(text), wz, text.includes('"_uol"')), pri) : null))
+        // parsed in a slice of its own (one loaded ahead no later than a map's own: something may be waiting on it by
+        // now); a file without links (no "_uol") needs no link passes
+        .then((text) => (text ? this.slicer.add(() => prepare(JSON.parse(text), wz, text.includes('"_uol"')), pri === 'ahead' ? 'normal' : pri) : null))
         .catch(() => { this.jsonCache.delete(path); return null; });   // a dropped connection: asked again next time
       this.jsonCache.set(path, p);
     } else this.files.bump(`${path}.json`, pri);
@@ -262,7 +293,7 @@ export class Assets {
       .then((blob) => (blob ? createImageBitmap(blob) : null))
       .then((bmp) => {
         if (!bmp) return null;
-        e.img = bmp; e.ready = true; e.bytes = NO_BYTES;
+        e.img = bmp; e.ready = true; e.bytes = NO_BYTES; e.used = performance.now();
         this.loaded++; this.loadedPx += bmp.width * bmp.height;
         return bmp;
       }, () => { this.failed(e, e.tries); return null; });
@@ -273,9 +304,20 @@ export class Assets {
   image(node) {
     if (!isCanvas(node)) return null;
     const e = this._entry(node, 'urgent');
-    if (e.ready) return e.img;
+    if (e.ready) { e.used = performance.now(); return e.img; }
     if (!e.err) this.decoded(e);
     return null;
+  }
+
+  /**
+   * Lets go of decoded images not drawn in the last `ms` (on moving to another map): an ImageBitmap holds its pixels
+   * for as long as it is kept, and a long session's worth ran to hundreds of MB. One wanted again is read back from the
+   * local copy, so without one nothing is let go.
+   */
+  release(ms = 60000) {
+    if (!this.files.stored) return;
+    const before = performance.now() - ms;
+    for (const [k, e] of this.imgCache) if (e.ready && !(e.used > before)) this.imgCache.delete(k);
   }
 
   /**
@@ -285,7 +327,8 @@ export class Assets {
   enqueue(nodes, pri = 1) {
     const q = (this.queues ??= [[], [], []].map((list) => ({ list, head: 0 })))[pri];
     const queued = (this.queued ??= new Set());   // each canvas waits once, however many ask for it
-    for (const n of nodes) if (isCanvas(n) && !this.imgCache.has(n._canvas) && !queued.has(n._canvas)) { q.list.push(n); queued.add(n._canvas); }
+    const have = this.files.have;
+    for (const n of nodes) if (isCanvas(n) && !this.imgCache.has(n._canvas) && !have.has(n._canvas) && !queued.has(n._canvas)) { q.list.push(n); queued.add(n._canvas); }
     this.pump();
   }
   /** How many canvases still wait in the queue at this priority. */
@@ -303,9 +346,13 @@ export class Assets {
       const n = q.list[q.head++];
       if (q.head === q.list.length) { q.list.length = 0; q.head = 0; }
       this.queued.delete(n._canvas);
-      if (this.imgCache.has(n._canvas)) continue;
+      if (this.imgCache.has(n._canvas) || this.files.have.has(n._canvas)) continue;
       this.inFlight++;
-      this._entry(n).bytes.then(() => { this.inFlight--; this.pump(); });   // its bytes only: decoded when first drawn
+      const done = () => { this.inFlight--; this.pump(); };
+      // into the local copy only, where there is one (drawn, it is read back from there and decoded); without one its
+      // bytes are kept until it is first drawn
+      if (this.files.stored) this.files.get(n._canvas, 'ahead').then(done, done);
+      else this._entry(n, 'ahead').bytes.then(done);
     }
   }
 
