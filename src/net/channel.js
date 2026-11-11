@@ -1706,6 +1706,8 @@ export class ChannelSession {
   mobDamageMob(attacker, charId, victim, attack, damage, facingLeft, x, y) {
     this.send(new PacketWriter(C.MOB_DAMAGE_MOB).int(attacker).int(charId).int(victim).byte(attack).int(damage).byte(facingLeft ? 1 : 0).short(x).short(y));
   }
+  /** The guild boss field's pulley, struck while its state is 0: no body. */
+  pullGuildBossPulley() { this.send(new PacketWriter(C.GUILD_BOSS_PULLEY_HIT)); }
   /** The Beholder's own skill: its oid, the skill (Aura / Hex of the Beholder), its action (facing left in bit 7). */
   beholder(oid, skill, action, extra = null) {
     const w = new PacketWriter(C.BEHOLDER).int(oid).int(skill).byte(action);
@@ -1786,8 +1788,6 @@ export class ChannelSession {
   }
 
   /** DAMAGE_REACTOR: an attack reached it. stance: 0/1 in the air facing left/right, 2/3 on the ground. */
-  /** The guild boss field's pulley, struck while its state is 0: no body. */
-  pullGuildBossPulley() { this.send(new PacketWriter(C.GUILD_BOSS_PULLEY_HIT)); }
   damageReactor(oid, charPos, stance, skill = 0) {
     this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(charPos).short(stance).int(0).int(skill));
   }

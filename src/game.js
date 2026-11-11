@@ -3054,10 +3054,17 @@ export class Game {
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
       exclusiveAnswered: () => this.releaseExclusive(),
-      // a family privilege in use: its icon (Family/RightIcon/<type>) in the buff row until it runs out
+      skillBookResult: (d) => this.onSkillBookResult(d),
+      inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
+      sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
+      avatarMega: (a) => { this.hud.megaphone([this.masked(`${a.name} : ${a.lines.join('')}`)], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
+      avatarMegaClear: () => this.avatarBanner.clear(),
+      tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show({ ...d, lines: d.lines.map((l) => this.masked(l)) }); },
+      tvOff: () => { this.tvWait = 0; this.mapleTV.clear(); },
       witchTowerScore: later((s) => this.onWitchTowerScore(s)),
       guildBossHealer: later((y) => this.guildBoss?.healerMove(y)),
       guildBossPulley: later((s) => this.guildBoss?.pulleyState(s)),
+      // a family privilege in use: its icon (Family/RightIcon/<type>) in the buff row until it runs out
       familyPrivilege: (p) => { this.familyPrivilege = p ? { type: p.type, index: p.a, until: Date.now() + p.ms, dur: Math.max(1, p.ms) } : null; },
       mobSpeak: later((oid, s, l) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.mobSay(m, s, l); }),
       // the Zakum Shrine / Horntail's Cave closing (a pink line); a random transform potion that failed
@@ -3085,13 +3092,6 @@ export class Game {
       csCouponGift: (to, items, mp) => this.csWin?.couponGift(to, items, mp),
       // a quest's effect: its message in your log, light blue (its art, Effect/Quest.img / Sound/Quest.img, isn't in v83's data)
       questEffect: later((msg) => { if (msg) this.hud.gain(msg, '#64B4F0'); }),
-      skillBookResult: (d) => this.onSkillBookResult(d),
-      inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
-      sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
-      avatarMega: (a) => { this.hud.megaphone([this.masked(`${a.name} : ${a.lines.join('')}`)], { ...CHAT_BAR.avatarMega, channel: a.channel, ear: a.ear }); this.avatarBanner.show(a); },
-      avatarMegaClear: () => this.avatarBanner.clear(),
-      tv: (d) => { this.tvWait = d.seconds; this.mapleTV.show({ ...d, lines: d.lines.map((l) => this.masked(l)) }); },
-      tvOff: () => { this.tvWait = 0; this.mapleTV.clear(); },
       tvError: (code) => { const t = TV_ERRORS[code]; if (t) this.hud.message(t, CHAT_COLOR.error); },
       tvResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
       avatarMegaResult: (text) => { this.cashBusy = false; if (text) this.windows.notice(text); },
@@ -3476,11 +3476,7 @@ export class Game {
       })),
       // Hypnotize: the last monster put under it is the one whose attacks count; its end clears that, whichever it was
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { if (s.second & HYPNOTIZE) this.lastHypnotized = e; this.applyMobStatus(e, s); } }),
-      mobStatusCancel: later((oid, first, second) => {
-        const e = this.lifeByOid.get(oid);
-        if (second & HYPNOTIZE) this.lastHypnotized = null;
-        if (e && !e.pending) e.removeStatus(first, second);
-      }),
+      mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
       moveMob: later((oid, start, moves, act, skill, level) => {
@@ -6644,7 +6640,7 @@ export class Game {
       targets = first ? [first, ...this.mobsIn(this.skillBox(p, skillId, lv), p.x, p.y, first).slice(0, mobCount - 1)] : [];
     }
     const looks = skillId === BAND_OF_THIEVES ? this.thiefLooks(skillId, targets.length) : [];
-    if (this.net) this.after(hitDelay, () => { this.hitReactors(kind, skillId, lv, pose); if (kind === 'melee') this.guildBoss?.swing(this.attackBox(kind, skillId, lv, pose)); });
+    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
     // Snipe's shot strikes for 199,999 less up to 10,000
     const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
@@ -6747,6 +6743,8 @@ export class Game {
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
+    // the guild boss field's pulley turns when a close-range swing reaches it
+    if (this.net && kind === 'melee' && this.guildBoss) this.after(hitDelay, () => this.guildBoss?.swing(this.attackBox(kind, skillId, lv, pose)));
     // Assaulter: straight to the floor 200px ahead, leaving its trail where you stood
     if (skillId === ASSAULTER) {
       const from = { x: p.x, y: p.y, right: p.facingRight };
@@ -6788,7 +6786,7 @@ export class Game {
       && d.x >= box.left && d.x <= box.right && d.y >= box.top && d.y <= box.bottom
       && (d.type === 0 ? d.owner === mine : d.type === 1 ? d.owner === party : true)).slice(0, max).sort((a, b) => a.id - b.id);
     const touches = (m, d) => { const h = m.hitBox(true); return h.right >= d.x - 50 && h.left <= d.x + 50 && h.bottom >= d.y - 50 && h.top <= d.y + 50; };
-    const mobs = this.liveMobs().filter((m) => mesos.some((d) => touches(m, d))).slice(0, Math.max(1, Math.min(15, ld?.mobCount || 1)));
+    const mobs = this.targetMobs().filter((m) => mesos.some((d) => touches(m, d))).slice(0, Math.max(1, Math.min(15, ld?.mobCount || 1)));
     const damage = (m) => mesos.slice(0, 15).filter((d) => touches(m, d)).map((d) => {
       const a = d.id, ratio = a <= 1000 ? (a * 0.82 + 28) / 5300 : a / (a + 5250);
       return Math.max(1, Math.trunc(50 * (ld?.x || 0) * ratio * (0.5 + Math.random() * 0.5)));
@@ -8307,8 +8305,7 @@ export class Game {
     return best && { x: Math.round(best.x), y: Math.round(best.y) };
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
-  /** The monsters your attacks can reach: alive, never a Hypnotized one, nor one only monsters hurt (info/damagedByMob). */
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !hypnotized(m) && !Number(m.src?.info?.damagedByMob)); }
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
   /** A monster within a ranged weapon's swing, so a held shot gives way to the swing (never with Combat.NoWhack). */
   swingsClose() { return !config.noWhack && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length > 0; }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
@@ -8316,6 +8313,8 @@ export class Game {
     const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
     return Math.max(0, Math.min(CLOSE_REACH, lt ? -lt[0] : CLOSE_REACH));
   }
+  /** The monsters your attacks can reach: the live ones, never a Hypnotized one, nor one only monsters hurt (info/damagedByMob). */
+  targetMobs() { return this.liveMobs().filter((m) => !hypnotized(m) && !Number(m.src?.info?.damagedByMob)); }
   /**
    * How far a shot flies: the skill's range, else 300px for a bow or crossbow plus The Eye of Amazon's, 200px for a
    * claw plus Keen Eyes', 200px for a gun.
@@ -8335,7 +8334,7 @@ export class Game {
    * each reaching a quarter of its distance from you up and down.
    */
   firstOnLine(ent, from, range, y) {
-    const dir = ent.facingRight ? 1 : -1, mobs = this.liveMobs();
+    const dir = ent.facingRight ? 1 : -1, mobs = this.targetMobs();
     for (let d = from; d < range; d += 20) {
       const a = ent.x + dir * d, b = ent.x + dir * Math.min(d + 20, range), lo = Math.min(a, b), hi = Math.max(a, b), s = Math.floor(d / 4);
       const hit = mobs.filter((m) => { const h = m.hitBox(true); return h.right > lo && h.left < hi && h.bottom > y - s && h.top < y + s; });
@@ -8365,7 +8364,7 @@ export class Game {
   }
   mobsIn(box, x, y, except = null) {
     if (!box) return [];
-    return this.liveMobs().filter((m) => {
+    return this.targetMobs().filter((m) => {
       if (m === except) return false;
       const h = m.hitBox(true);
       return h.right >= box.left && h.left <= box.right && h.bottom >= box.top && h.top <= box.bottom;
@@ -8596,7 +8595,7 @@ export class Game {
     // maxReach: how far in front it goes at most (a ranged weapon's swing)
     if (p.facingRight) x2 = Math.max(x1 + 1, Math.min(x2, p.x + maxReach)); else x1 = Math.min(x2 - 1, Math.max(x1, p.x - maxReach));
     // a monster is in it when its body (now or a frame ago) overlaps the box (openms, docs/hitboxes.md)
-    const mobs = this.liveMobs();
+    const mobs = this.targetMobs();
     const inside = (m) => { const b = m.hitBox(true); return b.right >= x1 && b.left <= x2 && b.bottom >= top && b.top <= bottom; };
     // Slash Blast, Coma, Charged Blow: only once something is inside the ordinary swing do they reach out to their range
     const reach = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
@@ -9595,6 +9594,7 @@ export class Game {
    * each other: two MOB_DAMAGE_MOB with no attack.
    */
   hypnoTouch() {
+    if (this.lastHypnotized && !hypnotized(this.lastHypnotized)) this.lastHypnotized = null;   // its Hypnotize ended
     const h = this.lastHypnotized;
     if (!h || !h.controlled || !h.alive || h.dying || !this.map.life.includes(h) || h.attacking || (!h.flying && !h.fh)) return;
     const now = performance.now();
