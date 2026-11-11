@@ -4071,7 +4071,6 @@ export class Game {
       if (this.owlResult) this.windows.close(this.owlResult);
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
-      if (this.pendingNotes?.length) this.showNotes(this.pendingNotes);   // notes still waiting: the balloon on every map
       if (pos) this.placeAt(pos.x, pos.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx) : map.spawnPortal(portal));
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
@@ -4080,6 +4079,7 @@ export class Game {
       if (!this.net) history.replaceState(null, '', `?map=${id}`);
       this.hooks.onMap?.(map);
       this.hud?.setMap(map);
+      if (this.pendingNotes?.length) this.showNotes(this.pendingNotes);   // notes still waiting: the balloon on every map
       this.fieldBgm = null;
       music.play(map.info.bgm);
       this.net?.mapLoaded();
