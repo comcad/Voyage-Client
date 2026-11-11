@@ -67,6 +67,7 @@ import { MapleLifeWin } from './ui/maplelife.js';
 import { OwlWin, OwlResultWin } from './ui/owl.js';
 import { openMaker, makerOutcome } from './ui/maker.js';
 import { openLegendary } from './ui/legendary.js';
+import { CarnivalWin } from './ui/carnival.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -4024,12 +4025,20 @@ export class Game {
 
   /**
    * OPEN_UI: a script opens one of your windows by its UI id (it only opens, never closes). On a fieldType 22 map
-   * only the Quest window (6) opens. Ids without a window here (UserInfo, Monster Carnival, Ranking, GM Board, Maple
-   * Event) do nothing; 0xB is the Guild BBS, 0x14 the Energy Charge gauge, 0x17 the Maker, 0x1F the Medal window.
+   * only the Quest window (6) opens. Ids without a window here (Ranking, GM Board, Maple Event) do nothing; 0xB is the
+   * Guild BBS, 0x12 the Monster Carnival window (when none is up: on a Carnival field with its lists, elsewhere
+   * empty), 0x14 the Energy Charge gauge, 0x17 the Maker, 0x1F the Medal window.
    */
   openUI(type) {
     if (!this.windows || (Number(this.map?.info?.fieldType) === 22 && type !== 6)) return;
     if (type === 0x17) { openMaker(this); return; }
+    if (type === 0x12) {
+      if (this.fieldMode?.openWindow) { this.fieldMode.openWindow(); return; }
+      if (this.carnivalWin && this.windows.order.includes(this.carnivalWin)) return;
+      const w = this.carnivalWin = new CarnivalWin(this.windows, this.carnivalSaved || {});
+      this.assets.preload(w.frames()).then(() => { if (this.carnivalWin === w) this.windows.show(w, null); });
+      return;
+    }
     // UserInfo: an empty Character Info window, nothing sent; a later CHAR_INFO replaces it
     if (type === 10) {
       if (!this.infoWin || !this.windows.order.includes(this.infoWin)) this.infoWin = this.windows.show(new CharInfoWin(this.windows, { id: 0, name: '', level: 0, job: 0, fame: 0, guild: '', alliance: '', pets: [], wish: [] }), null);
@@ -4297,6 +4306,7 @@ export class Game {
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
       this.witchTower = this.witchTowerLoad = null; this.guildBoss = null;
+      if (this.carnivalWin) { this.windows.close(this.carnivalWin); this.carnivalWin = null; }   // an OPEN_UI Carnival window goes with the map, as the field one does
       if (Number(map.info?.fieldType) === 8 && (map.data?.healer || map.data?.pulley)) {
         const gb = new GuildBossField(this, map);
         gb.load().then(() => { if (this.map === map) this.guildBoss = gb; });

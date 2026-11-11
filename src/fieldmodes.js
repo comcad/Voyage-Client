@@ -512,16 +512,21 @@ export class CarnivalField extends CarnivalWaitField {
     this.win = null;
   }
   /** MONSTER_CARNIVAL_START: { team, cp: [mine, total, team, total, other, total] | null, counts: [per monster] }. */
-  async carnivalStart(d) {
+  /** The Carnival window with this field's three lists, made once: by MONSTER_CARNIVAL_START or a script's OPEN_UI 0x12. */
+  async openWindow() {
     const g = this.game;
-    super.carnivalStart(d);
-    if (!this.win) {
+    if (this.win) return this.win;
+    return (this.winOpening ??= (async () => {
       const w = new CarnivalWin(g.windows, g.carnivalSaved || {});
       await g.assets.preload(w.frames());
       this.win = g.windows.show(w, null);
       this.lists.forEach((list, t) => list.forEach((e, k) => w.addRow(t, { index: k + 1, name: e.name, cp: e.cp, desc: e.desc })));
-    }
-    const w = this.win;
+      return this.win;
+    })());
+  }
+  async carnivalStart(d) {
+    super.carnivalStart(d);
+    const w = await this.openWindow();
     w.setMyTeam(d.team);
     if (d.cp) { w.setMine(d.cp[0], d.cp[1]); w.setTeam(d.team, d.cp[2], d.cp[3]); w.setTeam(d.team === 0 ? 1 : 0, d.cp[4], d.cp[5]); }
     (d.counts || []).slice(0, this.lists[0].length).forEach((n, k) => { if (n && this.lists[0][k].name) w.summoned(this.lists[0][k].name, n); });
