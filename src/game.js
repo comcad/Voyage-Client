@@ -20,6 +20,8 @@ import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
 import { KeyCommands } from './commands.js';
 import { DojoWindow } from './ui/dojo.js';
+import { loadFieldMode } from './fieldmodes.js';
+import { RpsWin, RPS_TEXT } from './ui/rps.js';
 import { PyramidWindow } from './ui/pyramid.js';
 import { Reactor, loadReactorImg } from './reactors.js';
 import { Guide } from './guide.js';
@@ -847,7 +849,7 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
-    this.input.filter = (k, down) => this.dojoKey(k, down);
+    this.input.filter = (k, down) => (down && !!this.fieldMode?.key?.(k)) || this.dojoKey(k, down);   // the Carnival window's Tab / F1-F12 first
     this.controls = loadControls();          // controller and touch layouts, kept in this browser
     this.padInput = new PadInput(this.input, () => this.controls?.padMove || 'ls');
     this.cam = { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
@@ -2901,7 +2903,7 @@ export class Game {
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
-      exclusiveAnswered: () => this.releaseExclusive(),
+      exclusiveAnswered: () => { this.releaseExclusive(); this.fieldMode?.win?.answered?.(); },
       skillBookResult: (d) => this.onSkillBookResult(d),
       inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
       sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
@@ -3078,6 +3080,8 @@ export class Game {
         if (secs !== null && Number(this.map?.info?.fieldType) === 14) { (this.dojo ??= new DojoWindow(this)).clock(secs); return; }
         // a Pyramid stage times itself in its own window
         if (secs !== null && Number(this.map?.info?.fieldType) === 23) { (this.pyramid ??= new PyramidWindow(this)).clock(secs); return; }
+        // the Coconut Harvest's board counts the time down itself
+        if (secs !== null && this.fieldMode?.clock) { this.fieldMode.clock(secs); return; }
         this.clock = secs === null ? null : { end: performance.now() + secs * 1000, dur: secs * 1000 }; if (secs !== null) this.loadClockArt();
       }),
       // OX_QUIZ: the question (Etc/OXQuiz.img/<set>/<n>/q) or its answer (d, a space, "[Answer:O]" for a = 1, else X)
@@ -3225,7 +3229,24 @@ export class Game {
         if (!e || e.pending) return;
         e.appearing = false; delete e.fadeInAt; e.state = ''; e.setState(e.flying ? 'fly' : 'stand');
       }),
-      carnivalTeam: (team) => { this.carnivalTeam = team; },
+      // the Monster Carnival (fieldmodes.js, ui/carnival.js)
+      carnivalStart: later((d) => (this.fieldMode?.carnivalStart ? this.fieldMode.carnivalStart(d) : this.setCarnivalTeam(d.team))),
+      carnivalCP: later((...a) => this.fieldMode?.carnivalCP?.(...a)),
+      carnivalPartyCP: later((...a) => this.fieldMode?.carnivalPartyCP?.(...a)),
+      carnivalSummon: later((...a) => this.fieldMode?.carnivalSummon?.(...a)),
+      carnivalMessage: later((...a) => this.fieldMode?.carnivalMessage?.(...a)),
+      carnivalDied: later((...a) => this.fieldMode?.carnivalDied?.(...a)),
+      carnivalLeave: later((...a) => this.fieldMode?.carnivalLeave?.(...a)),
+      carnivalResult: later((...a) => this.fieldMode?.carnivalResult?.(...a)),
+      // the Snowball event (fieldmodes.js)
+      snowState: later((...a) => this.fieldMode?.snowState?.(...a)),
+      snowHit: later((...a) => this.fieldMode?.snowHit?.(...a)),
+      snowMessage: later((...a) => this.fieldMode?.snowMessage?.(...a)),
+      coconutHit: later((...a) => this.fieldMode?.coconutHit?.(...a)),
+      coconutScore: later((...a) => this.fieldMode?.coconutScore?.(...a)),
+      ariantScores: later((list) => this.fieldMode?.ariantScores?.(list)),
+      ariantResult: later(() => this.fieldMode?.ariantResult?.()),
+      rpsGame: later((mode, d) => this.rpsGame(mode, d)),
       // LEFT_KNOCK_BACK (the Snowball event): 300 left and 300 up, as a blow's impact
       leftKnockBack: later(() => {
         const p = this.player, impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
@@ -3294,7 +3315,7 @@ export class Game {
       })),
       mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) this.applyMobStatus(e, s); }),
       mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
-      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.block); }),
+      reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.index, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
       moveMob: later((oid, start, moves, act, skill, level) => {
         const e = this.lifeByOid.get(oid);
@@ -3926,7 +3947,10 @@ export class Game {
         new Promise((r) => setTimeout(r, Math.max(0, FADE_MS - (performance.now() - fadeStart)))),
       ]);
       if (!current()) return;
-      this.map = map;
+      const fieldMode = await loadFieldMode(this, map);   // an event field's own game
+      if (!current()) return;
+      this.fieldMode?.leave?.();
+      this.map = map; this.fieldMode = fieldMode;
       this.questLayerTags();
       for (const { tag, on } of this.objVisQueue || []) map.setObjectVisible(tag, on);
       this.objVisQueue = null;
@@ -4148,13 +4172,15 @@ export class Game {
     if (rp) for (const fn of waiting) fn(rp);
   }
   async addOther(d) {
-    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips: lookEquipIds(d.look) });
+    // on an event field that dresses its teams, their team's outfit instead
+    const equips = this.fieldMode?.teamLook?.(d.look.gender, d.team) || lookEquipIds(d.look);
+    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips });
     await look.load();
     await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']));
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
-    rp.lookData = d.look;
+    rp.lookData = d.look; rp.team = d.team;
     rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk && this.masked(d.chalk); rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
@@ -4168,7 +4194,8 @@ export class Game {
 
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
-    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips: lookEquipIds(lookData) });
+    const equips = this.fieldMode?.teamLook?.(lookData.gender, rp.team) || lookEquipIds(lookData);   // a team outfit stays on
+    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
     await look.load();
     rp.look = look; rp.lookData = lookData;
   }
@@ -4694,8 +4721,9 @@ export class Game {
   /** A character's tags from y down, 1px apart: name, guild, medal. */
   drawCharTags(ctx, ent, look, local, x, y) {
     y += (this.drawLabelTag(ctx, look, ent.name, x, y) || nameTag(ctx, ent.name, x, y).h) + 1;
-    const guild = local ? this.guild?.name : ent.guild;
-    if (guild) y += drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, x, y) + 1;
+    const guild = local ? this.guild?.name : ent.guild, team = this.carnivalTag(ent, local);
+    if (team) y += drawGuildTag(ctx, this, team, null, x, y) + 1;   // a Monster Carnival team takes the guild line's place
+    else if (guild) y += drawGuildTag(ctx, this, guild, local ? this.guild.emblem : ent.emblem, x, y) + 1;
     const name = look?.medal ? (this.windows.itemName(look.medal) || '').replace("'s Medal", '') : '', art = name && this.nameTagArt();
     if (art && artTag(ctx, this.assets, art.medal?.[look.medalTag], name, x, y) < 0) nameTag(ctx, name, x, y);
   }
@@ -5595,6 +5623,7 @@ export class Game {
     this.vfx?.update(dt);
     this.weather.update(dt);
     this.kites.update(dt);
+    this.fieldMode?.update?.(dt);
     const p = this.player;
     if (p.morphView) p.morphView.update(p, p.action, !!p.attack, dt, p.attack ? p.attackScale || 1 : 1);
     for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
@@ -5871,7 +5900,8 @@ export class Game {
       }
       const skill = this.pressedSkill();
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
-      if (this.holdAction(ACTION.ATTACK)) { this.attack(0); return; }
+      // an event field swings its own way; then a reactor in reach takes the swing; else the usual attack
+      if (this.holdAction(ACTION.ATTACK)) { if (!this.fieldMode?.attack?.() && !this.reactorAttack()) this.attack(0); return; }
     }
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
@@ -6244,7 +6274,9 @@ export class Game {
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
-    return this.attack(id, kind);
+    const used = this.attack(id, kind);
+    if (used && this.net) this.skillReactors(id);   // a cast can set off reactors waiting for that skill
+    return used;
   }
 
   /** On the Battleship (a vehicle mount that isn't a skill vehicle). */
@@ -6396,7 +6428,6 @@ export class Game {
       targets = first ? [first, ...this.mobsIn(this.skillBox(p, skillId, lv), p.x, p.y, first).slice(0, mobCount - 1)] : [];
     }
     const looks = skillId === BAND_OF_THIEVES ? this.thiefLooks(skillId, targets.length) : [];
-    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
     // Snipe's shot strikes for 199,999 less up to 10,000
     const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
@@ -7998,7 +8029,7 @@ export class Game {
     return false;
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
-  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody); }
+  liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !this.carnivalAlly(m)); }
   /** A monster within a ranged weapon's swing, so a held shot gives way to the swing (never with Combat.NoWhack). */
   swingsClose() { return !config.noWhack && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length > 0; }
   /** Where a ranged weapon's swing ends in front of you (65px at most): a shot starts from there. */
@@ -8229,6 +8260,54 @@ export class Game {
   }
 
 
+  /**
+   * The attack key on an event field (Snowball, Coconut): your weapon's plain swing (lying down, the prone stab) at no
+   * monster or reactor, sent as a close-range attack that hit nothing, with where you stand. Returns the first of
+   * `rects` the swing's afterimage box reaches (-1 for none: a swing with no afterimage box reaches nothing) and when
+   * the blow lands (ms), or null when you couldn't swing.
+   * needHit (reactors): only swings when one of them is in reach, and takes the first that is in front of you (else
+   * the last in reach).
+   */
+  fieldAttack(rects, needHit = false) {
+    const p = this.player;
+    if (this.dead || p.ladder) return null;
+    const mt = this.morphTpl();
+    if (mt && !p.morphView?.dropped) {
+      if (mt.hide) { this.net?.cancelBuff(5101007); return null; }   // swinging ends the Oak Barrel
+      if (!mt.superman) return null;
+    }
+    const ds = this.darkSight();
+    if (ds && !this.skills.level(VANISH)) {   // only brings you out of Dark Sight
+      if (!ds.leaving) { ds.leaving = true; this.playSkillEffect(ds.source, p); this.net?.cancelBuff(ds.source); }
+      return null;
+    }
+    const prone = !!p.fh && this.input.is('down') && this.look.has('proneStab');
+    const pose = prone ? 'proneStab' : this.look.attackAction();
+    let hit = -1;
+    const s = this.afterimage?.[this.afterimageLevel()]?.[pose];
+    if (s?.lt && s?.rb) {
+      const [x1, x2] = p.facingRight ? [p.x - s.rb[0], p.x - s.lt[0]] : [p.x + s.lt[0], p.x + s.rb[0]];
+      const top = p.y + s.lt[1], bottom = p.y + s.rb[1];
+      const reaches = (r) => r && r.left < r.right && r.top < r.bottom
+        && Math.max(r.left, x1) < Math.min(r.right, x2) && Math.max(r.top, top) < Math.min(r.bottom, bottom);
+      if (!needHit) hit = rects.findIndex(reaches);
+      else {
+        for (let i = 0; i < rects.length; i++) {
+          if (!reaches(rects[i])) continue;
+          hit = i;
+          // "in front", as the client works it out: the box's middle (negated facing left) against your x
+          if (Math.trunc((rects[i].left + rects[i].right) / 2) * (p.facingRight ? 1 : -1) - Math.round(p.x) >= 0) break;
+        }
+      }
+    }
+    if (needHit && hit < 0) return null;
+    p.attack = pose; p.frame = 0; p.frameT = 0; p.action = pose;
+    const scale = p.attackScale = this.attackScale(this.attackSpeed(0)), trailAt = this.hitFrame(pose, 'melee');
+    this.after(this.frameTime(pose, trailAt) * scale, () => { this.playAfterimage(pose, trailAt, 0); this.playWeaponSound(p); });
+    this.net?.attack('melee', { targets: [], lines: 1, stance: this.actionId(pose), facingLeft: !p.facingRight, speed: this.attackSpeed(0), at: p });
+    return { hit, delay: Math.round(this.look.attackDelay(pose) * scale) };
+  }
+
   /** The box an attack reaches: the skill's lt/rb, else the swing's afterimage box, else a default per kind. */
   attackBox(kind, skillId, lv, action, charge = 0) {
     const p = this.player;
@@ -8248,32 +8327,65 @@ export class Game {
   // ------------------------------------------------------------------ reactors
   async spawnReactor(d) {
     (this.reactors ??= new Map());
-    const map = this.map, img = await loadReactorImg(this.assets, d.id);
-    if (!img || this.map !== map) return;
-    const r = new Reactor(d, img, map);
+    const map = this.map, loaded = await loadReactorImg(this.assets, d.id);
+    if (!loaded || this.map !== map) return;
+    const r = new Reactor(d, loaded.img, loaded.info, map);
     r.volumeAt = (x, y) => this.volumeAt(x, y);
     await this.assets.preload(r.frames());
     if (this.map === map) this.reactors.set(d.oid, r);
   }
-  /** Reactors an attack's box reaches when it lands: each gets one hit, whatever the number of damage lines. */
-  hitReactors(kind, skillId, lv, action) {
+  /** The stance a reactor hit carries: on a floor (2), facing left (1). */
+  reactorStance() { const p = this.player; return (p.fh ? 2 : 0) | (p.facingRight ? 0 : 1); }
+  /**
+   * The attack key with a reactor in reach: the plain swing goes at the reactors that can be hit (their current
+   * frame's box) and only at them - no monster is struck that time. The one it takes (DAMAGE_REACTOR: no skill, your
+   * stance, when the swing lands) starts its hit here when the swing lands; one that needs a quest you aren't on takes
+   * nothing. False when none is in reach, for the usual attack.
+   */
+  reactorAttack() {
+    if (!this.net || !this.reactors?.size) return false;
+    const list = [...this.reactors.values()].filter((r) => r.hittable && r.box());
+    if (!list.length) return false;
+    const res = this.fieldAttack(list.map((r) => r.box()), true);
+    if (!res) return false;
+    const r = list[res.hit];
+    if (r.quest && this.quests?.status(r.quest) !== 1) return true;
+    const stance = this.reactorStance();
+    r.struck(stance, res.delay);
+    this.net.damageReactor(r.oid, 0, stance, res.delay, 0);
+    return true;
+  }
+  /**
+   * After a skill: each idle reactor with an event of type 5 for that skill whose box (lt / rb from it) holds you is
+   * set off (DAMAGE_REACTOR with the skill, its hit 800ms on).
+   */
+  skillReactors(skillId) {
     if (!this.reactors?.size) return;
-    const p = this.player, b = this.attackBox(kind, skillId, lv, action);
-    const stance = (p.facingRight ? 1 : 0) + (p.fh ? 2 : 0);
+    const p = this.player, x = Math.round(p.x), y = Math.round(p.y), now = performance.now(), stance = this.reactorStance();
     for (const r of this.reactors.values()) {
-      const box = r.hittable && r.box();
-      if (!box || box.right < b.x1 || box.left > b.x2 || box.bottom < b.top || box.top > b.bottom) continue;
-      this.net.damageReactor(r.oid, (Math.round(p.x) << 16) | (Math.round(p.y) & 0xffff), stance, skillId || 0);
+      if (r.phase !== 0 || now < r.noHitUntil) continue;
+      r.events(r.cur).some((e, i) => {
+        if (Number(e?.type) !== 5 || !Object.values(e.activeSkillID || {}).map(Number).includes(skillId)) return false;
+        const lt = e.lt || [0, 0], rb = e.rb || [0, 0];
+        if (!(x >= r.x + lt[0] && x < r.x + rb[0] && y >= r.y + lt[1] && y < r.y + rb[1])) return false;
+        r.skillStruck(stance, i);
+        this.net.damageReactor(r.oid, 1, stance, 800, skillId);
+        return true;
+      });
     }
   }
-  /** Touch reactors hear when you walk onto them and off them again. */
+  /** Touch reactors hear when your feet go into their current frame and out again, checked once a second. */
   touchReactors() {
     if (!this.reactors?.size) return;
-    const pb = this.playerBody();
+    const now = performance.now();
+    if (now - (this.touchCheckAt || 0) <= 999) return;
+    this.touchCheckAt = now;
+    const p = this.player, x = Math.round(p.x), y = Math.round(p.y);
     for (const r of this.reactors.values()) {
-      if (!r.touch || r.gone) continue;
-      const box = r.box();
-      const inside = !!box && box.right >= pb.left && box.left <= pb.right && box.bottom >= pb.top && box.top <= pb.bottom;
+      if (!r.touch) continue;
+      const b = r.box();
+      if (!b || b.right <= b.left || b.bottom <= b.top) continue;
+      const inside = x >= b.left && x < b.right && y >= b.top && y < b.bottom;
       if (inside !== r.touching) { r.touching = inside; this.net.touchReactor(r.oid, inside); }
     }
   }
@@ -8902,28 +9014,53 @@ export class Game {
       if (force >= 0) d = force < hp ? hp - force : hp;
       const disease = Number(info.disease) && Number(info.level) ? ((Number(info.disease) & 0xff) << 8) | (Number(info.level) & 0xff) : 0;
       if (d > 0) {
-        const p = this.player, dir = Number(info.dir) || 0;
+        const dir = Number(info.dir) || 0;
         // the push: along dir, or 270 the way you were moving (and 270 up unless you were falling)
         let vx, vy;
         if (dir) { const a = ((90 - dir * 30) * Math.PI) / 180; vx = Math.round(Math.cos(a) * KNOCKBACK); vy = -Math.round(Math.sin(a) * KNOCKBACK); if (obj.f) vx = -vx; }
         else { vx = dx < 0 ? -KNOCKBACK : dx > 0 ? KNOCKBACK : 0; vy = dy < 1 ? -KNOCKBACK : 0; }
-        this.net.takeObstacleDamage(d, disease);
-        this.vfx?.damage(p, [d], 'violet');
-        setExpression(p, 1, HIT_FACE_TIME);
-        this.standUp();
-        if ((vx || vy) && !this.holdsStance()) {
-          if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
-          if (vy < 0) { p.fh = null; p.ladder = null; }
-          p.vx = vx; if (vy) p.vy = vy;
-        }
-        p.attack = null;
-        this.invincible = HIT_PROTECTION; this.missed = false;
+        this.fieldHurt(d, vx, vy, disease);
       }
       const target = Number(info.targetField) || 0;
       if (target && target !== 999999999) this.net.directionField(target);
       return true;
     }
     return false;
+  }
+  /**
+   * RPS_GAME: 8 opens Rock-Paper-Scissors for an NPC (its notice first, then the window, not while one is open);
+   * 6, 7 and 9-14 only reach an open window. Anything else is ignored.
+   */
+  async rpsGame(mode, d) {
+    if (mode < 6 || mode > 14) return;
+    const open = this.rps && this.windows.order.includes(this.rps) ? this.rps : null;
+    if (mode === 8) {
+      if (open) return;
+      await localTalk(this.windows, d.npc, RPS_TEXT.notice, ['OK']);
+      const w = new RpsWin(this.windows, d.npc);
+      await this.assets.preload(w.frames());
+      this.rps = this.windows.show(w, null);
+      return;
+    }
+    open?.game(mode, d);
+  }
+  /**
+   * A blow from the field itself (an obstacle, a Snowball snowman): TAKE_DAMAGE -3 with its disease, shown in violet,
+   * and you're thrown (vx, vy) unless you hold your stance; then the usual protection after a hit.
+   */
+  fieldHurt(d, vx, vy, disease = 0) {
+    const p = this.player;
+    this.net.takeObstacleDamage(d, disease);
+    this.vfx?.damage(p, [d], 'violet');
+    setExpression(p, 1, HIT_FACE_TIME);
+    this.standUp();
+    if ((vx || vy) && !this.holdsStance()) {
+      if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
+      if (vy < 0) { p.fh = null; p.ladder = null; }
+      p.vx = vx; if (vy) p.vy = vy;
+    }
+    p.attack = null;
+    this.invincible = HIT_PROTECTION; this.missed = false;
   }
   /**
    * The damage a monster's blow does you, or 0 for a MISS.
@@ -9223,6 +9360,18 @@ export class Game {
    * (type 2) when the ball, flying from its start point, reaches you. Whoever controls the monster, each client
    * checks itself, as in the original.
    */
+  setCarnivalTeam(team) { this.carnivalTeam = team; }
+  /** "Maple Red" / "Maple Blue" on a Monster Carnival field (types 10, 11, 15) for someone on team 0 / 1. */
+  carnivalTag(ent, local) {
+    if (![10, 11, 15].includes(Number(this.map?.info?.fieldType))) return null;
+    const team = local ? this.carnivalTeam : ent.team;
+    return team === 0 ? 'Maple Red' : team === 1 ? 'Maple Blue' : null;
+  }
+  /** A monster on your Monster Carnival team: your attacks pass it by. */
+  carnivalAlly(m) {
+    const type = Number(this.map?.info?.fieldType);
+    return (type === 10 || type === 15) && this.carnivalTeam !== undefined && m.team === this.carnivalTeam;
+  }
   /** A Hypnotized monster, or in a Monster Carnival one on your team: it doesn't hurt you. */
   friendlyToYou(m) {
     if (hypnotized(m)) return true;
@@ -9537,6 +9686,7 @@ export class Game {
     const chars = this.drawOrder(ctx, cam, inShop), playerLayer = this.playerZ.page;
     const mobs = map.life.filter((e) => e.kind !== 'Npc').map((e) => ({ e, k: mobDepth(e) })).sort((a, b) => a.k - b.k).map((x) => x.e);
     for (let l = 0; l < 8; l++) {
+      if (l === 3) this.fieldMode?.drawWorld?.(ctx, cam);   // an event field's pieces stand just behind page 3
       map.drawLayer(ctx, cam, l);
       for (const e of mobs) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
@@ -9561,6 +9711,7 @@ export class Game {
     this.drawFx(ctx, cam);
     this.drawKeyGauge(ctx, cam);
     map.drawBacks(ctx, cam, true);
+    this.fieldMode?.drawOver?.(ctx, cam);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
     this.weather.draw(ctx);
@@ -9593,6 +9744,7 @@ export class Game {
       if (this.quizNotice) drawFloatNotice(ctx, this.assets, this.quizNotice.N, this.quizNotice.text);
       this.avatarBanner.draw(ctx);
       this.drawClock(ctx);
+      this.fieldMode?.drawHud?.(ctx);
       this.dojo?.draw(ctx);
       this.pyramid?.draw(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top

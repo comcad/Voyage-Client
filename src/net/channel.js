@@ -909,7 +909,7 @@ export class ChannelSession {
       const pets = [];
       while (r.available && r.ubyte() === 1) pets.push({ slot: pets.length, ...readPet(r) });
       let box = null;
-      let chalk = null, rings = null, berserk = false, mountInfo = null;
+      let chalk = null, rings = null, berserk = false, mountInfo = null, team = -1;
       const cards = [];
       if (r.available >= 13) {
         mountInfo = { level: r.int(), exp: r.int(), tired: r.int() };   // the mount's level / exp / tiredness
@@ -920,9 +920,10 @@ export class ChannelSession {
         try {
           if (r.available && r.ubyte()) for (let n = r.int(); n > 0; n--) cards.push(r.int());
           berserk = r.available > 0 && r.ubyte() !== 0;
+          if (r.available >= 2) { r.ubyte(); team = r.byte(); }   // then another byte, and the team an event field reads (-1 none)
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, team, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -1370,9 +1371,48 @@ export class ChannelSession {
     });
     // the Snowball event's wall: thrown back left (and up)
     on(S.LEFT_KNOCK_BACK, () => this.emit('leftKnockBack'));
+    // the Snowball event: its state, both snowmen's HP and each snowball's position and speed; the first one also
+    // carries what a blow to a snowball and to a snowman (usual / 1 in 10) sends
+    on(S.SNOWBALL_STATE, (r) => {
+      const state = r.ubyte(), hp0 = r.int(), hp1 = r.int();
+      const balls = [0, 1].map(() => ({ pos: r.short(), speed: r.ubyte() }));
+      const extra = r.available >= 6 ? [r.ushort(), r.ushort(), r.ushort()] : null;
+      this.emit('snowState', state, hp0, hp1, balls, extra);
+    });
+    // what was struck (0 / 1 a snowball, 2 / 3 a snowman), for how much, shown after how many ms
+    on(S.HIT_SNOWBALL, (r) => { const what = r.ubyte(), damage = r.ushort(), delay = r.ushort(); this.emit('snowHit', what, damage, delay); });
+    on(S.SNOWBALL_MESSAGE, (r) => { const team = r.ubyte(), msg = r.ubyte(); this.emit('snowMessage', team, msg); });
+    // Coconut Harvest: a coconut (-1 every one) goes to a state after a delay; both teams' scores
+    on(S.COCONUT_HIT, (r) => { const id = r.short(), delay = r.ushort(), state = r.ubyte(); this.emit('coconutHit', id, delay, state); });
+    on(S.COCONUT_SCORE, (r) => { const a = r.ushort(), b = r.ushort(); this.emit('coconutScore', a, b); });
+    // the Ariant Coliseum: each player's score (a negative one takes them off the board), and the result scroll
+    on(S.ARIANT_ARENA_USER_SCORE, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0; n--) list.push({ name: r.string(), score: r.int() });
+      this.emit('ariantScores', list);
+    });
+    on(S.ARIANT_ARENA_SHOW_RESULT, () => this.emit('ariantResult'));
+    // Rock-Paper-Scissors: 8 opens it for an NPC, 11 is the NPC's hand and how you did; the others are bare
+    on(S.RPS_GAME, (r) => {
+      const mode = r.ubyte(), d = {};
+      if (mode === 8) d.npc = r.int();
+      else if (mode === 11) { d.hand = r.ubyte(); d.result = r.byte(); }
+      this.emit('rpsGame', mode, d);
+    });
     on(S.RESET_MONSTER_ANIMATION, (r) => { const oid = r.int(); if (r.ubyte()) this.emit('mobResetAnim', oid); });
-    // a Monster Carnival starts: your team (the CP counts after it aren't shown yet)
-    on(S.MONSTER_CARNIVAL_START, (r) => this.emit('carnivalTeam', r.ubyte()));
+    // a Monster Carnival starts: your team, then (on the field itself) your CP, your team's and the other's (available,
+    // earned), and a byte per monster: how many times it has been summoned
+    on(S.MONSTER_CARNIVAL_START, (r) => {
+      const team = r.ubyte(), cp = r.available >= 12 ? [0, 1, 2, 3, 4, 5].map(() => r.ushort()) : null;
+      this.emit('carnivalStart', { team, cp, counts: Array.from(r.rest()) });
+    });
+    on(S.MONSTER_CARNIVAL_OBTAINED_CP, (r) => { const a = r.ushort(), b = r.ushort(); this.emit('carnivalCP', a, b); });
+    on(S.MONSTER_CARNIVAL_PARTY_CP, (r) => { const t = r.ubyte(), a = r.ushort(), b = r.ushort(); this.emit('carnivalPartyCP', t, a, b); });
+    on(S.MONSTER_CARNIVAL_SUMMON, (r) => { const tab = r.ubyte(), index = r.ubyte(); this.emit('carnivalSummon', tab, index, r.string()); });
+    on(S.MONSTER_CARNIVAL_MESSAGE, (r) => this.emit('carnivalMessage', r.ubyte()));
+    on(S.MONSTER_CARNIVAL_DIED, (r) => { const team = r.ubyte(), name = r.string(); this.emit('carnivalDied', team, name, r.ubyte()); });
+    on(S.MONSTER_CARNIVAL_LEAVE, (r) => { const code = r.ubyte(), team = r.ubyte(); this.emit('carnivalLeave', code, team, r.string()); });
+    on(S.MONSTER_CARNIVAL_RESULT, (r) => this.emit('carnivalResult', r.ubyte()));
 
     // a move or a door turned down (BLOCKED_MAP), or a channel / shop the server won't let you into (BLOCKED_SERVER):
     // both answer the request, and say why
@@ -1415,14 +1455,18 @@ export class ChannelSession {
       this.emit('drop', d);
     });
     // reactors: spawn (oid, id, state, position, facing), hit (oid, new state, position, stance), destroy (oid, state)
-    on(S.REACTOR_SPAWN, (r) => { const oid = r.int(), id = r.int(), state = r.byte(), pos = r.pos2(); this.emit('reactorSpawn', { oid, id, state, x: pos.x, y: pos.y }); });
+    // a reactor: its object and reactor ids, state, place, whether it is mirrored and its name
+    on(S.REACTOR_SPAWN, (r) => {
+      const oid = r.int(), id = r.int(), state = r.byte(), pos = r.pos2(), flip = r.available ? r.bool() : false, name = r.available >= 2 ? r.string() : '';
+      this.emit('reactorSpawn', { oid, id, state, x: pos.x, y: pos.y, flip, name });
+    });
     // a hit: its new state, where it is, ms before the hit shows, the hit's index, then tenths of a second it can't be hit
     on(S.REACTOR_HIT, (r) => {
       const oid = r.int(), state = r.byte(), pos = r.pos2();
       const delay = r.available >= 2 ? r.ushort() : 0, index = r.available ? r.byte() : 0, block = r.available ? r.byte() : 0;
       this.emit('reactorHit', { oid, state, x: pos.x, y: pos.y, delay, index, block });
     });
-    on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(); this.emit('reactorDestroy', { oid, state }); });
+    on(S.REACTOR_DESTROY, (r) => { const oid = r.int(), state = r.byte(), pos = r.available >= 4 ? r.pos2() : null; this.emit('reactorDestroy', { oid, state, ...pos }); });
     on(S.REMOVE_ITEM_FROM_MAP, (r) => {
       const anim = r.ubyte(), oid = r.int();
       if (anim === 4) { this.emit('removeDrop', oid, 4, 0, -1, r.short()); return; }   // 4: blown up by Meso Explosion, after a delay
@@ -1591,7 +1635,7 @@ export class ChannelSession {
    * Attack packets (AbstractDealDamageHandler.parseDamage). kind: melee | ranged | magic.
    * targets: [{oid, x, y, dmg:[...]}]; stance = body action id; facingLeft -> direction bit.
    */
-  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0 }) {
+  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0, at = null }) {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
     if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
@@ -1618,6 +1662,7 @@ export class ChannelSession {
       w.int(0); // per-target trailer (mob CRC in the real client); parseDamage skips 4 bytes per target
     }
     if (skill === 14111006) w.int(0).pos({ x: 0, y: 0 }); // Poison Bomb: position
+    if (at) w.pos({ x: Math.round(at.x), y: Math.round(at.y) });   // an event field's swing: where you stand
     this.send(w);
   }
   closeRangeAttack(o) { this.attack('melee', o); }
@@ -1707,9 +1752,12 @@ export class ChannelSession {
     this.send(w);
   }
 
-  /** DAMAGE_REACTOR: an attack reached it. stance: 0/1 in the air facing left/right, 2/3 on the ground. */
-  damageReactor(oid, charPos, stance, skill = 0) {
-    this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(charPos).short(stance).int(0).int(skill));
+  /**
+   * DAMAGE_REACTOR: a swing reached it (skill flag 0, skill 0) or a skill set it off (flag 1, the skill), with your
+   * stance (2 on a floor, 1 facing left) and when it shows (ms).
+   */
+  damageReactor(oid, bySkill, stance, delay, skill = 0) {
+    this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(bySkill).int(stance).short(delay).int(skill));
   }
   /** TOUCHING_REACTOR: walked onto (true) or off (false) a reactor set off by touch. */
   touchReactor(oid, touching) { this.send(new PacketWriter(C.TOUCHING_REACTOR).int(oid).byte(touching ? 1 : 0)); }
@@ -1719,6 +1767,16 @@ export class ChannelSession {
   takeObstacleDamage(damage, disease = 0) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(-3).byte(0).int(damage).short(disease).byte(0));
   }
+  /** SNOWBALL: your swing reached a snowball (0 / 1) or a snowman (2 / 3), for `damage`, landing after `delay` ms. */
+  snowball(what, damage, delay) { this.send(new PacketWriter(C.SNOWBALL).byte(what).short(damage).short(delay)); }
+  /** LEFT_KNOCKBACK: you stand in a snowball's box. */
+  leftKnockback() { this.send(new PacketWriter(C.LEFT_KNOCKBACK)); }
+  /** COCONUT: your swing reached coconut `id`, landing after `delay` ms. */
+  coconut(id, delay) { this.send(new PacketWriter(C.COCONUT).short(id).short(delay)); }
+  /** RPS_ACTION: 0 START, 1 a hand (0 rock, 1 paper, 2 scissors), 2 time up, 3 CONTINUE, 4 EXIT, 5 RETRY. */
+  /** MONSTER_CARNIVAL: summon / use / call the row (from 0) of a tab (0 monsters, 1 skills, 2 guardians). */
+  carnival(tab, index) { this.send(new PacketWriter(C.MONSTER_CARNIVAL).byte(tab).int(index)); }
+  rpsAction(mode, sel = 0) { const w = new PacketWriter(C.RPS_ACTION).byte(mode); if (mode === 1) w.byte(sel); this.send(w); }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
   }
