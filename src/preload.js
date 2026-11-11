@@ -69,13 +69,16 @@ export class Preloader {
     this.started = true;
     const index = await fetch('/character-index.json').then((r) => (r.ok ? r.json() : null)).catch(() => null);
     if (!index) return;
-    const load = async (path, pri) => {
+    const load = async (path, pri, keep = true) => {
       while (this.a.waiting(pri) > AHEAD || this.g.loading) await sleep(200);
       const tree = await this.a.json(path);
       this.a.enqueue(canvases(tree), pri);
+      // two thousand faces and hairs are a lot to hold (and to sweep in every garbage collection): only their images
+      // stay; the data comes back from the local cache when someone wears it
+      if (!keep) this.a.jsonCache.delete(path);
     };
     for (const id of [...(index.body || []), ...(index.head || [])]) await load(`Character/${pad(id, 8)}.img`, 1);
-    for (const id of index.face || []) await load(`Character/Face/${pad(id, 8)}.img`, 2);
-    for (const id of index.hair || []) await load(`Character/Hair/${pad(id, 8)}.img`, 2);
+    for (const id of index.face || []) await load(`Character/Face/${pad(id, 8)}.img`, 2, false);
+    for (const id of index.hair || []) await load(`Character/Hair/${pad(id, 8)}.img`, 2, false);
   }
 }

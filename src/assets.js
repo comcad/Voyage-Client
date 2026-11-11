@@ -63,12 +63,34 @@ const PRI_NAMES = Object.keys(PRI);
  * Batched files don't go through the browser's own cache, so where the browser allows a local one (localhost, https)
  * they are kept there for the next visit, under the server's asset version.
  */
+class Slicer {
+  constructor() {
+    this.lines = PRI_NAMES.map(() => new Line()); this.running = false;
+    this.channel = new MessageChannel();   // a message comes back as its own task, with no timer's minimum wait
+    this.channel.port1.onmessage = () => this.run();
+  }
+  /** Runs fn in a slice (pri: see PRI); resolves with what it returns. */
+  add(fn, pri = 'normal') {
+    return new Promise((resolve, reject) => {
+      this.lines[PRI[pri] ?? 2].push(() => { try { resolve(fn()); } catch (err) { reject(err); } });
+      if (!this.running) { this.running = true; this.channel.port2.postMessage(0); }
+    });
+  }
+  run() {
+    const end = performance.now() + SLICE_MS;
+    let line;
+    while ((line = this.lines.find((l) => l.size)) && performance.now() < end) line.take()();
+    if (this.lines.some((l) => l.size)) this.channel.port2.postMessage(0); else this.running = false;
+  }
+}
+
 class Batcher {
   constructor(assets) {
     this.a = assets;
     this.files = new Map();   // path -> { pri, sent, promise, resolve, reject }
     this.pending = PRI_NAMES.map(() => new Set());
     this.timer = 0;
+    this.writes = [];   // files waiting to go into the local cache, written in idle time
     this.cache = typeof caches !== 'undefined' && globalThis.isSecureContext
       ? fetch(`${assets.base}-version`).then((r) => r.json()).then((v) => caches.open(`voyage-assets-${v.v}`)).catch(() => null)
       : Promise.resolve(null);
@@ -120,17 +142,39 @@ class Batcher {
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength), cache = await this.cache;
     let off = 0;
     for (const p of paths) {
-      const len = view.getUint32(off);
-      off += 4;
-      const f = this.files.get(p);
-      if (len === 0xffffffff) { if (f) { this.files.delete(p); f.resolve(null); } continue; }
-      const blob = new Blob([buf.subarray(off, off + len)], { type: p.endsWith('.json') ? 'application/json' : 'image/png' });
-      off += len;
-      if (f) { this.files.delete(p); f.resolve(blob); }
-      cache?.put(this.url(p), new Response(blob)).catch(() => {});
+      const len = view.getUint32(off), at = off + 4;
+      off = at + (len === 0xffffffff ? 0 : len);
+      // each file is handed on in a slice of its own (what is waiting on it runs then too)
+      this.a.slicer.add(() => {
+        const f = this.files.get(p);
+        if (len === 0xffffffff) { if (f) { this.files.delete(p); f.resolve(null); } return; }
+        const blob = new Blob([buf.subarray(at, at + len)], { type: p.endsWith('.json') ? 'application/json' : 'image/png' });
+        if (f) { this.files.delete(p); f.resolve(blob); }
+        if (cache) this.write(cache, p, blob);
+      }, this.files.get(p)?.pri);
     }
   }
+  /** Into the local cache when the browser is idle, a few at a time. */
+  write(cache, path, blob) {
+    this.writes.push([path, blob]);
+    if (this.writing) return;
+    this.writing = true;
+    const idle = globalThis.requestIdleCallback || ((fn) => setTimeout(() => fn({ timeRemaining: () => 5 }), 50));
+    const drain = (deadline) => {
+      while (this.writes.length && deadline.timeRemaining() > 2) {
+        const [p, b] = this.writes.shift();
+        cache.put(this.url(p), new Response(b)).catch(() => {});
+      }
+      if (this.writes.length) idle(drain); else this.writing = false;
+    };
+    idle(drain);
+  }
 }
+/**
+ * Main-thread work after downloads (unpacking a batch, parsing a data file) runs SLICE_MS at a time, by priority, so a
+ * burst of arrivals is spread over frames rather than stalling one: batching makes a crowd's files land together.
+ */
+const SLICE_MS = 4;
 /** A first-in first-out list that doesn't shift its array (it can hold thousands). */
 class Line {
   constructor() { this.list = []; this.head = 0; }
@@ -146,6 +190,7 @@ export class Assets {
     this.imgCache = new Map();
     this.loaded = 0; this.loadedPx = 0;   // images loaded so far and their pixels (the /fps report)
     this.slots = { active: 0, lines: [new Line(), new Line(), new Line()] };
+    this.slicer = new Slicer();
     this.files = new Batcher(this);
   }
 
@@ -179,7 +224,8 @@ export class Assets {
       const wz = path.split('/')[0];
       p = this.files.get(`${path}.json`, pri)
         .then((blob) => (blob ? blob.text() : null))
-        .then((text) => (text ? prepare(JSON.parse(text), wz) : null))
+        // parsed in a slice of its own; a file without links (no "_uol") needs no link passes
+        .then((text) => (text ? this.slicer.add(() => prepare(JSON.parse(text), wz, text.includes('"_uol"')), pri) : null))
         .catch(() => { this.jsonCache.delete(path); return null; });   // a dropped connection: asked again next time
       this.jsonCache.set(path, p);
     } else this.files.bump(`${path}.json`, pri);
@@ -196,7 +242,7 @@ export class Assets {
       e = { img, ready: false, tries, pri };
       e.promise = new Promise((res) => {
         // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
-        img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
+        img.onload = () => { const done = () => { e.ready = true; img.onload = img.onerror = null; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
         img.onerror = () => { e.err = true; e.tries = tries + 1; e.failedAt = performance.now(); res(null); };
       });
       // its bytes come in a batch (Batcher) and are shown from memory; none (no such file) or a dropped connection is
@@ -257,7 +303,7 @@ export class Assets {
   }
 }
 
-function prepare(tree, wz) {
+function prepare(tree, wz, links = true) {
   const seen = new Set();
   (function prefix(node) {
     if (!node || typeof node !== 'object' || seen.has(node)) return;
@@ -268,23 +314,25 @@ function prepare(tree, wz) {
     for (const k in node) prefix(node[k]);
   })(tree);
 
-  // Resolve UOLs relative to the node that contains them. Repeat for chained links.
-  for (let pass = 0; pass < 4; pass++) {
+  // Resolve UOLs relative to the node that contains them. Repeat for chained links. (One chain of the nodes above,
+  // pushed and popped as the walk goes, rather than a copy at every node.)
+  for (let pass = 0; links && pass < 4; pass++) {
     let unresolved = 0;
-    const visited = new Set();
-    (function walk(node, ancestors) {
+    const visited = new Set(), chain = [];
+    (function walk(node) {
       if (!node || typeof node !== 'object' || visited.has(node)) return;
       visited.add(node);
-      const chain = [...ancestors, node];
+      chain.push(node);
       for (const k in node) {
         const v = node[k];
         if (v && typeof v === 'object' && typeof v._uol === 'string') {
           const target = resolveUol(chain, v._uol);
           if (target && !(typeof target._uol === 'string')) node[k] = target;
           else unresolved++;
-        } else walk(v, chain);
+        } else walk(v);
       }
-    })(tree, []);
+      chain.pop();
+    })(tree);
     if (!unresolved) break;
   }
   return tree;

@@ -42,6 +42,12 @@ export function hermite(b, e, t) {
  */
 export const CATCH_UP = 550;
 const TOO_FAR = CATCH_UP + 5000;
+/**
+ * A player whose movement comes in small pieces (under SHORT ms a packet) plays at STRETCH ms a tick once under LOW ms
+ * is left, so a piece arriving a little late finds them still moving rather than frozen mid-stride. A Voyage addition
+ * for such senders only: the client's own players send half a second at a time and play exactly as the client does.
+ */
+const SHORT = 150, LOW = 60, STRETCH = 24;
 export class CharPath {
   constructor(x, y) { this.reset(x, y); }
   /** Standing at (x, y), nothing to play. */
@@ -62,8 +68,10 @@ export class CharPath {
   queue(moves) {
     const keys = pathKeys(moves, this.q[this.q.length - 1] || this.cur);
     if (!keys.length) return;
+    const dur = keys.reduce((s, k) => s + k.dur, 0);
+    this.short = dur < SHORT;
     this.q.push(...keys);
-    this.total += keys.reduce((s, k) => s + k.dur, 0);
+    this.total += dur;
     this.rate = this.total < CATCH_UP ? 30 : 33;
     if (this.total > TOO_FAR) { const last = this.q[this.q.length - 1]; this.q = [{ ...last, type: 3, dur: 0 }]; this.total = 0; }
   }
@@ -74,7 +82,8 @@ export class CharPath {
   tick(pose) {
     this.prev = { x: this.cur.x, y: this.cur.y };
     if (!this.q.length) return;
-    this.t += this.rate;
+    const rate = this.short && this.total < LOW ? STRETCH : this.rate;
+    this.t += rate;
     let jumped = false;
     while (this.q.length) {
       const e = this.q[0];
@@ -86,7 +95,7 @@ export class CharPath {
       pose(e);
       this.q.shift();
     }
-    this.total -= this.rate;
+    this.total -= rate;
     if (this.q.length && this.total > 0) {
       const e = this.q[0];
       if (e.type === 3) { this.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy }; jumped = true; }

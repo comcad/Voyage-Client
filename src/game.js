@@ -3040,7 +3040,8 @@ export class Game {
     this.standardPdd(0, 1);   // load the standard defence table before the first blow
     this.rocks = { regular: (info.rocks || []).slice(0, 5), vip: (info.rocks || []).slice(5, 15) };   // Teleport Rock maps
     this.keyBar = this.statusBar; // the quick slots (render() rebuilds them from the keymap)
-    const later = (fn) => (...a) => (this.loading ? this.queue.push(() => fn(...a)) : fn(...a));
+    // held while a map loads, and while what was held is still being handled (so the order holds; see drainQueue)
+    const later = (fn) => (...a) => (this.loading || this.draining ? this.queue.push(() => fn(...a)) : fn(...a));
     const h = this.net.h;
     Object.assign(h, {
       cashShopOpen: (d) => this.openCashShop(d),
@@ -4261,6 +4262,8 @@ export class Game {
     const seq = this.loadSeq = (this.loadSeq || 0) + 1;
     const current = () => seq === this.loadSeq;
     this.petMpArmed = false;
+    // what was held for the map we're leaving and not handled yet belongs to that map
+    if (this.draining) { clearTimeout(this.drainTimer); this.draining = false; this.queue = []; }
     this.loading = true; this.loadingId = id; this.objVisQueue = null;
     // a scene ends with its map; the next map's scene comes while that one loads
     this.direction = null;
@@ -4331,11 +4334,25 @@ export class Game {
       this.loading = false;
       if (this.fade?.dir === 'out') this.fade = { dir: 'in', t0: performance.now() };   // a failed load still lights up again
       this.hooks.onLoading?.(false);
-      const q = this.queue; this.queue = [];
-      for (const fn of q) fn();
+      this.drainQueue();
       this.questAlert?.refresh();   // what this map, your items and your level offer
       this.preloadOwn();
     }
+  }
+
+  /**
+   * What came in while the map loaded, handled a few ms at a time: a crowded map is a hundred-odd packets at once
+   * (players, their pets, drops), and handled together they held up the screen for a tenth of a second or more.
+   * Anything newer waits behind them (see later), so the order holds.
+   */
+  drainQueue() {
+    this.draining = true;
+    const step = () => {
+      const end = performance.now() + 6;
+      while (this.queue.length && performance.now() < end) this.queue.shift()();
+      if (this.queue.length) this.drainTimer = setTimeout(step, 0); else this.draining = false;
+    };
+    step();
   }
 
   placeAtPortal(portal) { this.placeAt(portal.x, portal.y - 10); }
