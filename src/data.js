@@ -175,12 +175,14 @@ export function weaponMultiplier(weaponId, pose = null) {
 /** Equipment scrolls (204xxxx, incl. Clean Slate / Chaos 2049xxx): used by dropping them on an equip. */
 export const isScroll = (id) => Math.floor(id / 10000) === 204;
 /**
- * Whether a scroll fits an equip, as Cosmic's ScrollHandler decides: 2049xxx (Clean Slate, Chaos) fit any,
- * 20492xx (accessory) fits rings / pendants / belts, others match their 3rd-4th digits to the equip's category.
+ * Whether a scroll fits an equip, as the client decides: Clean Slate (20490xx) and Chaos (20491xx, but not
+ * 2049105-2049110) fit any equip but pet equipment; accessory scrolls (20492xx) fit rings, pendants and belts; any
+ * other matches its 3rd-4th digits to the equip's category.
  */
 export function scrollFits(scrollId, equipId) {
-  const sid = Math.floor(scrollId / 100);
-  if (Math.floor(scrollId / 1000) === 2049 && sid !== 20492) return true;
-  if (sid === 20492) return [11, 12, 13].includes(Math.floor(equipId / 10000) % 100);
-  return sid % 100 === Math.floor(equipId / 10000) % 100;
+  if (Math.floor(scrollId / 10000) !== 204 || Math.floor(equipId / 1000000) !== 1) return false;
+  const g = Math.floor(scrollId / 100), pet = Math.floor(equipId / 100000) === 18;
+  if (!pet && (g === 20490 || (g === 20491 && !(scrollId >= 2049105 && scrollId <= 2049110)))) return true;
+  if (g === 20492) return [11, 12, 13].includes(Math.floor(equipId / 10000) % 100);
+  return Math.floor((scrollId % 10000) / 100) === Math.floor(equipId / 10000) % 100;
 }

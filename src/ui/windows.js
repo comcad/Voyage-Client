@@ -545,7 +545,6 @@ class InventoryWin extends Win {
     if (c.kind !== 'item') return;
     if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
     const to = this.slotAt(lx, ly) <= this.limit ? this.slotAt(lx, ly) : 0;
-    if (c.tab === 2 && isScroll(c.id) && this.tab === 1 && to && this.g.inventory[1][to]) { this.g.useScroll(c.slot, to); return; }
     if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);
     else if (c.tab === 'equip' && this.tab === 1) this.g.unequip(c.slot);
   }

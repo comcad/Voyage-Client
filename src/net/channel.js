@@ -1272,7 +1272,8 @@ export class ChannelSession {
     });
     on(S.SUMMON_SKILL, (r) => this.emit('summonSkill', r.int(), r.int(), r.ubyte()));
     // SHOW_SCROLL_EFFECT: who, success, cursed (the item was destroyed), Legendary Spirit, White Scroll
-    on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.bool(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
+    // (success is signed: -1 "cannot use", 0 failed, else it worked)
+    on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.byte(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
     on(S.SHOW_FOREIGN_EFFECT, (r) => {
       const id = r.int(), effect = r.ubyte();
       if (effect === 1 && r.available >= 4) {

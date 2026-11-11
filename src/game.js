@@ -63,6 +63,7 @@ import { permanent } from './ui/itemguard.js';
 import { MapleLifeWin } from './ui/maplelife.js';
 import { OwlWin, OwlResultWin } from './ui/owl.js';
 import { openMaker, makerOutcome } from './ui/maker.js';
+import { openLegendary } from './ui/legendary.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -5018,23 +5019,30 @@ export class Game {
    * a White Scroll in the bag you are asked whether to use it too. The server answers with the new item
    * (MODIFY_INVENTORY) and SHOW_SCROLL_EFFECT.
    */
-  async useScroll(scrollSlot, equipSlot) {
+  /**
+   * A scroll dropped on an equip: on what you wear (a negative slot), or in the Legendary Spirit window (`win`, an
+   * Equip-tab slot). The client's checks: dead; the reuse gate; a sealed scroll; the item; whether it fits (nothing is
+   * said when it doesn't, and the upgrade slots are the server's business); a sealed item's warning. Then the White
+   * Scroll: asked on the normal path, the window's box with Legendary Spirit - never for the six scrolls that take
+   * none, or with no White Scroll in Use. True once it went.
+   */
+  async useScroll(scrollSlot, equipSlot, win = null) {
     const inv = this.inventory, scroll = inv?.[2]?.[scrollSlot];
-    const eq = equipSlot < 0 ? inv?.equipped?.[equipSlot] : inv?.[1]?.[equipSlot];
-    if (!scroll || !eq || !isScroll(scroll.id)) return;
-    if (this.dead) { this.notice("You can't do it once you're dead."); return; }
-    if (equipSlot > 0 && !(this.skills?.level(1003) > 0)) { this.notice('Scrolls can only be used on equipped items.'); return; }
-    const sid = scroll.id, modifier = Math.floor(sid / 1000) === 2049;
-    if (!scrollFits(sid, eq.id)) { this.notice('This scroll cannot be used on this item.'); return; }
-    if (!modifier && !(eq.slots > 0)) { this.notice('This item has no upgrades available.'); return; }
-    if (eq.flag & 1 && !(await this.windows.confirm('Due to the potency of the scroll,\r\nthe sealed item might be destroyed.\r\nAre you sure you still want to use the scroll?'))) return;
+    if (this.dead) { this.notice("You can't do it once you're dead."); return false; }
+    if (!this.canExclusive(500) || !scroll || !isScroll(scroll.id)) return false;
+    if (scroll.flag & 1) { this.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return false; }
+    if (win?.locked) return false;
+    const eq = win ? inv?.[1]?.[equipSlot] : inv?.equipped?.[equipSlot];
+    if (!eq || !scrollFits(scroll.id, eq.id)) return false;
+    if (eq.flag & 1 && !(await this.windows.confirm('Due to the potency of the scroll,\r\nthe sealed item might be destroyed.\r\nAre you sure you still want to use the scroll?'))) return false;
     // Spikes, Cold Protection and Clean Slate scrolls never take a White Scroll
-    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && ![2040727, 2041058, 2049000, 2049001, 2049002, 2049003].includes(sid);
-    const white = hasWhite && (await this.windows.confirm('Would you like to use the White Scroll?'));
-    if (inv[2][scrollSlot] !== scroll) return;          // it moved while you were deciding
-    if (!this.canExclusive(500)) return;
-    this.net?.useScroll(scrollSlot, equipSlot, white, equipSlot > 0);
+    const hasWhite = Object.values(inv[2]).some((x) => x.id === 2340000) && ![2040727, 2041058, 2049000, 2049001, 2049002, 2049003].includes(scroll.id);
+    const white = win ? hasWhite && win.checked : hasWhite && (await this.windows.confirm('Would you like to use the White Scroll?'));
+    if (inv[2][scrollSlot] !== scroll || (win && (win.locked || inv[1][equipSlot] !== eq))) return false;   // it moved while you were deciding
+    if (!this.canExclusive(500)) return false;
+    this.net?.useScroll(scrollSlot, equipSlot, white, !!win);
     this.lockExclusive();
+    return true;
   }
 
   /**
@@ -5089,29 +5097,38 @@ export class Game {
    * window instead (the Enchant sound, the line once its art is done) and nothing plays on you. Anyone else's (and
    * your own otherwise): Enchant Success / Failure on them with its sound.
    */
+  /**
+   * SHOW_SCROLL_EFFECT. Your own Legendary Spirit result goes to its window. Otherwise: your own line, then the
+   * success / failure sound and art on whoever scrolled; someone else's Legendary Spirit result plays the _Delay sound
+   * and shows its art 3120ms later, when their window's animation ends.
+   */
   async onScrollEffect(e) {
     const ent = e.id === this.player.id ? this.player : this.others.get(e.id);
     if (!ent) return;
-    const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Enchant?.[e.success ? 'Success' : 'Failure'];
-    const mine = ent === this.player, line = !mine ? null
-      : e.success ? (e.white ? ' The item was successfully upgraded, and the white scroll was used in the process.'
+    const mine = ent === this.player, ok = e.success !== 0;
+    if (mine && e.legendary) {
+      const w = this.legendaryWin;
+      if (w && this.windows.order.includes(w)) w.result(e.success, e.cursed);
+      return;
+    }
+    const line = !mine ? null
+      : ok ? (e.white ? ' The item was successfully upgraded, and the white scroll was used in the process.'
         : 'The scroll lights up, and then its mysterious power has been transferred to the item.')
         : e.cursed ? 'The item is destroyed due to the overwhelming power of the scroll.'
           : e.white ? 'The item upgrade failed, but since the White Scroll was used, the number of item upgrade slots remained in tact.'
             : 'The scroll lights up, but the item winds up as if nothing happened';
-    if (mine && e.legendary) {
-      sfx.play('Game/Enchant');
-      const len = node ? new Anim(node, false).frames.reduce((t, f) => t + (Number(f.delay) || 100), 0) : 0;
-      this.after(len, () => this.hud.message(line, CHAT_COLOR.error));
-      return;
-    }
     if (line) this.hud.message(line, CHAT_COLOR.error);
-    sfx.play(e.success ? 'Game/EnchantSuccess' : 'Game/EnchantFailure');
-    if (node) {
-      const anim = new Anim(node, false);
-      await this.assets.preload(anim.frames);
-      this.fx.push({ anim, follow: ent, flip: false });
-    }
+    if (e.legendary) { sfx.play(ok ? 'Game/EnchantSuccess_Delay' : 'Game/EnchantFailure_Delay'); this.enchantArt(ent, ok, 3120); return; }
+    sfx.play(ok ? 'Game/EnchantSuccess' : 'Game/EnchantFailure');
+    this.enchantArt(ent, ok);
+  }
+  /** Effect/BasicEff.img/Enchant/Success or Failure on someone, `delay` ms from now (if still on this map). */
+  async enchantArt(ent, ok, delay = 0) {
+    const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Enchant?.[ok ? 'Success' : 'Failure'];
+    if (!node) return;
+    const anim = new Anim(node, false), map = this.map;
+    await this.assets.preload(anim.frames);
+    this.after(delay, () => { if (this.map === map) this.fx.push({ anim, follow: ent, flip: false }); });
   }
 
   unequip(slot) {
@@ -6400,6 +6417,7 @@ export class Game {
     const sb = this.skills, lv = sb.level(id);
     if (!lv || !sb.owns(id)) return false;   // another job's skill, even if you have levels in it
     if ([1007, 10001007, 20001007, 20011007].includes(id)) { openMaker(this); return true; }   // the Maker opens its window
+    if ([1003, 10001003, 20001003, 20011003].includes(id)) { openLegendary(this); return true; }   // so does Legendary Spirit
     const kind = sb.kind(id, this.weaponId());
     if (kind === 'passive') return false;
     if (this.riding && !this.skillKeyPressed) return false;   // a key held down on a mount doesn't repeat
