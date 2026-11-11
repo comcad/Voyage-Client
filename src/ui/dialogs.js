@@ -1,6 +1,6 @@
 import { pad, frames } from '../assets.js';
 import { invType, itemInfo } from '../data.js';
-import { drawParts } from '../character.js';
+import { drawParts, CharacterLook } from '../character.js';
 import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases, drawTabStrip } from './windows.js';
@@ -295,6 +295,10 @@ export class NpcDialog extends Win {
 /** Shows a server NPC_TALK and resolves with { action, sel } once the player answers. */
 export function npcTalk(mgr, d) {
   if (d.type === 0x0E) return new Promise((resolve) => mgr.show(new SlideMenu(mgr, d, resolve), null));
+  // a style choice: the avatar picker (its art loaded first)
+  if (d.type === 7 && d.styles?.length) {
+    return new Promise((resolve) => { const w = new AvatarStyleDialog(mgr, d, resolve); mgr.assets.preload(w.frames()).then(() => mgr.show(w, null)); });
+  }
   return new Promise((resolve) => mgr.show(new NpcDialog(mgr, d, resolve), null));   // opens without the dialog alert
 }
 
@@ -427,6 +431,79 @@ export class PetSelectDialog extends Win {
   }
 }
 
+/**
+ * NPC_TALK 7 / 8, choosing a style: UIWindow.img/UtilDlgEx_Avatar (419x306), centred on (400, 300). The words are at
+ * x 110, centred in the text box from y 28. A copy of your own look wears the style - a face for 2xxxx ids, a hair for
+ * 3xxxx, otherwise a skin - standing with its feet at (207, 245); a face or hair shows the item's name in white on
+ * nameTag at (123, 246), centred on x 210. BACK / NEXT step round the styles (wrapping), TAKE OFF ALL shows it with no
+ * equipment and DEFAULT SETTINGS (in its place) puts it back. OK answers with the style's index; Cancel and LEAVE
+ * STORE answer no. Lost in the decompile and placed by the art (unverified): every button, the shadow, and the NPC's
+ * portrait (the blue panel at the top left, its name on the bar under it).
+ */
+export class AvatarStyleDialog extends Win {
+  constructor(mgr, d, done) {
+    const A = mgr.W.UtilDlgEx_Avatar, B = mgr.B;
+    super(mgr, A.backgrnd, Math.max(0, Math.min(UI_W - 419, (UI_W >> 1) - 209)), Math.max(0, Math.min(UI_H - 306, (UI_H >> 1) - 153)));
+    this.buttons = []; this.closeBtn = null;
+    this.A = A; this.U = mgr.W.UtilDlgEx; this.d = d; this.done = done; this.modal = true; this.sel = 0; this.dressed = true;
+    const k = Math.floor((d.styles[0] || 0) / 10000);
+    this.kind = k === 2 ? 'face' : k === 3 ? 'hair' : 'skin';
+    this.layout = richText(scratch(), d.text || '', 280, textRef(mgr), NPC_TEXT);
+    this.textY = 28 + (this.layout.height > 100 ? -6 : Math.trunc((100 - this.layout.height - 6) / 2));
+    const n = d.styles.length, turn = (s) => { this.sel = (this.sel + s + n) % n; this.rebuild(); };
+    this.button(A.BtPrev, 15, 193, () => turn(-1));
+    this.button(A.BtNext, 340, 193, () => turn(1));
+    this.button(B.BtOK2, 307, 279, () => this.finish(1));
+    this.button(B.BtCancel2, 358, 279, () => this.finish(0));
+    this.offBtn = this.button(A.BtOff, 12, 279, () => { this.dressed = false; this.rebuild(); });
+    this.onBtn = this.button(A.BtOn, 12, 279, () => { this.dressed = true; this.rebuild(); });
+    this.button(A.BtExit, 96, 279, () => this.finish(0));
+    this.rebuild();
+    NpcDialog.prototype.portrait.call(this);
+  }
+  frames() { return [...super.frames(), this.A.nameTag, this.A.shadow, this.U.bar].filter(Boolean); }
+  /** Your look with the style on (and without equipment when TAKE OFF ALL is down); shown once its parts are in. */
+  async rebuild() {
+    this.offBtn.visible = this.dressed; this.onBtn.visible = !this.dressed;
+    const me = this.g.look, id = this.d.styles[this.sel], seq = (this.seq = (this.seq || 0) + 1);
+    if (!me) return;
+    const o = { skin: me.skin, face: me.faceId, hair: me.hairId, gender: me.gender, equips: this.dressed ? [...(me.equipIds || [])] : [] };
+    if (this.kind === 'face') o.face = id; else if (this.kind === 'hair') o.hair = id; else o.skin = id % 100;
+    const look = new CharacterLook(this.mgr.assets, o);
+    await look.load();
+    if (seq !== this.seq) return;
+    this.look = look;
+    if (this.kind !== 'skin') this.mgr.itemName(id);   // its name, for the tag
+  }
+  finish(action) { this.mgr.close(this); this.done({ action, sel: action === 1 ? this.sel : undefined }); }
+  key(e) { if (e.key === 'Enter') this.finish(1); else if (e.key === 'Escape') this.finish(0); }
+  body(ctx) {
+    const m = this.mgr;
+    drawRich(ctx, this.layout, 110, this.textY, { size: NPC_TEXT.size, drawIcon: (n, x, y) => m.drawIcon(ctx, n, x, y) });
+    // the NPC, standing in the blue panel, with its name on the bar under it
+    if (this.face?.length) {
+      const total = this.face.reduce((t, f) => t + (Number(f.delay) || 180), 0);
+      let tt = performance.now() % total, f = this.face[0];
+      for (const x of this.face) { f = x; if ((tt -= Number(x.delay) || 180) < 0) break; }
+      const img = m.image(f), o = f?.origin || [img?.width / 2, img?.height];
+      if (img) ctx.drawImage(img, Math.round(55 - o[0]), Math.round(106 - o[1]));
+    }
+    if (this.name) {
+      const bar = m.image(this.U.bar);
+      if (bar) ctx.drawImage(bar, 55 - Math.trunc(bar.width / 2), 108);
+      uiText(ctx, this.name, 55, 110, { color: '#fff', size: 12, align: 'center' });
+    }
+    const sh = m.image(this.A.shadow);
+    if (sh) ctx.drawImage(sh, 182, 241);
+    if (this.look) drawParts(ctx, m.assets, this.look.compose(this.look.standAction(), 0), 207, 245, false);
+    if (this.kind !== 'skin') {
+      const tag = m.image(this.A.nameTag);
+      if (tag) ctx.drawImage(tag, 123, 246);
+      uiText(ctx, m.itemName(this.d.styles[this.sel]) || '', 210, 248, { color: '#fff', size: 12, align: 'center' });
+    }
+  }
+}
+
 // ==================================================================== notices
 /**
  * The death notice at (257, 97), its words in the art. 'ok' (UIWindow.img/Notice/0): "PRESS OK TO BE REVIVED. Once
@@ -461,7 +538,7 @@ export class UtilBox extends Win {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.modal = true; this.kind = kind; this.done = done; this.opts = opts;
-    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text';
+    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text' || kind === 'buddy';
     // centred lines take item names (#t), colours and \r\n breaks; each is trimmed so it centres on its words
     this.centred = !field && kind !== 'okcancelLeft';
     this.lines = kind === 'okcancelLeft' ? text.split('\n')
@@ -471,7 +548,8 @@ export class UtilBox extends Win {
     // centred lines stack by their own height (a line with an item icon is taller)
     this.textH = this.centred ? this.lines.reduce((t, l) => t + (l.h || 14), 0) : n * 14;
     this.tiles = Math.max(2, Math.floor(this.textH / 20) + 1);
-    this.w = 266; this.h = field ? 121 + (n - 1) * 14 : 21 + this.tiles * 20 + 55;
+    // (Add Buddy's drop-down makes the box 6px taller)
+    this.w = 266; this.h = field ? 121 + (n - 1) * 14 + (kind === 'buddy' ? 6 : 0) : 21 + this.tiles * 20 + 55;
     this.x = (UI_W - this.w) >> 1; this.y = (UI_H - this.h) >> 1;
     // 'ok': a notice with OK alone, where Cancel would be
     this.button(mgr.B.BtOK2, kind === 'ok' ? 205 : 155, this.h - 30, () => this.finish(true));
@@ -489,6 +567,12 @@ export class UtilBox extends Win {
       this.field.rect.h = 15; this.field.value = opts.def || '';
       this.names = opts.names || []; this.listOpen = false;
     }
+    // 'buddy': the name in the box, and the box's drop-down picks the group (the first one at first)
+    if (kind === 'buddy') {
+      this.field = overlayField(mgr, 140, { max: opts.max || 12, color: '#000' });
+      this.field.rect.h = 15; this.field.value = '';
+      this.names = opts.groups || []; this.group = this.names[0] ?? ''; this.listOpen = false;
+    }
   }
   frames() { return [...allCanvases(this.mgr.B.YesNo3), ...allCanvases(this.mgr.B.ComboBox?.normal), ...super.frames()]; }
   finish(ok) {
@@ -500,6 +584,7 @@ export class UtilBox extends Win {
     }
     this.answered = true; this.field?.remove(); this.mgr.close(this);
     if (this.kind === 'whisper' || this.kind === 'text') { const v = this.field.value.trim(); this.done(ok && (v || this.opts.empty) ? v : null); return; }
+    if (this.kind === 'buddy') { const v = this.field.value.trim(); this.done(ok && v ? { name: v, group: this.group } : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
     const v = Math.floor(Number(this.field.value));
     this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
@@ -531,12 +616,12 @@ export class UtilBox extends Win {
     }
     this.lines.forEach((l, i) => line(l, 19, 28 + i * 14, 'left'));
     const fy = this.h - 73;
-    if (this.kind === 'whisper') this.drawCombo(ctx);
+    if (this.kind === 'whisper' || this.kind === 'buddy') this.drawCombo(ctx);
     else {
       ctx.fillStyle = '#000'; ctx.fillRect(18, fy - 1, 228, 17);
       ctx.fillStyle = '#fff'; ctx.fillRect(19, fy, 226, 15);
     }
-    placeField(m, this.field, this.x + (this.kind === 'whisper' ? 21 : 19), this.y + fy);
+    placeField(m, this.field, this.x + (this.kind === 'whisper' || this.kind === 'buddy' ? 21 : 19), this.y + fy + (this.kind === 'buddy' ? 3 : 0));
     if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
   }
 }
@@ -548,6 +633,8 @@ UtilBox.prototype.drawCombo = function drawCombo(ctx) {
   const l = m.image(C?.[0]), c = m.image(C?.[1]), e = m.image(C?.[2]);
   if (l && c && e) { ctx.drawImage(l, r.x, r.y); ctx.drawImage(c, r.x + l.width, r.y, r.w - l.width - e.width, r.h); ctx.drawImage(e, r.x + r.w - e.width, r.y); }
   else { ctx.fillStyle = '#fff'; ctx.fillRect(r.x, r.y, r.w, r.h); }
+  // Add Buddy: the group picked, at the box's right end before its arrow
+  if (this.kind === 'buddy' && this.group) uiText(ctx, this.group, r.x + r.w - 22, r.y + 2, { color: '#555', size: 12, align: 'right' });
   if (!this.listOpen || !this.names.length) return;
   const hover = this.rowAt(m.mouse.x - this.x, m.mouse.y - this.y);
   this.names.forEach((n, i) => {
@@ -562,9 +649,9 @@ UtilBox.prototype.rowAt = function rowAt(lx, ly) {
   return this.listOpen && lx >= r.x && lx < r.x + r.w && i >= 0 && i < this.names.length ? i : -1;
 };
 UtilBox.prototype.down = function down(lx, ly) {
-  if (this.kind !== 'whisper') return;
+  if (this.kind !== 'whisper' && this.kind !== 'buddy') return;
   const r = this.comboRect(), row = this.rowAt(lx, ly);
-  if (row >= 0) { this.field.value = this.names[row]; this.listOpen = false; this.field.focus(); return; }
+  if (row >= 0) { if (this.kind === 'buddy') this.group = this.names[row]; else this.field.value = this.names[row]; this.listOpen = false; this.field.focus(); return; }
   this.listOpen = lx >= r.x + r.w - 18 && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h ? !this.listOpen : false;
 };
 
@@ -588,6 +675,17 @@ const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
 // Use / Set-up / Etc items other than stars and bullets: these ask how many
 const isStackable = (id) => [2, 3, 4].includes(invType(id)) && !isRechargeable(id);
 const commas = (n) => n.toLocaleString('en-US');
+/**
+ * A potion's discounted price (SET_POTION_DISCOUNT_RATE), for 200xxxx-202xxxx items: (100 - rate)% of the price,
+ * rounded half up; 0 for no discount.
+ */
+function potionPrice(g, price, id) {
+  const rate = g?.potionRate || 0, k = Math.floor(id / 10000);
+  if (!rate || k < 200 || k > 202) return 0;
+  let x = (100 - rate) * price * 0.01;
+  if (Math.trunc(x * 10) % 10 >= 5) x += 1;
+  return Math.trunc(x);
+}
 /** An item name cut to the row's 152px, ending in "..". */
 function rowName(ctx, s) {
   ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';
@@ -692,7 +790,8 @@ export class ShopWin extends Win {
         qty = await this.askQty(`${timed}How many are you willing to buy?`, 1, 1, it.max);
         if (!qty || qty < 1 || qty > it.max) return;
       } else if (!(await this.ask(`${timed}Are you sure you want to buy it?`))) return;
-      const cost = it.price * qty;
+      // a potion discount (SET_POTION_DISCOUNT_RATE) lowers what you need; the packet keeps the base price
+      const cost = (potionPrice(this.g, it.price, it.id) || it.price) * qty;
       if (cost <= 0 || cost > this.g.meso) { m.notice(NO_MESOS); return; }
     }
     if (this.pending || !this.open) return;
@@ -780,7 +879,14 @@ export class ShopWin extends Win {
     this.rowText(ctx, rowName(ctx, m.itemName(it.id)), 49, y - 20);
     const mark = im(it.price ? this.S.meso : this.S.token);
     if (mark) ctx.drawImage(mark, 49, y - 1);
-    this.rowText(ctx, it.price ? `${commas(it.price)}meso` : commas(it.token), 64, y);
+    const text = it.price ? `${commas(it.price)}meso` : commas(it.token);
+    this.rowText(ctx, text, 64, y);
+    // a potion discount: the lower price in red, at the normal price's width + 54 as the client places it
+    const d = it.price ? potionPrice(this.g, it.price, it.id) : 0;
+    if (d) {
+      ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif'; const w = ctx.measureText(text).width; ctx.restore();
+      uiText(ctx, `${commas(d)}meso`, Math.round(w + 54), y, { color: '#ff2020', size: 12 });
+    }
   }
   /** One of your items: icon (with its count for Use / Set-up / Etc), name and price; no coin on this side. */
   sellRow(ctx, i, r, selected) {
@@ -1079,6 +1185,42 @@ function tipSale(ctx, it, x, y, W) {
   tipCentre(ctx, `Original Price : ${o} Cash`, x, y, W, TIP_FONT.body, '#fff');
   tipPair(ctx, 'Discount Price :', TIP_FONT.body, '#fff', `${pct}%`, TIP_FONT.body, TIP_SALE, x, y + 16, W);
 }
+/**
+ * The Cash Shop's limited-sale guide at the foot of a commodity's tooltip (it.limited: its limited-goods record).
+ * Its lines: two empty; the dates (flag 2); the weekdays it sells on, Mon to Sun (flag 4; none when all 7); the hours
+ * (flag 8); how many are sold and left (flag 1 with a total) or that it sells for a limited time; "Hurry!!!"; two
+ * empty. "[ Limited Sale Guide ]" in gold is centred 14px down, then from the second line, 31px down, each line
+ * centred and 18px on (an empty one 8px), the 4th from the end in gold. The tooltip grows 16px for each line. The
+ * order of the date's day and month and the end hour are unverified.
+ */
+const LIMITED_DAYS = ['[Sun]', '[Mon]', '[Tues]', '[Wed]', '[Thur]', '[Fri]', '[Sat]'];
+function tipLimitedLines(r) {
+  const f = tipNum(r.flags), L = ['', ''];
+  const date = (d) => [Math.floor(d / 100) % 100, d % 100].map((v) => String(v).padStart(2, ' ')).concat(String(Math.floor(d / 10000)).padStart(4, ' ')).join('/');
+  if (f & 2) L.push(`From ${date(tipNum(r.start))}   (mm/dd/yyyy)`, `to ${date(tipNum(r.end))}     (mm/dd/yyyy)`);
+  if (f & 4) {
+    const on = [1, 2, 3, 4, 5, 6, 0].filter((i) => tipNum(r.days?.[i]));
+    if (on.length < 7) L.push(`${on.map((i) => LIMITED_DAYS[i]).join('')} only`);
+  }
+  if (f & 8) L.push(`from ${String(tipNum(r.startHour)).padStart(2, '0')}:00 to ${String(tipNum(r.endHour)).padStart(2, '0')}:00`);
+  if (f & 1 && tipNum(r.total) >= 1) L.push(`Only ${tipNum(r.total)} will be sold.`, `There are currently ${tipNum(r.remaining)} left.`);
+  else L.push('This item will be on sale only for this limited time.');
+  L.push('Hurry!!!', '', '');
+  return L;
+}
+const tipLimitedH = (it) => (it.limited ? 16 * tipLimitedLines(it.limited).length : 0);
+const tipLimitedW = (ctx, it) => (it.limited ? Math.ceil(Math.max(...tipLimitedLines(it.limited).map((l) => tipW(ctx, l, TIP_FONT.body)))) + 20 : 0);
+function tipLimited(ctx, it, x, y, W) {
+  if (!it.limited) return;
+  const L = tipLimitedLines(it.limited), gold = TIP_TITLE[2];
+  tipCentre(ctx, '[ Limited Sale Guide ]', x, y + 14, W, TIP_FONT.body, gold);
+  let ly = y + 31;
+  for (let i = 1; i < L.length; i++) {
+    if (!L[i]) { ly += 8; continue; }
+    tipCentre(ctx, L[i], x, ly, W, TIP_FONT.body, i === L.length - 4 ? gold : '#fff');
+    ly += 18;
+  }
+}
 // my may be { bottom }: the tip ends there (over the quick slots, so it doesn't cover them)
 const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, UI_W - 1 - W)), Math.max(0, Math.min(typeof my === 'object' ? my.bottom - H : my, UI_H - 1 - H))];
 
@@ -1219,6 +1361,7 @@ function equipTip(ctx, mgr, it, info, mx, my) {
   let W = 236;
   W = Math.max(W, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
   for (const [l, v, fo] of rows) W = Math.max(W, Math.ceil(tipW(ctx, l, TIP_FONT.small) + tipW(ctx, v, fo)) + 20);
+  W = Math.max(W, tipLimitedW(ctx, it));
   const desc = tipWrap(ctx, text, 208), descH = tipWrapH(desc), sale = tipOnSale(it);
   // a first tag line wider than the box wraps; the second is given the first one's height
   const ownH = owner ? 19 : 0, tagW = tags[0] ? tipW(ctx, tags[0], TIP_FONT.body) : 0;
@@ -1227,7 +1370,7 @@ function equipTip(ctx, mgr, it, info, mx, my) {
   // the Cash Shop's tooltip shows the item's sample picture (info/sample) centred above the description
   const sample = cs && tipIsCanvas(info.sample) ? info.sample : null, sImg = sample && mgr.image(sample);
   const sampleH = sample ? (sImg?.height || sample._h || 0) + 5 : 0;
-  const H = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0) + sampleH;
+  const H0 = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0) + sampleH, H = H0 + tipLimitedH(it);
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
@@ -1266,9 +1409,10 @@ function equipTip(ctx, mgr, it, info, mx, my) {
     tipText(ctx, l, x + 16, ry, TIP_FONT.small, TIP_LABEL);
     if (v) tipText(ctx, v, x + 16 + tipW(ctx, l, TIP_FONT.small), ry, fo, '#fff');
   });
-  if (sale) tipSale(ctx, it, x, y + H - descH - 39, W);
-  if (sImg) ctx.drawImage(sImg, x + ((W - sImg.width) >> 1), y + H - descH - (sale ? 35 : 0) - 3 - sampleH);
-  tipDrawWrap(ctx, desc, x + 10, y + H - descH - (cs ? 3 : 5));
+  if (sale) tipSale(ctx, it, x, y + H0 - descH - 39, W);
+  if (sImg) ctx.drawImage(sImg, x + ((W - sImg.width) >> 1), y + H0 - descH - (sale ? 35 : 0) - 3 - sampleH);
+  tipDrawWrap(ctx, desc, x + 10, y + H0 - descH - (cs ? 3 : 5));
+  tipLimited(ctx, it, x, y + H0, W);
 }
 
 function itemTip(ctx, mgr, it, info, mx, my) {
@@ -1285,12 +1429,12 @@ function itemTip(ctx, mgr, it, info, mx, my) {
   let text = mgr.desc(id) || '';
   if (!pet && it.flag !== undefined && tipNum(info.tradeAvailable) && !(f & 0x02)) text += (text ? '\n' : '') + TIP_SCISSORS;
   const reqLv = pet ? 0 : tipNum(info.reqLevel), showReq = reqLv > 0 || Math.floor(id / 10000) === 301;
-  const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
+  const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20, tipLimitedW(ctx, it));
   const desc = tipWrap(ctx, text, W - 20 - 92 - 3), descH = tipWrapH(desc), sale = tipOnSale(it);
   const head = pet ? (period ? 16 : 0) + (gift ? 16 : 0)
     : tagH + (period ? 20 : 0) + (spouse ? 16 : 0) + (owner ? 16 : 0) + (gift ? 16 : 0);
   const top = head + (showReq ? 44 : 32);
-  const H = Math.max(head + 116 + (showReq ? 12 : 0), top + descH + 8) + (sale ? 35 : 0);
+  const H0 = Math.max(head + 116 + (showReq ? 12 : 0), top + descH + 8) + (sale ? 35 : 0), H = H0 + tipLimitedH(it);
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
@@ -1319,4 +1463,5 @@ function itemTip(ctx, mgr, it, info, mx, my) {
     ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, sy - 4, W - 12, 1);
     tipSale(ctx, it, x, sy + 4, W);
   }
+  tipLimited(ctx, it, x, y + H0, W);
 }

@@ -5,6 +5,7 @@ const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' };
 import { mapPath } from '../map.js';
 import { uiText } from './wzui.js';
 import { CHAT_COLOR, CHAT_BAR } from './statusbar.js';
+import { localTalk } from './dialogs.js';
 import { UI_W, UI_H } from '../view.js';
 
 const GAIN_LIFE = 5, GAIN_FADE = 1, GAIN_MAX = 7, GAIN_LINE = 16, BANNER_SPEED = 70;
@@ -71,16 +72,20 @@ export class Hud {
   message(text, color = '#fff') { this.game.statusBar?.message(text, color); }
 
   notice(n) {
-    const { type, msg } = n;
-    if (type === 1) { this.game.windows.serverNotice(msg); return; }      // the server's pop-up
+    const { type, msg } = n, g = this.game;
+    if (type === 1) { g.windows.serverNotice(msg); return; }      // the server's pop-up
     if (type === 4) { this.banner(msg); return; }                         // the scrolling notice along the top
-    if (type === 2) { this.megaphone([msg], CHAT_BAR.mega); return; }   // Megaphone: this channel
-    if (type === 0x0B && n.item) { this.gachapon(n); return; }
-    if (type === 3 || type === 8 || type === 10) {                       // Super / Item / Triple: the world
-      const lines = n.lines || [msg];
-      this.megaphone(lines, { ...(type === 8 ? CHAT_BAR.itemMega : CHAT_BAR.superMega), channel: n.channel, ear: n.ear, item: type === 8 ? n.item : null });
+    if (type === 7) { localTalk(g.windows, n.npc || 0, msg, ['OK']); return; }   // in an NPC's dialog
+    // megaphones (2, 3, 8, 9, 10): none on an event map unless you are a GM; others' words masked; the swindle check
+    if ([2, 3, 8, 9, 10].includes(type)) {
+      if (Math.floor((g.map?.id || 0) / 1e6) % 100 === 9 && !g.gm) return;
+      const lines = (n.lines || [msg]).map((l) => g.megaphoneMasked(l));
+      g.swindleCheck?.(lines.join(' '));
+      if (type === 2) { this.megaphone(lines, CHAT_BAR.mega); return; }   // Megaphone: this channel
+      this.megaphone(lines, { ...(type === 8 || type === 9 ? CHAT_BAR.itemMega : CHAT_BAR.superMega), channel: n.channel, ear: type === 9 ? true : n.ear, item: type === 8 ? n.item : null });
       return;
     }
+    if (type === 0x0B && n.item) { g.swindleCheck?.(msg); this.gachapon(n); return; }
     this.message(type === 0 ? `[Notice] ${msg}` : msg, NOTICE_COLORS[type] || CHAT_COLOR.notice);
   }
   /**

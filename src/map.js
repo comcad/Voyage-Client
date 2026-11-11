@@ -115,7 +115,10 @@ export class GameMap {
       if (vl) this.fh.wallL = Math.max(this.fh.wallL, vl + 20);
       if (vr) this.fh.wallR = Math.min(this.fh.wallR, vr - 20);
       if (vt) this.fh.ceiling = Math.max(this.fh.ceiling, vt + 65);
+      const vb = Number(data.info.VRBottom) || 0;
+      if (vb) this.fh.ground = Math.min(this.fh.ground, vb);
     }
+    this.fh.fs = Number(data.info?.fs) || 1;   // the map's drag (1 when unset)
     this.ladders = Object.entries(data.ladderRope || {}).map(([id, l]) => ({ ...l, id: Number(id) }));   // the id goes in movement
 
     // Bounds: VR* when present, else derived from footholds.
@@ -633,7 +636,7 @@ export class Life {
   /** A path point's pose (its stance: 1 walk, 2 stand, 3 jump, 6 fly, 16 chase; bit 0 faces left) and floor. */
   takePose(s) {
     this.facingRight = !(s.stance & 1);
-    const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: this.flying ? 'fly' : 'chase' }[s.stance >> 1];
+    const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: this.flying && !this.anims.chase ? 'fly' : 'chase' }[s.stance >> 1];
     if (pose) this.setState(this.anims[pose] ? pose : pose === 'stand' ? this.state : this.flying ? 'fly' : 'move');
     if (!this.flying) this.fh = s.fh ? this.footholds.get(s.fh) || this.fh : null;
   }
@@ -649,6 +652,7 @@ export class Life {
    * client shows it moving the same way at the same time. Its AI picks up from where the path ends.
    */
   planPath() {
+    if (this.flying) { this.planFlyPath(); return; }
     const sim = Object.create(this), moves = [], start = { x: Math.round(this.x), y: Math.round(this.y) };
     sim.setState = function (st) { if (this.anims[st]) this.state = st; };
     for (let t = 0; t < 1000; t += 30) {
@@ -666,6 +670,99 @@ export class Life {
   }
 
   /**
+   * A flyer's plan, as the client's controller makes it: 12 steps of 90ms (1080ms). Each step runs its fly AI, then
+   * one flight step over the whole 90ms:
+   * - sideways it is pushed at 1200px/s^2 up to its top speed, and brakes at 1000px/s^2 x the map's fs when let go;
+   * - its spot 10px or more above: it flaps (straight up at its top speed, recorded as a point of its own); within
+   *   10px it hovers (settling to a sink of 0.3 x its top speed); below, it sinks at 1200px/s^2 up to its top speed;
+   * - it moves by the step's average speed, then is kept inside the map's box (its spot pulled 30px back in);
+   * - the step is recorded where it ends (speeds truncated), merged into the point before while its pose and the
+   *   signs of its speeds stay the same.
+   * Its AI: chasing, a spot within 120px left or right and 40px up or down of its target, picked again within 11px
+   * of it or once the target is 150px from it; after 60-119 spots it gives the chase up. Left alone, a spot along a
+   * foothold of one group (walls too), from 50px above to 9px below it, another group after (its width + 40-240) / 8
+   * spots. Stunned, it lets go of everything (and sinks). The spot goes with the path (MOVE_LIFE).
+   */
+  planFlyPath() {
+    const F = (this.fly ??= { vx: 0, vy: 0, inX: 0, inY: 0, has: false, group: -1, counter: 0, chase: null, tx: 0, ty: 0, action: this.stance });
+    // set on a new target, its AI starts afresh; let go, it only forgets the target
+    if (this.aggro && this.aggro !== F.chase) { F.chase = this.aggro; F.has = false; F.group = -1; F.counter = 0; F.tx = F.ty = 0; }
+    else if (!this.aggro) F.chase = null;
+    const fh = this.footholds, G = fh.flyGroups(), rnd = (n) => Math.floor(Math.random() * n), dt = 0.09;
+    const sp = Math.max(10, Math.min(140, this.flySpeedStat + this.speedMod)) / 100, brake = 1000 * (fh.fs || 1) * dt, acc = 1200;
+    const accel = (v, a, max) => (a > 0 ? (v >= max ? v : Math.min(max, v + a * dt)) : (v <= -max ? v : Math.max(-max, v + a * dt)));
+    let x = this.x, y = this.y;
+    const start = { x: Math.round(x), y: Math.round(y) }, moves = [];
+    const reuse = () => { const l = moves[moves.length - 1]; return l && l.cmd === 0 && l.duration === 0 ? l : null; };
+    for (let s = 0; s < 12; s++) {
+      const water = fh.swimming(x, y), max = (water ? 140 : 200) * sp;
+      const base = F.chase && this.anims.chase ? 16 : 6;
+      const input = (dx, dy) => { F.inX = dx; F.inY = dy; F.action = dx ? (base << 1) | (dx < 0 ? 1 : 0) : (base << 1) | (F.action & 1); };
+      if (this.held) input(0, 0);
+      else {
+        if (F.has) {
+          const dx = Math.abs(Math.trunc(F.tx - x)) >= 10 ? (F.tx >= x ? 1 : -1) : 0;
+          let dy = 0;
+          if (Math.abs(Math.trunc(F.ty - y)) < 10) dy = -1;
+          else if (F.ty < y) {   // the flap: straight up at once (five times the swim speed in water)
+            F.vy = -(water ? 140 * sp * 5 : max);
+            const e = { cmd: 1, rx: Math.trunc(F.vx), ry: Math.trunc(F.vy), stance: F.action, duration: 0 }, l = reuse();
+            if (l) { for (const k of Object.keys(l)) delete l[k]; Object.assign(l, e); } else moves.push(e);
+          }
+          input(dx, dy);
+          const ix = Math.trunc(x), iy = Math.trunc(y), c = F.chase;
+          if (ix >= F.tx - 11 && ix < F.tx + 11 && iy >= F.ty - 11 && iy < F.ty + 11) F.has = false;
+          else if (c && !(c.x >= F.tx - 150 && c.x < F.tx + 150 && c.y >= F.ty - 150 && c.y < F.ty + 150)) F.has = false;
+        }
+        if (!F.has && F.chase) {
+          if (F.counter === 0) F.counter = rnd(60) + 60;
+          F.tx = Math.trunc(F.chase.x) + rnd(240) - 120; F.ty = Math.trunc(F.chase.y) + rnd(80) - 40;
+          F.group = -1; F.counter--; F.has = true;
+          if (F.counter <= 0) { this.aggro = this.chased = null; F.chase = null; }   // this spot is still flown to
+        } else if (!F.has && G.ids.length) {
+          if (F.counter <= 0 || F.group < 0) {
+            F.group = G.ids[rnd(G.ids.length)];
+            const [a, b] = G.range.get(F.group);
+            F.counter = (b - a + 40 + rnd(200)) >> 3;
+          }
+          const list = G.list.get(F.group), f = list[rnd(list.length)], L = Math.hypot(f.x2 - f.x1, f.y2 - f.y1), len = Math.trunc(L);
+          const t = len > 0 ? rnd(len) : 0;   // (a zero-length foothold: its start)
+          F.tx = Math.trunc((L ? (f.x2 - f.x1) / L : 0) * t + f.x1);
+          F.ty = Math.trunc((L ? (f.y2 - f.y1) / L : 0) * t + rnd(60) + f.y1 - 50);
+          F.counter--; F.has = true;
+        }
+      }
+      // the flight
+      const vx0 = F.vx, vy0 = F.vy;
+      let vx = F.vx, vy = F.vy;
+      if (vx > max) vx = Math.max(max, vx - brake); else if (vx < -max) vx = Math.min(-max, vx + brake);
+      if (F.inX) vx = accel(vx, F.inX * acc, max);
+      else vx = vx > 0 ? Math.max(0, vx - brake) : Math.min(0, vx + brake);
+      if (vy > max) vy = Math.max(max, vy - brake); else if (vy < -max) vy = Math.min(-max, vy + brake);
+      if (F.inY < 0) { const T = max * 0.3; if (vy > T) vy = Math.max(T, vy - acc * dt); else if (vy < T) vy = Math.min(T, vy + acc * dt * 0.5); }
+      else if (F.inY > 0) vy = max * 1.5;
+      else vy = accel(vy, acc, max);
+      x += (vx0 + vx) * dt * 0.5; y += (vy0 + vy) * dt * 0.5;
+      F.vx = vx; F.vy = vy;
+      // the map's box: its spot pulled 30px back in (the client puts x + 30 for the top edge's spot)
+      const L0 = fh.wallL, R0 = fh.wallR, T0 = fh.ceiling, B0 = fh.ground;
+      let cx = false, cy = false;
+      if (x < L0) { x = L0; cx = true; } else if (x > R0 - 1) { x = R0 - 1; cx = true; }
+      if (y < T0) { y = T0; cy = true; } else if (y > B0 - 1) { y = B0 - 1; cy = true; }
+      if (cx) F.tx = Math.trunc(x === L0 ? x + 30 : x - 30);
+      if (cy) F.ty = Math.trunc(y === T0 ? x + 30 : y - 30);
+      // the step's point
+      const e = { cmd: 0, x: Math.trunc(x), y: Math.trunc(y), vx: Math.trunc(vx), vy: Math.trunc(vy), fh: 0, stance: F.action, duration: 90 };
+      const l = moves[moves.length - 1];
+      if (l && l.cmd === 0 && l.stance === e.stance && Math.sign(l.vx) === Math.sign(e.vx) && Math.sign(l.vy) === Math.sign(e.vy) && l.duration > 0) Object.assign(l, { ...e, duration: l.duration + 90 });
+      else if (reuse()) Object.assign(reuse(), e);
+      else moves.push(e);
+    }
+    this.path = { steps: moves.filter((m) => m.cmd === 0), i: 0, t: 0, fromX: this.x, fromY: this.y };
+    this.onPath?.(this, start, moves);
+  }
+
+  /**
    * KILL_MONSTER: its statuses end (a frozen one thaws) and it dies as `type` says (1 and up). 2, 4 and up: it goes
    * off in its attack1, which hurts like the attack does, and is gone when that ends. Otherwise its death pose: 3 is
    * skill1, the rest one of its die nodes at random (die1, die2, dieF, as many as it has nodes starting with "die").
@@ -677,7 +774,9 @@ export class Life {
     const dies = Object.keys(this.src).filter((k) => k.startsWith('die')).length;
     const name = type === 3 ? 'skill1' : ['die1', 'die2', 'dieF'][Math.floor(Math.random() * dies)];
     if (name && name !== 'die1' && this.src[name]) this.anims.die1 = new Anim(this.src[name], false);
+    this.dieAction = { die1: 9, die2: 10, dieF: 11, skill1: 21 }[name] ?? 9;   // its action number, for the line it says
     this.state = ''; this.setState('die1'); if (!this.anims.die1) this.removed = true;
+    else this.onDie?.(this);
   }
 
   allFrames() { return [...Object.values(this.anims), ...(this.tv ? [this.tv.msg.anim, this.tv.ad.anim] : [])].flatMap((a) => a.frames); }

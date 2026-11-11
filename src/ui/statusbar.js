@@ -106,6 +106,9 @@ export class StatusBar {
     // "-" minimizes the log to one line, "+" opens it
     this.chatMinBtn = this.btn(this.B.BtMin, 536, () => y() + 12, () => this.setChatState(1));
     this.chatMaxBtn = this.btn(this.B.BtMax, 536, () => y() + 12, () => this.setChatState(3));
+    // Report: the chat log goes with it (the client's own report flow). Its place was lost: the gap between the chat
+    // line's end (514) and the log's -/+ (536) on the white strip (unverified)
+    this.claimBtn = this.btn(S.BtClaim, 514, () => y() + 8, () => g.openReport());
 
     this.chat = new TextField(this.layer, CHAT.x, 0, CHAT.w, CHAT.h, { max: 70, color: '#000' });
     this.chat.el.classList.add('chatinput');
@@ -115,7 +118,7 @@ export class StatusBar {
 
     const menuFrames = Object.entries(MENU_ITEMS).flatMap(([w, list]) => [this.W[w].backgrnd, ...list.flatMap((b) => stateFrames(this.W[w][b]))]);
     await a.preload([S.base.backgrnd, S.base.backgrnd2, S.base.chat, S.base.chatTarget, S.base.quickSlot, S.base.box, S.base.iconMemo,
-      S.gauge.bar, S.gauge.graduation, S.gauge.gray, ...canvases(S.number), ...canvases(this.W.KeyConfig?.quickslotConfig?.key), ...canvases(this.B.LevelNo),
+      S.gauge.bar, S.gauge.graduation, S.gauge.gray, S.gauge.tempExp, ...canvases(S.number), ...canvases(this.W.KeyConfig?.quickslotConfig?.key), ...canvases(this.B.LevelNo),
       ...new Anim(S.gauge.hpFlash).frames, ...new Anim(S.gauge.mpFlash).frames, ...this.allButtons().flatMap((b) => b.frames()), ...this.chatMaxBtn.frames(), ...menuFrames]);
     a.preload(['EquipKey', 'InvenKey', 'StatKey', 'SkillKey'].flatMap((k) => canvases(S[k]?.ani)));
     this.render();
@@ -146,7 +149,7 @@ export class StatusBar {
   }
 
   allButtons() {
-    const list = [this.shopBtn, this.menuBtn, this.shortBtn, this.tradeBtn, ...this.tabs,
+    const list = [this.shopBtn, this.menuBtn, this.shortBtn, this.tradeBtn, this.claimBtn, ...this.tabs,
       this.quickLevel < 2 ? this.quickBtn : this.quickBtnD, this.chatState === 3 ? this.chatMinBtn : this.chatMaxBtn];
     if (this.menu) list.push(...this.menu.buttons);
     return list.filter(Boolean);
@@ -449,6 +452,7 @@ export class StatusBar {
     if (b === this.tabs?.[4]) return 'KeySet';
     if (b === this.quickBtn) return 'QuickSlot';
     if (b === this.quickBtnD) return 'QuickSlotD';
+    if (b === this.claimBtn) return 'Claim';
     return null;
   }
   /** The tooltip for the quick slot under the mouse: the item's, or the skill's. */
@@ -674,6 +678,13 @@ export class StatusBar {
     for (const [k, f] of Object.entries(FILLS)) {
       const w = Math.max(0, Math.min(f.w, grayW[k]));
       if (gray && w > 0) ctx.drawImage(gray, gx + f.x + f.w - w, gy + FILL_Y, w, FILL_H);
+    }
+    // stored Gachapon EXP (below level 51): gauge/tempExp from where the EXP ends, 115 x what it would add / the level's
+    // EXP wide (no further than the level's end) and 15 tall
+    const gacha = s.level < 51 ? s.gachaExp || 0 : 0, temp = img(S.gauge.tempExp);
+    if (gacha > 0 && temp) {
+      const tw = Math.max(0, Math.round((FILLS.exp.w * Math.min(gacha, need - s.exp)) / need));
+      if (tw > 0) ctx.drawImage(temp, gx + FILLS.exp.x + FILLS.exp.w - Math.max(0, grayW.exp), gy + FILL_Y, tw, 15);
     }
     // the low-HP / low-MP warning flash covers the whole gauge
     for (const a of this.flashes.hp) this.flash(ctx, a, gx, gy + 13);

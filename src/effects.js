@@ -249,10 +249,18 @@ export class WorldFx {
    */
   layoutNumber(n) {
     const im = (node) => node && this.assets.image(node), [bigK, smallK] = SETS[n.kind] || SETS.red;
-    // over the body it struck: a monster's own lt/rb (a boss part's, not the whole boss's), else its picture
-    const body = typeof n.target.bodyBox === 'function' ? n.target.bodyBox() : null;
-    const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
-    n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    // a monster's numbers stand on its current frame's head point (mirrored as it faces; its feet in a frame without
+    // one); anyone else's over the body struck - its own lt/rb, else its picture
+    const node = n.target.kind === 'Mob' ? n.target.node : null;
+    if (node) {
+      const head = node.head || [0, 0];
+      n.x = Math.round(n.target.x + (n.target.facesRight ? -head[0] : head[0]));
+      n.y = n.target.y + head[1] - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    } else {
+      const body = typeof n.target.bodyBox === 'function' ? n.target.bodyBox() : null;
+      const top = body ? body.top : typeof n.target.box === 'function' ? n.target.box().top : n.target.y - 60;
+      n.x = body ? Math.round((body.left + body.right) / 2) : n.target.x; n.y = top - n.lift - (n.gap ?? LINE_GAP) * n.line;
+    }
     if (!n.v) {
       const img = im((n.kind === 'violet' ? this.E.NoViolet0 : this.E.NoRed0)?.Miss);
       if (!img) return false;
@@ -370,12 +378,18 @@ export class WorldFx {
     for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - i * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
     return null;
   }
-  buffList() { const now = Date.now(); return this.game.buffs.filter((b) => b.until > now && !(b.source === 5221006 && this.game.battleshipHp === 0)); }
+  buffList() {
+    const now = Date.now(), fp = this.game.familyPrivilege;
+    const list = this.game.buffs.filter((b) => b.until > now && !(b.source === 5221006 && this.game.battleshipHp === 0));
+    // a family privilege in use: UIWindow.img/Family/RightIcon/<type>, timed like a buff (no source: nothing ends it)
+    if (fp && fp.until > now) list.push({ source: 0, family: fp.type, until: fp.until, dur: fp.dur });
+    return list;
+  }
   get buffTop() { return this.boss ? 46 : 4; }
   drawBuffs(ctx) {
     const g = this.game, now = Date.now();
     this.buffList().forEach((b, i) => {
-      const node = b.source > 0 ? g.skills?.icon(b.source) : this.itemIcon(-b.source);
+      const node = b.family !== undefined ? this.W?.Family?.RightIcon?.[b.family] : b.source > 0 ? g.skills?.icon(b.source) : this.itemIcon(-b.source);
       if (b.source > 0 && !node) g.skills?.ensure(b.source);
       const img = node && this.assets.image(node);
       if (!img) { if (node) this.assets.preload([node]); return; }

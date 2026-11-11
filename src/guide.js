@@ -141,7 +141,9 @@ export class Guide {
     if (t?.balloon) this.drawBalloon(ctx, x, y, t.balloon);
     else if (t?.picture) {
       const n = t.picture.node, pic = n && this.g.assets.image(n);
-      if (pic) { const o = n.origin || [0, 0]; ctx.drawImage(pic, x - o[0], y - this.height - o[1]); }
+      // centred over the guide, its bottom `height` above its feet; the picture's own origin is left out (unverified:
+      // with it, the first picture would stand some 760px up)
+      if (pic) ctx.drawImage(pic, x - Math.trunc(pic.width / 2), y - this.height - pic.height);
     }
   }
   /**

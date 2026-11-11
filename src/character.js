@@ -48,6 +48,13 @@ const ATTACK_POSES = {
 };
 const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
 
+/**
+ * A ghost's body pose for each avatar pose (anything else stands; the dead stay dead), and the plain pose its head,
+ * face, hair and the headgear left on take for each ghost pose.
+ */
+const GHOST_POSE = { walk1: 'ghostwalk', walk2: 'ghostwalk', jump: 'ghostjump', prone: 'ghostproneStab', proneStab: 'ghostproneStab', fly: 'ghostfly', ladder: 'ghostladder', rope: 'ghostrope', sit: 'ghostsit' };
+const GHOST_PLAIN = { ghostwalk: 'walk1', ghoststand: 'stand1', ghostjump: 'jump', ghostproneStab: 'proneStab', ghostfly: 'fly', ghostladder: 'ladder', ghostrope: 'rope', ghostsit: 'sit' };
+
 export class CharacterLook {
   constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [], gender = null } = {}) {
     this.assets = assets; this.gender = gender;
@@ -111,6 +118,8 @@ export class CharacterLook {
     this.faceAcc = new Set(eq.map((n, i) => n && [101, 102].includes(cat(i)) ? n : null).filter(Boolean));
     // what stays on a dead character: the headgear (cap, face / eye accessory, earrings); clothes and weapon come off
     this.deadKeep = new Set(eq.map((n, i) => n && [100, 101, 102, 103].includes(Math.floor(ids[i] / 10000)) ? n : null).filter(Boolean));
+    // what a ghost keeps on: the cap, eye accessory and earrings (and its hair)
+    this.ghostKeep = new Set(eq.map((n, i) => n && [100, 102, 103].includes(Math.floor(ids[i] / 10000)) ? n : null).filter(Boolean));
     this.hasCap = ids.some((id) => Math.floor(id / 10000) === 100);
     // a label / quote ring changes the name tag / chat balloon (the last ring with one wins); some equips (the effect
     // rings) carry an effect of their own
@@ -130,23 +139,31 @@ export class CharacterLook {
 
   /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */
   exprReady(n) { return !!n && (isCanvas(n) ? !!this.assets.image(n) : Object.values(n).filter(isCanvas).every((c) => this.assets.image(c))); }
-  has(action) { return !!this.body?.[action]?.[0]; }
+  /**
+   * The body's frames for an avatar pose. A ghost (`ghost`: 1 the Ghost Candy's, 2 the spaceship) takes its ghost*
+   * pose, the child named by its value.
+   */
+  bodyFrames(action) {
+    if (!this.ghost || action === 'dead') return this.body?.[action];
+    return this.body?.[GHOST_POSE[action] || 'ghoststand']?.[this.ghost];
+  }
+  has(action) { return !!this.bodyFrames(action)?.[0]; }
   /** Body actions in WZ order (attack packets number them by ACTIONS instead). */
   actionList() { return (this._actions ??= Object.keys(this.body || {}).filter((k) => k !== 'info')); }
-  frameCount(action) { return frames(this.body?.[action]).length; }
+  frameCount(action) { return frames(this.bodyFrames(action)).length; }
   /**
    * When an attack in this pose lands, in ms from its start (before attack speed): a pose made of frames that point at
    * other poses lands once its frames with a negative delay have played (at once if none); any other pose at the
    * start of its last frame.
    */
   attackDelay(action) {
-    const fr = frames(this.body?.[action]);
+    const fr = frames(this.bodyFrames(action));
     if (fr.some((f) => f?.action)) return fr.reduce((t, f) => t + (f.delay < 0 ? -f.delay : 0), 0);
     let t = 0; for (let i = 0; i < fr.length - 1; i++) t += this.delay(action, i);
     return t;
   }
   /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms. */
-  delay(action, frame) { return Math.abs(this.body?.[action]?.[frame]?.delay ?? 150) || 150; }
+  delay(action, frame) { return Math.abs(this.bodyFrames(action)?.[frame]?.delay ?? 150) || 150; }
   /**
    * The frame after `frame`. The client plays stand1, stand2 and alert forward and back (0,1,2,1,0...), so standing
    * breathes smoothly; every other action loops. `back` is which way a back-and-forth one is going; `wrapped`
@@ -180,11 +197,14 @@ export class CharacterLook {
    * expr = { name, frame }: a Face.img expression (smile, cry, blink...) in place of its default.
    */
   compose(action, frame, expr = null, mounted = false) {
-    let bf = this.body?.[action]?.[frame];
+    // a ghost's body is its ghost pose; its head, face, hair and headgear take that pose's plain counterpart
+    const ghost = this.ghost && action !== 'dead' ? GHOST_POSE[action] || 'ghoststand' : null;
+    let bf = ghost ? this.body?.[ghost]?.[this.ghost]?.[frame] : this.body?.[action]?.[frame];
     if (!bf) return [];
+    if (ghost) action = GHOST_PLAIN[ghost];
     // a frame that points at another pose's frame (alert2, shot, brandish1...) draws that one, turned clockwise about
     // the feet, maybe mirrored, then moved (drawParts does it)
-    const ref = bf.action && this.body[bf.action]?.[bf.frame] ? bf : null;
+    const ref = !ghost && bf.action && this.body[bf.action]?.[bf.frame] ? bf : null;
     if (ref) { action = ref.action; frame = ref.frame; bf = this.body[action][frame]; }
     const back = BACK_ACTIONS.has(action);
     const parts = [];
@@ -213,6 +233,7 @@ export class CharacterLook {
     for (const eq of this.equips) {
       if (mounted && this.handNodes?.has(eq)) continue;
       if (dead && !this.deadKeep?.has(eq)) continue;
+      if (ghost && !this.ghostKeep?.has(eq)) continue;
       let node = eq[ha]?.[hf];
       // a face / eye accessory follows the face: its art for the expression (smile, cry...) or its default;
       // like the face it isn't drawn from behind (on a ladder / rope)

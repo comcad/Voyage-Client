@@ -131,7 +131,8 @@ export class CashShopWin extends Win {
     super(mgr, null, (UI_W - 800) >> 1, (UI_H - 600) >> 1);
     this.w = 800; this.h = 600; this.fixed = true; this.buttons = [];
     this.available = d.available !== 0; this.account = d.account || ''; this.bestTable = d.best || [];
-    this.serverData = d; this.stock = d.stock || new Map();
+    this.serverData = d; this.stock = d.stock || new Map(); this.limited = d.limited || [];
+    this.limitAsked = new Set(); this.limitAnswers = new Map(); this.accountWide = null;
     this.cash = { credit: 0, prepaid: 0, maplePoint: 0 };
     this.inv = []; this.wish = []; this.storageSlots = null;
     this.tab = 1; this.sub = 0; this.page = 0; this.search = [];
@@ -338,6 +339,34 @@ export class CashShopWin extends Win {
     this.inv.push(...c.items);
     this.alert(`You have received ${c.items.length + c.got.length} item(s), ${fmt(c.maplePoints)} MaplePoints and ${fmt(c.mesos)} mesos using the coupon.`);
   }
+  /** A cash item deleted from the locker (CASHSHOP_OPERATION 0x6C, or 0x85 with the Maple Points it was worth). */
+  deleted(cashId, mp) {
+    this.inv = this.inv.filter((c) => String(c.cashId) !== String(cashId));
+    if (mp === null || mp === undefined) { this.done(); this.alert('The cash item has been deleted.'); }
+    else this.alert(`Cash item has been deleted.\r\n(${mp} accumulated as MaplePoints)`);
+  }
+  /** A package sent as a gift (0x8B). */
+  async packageGift(to, itemId, price) {
+    this.done(); sfx.play('UI/BuyShopItem');
+    this.alert(`[ ${await this.name(itemId)} ] \r\nwas sent to ${to}. \r\n${price} NX Prepaid \r\nwere spent in the process.`);
+  }
+  /** A gift coupon used (0x5B): the client's own words, broken English and all. */
+  async couponGift(to, items, mp) {
+    this.done(); sfx.play('UI/BuyShopItem');
+    let t = `You have receivedTo ${to}\r\n`;
+    for (const it of items) t += `\r\n${it.quantity} ${await this.name(it.itemId)}`;
+    if (items.length && mp) t += 'and \r\n';
+    if (mp) t += `${mp} MaplePoints`;
+    this.alert(`${t}You have given a gift to`);
+  }
+  /** Gachapon Stamps from a Gachapon Ticket (0x14C): no room, or so many, the locker turning to Etc. */
+  stamps(ok, n) {
+    if (!ok) { this.alert('You cannot receive any Gachapon Stamps\r\nbecause you do not have enough room in\r\nyour Etc window.'); return; }
+    this.itab = 4;
+    this.alert(`You have acquired ${n} Gachapon Stamps\r\nby purchasing the Gachapon Ticket.`);
+  }
+  /** CHARGE_PARAM_RESULT: the client would open its billing page; here, the usual pointer to the website. */
+  charge() { this.done(); this.alert('Please visit the website to charge your account.'); }
   async expired(cashId) {
     const it = this.inv.find((c) => String(c.cashId) === String(cashId));
     this.inv = this.inv.filter((c) => c !== it);
@@ -349,7 +378,20 @@ export class CashShopWin extends Win {
     this.cfirst = Math.max(0, rows - LOCKER.rows);
     this.csel = this.inv[this.inv.length - 1] || null;
   }
-  setStock(sn, left) { if (left <= 0) this.stock.set(sn, 1); else this.stock.delete(sn); }
+  /**
+   * A limited item's count (0x47): only an item with a limited-goods record changes - back on sale when some come back,
+   * sold out at none.
+   */
+  setStock(sn, left, itemId) {
+    const r = this.limited.find((x) => x.itemId === itemId && x.sns.includes(sn));
+    if (!r) return;
+    if (r.remaining < 1 && left > 0) r.state = -1;
+    else if (left === 0) r.state = 0xC0;
+    r.remaining = left;
+    if (r.state === 0xC0) this.stock.set(sn, 1); else if (r.state === -1) this.stock.delete(sn);
+  }
+  /** The limited-goods record for a commodity (its item, with its SN listed), if any. */
+  limitedFor(c) { return c && this.limited.find((x) => x.itemId === c.ItemId && x.sns.includes(c.SN)); }
   /** A result that isn't followed by the NX amounts frees the shop itself. */
   done() { this.busy = false; clearTimeout(this.busyTimer); }
   taken(pos, item) {
@@ -448,7 +490,23 @@ export class CashShopWin extends Win {
     if (this.tab === WISH) return this.wish.map((sn) => this.bySN.get(sn)).filter(Boolean);
     if (this.tab === SEARCH) return this.search;
     if (this.tab === MAIN) return [];
-    return this.groups.get(`${this.tab}:${this.sub}`) || [];
+    return (this.groups.get(`${this.tab}:${this.sub}`) || []).filter((c) => this.limitOk(c));
+  }
+  /**
+   * One-per-account items (Limit 2: one answer for all of them, asked with SN 0; Limit 3: one per SN) stay hidden
+   * until the server answers 0 (CS mode 0x28, answered by 0x9A).
+   */
+  limitOk(c) {
+    const lim = Number(c.Limit);
+    if (lim !== 2 && lim !== 3) return true;
+    const sn = lim === 2 ? 0 : c.SN;
+    if (!this.limitAsked.has(sn)) { this.limitAsked.add(sn); this.g.net?.csLimitQuery(sn); }
+    return lim === 2 ? this.accountWide === 0 : this.limitAnswers.get(sn) === 0;
+  }
+  /** 0x9A: SN 0 is the account-wide answer; any other is that SN's, and a set one also sets the account-wide one. */
+  limitAnswer(sn, flag) {
+    if (sn === 0) this.accountWide = flag;
+    else { this.limitAnswers.set(sn, flag); if (flag) this.accountWide = 1; }
   }
   pages() { return Math.ceil(this.list().length / PER_PAGE); }
   cellAt(i) { return { x: LIST_X + 2 + 206 * (i % 2), y: LIST_Y + 2 + 81 * Math.floor(i / 2) }; }
@@ -1447,7 +1505,8 @@ export class CashShopWin extends Win {
   }
   /** A catalogue item's tooltip: the item, with its period ("AVAILABLE FOR n DAYS."). */
   tipItem(c) {
-    const t = { id: c.ItemId, price: c.Price, cs: true };
+    const t = { id: c.ItemId, price: c.Price, cs: true }, lim = this.limitedFor(c);
+    if (lim) t.limited = lim;
     if (c.Period > 0) t.period = c.Period;
     if (c.Discount > 0) { t.discount = c.Discount; t.origPrice = c.OrigPrice; }
     // a slot expansion shows what it adds instead

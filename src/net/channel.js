@@ -156,7 +156,8 @@ function readMobStats(r, has) {
   if (has(30)) r.int();
   if (has(29) || has(30)) r.int();
   // bit 31: two bytes; while the first isn't 0 blows do nothing to it
-  if (has(31)) { const a = r.ubyte(); r.ubyte(); out.push({ first: 0, second: 0x80000000, source: 0, value: a }); }
+  // (the second byte: while it isn't 0 the monster neither attacks nor bombs)
+  if (has(31)) { const a = r.ubyte(), b = r.ubyte(); out.push({ first: 0, second: 0x80000000, source: 0, value: a, value2: b }); }
   return out;
 }
 
@@ -168,8 +169,8 @@ function readMobStats(r, has) {
  */
 const REMOTE_STATS = [[7, 1, 'speed'], [21, 1, 'combo'], [22, 4, 'weaponCharge'], [17, 4, 'stun'], [20, 4, 'darkness'],
   [19, 4, 'seal'], [30, 4, 'weakness'], [31, 4, 'curse'], [18, 'poison', 'poison'], [26, 0, 'shadowPartner'],
-  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [34, 2, 'ghost'], [39, 4, 'attract'], [41, 4, 'spiritJavelin'],
-  [47, 4], [49, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
+  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [49, 2, 'ghost'], [39, 4, 'attract'], [41, 4, 'spiritJavelin'],
+  [47, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
   [71, 4], [75, 4], [76, 4], [77, 4]];
 const TWO_STATE_NAMES = ['energyCharged', 'dashSpeed', 'dashJump', 'ride', 'partyBooster', 'guidedBullet', 'undead'];
 /**
@@ -290,7 +291,14 @@ export class ChannelSession {
         // best sellers: 9 tabs x 2 genders x 5 of (category, gender, SN)
         for (let i = 0; i < 90; i++) { r.int(); r.int(); d.best.push(r.int()); }
         for (let n = r.short(); n > 0; n--) d.stock.set(r.int(), r.int());   // 1 sold out, 2 not at this hour
-        for (let n = r.short(); n > 0; n--) r.skip(0x68);                      // limited goods
+        // limited goods: item, up to 10 SNs, state (-1 on sale, 1 / 0xC0 sold out, 2 / 0xBF not now), total, left,
+        // flags (1 count, 2 dates, 4 weekdays, 8 hours), start / end date (YYYYMMDD), start / end hour, Sun..Sat
+        for (let n = r.short(); n > 0; n--) {
+          const itemId = r.int(), sns = []; for (let i = 0; i < 10; i++) sns.push(r.int());
+          const rec = { itemId, sns: sns.filter(Boolean), state: r.int(), total: r.int(), remaining: r.int(), flags: r.int(), start: r.int(), end: r.int(), startHour: r.int(), endHour: r.int(), days: [] };
+          for (let i = 0; i < 7; i++) rec.days.push(r.int());
+          (d.limited ??= []).push(rec);
+        }
         for (let n = r.short(); n > 0; n--) r.skip(0x44);                      // free-trial windows
         r.ubyte(); d.level = r.int();
       } catch (e) { console.warn('SET_CASH_SHOP: short packet', e); }
@@ -307,6 +315,34 @@ export class ChannelSession {
       this.emit('notes', notes);
     });
     on(S.QUERY_CASH_RESULT, (r) => this.emit('csCash', { credit: r.int(), maplePoint: r.int(), prepaid: r.int() }));
+    // the Zakum Shrine / Horntail's Cave closing: a kind (0: unless the boss is summoned) and the minutes left (0: closed)
+    on(S.ZAKUM_SHRINE, (r) => { const kind = r.ubyte(); this.emit('bossShrine', 'zakum', kind, r.int()); });
+    on(S.HORNTAIL_CAVE, (r) => { const kind = r.ubyte(); this.emit('bossShrine', 'horntail', kind, r.int()); });
+    // a random transform potion that failed: 1, then 2 (with the name not found) or 3 (only in town)
+    on(S.RANDOM_MORPH_RES, (r) => {
+      this.emit('exclusiveAnswered');
+      if (r.ubyte() !== 1) return;
+      const reason = r.ubyte();
+      this.emit('randomMorph', reason, reason === 2 ? r.string() : '');
+    });
+    // trading mesos past the daily limit (0: the notice); either way the request is answered
+    on(S.TRADE_MONEY_LIMIT, (r) => { const flag = r.available ? r.ubyte() : 1; this.emit('exclusiveAnswered'); if (flag === 0) this.emit('tradeMoneyLimit'); });
+    on(S.ARIANT_RESULT, (r) => this.emit('serverNotice', r.string()));
+    // quest start / end dates the server overrides (SET_QUEST_TIME), or all of them dropped (SET_QUEST_CLEAR)
+    on(S.SET_QUEST_CLEAR, () => this.emit('questTimes', null));
+    on(S.SET_QUEST_TIME, (r) => {
+      const list = [];
+      for (let n = r.ubyte(); n > 0; n--) { const id = r.int(); list.push({ id, start: r.long(), end: r.long() }); }
+      this.emit('questTimes', list);
+    });
+    on(S.SET_POTION_DISCOUNT_RATE, (r) => this.emit('potionDiscount', r.ubyte()));
+    on(S.GMEVENT_INSTRUCTIONS, (r) => this.emit('eventHelp', r.ubyte()));
+    // party-raid values: PRaid_Point (PARTY_VALUE); Red_Stage / Blue_Stage / Bamboo_Used (FIELD_SET_VARIABLE)
+    on(S.PARTY_VALUE, (r) => { const key = r.string(); this.emit('partyValue', key, r.string()); });
+    on(S.FIELD_SET_VARIABLE, (r) => { const key = r.string(); this.emit('fieldVariable', key, r.string()); });
+    on(S.CASHSHOP_PURCHASE_EXP_CHANGED, (r) => this.emit('csPurchaseExp', r.ubyte()));
+    on(S.CASHSHOP_GACHAPON_STAMP_RESULT, (r) => { const ok = r.ubyte(); this.emit('csStamps', ok, ok && r.available >= 4 ? r.int() : 0); });
+    on(S.CHARGE_PARAM_RESULT, () => this.emit('csCharge'));
     on(S.CASHSHOP_OPERATION, (r) => {
       const op = r.ubyte(), list = (n) => { const out = []; for (; n > 0; n--) out.push(readCashItem(r)); return out; };
       if (op === 0x4B) { const items = list(r.short()); this.emit('csInventory', items, r.available >= 4 ? r.short() : null, r.available >= 2 ? r.short() : null); }
@@ -326,7 +362,7 @@ export class ChannelSession {
       else if (op === 0x8D) { const got = []; for (let n = r.int(); n > 0; n--) got.push({ count: r.short(), pos: r.short(), itemId: r.int() }); this.emit('csMesoBought', got); }
       else if (op === 0x87 || op === 0x91) { const item = readCashItem(r); this.emit('csRing', { item, to: r.string(), itemId: r.int(), count: r.short() }); }
       else if (op === 0x6E) this.emit('csExpired', r.long());
-      else if (op === 0x47) { r.int(); const sn = r.int(); this.emit('csStock', sn, r.int()); }
+      else if (op === 0x47) { const itemId = r.int(), sn = r.int(); this.emit('csStock', sn, r.int(), itemId); }
       // a failure: the reason, and for 0xBF / 0xC0 (not at this hour / sold out) the SN
       else if (CS_FAILS.has(op)) {
         const reason = r.ubyte(), sn = (reason === 0xBF || reason === 0xC0) && r.available >= 4 ? r.int() : 0;
@@ -338,6 +374,15 @@ export class ChannelSession {
       else if (op === 0x62) this.emit('csSlots', 'storage', r.short());
       else if (op === 0x64) this.emit('csSlots', 'character', r.short());
       else if (op === 0x9E || op === 0xA0) this.emit('csTransferBought', op === 0x9E ? 'name' : 'world', readCashItem(r));
+      else if (op === 0x9B) r.ubyte();
+      else if (op === 0x9A) { const sn = r.int(); this.emit('csAccountLimit', sn, r.ubyte()); }   // a one-per-account answer
+      // a cash item deleted from the locker (0x85: with the Maple Points it was worth)
+      else if (op === 0x6C) this.emit('csDeleted', r.long(), null);
+      else if (op === 0x85) { const sn = r.long(); this.emit('csDeleted', sn, r.int()); }
+      // a package sent as a gift: to whom, the package, then what it cost
+      else if (op === 0x8B) { const to = r.string(), itemId = r.int(); r.short(); r.short(); this.emit('csPackageGift', to, itemId, r.int()); }
+      // a gift coupon used: for whom, the items, the Maple Points
+      else if (op === 0x5B) { const to = r.string(), items = list(r.ubyte()); this.emit('csCouponGift', to, items, r.int()); }
     });
     // a name change or world transfer: may it go ahead (an error code, then for a transfer the worlds), and is a new name free
     on(S.CASHSHOP_CHECK_NAME_CHANGE_POSSIBLE_RESULT, (r) => { r.int(); const error = r.ubyte(); this.emit('csNameChangeRules', error, r.int()); });
@@ -431,9 +476,13 @@ export class ChannelSession {
     // Surprise, the town, the item)
     on(S.SERVERMESSAGE, (r) => {
       const type = r.ubyte();
-      if (type === 4) r.ubyte();
+      // the scrolling notice: a flag, and the text only when it is set (0 takes it down)
+      if (type === 4) { const on = r.ubyte(); if (!on) { this.emit('notice', { type, msg: '' }); return; } }
       const n = { type, msg: r.string() };
       try {
+        if (type === 6) n.item = r.int();          // a notice with an item attached
+        else if (type === 7) n.npc = r.int();      // a notice in an NPC's dialog
+        else if (type === 9) n.channel = r.ubyte() + 1;
         if (type === 3) { n.channel = r.ubyte() + 1; n.ear = r.bool(); }
         else if (type === 8) { n.channel = r.ubyte() + 1; n.ear = r.bool(); if (r.ubyte()) n.item = readItem(r, false); }
         else if (type === 0x0B) { n.channel = r.int(); n.town = r.string(); n.item = readItem(r, false); }
@@ -681,8 +730,10 @@ export class ChannelSession {
       const ids = Array.from({ length: 6 }, () => r.int()), names = ids.map(() => fixed(r, 13));
       const jobs = ids.map(() => r.int()), levels = ids.map(() => r.int()), channels = ids.map(() => r.int());
       const leader = r.int(), maps = ids.map(() => r.int());
-      const members = ids.map((id, i) => ({ id, name: names[i], job: jobs[i], level: levels[i], channel: channels[i], map: maps[i] })).filter((m) => m.id);
-      return { leader, members };
+      // each slot's Mystic Door: its town, the field it was opened in, and where (16 bytes a slot)
+      const doors = r.available >= 96 ? ids.map(() => ({ town: r.int(), area: r.int(), x: r.int(), y: r.int() })) : null;
+      const members = ids.map((id, i) => ({ id, slot: i, name: names[i], job: jobs[i], level: levels[i], channel: channels[i], map: maps[i] })).filter((m) => m.id);
+      return { leader, members, slots: ids.map((id, i) => ({ id, name: names[i], map: maps[i] })), doors };
     };
     // ---- guilds: GUILD_OPERATION sub-ops (GuildPackets); messages are bare codes, 53-55 add a name
     on(S.GUILD_OPERATION, (r) => {
@@ -736,7 +787,8 @@ export class ChannelSession {
       } else if (op === 0x1B) { const leader = r.int(); this.emit('party', { kind: 'leader', leader, reason: r.available ? r.ubyte() : 0 }); }
       else if (op === 0x23) { if (r.available >= 12) this.emit('party', { kind: 'levelJob', id: r.int(), level: r.int(), job: r.int() }); }
       else if (op === 0x24) { const ok = r.available ? r.ubyte() : 0; this.emit('partyMessage', op, ok && r.available >= 2 ? r.string() : ''); }
-      else if (op === 0x25) { /* a member's Mystic Door */ }
+      // a member's Mystic Door: their slot, then its town, field and place
+      else if (op === 0x25) { const slot = r.ubyte(), town = r.int(), area = r.int(); this.emit('party', { kind: 'door', slot, door: { town, area, x: r.short(), y: r.short() } }); }
       else this.emit('partyMessage', op, r.available >= 2 ? r.string() : '');
     });
     on(S.UPDATE_PARTYMEMBER_HP, (r) => this.emit('partyHp', r.int(), r.int(), r.int()));
@@ -1070,6 +1122,21 @@ export class ChannelSession {
     on(S.CLOSE_RANGE_ATTACK, readAttack('melee'));
     on(S.RANGED_ATTACK, readAttack('ranged'));
     on(S.MAGIC_ATTACK, readAttack('magic'));
+    // a blow from someone's full Energy Charge: read as a melee attack; they play no action for it
+    on(S.ENERGY_ATTACK, readAttack('energy'));
+    // a monster's line: its speak entry and the line in it (Cosmic's SHOW_MAGNET)
+    on(S.MOB_SPEAKING, (r) => { const oid = r.int(), s = r.int(); this.emit('mobSpeak', oid, s, r.int()); });
+    // the family privilege in use: its type (0: none), the privilege's index, two more values, then its time left
+    // WITCH_TOWER_SCORE: the keys you hold; GUILD_BOSS_HEALER_MOVE: the healer's new y; GUILD_BOSS_PULLEY_STATE: the pulley's state
+    on(S.WITCH_TOWER_SCORE, (r) => this.emit('witchTowerScore', r.ubyte()));
+    on(S.GUILD_BOSS_HEALER_MOVE, (r) => this.emit('guildBossHealer', r.short()));
+    on(S.GUILD_BOSS_PULLEY_STATE, (r) => this.emit('guildBossPulley', r.ubyte()));
+    on(S.FAMILY_SET_PRIVILEGE, (r) => {
+      const type = r.ubyte();
+      if (!type) { this.emit('familyPrivilege', null); return; }
+      const a = r.int(), b = r.int(), c = r.int(), neg = r.ubyte() !== 0, ms = r.int();
+      this.emit('familyPrivilege', { type, a, b, c, ms: neg ? -ms : ms });
+    });
 
     on(S.KEYMAP, (r) => {
       if (r.ubyte() !== 0) return;
@@ -1201,6 +1268,12 @@ export class ChannelSession {
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         b.morph = values[popcount(mask >> 32n) + popcount(mask & 0x1n)];
       }
+      // Ghost (second mask 0x20000): read right after a morph; its value is 1 for a ghost, 2 for the spaceship
+      if (pick === normal && mask & 0x20000n) {
+        r.pos = start;
+        const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
+        b.ghost = values[popcount(mask >> 32n) + popcount(mask & 0x3n)] || 0;
+      }
       // Shadow Stars: its one stat picks the star it throws (the item 2069999 above it)
       if (pick === normal && n === 1 && mask === 0x100n) { r.pos = start; b.shadowStars = r.short(); }
       // Power Stance / Freeze Standing: its one stat is the % chance not to be knocked back
@@ -1248,7 +1321,8 @@ export class ChannelSession {
     });
     on(S.SUMMON_SKILL, (r) => this.emit('summonSkill', r.int(), r.int(), r.ubyte()));
     // SHOW_SCROLL_EFFECT: who, success, cursed (the item was destroyed), Legendary Spirit, White Scroll
-    on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.bool(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
+    // (success is signed: -1 "cannot use", 0 failed, else it worked)
+    on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.byte(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
     on(S.SHOW_FOREIGN_EFFECT, (r) => {
       const id = r.int(), effect = r.ubyte();
       if (effect === 1 && r.available >= 4) {
@@ -1259,6 +1333,8 @@ export class ChannelSession {
         this.emit('foreignSkill', id, skill, level, r.available >= 1 ? r.ubyte() : 0);
       }
       else if (effect === 2 && r.available >= 4) this.emit('affected', id, r.int());   // a party buff landed on them
+      // a quest's effect on them: with no items, its message (into your log) and Effect/Quest.img/<effect>
+      else if (effect === 3 && r.available >= 1) { if (r.ubyte() === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : -1, id); } }
       else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
@@ -1305,7 +1381,7 @@ export class ChannelSession {
       // 3: a quest's effect (0 items: message + Effect/Quest.img id) or the items it gave / took
       else if (type === 3 && r.available >= 1) {
         const n = r.ubyte();
-        if (n === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : 0); }
+        if (n === 0) { const msg = r.string(); this.emit('questEffect', msg, r.available >= 4 ? r.int() : -1); }
         else this.emit('questItems', Array.from({ length: n }, () => ({ id: r.int(), qty: r.int() })));
       }
     });
@@ -1313,6 +1389,7 @@ export class ChannelSession {
     on(S.GIVE_FOREIGN_BUFF, (r) => {
       const id = r.int(), m1 = r.long(), m2 = r.long(), st = readRemoteStats(r, m1, m2);
       if (st.ride) { this.emit('foreignMount', id, st.ride.value); return; }
+      if (st.ghost !== undefined) this.emit('foreignGhost', id, st.ghost);
       if (st.morph !== undefined) { this.emit('foreignMorph', id, st.morph); return; }
       // Dark Sight (or Wind Walk, when its bit comes in the first long): drawn see-through
       if (st.darkSight || BigInt.asUintN(64, m1) & 0x400000000n) this.emit('foreignHidden', id);
@@ -1664,11 +1741,12 @@ export class ChannelSession {
   /** activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its id/level). */
   /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
   npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
-  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0) {
+  /** `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else). */
+  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null) {
     const id = this.moveId++ & 0x7fff;
     (this.mobMoveIds ??= new Map()).set(oid, id);
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
-      .byte(0).byte(activity).byte(skill).byte(level).short(0).zero(8).byte(0).int(0).pos(start);
+      .byte(0).byte(activity).byte(skill).byte(level).short(0).byte(0).int(0).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
     writeMovement(w, moves);
     this.send(w);
   }
@@ -1715,6 +1793,8 @@ export class ChannelSession {
   mobDamageMob(attacker, charId, victim, attack, damage, facingLeft, x, y) {
     this.send(new PacketWriter(C.MOB_DAMAGE_MOB).int(attacker).int(charId).int(victim).byte(attack).int(damage).byte(facingLeft ? 1 : 0).short(x).short(y));
   }
+  /** The guild boss field's pulley, struck while its state is 0: no body. */
+  pullGuildBossPulley() { this.send(new PacketWriter(C.GUILD_BOSS_PULLEY_HIT)); }
   /** The Beholder's own skill: its oid, the skill (Aura / Hex of the Beholder), its action (facing left in bit 7). */
   beholder(oid, skill, action, extra = null) {
     const w = new PacketWriter(C.BEHOLDER).int(oid).int(skill).byte(action);
@@ -2123,6 +2203,8 @@ export class ChannelSession {
    * 0x0A the notice. allianceExpel 6 (guild, alliance), allianceLeader 7 (the new leader), allianceRank 9 (who, 1 up / 0 down).
    */
   allianceOp(mode, text = null) { const w = new PacketWriter(C.ALLIANCE_OPERATION).byte(mode); if (text !== null) w.string(text); this.send(w); }
+  /** ALLIANCE_OPERATION 8: the alliance's five rank titles. */
+  allianceTitles(ranks) { const w = new PacketWriter(C.ALLIANCE_OPERATION).byte(8); for (let i = 0; i < 5; i++) w.string(ranks[i] || ''); this.send(w); }
   allianceExpel(gid, aid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(6).int(gid).int(aid)); }
   allianceLeader(cid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(7).int(cid)); }
   allianceRank(cid, up) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(9).int(cid).byte(up ? 1 : 0)); }
@@ -2174,6 +2256,8 @@ export class ChannelSession {
   nameTransfer(cid, birthday) { this.send(new PacketWriter(C.NAME_TRANSFER).int(cid).int(birthday)); }
   worldTransfer(cid, birthday) { this.send(new PacketWriter(C.WORLD_TRANSFER).int(cid).int(birthday)); }
   checkNewName(name) { this.send(new PacketWriter(C.CHECK_CHAR_NAME).string(name)); }
+  /** Asks whether a one-per-account item may still be bought (sn 0: the account-wide answer). */
+  csLimitQuery(sn) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x28).int(sn)); }
   csNameChange(sn, oldName, newName) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x2E).int(sn).string(oldName).string(newName)); }
   csWorldTransfer(sn, world) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x31).int(sn).int(world)); }
   /** A ring for a partner: 0x1D a couple ring, 0x23 a friendship ring; birthday, wallet (1 NX Credit / 4 NX Prepaid), SN, partner, message */
@@ -2212,7 +2296,7 @@ export class ChannelSession {
   /** action: 1 next/yes/ok, 0 back/no, -1 end. selection for menus / numbers. */
   npcReply(lastType, action, selection) {
     const w = new PacketWriter(C.NPC_TALK_MORE).byte(lastType).byte(action);
-    if (lastType === 7 || lastType === 8) w.byte(action === 1 ? selection ?? 0 : 0);   // a style choice is one byte
+    if (lastType === 7 || lastType === 8) { if (action === 1) w.byte(selection ?? 0); }   // a style choice: one byte, and none on a cancel
     else if (typeof selection === 'string') w.string(selection);
     else if (selection !== undefined && selection !== null) w.int(selection);
     this.send(w);
