@@ -52,9 +52,19 @@ export class FredrickWin extends Win {
     this.busy = true;
     this.g.net?.fredrick(0x1a);
   }
-  /** FREDRICK_MESSAGE: what came of it; everything retrieved puts GET ALL out. */
+  /**
+   * FREDRICK 0x24, after GET ALL: the storing fee. With none it asks plainly; with one the client says how many days and
+   * what it costs, but the decompile lost the percent and mesos it prints, so the plain question stands in for it.
+   * Yes takes them (FREDRICK_ACTION 0x1B); no lets GET ALL be pressed again.
+   */
+  async askFee() {
+    if (await this.mgr.confirm('Are you sure you want to retrieve them?')) this.g.net?.fredrick(0x1b);
+    else this.busy = false;
+  }
+  /** FREDRICK_MESSAGE: what came of it (GET ALL can go again after any answer); everything retrieved empties him. */
   result(code) {
-    if (code === 0x1e) this.getAll.enabled = false;
+    this.busy = false;
+    if (code === 0x1e) { this.getAll.enabled = false; this.items = []; this.mesos = 0; }
     const t = FREDRICK_RESULTS[code];
     if (t) this.mgr.notice(t);
   }

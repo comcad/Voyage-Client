@@ -298,10 +298,19 @@ export class CashShopWin extends Win {
     this.alert('You have successfully made the purchase.');
   }
   /** Gifts waiting for us: the server already moved them into the Cash Inventory. */
+  /**
+   * Gifts waiting for you (0x4D): each opens its thank-you note in turn; OK answers the sender (NOTE_ACTION 0) and
+   * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (Cosmic sends one
+   * only after a reply, so an unanswered gift would stay hidden until you came back).
+   */
   async receivedGifts(gifts) {
-    for (const g of gifts) {
+    for (let i = 0; i < gifts.length; i++) {
+      const g = gifts[i];
       if (!this.inv.some((c) => String(c.cashId) === String(g.cashId))) this.inv.push(g);
-      await this.alert(`You have received ${await this.name(g.itemId)} from ${g.from}.\n${g.message}`);
+      const reply = await new Promise((done) => { const w = new CsGiftNoteDialog(this, g, done); this.mgr.assets.preload(w.frames()).then(() => this.mgr.show(w)); });
+      if (reply === null) continue;
+      this.g.net?.giftReply(g.from, reply, i, g.cashId);
+      await this.alert('The note has successfully been sent');
     }
   }
   /** A gift was sent: during the gift window's run it is counted for the summary, otherwise it says so. */
@@ -649,11 +658,15 @@ export class CashShopWin extends Win {
       return;
     }
   }
-  /** Come in from a wish list's PRESENT: that gift is asked for once the cash and the catalogue are both in. */
+  /**
+   * Come in from a wish list's PRESENT: the shop turns to the item's tab, sub-category and page (the client also puts
+   * the mouse on it; here it is selected), and that gift is asked for once the cash and the catalogue are both in.
+   */
   maybeWishGift() {
     const w = this.g.wishGift;
     if (!w || !this.cashKnown || !this.bySN) return;
     this.g.wishGift = null;
+    this.jumpTo(w.sn);
     this.giftWish(w.sn, w.name);
   }
   /**
@@ -1644,6 +1657,48 @@ class CsWishGiftDialog extends Win {
     uiText(ctx, this.to, 84, 25, { color: '#000', size: 12 });
     // the art's "Enter your message here." sits on the first line: covered once there is a message
     if (this.lines.some((f) => f.value)) { ctx.fillStyle = '#fff'; ctx.fillRect(22, 46, 220, 17); }
+  }
+}
+
+/**
+ * A gift's thank-you note (CashShop.img/CSNotice/3, 266x250, centred): the item at twice its size on the white box,
+ * standing on (26, 88); its name in black and the sender in blue, centred in 134px from x 103, at y 26 / 53 (both
+ * lost: taken from the values pushed before the width call); "sent you a present." in white at (107, 71); the gift's
+ * message, split at its first line break, at (25, 105) / (25, 121); the reply box (25, 174), 210 wide and up to 200
+ * long; OK (203, 220). OK checks the reply for curses and answers with it (an empty one too); Esc leaves it unanswered.
+ */
+class CsGiftNoteDialog extends Win {
+  constructor(shop, g, done) {
+    const mgr = shop.mgr, N = shop.C.CSNotice?.[3] || shop.C.CSNotice?.['3'];
+    super(mgr, N?.backgrnd, (UI_W - 266) >> 1, (UI_H - 250) >> 1);
+    this.buttons = []; this.closeBtn = null;
+    this.shop = shop; this.gift = g; this.done = done; this.w = 266; this.h = 250; this.modal = true;
+    this.box = editBox(shop, 210, 13, 200);
+    this.box.el.addEventListener('keydown', (e) => e.stopPropagation());
+    this.button(mgr.B.BtOK2, 203, 220, () => this.ok());
+    const msg = String(g.message || ''), at = msg.indexOf('\n');
+    this.msg = at < 0 ? [msg, ''] : [msg.slice(0, at).replace(/\r$/, ''), msg.slice(at + 1)];
+  }
+  async ok() {
+    const t = this.box.value.trim();
+    if (t.length > 200) return;
+    if (await this.shop.g.cursed(t)) { this.shop.alert('Cursing is not allowed.'); return; }
+    this.finish(t);
+  }
+  finish(v) { if (this.answered) return; this.answered = true; this.box.remove(); this.mgr.close(this); this.done(v); }
+  key(e) { if (e.key === 'Escape') this.finish(null); else if (e.key === 'Enter') this.ok(); }
+  body(ctx) {
+    placeBox(this, this.box, 25, 174);
+    if (!this.focused) { this.focused = true; setTimeout(() => this.box.focus(), 0); }
+    this.shop.drawBigIcon(ctx, { ItemId: this.gift.itemId }, 26, 88);
+    const centred = (t, y, color) => {
+      ctx.save(); ctx.font = '12px Arial'; const w = Math.min(134, ctx.measureText(t).width); ctx.beginPath(); ctx.rect(103, y - 2, 134, 18); ctx.clip();
+      uiText(ctx, t, ((134 - Math.round(w)) >> 1) + 103, y, { color, size: 12 }); ctx.restore();
+    };
+    centred(this.mgr.itemName(this.gift.itemId) || '', 26, '#000');
+    centred(this.gift.from || '', 53, '#2000ff');
+    uiText(ctx, 'sent you a present.', 107, 71, { color: '#fff', size: 12 });
+    this.msg.forEach((l, i) => { ctx.save(); ctx.beginPath(); ctx.rect(25, 103 + 16 * i, 216, 16); ctx.clip(); uiText(ctx, l, 25, 105 + 16 * i, { color: '#000', size: 12 }); ctx.restore(); });
   }
 }
 

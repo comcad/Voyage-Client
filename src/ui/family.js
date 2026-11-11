@@ -157,15 +157,38 @@ export class FamilyTreeWin extends Win {
   }
   get mine() { return this.chart?.self === this.g.player.id; }
 
+  /**
+   * BYE: a junior picked (or named) is dropped; your senior (or yourself) picked, you leave them. The client's words:
+   * (lv / 20 + 10) x lv x 2 Reputation, lv the junior's (yours when you leave), with the senior above's share when
+   * there is one - that second figure was lost in the decompile and is taken as half, as Cosmic deducts it - and a
+   * fee of (d + 2500) x d mesos, d how far the senior's level is above the junior's.
+   */
   async separate() {
     const c = this.chart, me = this.g.player.id;
     if (!c) return;
-    const sel = c.members.find((m) => m.id === this.sel);
-    if (sel && sel.senior === me && sel.id !== me) {
-      if (await this.mgr.confirm(`Let ${sel.name} go from your family?\nIt costs mesos and reputation.`)) { this.g.familySevered = sel.name; this.g.net?.familyDropJunior(sel.id); }
-    } else if (sel?.id === me && this.place.senior) {
-      if (await this.mgr.confirm(`Leave your senior ${this.place.senior.name}?\nIt costs mesos, and your juniors leave with you.`)) { this.g.familySevered = this.place.senior.name; this.g.net?.familyLeaveSenior(); }
-    } else this.mgr.notice('Select one of your juniors, or yourself to leave your senior.');
+    let sel = c.members.find((m) => m.id === this.sel);
+    if (!sel) {
+      const name = (await this.mgr.askText('Enter the name of the character you wish to delete.', '', { max: 13 }))?.trim();
+      sel = name && c.members.find((m) => m.name.toLowerCase() === name.toLowerCase());
+      if (!sel) return;
+    }
+    const mine = c.members.find((m) => m.id === me), lv = (m) => m?.level ?? 0;
+    const rep = (l) => (Math.floor(l / 20) + 10) * l * 2, fee = (d) => ((d + 2500) * d > 0 ? `\r\n\r\nFee:${(d + 2500) * d} Mesos` : '');
+    if (sel.senior === me && sel.id !== me) {
+      const R = rep(lv(sel)), d = Math.max(0, lv(mine) - lv(sel));
+      const text = mine?.senior
+        ? `${R} Reputation Points for yourself and ${Math.floor(R / 2)} Reputation Points for your Senior will be deducted\r\nand all lower Family members will be affected.\r\nDo you really want to separate from the selected character?`
+        : `${R} Reputation Points will be deducted from you, \r\nand all lower Family members will be affected.\r\nDo you really want to separate from the selected character`;
+      if (await this.mgr.confirm(text + fee(d))) { this.g.familySevered = sel.name; this.g.net?.familyDropJunior(sel.id); }
+      return;
+    }
+    const S = c.members.find((m) => m.id === mine?.senior) || this.place?.senior;
+    if (!S || (sel.id !== S.id && sel.id !== me)) return;
+    const R = rep(lv(mine)), d = Math.max(0, lv(S) - lv(mine));
+    const text = S.senior
+      ? `${R} Reputation Points for the Senior and ${Math.floor(R / 2)} Reputation Points for the 2nd Senior will be deducted, and all lower Family members will be affected.\r\nDo you really want to separate from the selected character?`
+      : `${R} Reputations for the Senior will be deducted, and\r\nall lower Family members will be affected. Do you really want to separate from the selected character?`;
+    if (await this.mgr.confirm(text + fee(d))) { this.g.familySevered = S.name; this.g.net?.familyLeaveSenior(); }
   }
 
   draw(ctx) {

@@ -100,7 +100,7 @@ function readShopItems(r) {
   return Array.from({ length: r.ubyte() }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) }));
 }
 /**
- * ROOM type 5 (getHiredMerchant): your slot, the merchant item, visitors, notes, the owner's name - then, for the
+ * ROOM type 5 (getHiredMerchant): your slot, the merchant item, visitors, the notes left while away, the owner's name - then, for the
  * owner only, opening time, sales and stored mesos - the title, and the stock (an empty one adds a 0 byte).
  */
 function readMerchantRoom(r, selfName) {
@@ -108,19 +108,21 @@ function readMerchantRoom(r, selfName) {
   const slot = r.short(), itemId = r.int(); r.string();
   const people = [];
   for (let s = r.ubyte(); s !== 0xFF; s = r.ubyte()) people.push({ slot: s, look: readCharLook(r), name: r.string() });
-  for (let n = r.short(); n > 0; n--) { r.string(); r.ubyte(); }
+  // what visitors said while the owner was away (the owner's copy only): "name : text" and the seat it came from
+  const notes = [];
+  for (let n = r.short(); n > 0; n--) notes.push({ text: r.string(), slot: r.ubyte() });
   const owner = r.string(), mine = owner === selfName, sold = [];
-  let firstTime = false;
+  let firstTime = false, elapsed = 0, received = 0;
   if (mine) {
-    r.short(); r.short(); firstTime = r.bool();
+    elapsed = r.int(); firstTime = r.bool();           // how long it has been open (ms), and a store not opened yet
     for (let n = r.ubyte(); n > 0; n--) sold.push({ id: r.int(), qty: r.short(), mesos: r.int(), buyer: r.string() });
-    r.int();
+    received = r.int();               // what the merchant holds for you
   }
   const title = r.string(); r.ubyte();
   const mesos = r.int();            // the owner: what the merchant has earned; a visitor: their own
   const n = r.ubyte();
   const items = n ? Array.from({ length: n }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) })) : (r.ubyte(), []);
-  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, mesos, sold, people, title, items };
+  return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, elapsed, received, mesos, sold, people, title, items, notes };
 }
 /** ROOM type 4 (getPlayerShop): max visitors, your slot (0 owner), sales so far, owner and visitors, title, stock. */
 function readShopRoom(r) {
@@ -529,7 +531,36 @@ export class ChannelSession {
     // your account's gender (only 0 may propose)
     on(S.SET_GENDER, (r) => this.emit('accountGender', r.ubyte()));
     // a proposal to you (0: who, their id); 9 the wedding wish list
-    on(S.MARRIAGE_REQUEST, (r) => { if (r.ubyte() === 0) { const name = r.string(); this.emit('proposal', name, r.int()); } });
+    // a wedding hall's ceremony: the step reached (with the groom's and bride's ids), and its end
+    on(S.WEDDING_PROGRESS, (r) => { const step = r.ubyte(), groom = r.int(), bride = r.int(); this.emit('weddingProgress', step, groom, bride); });
+    on(S.WEDDING_CEREMONY_END, () => this.emit('weddingEnd'));
+    on(S.MARRIAGE_REQUEST, (r) => {
+      const mode = r.ubyte();
+      if (mode === 0) { const name = r.string(); this.emit('proposal', name, r.int()); }
+      else if (mode === 9) this.emit('wishListInput');   // the couple writes their wish list
+    });
+    // WEDDING_GIFT_RESULT: 9 / 11 the couple's wishes (11 with what they were given), 10 / 15 what you were given, 12-14 / 16
+    // answers. An item block: a mask (equip 4, use 8, setup 0x10, etc 0x20, cash 0x40), then for each type set a count
+    // and the items; the types not set are kept as they were.
+    on(S.WEDDING_GIFT_RESULT, (r) => {
+      const mode = r.ubyte(), names = () => { const l = []; for (let n = r.ubyte(); n > 0; n--) l.push(r.string()); return l; };
+      const block = () => {
+        const mask = r.int(); r.int();
+        const types = [], items = [];
+        for (let t = 1; t <= 5; t++) {
+          if (!(mask & (1 << (t + 1)))) continue;
+          types.push(t);
+          for (let n = r.ubyte(), i = 0; i < n; i++) items.push({ ...readItem(r, false), groupIndex: i });
+        }
+        return { types, items };
+      };
+      const e = { mode };
+      if (mode === 9) e.names = names();
+      else if (mode === 11) { e.names = names(); e.block = block(); }
+      else if (mode === 10 || mode === 15) e.block = block();
+      else if (![12, 13, 14, 16].includes(mode)) return;
+      this.emit('weddingGifts', e);
+    });
     // MARRIAGE_RESULT: 0x0b / 0x0c the record (engaged / married), 0x0f an invitation (groom, bride, type), 0x24 a message
     on(S.MARRIAGE_RESULT, (r) => {
       const mode = r.ubyte(), e = { mode };
@@ -763,7 +794,9 @@ export class ChannelSession {
         const mesos = flags & 2 ? r.int() : 0;
         for (const f of [4, 8, 0x10, 0x20, 0x40]) if (flags & f) for (let n = r.ubyte(); n > 0; n--) items.push(readItem(r, false));
         this.emit('fredrick', { op: 'open', npc, slots, mesos, items });
-      } else if (op === 0x26) this.emit('fredrick', { op: 'unavailable' });
+      } else if (op === 0x24) { const days = r.int(); this.emit('fredrick', { op: 'fee', days, fee: r.int() }); }   // the storing fee, asked before GET ALL goes on
+      else if (op === 0x25) { const npc = r.int(), map = r.int(); this.emit('fredrick', { op: 'elsewhere', npc, map, channel: r.ubyte() }); }   // your store is open somewhere
+      else if (op === 0x26) this.emit('fredrick', { op: 'unavailable' });
     });
     on(S.FREDRICK_MESSAGE, (r) => this.emit('fredrick', { op: 'result', code: r.ubyte() }));
     // the guild BBS: 6 a page of the list (a notice flag and the notice, the total, then the threads), 7 a thread with its
@@ -802,6 +835,15 @@ export class ChannelSession {
       else if (op === 4) { const name = r.string(); this.emit('messenger', { op: 'invited', name, ok: r.ubyte() === 1 }); }
       else if (op === 5) { const name = r.string(); this.emit('messenger', { op: 'declined', name, mode: r.ubyte() }); }
       else if (op === 6) this.emit('messenger', { op: 'chat', text: r.string() });
+      // the whole room again: each spot 0 empty, 1 as it is, else who sits there (look, name, channel)
+      else if (op === 8) {
+        const seats = [];
+        for (let i = 0; i < 3; i++) {
+          const f = r.ubyte();
+          seats.push(f === 0 ? null : f === 1 ? undefined : { look: readCharLook(r), name: r.string(), channel: r.ubyte() });
+        }
+        this.emit('messenger', { op: 'room', seats });
+      }
     });
     // ENTRUSTED_SHOP_CHECK_RESULT: 7 you may open a merchant, 9 Fredrick still holds your goods, 0x10 yours is open in another channel
     on(S.ENTRUSTED_SHOP_CHECK_RESULT, (r) => {
@@ -1821,6 +1863,14 @@ export class ChannelSession {
   propose(name, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(0).string(name).int(itemId)); }
   withdrawProposal() { this.send(new PacketWriter(C.RING_ACTION).byte(1)); }
   breakEngagement(itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(3).int(itemId)); }
+  /** WEDDING_TALK: the couple read the officiant's line for this step. WEDDING_TALK_MORE: a guest blesses them. */
+  weddingTalk(step) { this.send(new PacketWriter(C.WEDDING_TALK).byte(step)); }
+  /** RING_ACTION 9: the couple's wish list. WEDDING_ACTION 6 give (slot, item, count), 7 take (type, index), 8 close. */
+  weddingWishList(list) { const w = new PacketWriter(C.RING_ACTION).byte(9).short(list.length); for (const s of list) w.string(s); this.send(w); }
+  weddingGive(slot, itemId, qty) { this.send(new PacketWriter(C.WEDDING_ACTION).byte(6).short(slot).int(itemId).short(qty)); }
+  weddingTake(type, index) { this.send(new PacketWriter(C.WEDDING_ACTION).byte(7).byte(type).byte(index)); }
+  weddingAction(mode) { this.send(new PacketWriter(C.WEDDING_ACTION).byte(mode)); }
+  weddingBless() { this.send(new PacketWriter(C.WEDDING_TALK_MORE)); }
   answerProposal(ok, name, id) { this.send(new PacketWriter(C.RING_ACTION).byte(2).byte(ok ? 1 : 0).string(name).int(id)); }
   inviteGuest(name, marriageId, slot) { this.send(new PacketWriter(C.RING_ACTION).byte(5).string(name).int(marriageId).int(slot)); }
   openInvitation(slot, itemId) { this.send(new PacketWriter(C.RING_ACTION).byte(6).int(slot).int(itemId)); }
@@ -1854,6 +1904,12 @@ export class ChannelSession {
     if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
     if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0, r.available ? r.ubyte() : null); return true; }   // REAL_CLOSE_MERCHANT: closed, and what came back
     if (op === 0x1A) { this.emit('shopSold', r.ubyte(), r.short(), r.string()); return true; } // UPDATE_PLAYERSHOP: sold (owner)
+    // a Hired Merchant's owner: ORGANIZE's answer (its mesos, sold-out rows dropped), the mesos withdrawn, the visit list
+    // (name, ms there) and the blacklist
+    if (op === 0x28) { this.emit('shopOrganized', r.int()); return true; }
+    if (op === 0x2C) { this.emit('shopMesoTaken'); return true; }
+    if (op === 0x2E) { const list = []; for (let n = r.short(); n > 0; n--) list.push({ name: r.string(), ms: r.int() }); this.emit('shopVisits', list); return true; }
+    if (op === 0x2F) { const list = []; for (let n = r.short(); n > 0; n--) list.push(r.string()); this.emit('shopBlacklist', list); return true; }
     if (op === 4) { const slot = r.ubyte(), look = readCharLook(r); this.emit('shopVisitor', slot, r.string(), look); return true; }
     if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('shopChat', slot, r.string()); return true; }
     if (op === 0x0A) {                                                   // a visitor left, or the shop closed on you
@@ -2008,7 +2064,18 @@ export class ChannelSession {
   merchantTakeBack(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x26).short(index)); }
   merchantOrganize() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x28)); }
   merchantClose() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x29)); }
-  merchantLeave() { this.roomType = 0; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x27)); }
+  merchantLeave() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x27)); }
+  /** A Hired Merchant's owner: withdraw its mesos (2B), ask for the visit list (2E) or the blacklist (2F), add (30) or remove (31) a name. */
+  merchantMeso() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x2B)); }
+  merchantVisits() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x2E)); }
+  merchantBlacklist() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x2F)); }
+  merchantBlacklistAdd(name) { if (name) this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x30).string(name)); }
+  merchantBlacklistRemove(name) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x31).string(name)); }
+  /** A shop's owner bans the visitor in a slot (1C), or the hour-long stay runs out (1D). */
+  pshopBan(slot, name) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1C).byte(slot).string(name)); }
+  pshopStayOver(slot, name) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1D).byte(slot).string(name)); }
+  /** OPEN STORE first sends your own blacklist's names. */
+  pshopBlacklistNames(names) { const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0x1E).short(names.length); for (const n of names) w.string(n); this.send(w); }
   /** PLAYER_INTERACTION: 0 create (type 3 = trade), 2 invite, 3 decline, 4 visit, 6 chat, 0xA exit, 0xF item, 0x10 meso, 0x11 confirm */
   tradeStart(cid) {
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3));
@@ -2033,7 +2100,7 @@ export class ChannelSession {
     this.send(w);
   }
   /** FREDRICK_ACTION: 0x1A take everything back, 0x1C his window closed. */
-  fredrick(op) { this.send(new PacketWriter(C.FREDRICK_ACTION).byte(op)); }
+  fredrick(op) { this.send(new PacketWriter(C.FREDRICK_ACTION).byte(op)); }   // 0x1B: yes to the storing fee
   /** BBS_OPERATION 0: post (edit flag, the thread when editing, notice flag, title, text, emoticon). */
   bbsPost(edit, id, notice, title, text, icon) {
     const w = new PacketWriter(C.BBS_OPERATION).byte(0).byte(edit ? 1 : 0);
@@ -2117,6 +2184,8 @@ export class ChannelSession {
    * NOTE_ACTION 1: the notes discarded: how many, how many are type 3, your free Etc slots, then each id with its type
    * (a type 3 one, while slots last, adds the number before its text's "_").
    */
+  /** NOTE_ACTION 0: a gift's thank-you note to its sender (the reply, the gift's place in the list, its cash serial). */
+  giftReply(sender, reply, index, cashId) { this.send(new PacketWriter(C.NOTE_ACTION).byte(0).string(sender).string(reply).byte(1).int(index).long(cashId ?? 0)); }
   discardNotes(notes, freeEtc = 0) {
     const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(notes.length).byte(notes.filter((n) => n.fame === 3).length).byte(freeEtc);
     let slots = freeEtc;

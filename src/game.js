@@ -53,6 +53,7 @@ import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.
 import { UserListWin, PartyHpWin, GuildContractWin, GuildMarkWin, heracleSays } from './ui/userlist.js';
 import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
+import { WishListInputWin, WeddingGiftWin } from './ui/weddinggifts.js';
 import { uiText, TextField } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
 import { Kites } from './kites.js';
@@ -1052,8 +1053,10 @@ export class Game {
    */
   async showNotes(notes) {
     this.pendingNotes = notes;
-    if (!notes.length) return;
-    const ok = await notifyNote(this.windows);
+    if (!notes.length || this.noteAsking) return;
+    this.noteAsking = true;
+    let ok;
+    try { ok = await notifyNote(this.windows); } finally { this.noteAsking = false; }
     if (!ok || !this.pendingNotes?.length) return;
     const list = this.pendingNotes;
     this.pendingNotes = [];
@@ -1447,10 +1450,45 @@ export class Game {
     if (text.length > 60) { this.windows.notice('Use the megaphone to text up to 60 characters.'); return false; }
     return true;
   }
+  /** A trade or shop room's chat line: refused for a curse word, or by the chat checks (repeats, too many lines), else sent. */
+  async roomChat(text) {
+    if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return; }
+    if (this.statusBar?.canSay && !this.statusBar.canSay(text)) return;
+    this.net?.tradeChat(text);
+  }
   /** Whether a line holds a word from Etc/Curse.img (ignoring case), or a control character. */
   async cursed(text) {
     if (/[\x00-\x09\x0b\x0c\x0e-\x1f]/.test(text)) return true;
     return (await this.maskCurses(text)) !== text;
+  }
+  /** MARRIAGE_REQUEST 9: the couple's wish-list window (the bride's art for a female account). */
+  async openWishListInput() {
+    if (this.tradeOpen()) return;
+    const w = new WishListInputWin(this.windows, (this.accountGender ?? 0) !== 0);
+    await this.assets.preload(w.frames());
+    this.windows.show(w, null);
+  }
+  /** WEDDING_GIFT_RESULT: the give / receive windows and their answers (one request at a time). */
+  async onWeddingGifts(e) {
+    const w = this.weddingGifts && this.windows.order.includes(this.weddingGifts) ? this.weddingGifts : null;
+    if (e.mode === 9 || e.mode === 10) {
+      if (w || this.tradeOpen()) return;
+      const win = new WeddingGiftWin(this.windows, e.mode === 9, { names: e.names, items: e.block?.items });
+      await this.assets.preload(win.frames());
+      this.weddingGifts = this.windows.show(win, null);
+      return;
+    }
+    if (!w) return;
+    if (e.mode === 11 && w.give) {
+      w.pending = false; w.names = e.names; w.merge(e.block);
+      await this.windows.notice('You have sent a gift.');
+      w.exit();
+    } else if (e.mode === 12) this.windows.notice('You cannot give more than one present for each wishlist.');
+    else if ((e.mode === 13 || e.mode === 14) && w.give) { w.pending = false; this.windows.notice('Failed to send the gift.'); }
+    else if (e.mode === 15 && !w.give) {
+      w.pending = false; w.merge(e.block);
+      if (w.takeType >= 1 && w.takeType <= 5) w.tab = w.takeType - 1;
+    } else if (e.mode === 16 && !w.give) w.pending = false;
   }
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
@@ -2682,10 +2720,11 @@ export class Game {
 
   /**
    * A monster's blow is what sets the pet's potions off: HP is checked against what the blow will take from it, and a
-   * blow that also went elsewhere (Magic Guard's share to MP, Power Guard's reflected share) starts the MP checks,
-   * which then run on every stat update until an MP potion goes. Spending HP / MP on skills sets off nothing.
+   * blow that also went elsewhere (Power Guard's reflected share, Meso Guard's share paid in mesos, Magic Guard's share
+   * to MP: flag 1, 2 or 4, the first that applies) starts the MP checks, which then run on every stat update until an
+   * MP potion goes. Spending HP / MP on skills sets off nothing. meso: the share Meso Guard took (already off damage).
    */
-  petHitPots(m, damage, from) {
+  petHitPots(m, damage, from, meso = 0) {
     const now = Date.now(), on = (ids) => ids.find((id) => this.buffs?.some((b) => b.source === id && b.until > now));
     let hp = damage, flag = 0;
     const pg = from === -1 && damage > 0 && on(POWER_GUARDS);
@@ -2694,6 +2733,7 @@ export class Game {
       if (m.src?.info?.boss) back = Math.trunc(back / 2);
       if (back > 0) { hp -= back; flag = 1; }
     }
+    if (meso > 0) flag ||= 2;
     const mg = damage > 0 && on(MAGIC_GUARDS);
     if (mg) {
       const mp = Math.min(Math.trunc((damage * (this.skills.levelData(mg)?.x || 0)) / 100), this.stats?.mp || 0);
@@ -2990,7 +3030,8 @@ export class Game {
       tradeMeso: (side, v) => this.tradeWin?.setMeso(side, v),
       tradeConfirm: () => this.tradeWin?.partnerConfirmed(),
       // room chat from the other seat has its curse words masked
-      tradeChat: (text, slot) => this.tradeWin?.say(slot === this.tradeWin.slot ? text : this.maskedLine(text)),
+      // your own line in #006699, your partner's in black
+      tradeChat: (text, slot) => { const mine = slot === this.tradeWin?.slot; this.tradeWin?.say(mine ? text : this.maskedLine(text), mine ? '#006699' : '#000'); },
       tradeEnd: (result) => this.tradeWin?.ended(result),
       // player shops
       shopOpen: later(async (d) => {
@@ -3005,7 +3046,11 @@ export class Game {
       family: later((e) => this.onFamily(e)),
       shopSold: later((i, qty, buyer) => this.playerShop?.soldUpdate(i, qty, buyer)),
       shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
-      shopChat: later((slot, text) => this.playerShop?.say(slot === this.playerShop.slot ? text : this.maskedLine(text))),
+      shopChat: later((slot, text) => this.playerShop?.seatSay(slot, slot === this.playerShop.slot ? text : this.maskedLine(text))),
+      shopOrganized: later((mesos) => this.playerShop?.organized(mesos)),
+      shopMesoTaken: later(() => this.playerShop?.mesoTaken()),
+      shopVisits: later((list) => this.playerShop?.showVisits(list)),
+      shopBlacklist: later((list) => this.playerShop?.showBlacklist(list)),
       shopLeft: later((slot) => this.playerShop?.left(slot)),
       shopClosed: later((reason, result) => {
         this.playerShop?.end(reason);
@@ -3032,6 +3077,8 @@ export class Game {
       vega: (v) => { if (this.vegaWin && this.windows.order.includes(this.vegaWin)) this.vegaWin.onResult(v); },
       treasureBoxOpened: later((id) => this.openStep(TreasureBoxWin, 1, id === 4280000 || id === 4280002)),
       proposal: later((name, id) => this.onProposal(name, id)),
+      wishListInput: later(() => this.openWishListInput()),
+      weddingGifts: later((e) => this.onWeddingGifts(e)),
       marriageResult: later((e) => this.onMarriageResult(e)),
       newYearCard: later((e) => this.onNewYearCard(e)),
       kite: later((k) => this.kites.spawn(k)),
@@ -3217,6 +3264,8 @@ export class Game {
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
       reactorSpawn: later((d) => this.spawnReactor(d)),
+      weddingProgress: later((...a) => this.weddingProgress(...a)),
+      weddingEnd: later(() => this.weddingEnd()),
       mobMoveResponse: later((oid, r) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending || e.kind !== 'Mob') return;
@@ -3380,6 +3429,16 @@ export class Game {
         if (e.op === 'open') { if (!this.tradeOpen()) this.showSingle(new FredrickWin(this.windows, e)).then((w) => { this.fredrickWin = w; }); }
         else if (e.op === 'result') { if (this.fredrickWin && this.windows.order.includes(this.fredrickWin)) this.fredrickWin.result(e.code); }
         else if (e.op === 'unavailable') this.windows.notice('This is currently unavailable.\r\nPlease try again later');
+        // the storing fee: only while GET ALL is waiting in his open window
+        else if (e.op === 'fee') { if (this.fredrickWin?.busy && this.windows.order.includes(this.fredrickWin)) this.fredrickWin.askFee(e); }
+        // your Hired Merchant is open elsewhere (or there's nothing to retrieve): his OK-only dialog
+        else if (e.op === 'elsewhere') {
+          const none = e.map === 999999999 || e.channel > 0xFD;
+          localTalk(this.windows, e.npc, none
+            ? "I don't think you have any items or money to retrieve here.\r\nThis is where you retrieve the items and mesos that you couldn't get from your Hired Merchant. You'll also need to see me as the character that opened the Personal Store."
+            // the Free Market room's number was lost in the decompile: taken from the map id (910000001 is room 1)
+            : `Your Personal Store is open #bin Channel ${this.channelLabel(e.channel)}, Free Market ${e.map - 910000000}#k.\r\nIf you need me, then please close your personal store first before seeing me.`, ['OK']);
+        }
       },
       storageOpen: (s) => {
         if (this.storageWin) this.windows.close(this.storageWin);
@@ -3923,6 +3982,73 @@ export class Game {
 
   levelUpEffect() { this.vfx?.play('LevelUp', this.player); }
 
+  /** The chapel (680000110, its officiant 9201011) or the cathedral (680000210, 9201002), on their wedding field. */
+  weddingHall() {
+    const id = this.map?.id;
+    if (Number(this.map?.info?.fieldType) !== 60) return null;
+    return id === 680000110 ? { npc: 9201011, bgm: 'BgmGL/chapel', cathedral: false } : id === 680000210 ? { npc: 9201002, bgm: 'BgmGL/cathedral', cathedral: true } : null;
+  }
+  /** Closes the ceremony's dialog still up from the last step, as with its Next (yes / no: No). */
+  closeWeddingDialog(next = true) {
+    const d = this.weddingDlg;
+    this.weddingDlg = null;
+    if (!d || !this.windows.order.includes(d)) return;
+    this.windows.close(d);
+    d.done?.({ action: next ? 1 : 0 });
+  }
+  /**
+   * WEDDING_PROGRESS, in a wedding hall: the step and the couple. Step 0 starts the hall's music and clears the last
+   * ending. In the cathedral at step 2 a guest is asked "Do you want to bless this couple?" (yes: WEDDING_TALK_MORE)
+   * and the couple see nothing; any other step shows everyone the officiant's line (String/Npc.img/<npc>/wedding<step>),
+   * and when the couple close it they send WEDDING_TALK with the step.
+   */
+  async weddingProgress(step, groom, bride) {
+    const hall = this.weddingHall();
+    if (!hall) return;
+    this.closeWeddingDialog(false);
+    this.wedding = { step, groom, bride };
+    if (step === 0) { this.weddingFx = null; this.fieldBgm = hall.bgm; music.play(hall.bgm); }
+    const me = this.player?.id, couple = me === groom || me === bride;
+    if (hall.cathedral && step === 2) {
+      if (couple) return;
+      const asked = localTalk(this.windows, hall.npc, 'Do you want to bless this couple?', ['Yes', 'No']);
+      this.weddingDlg = this.windows.order.findLast((w) => w instanceof NpcDialog) || null;
+      if ((await asked) === 'Yes') this.net?.weddingBless();
+      return;
+    }
+    const text = (await this.assets.json('String/Npc.img'))?.[hall.npc]?.[`wedding${step}`];
+    if (!text) return;
+    const said = localTalk(this.windows, hall.npc, text, ['Next']);
+    this.weddingDlg = this.windows.order.findLast((w) => w instanceof NpcDialog) || null;
+    await said;
+    if (couple) this.net?.weddingTalk(step);
+  }
+  /**
+   * WEDDING_CEREMONY_END: the officiant's line still up closes (a yes / no stays), and Effect/BasicEff.img/Wedding
+   * plays between the groom and the bride, following them, until the next ceremony starts or you leave.
+   */
+  weddingEnd() {
+    const d = this.weddingDlg;
+    if (d && d.d?.type === 0) this.closeWeddingDialog(true);
+    const w = this.wedding, node = this.vfx?.E?.Wedding;
+    if (!w || !node || !this.weddingHall()) return;
+    this.assets.preload(frames(node));
+    this.weddingFx = { anim: new Anim(node, true) };
+  }
+  /** The wedding's ending between the couple (both must be here). */
+  drawWeddingFx(ctx, cam, dt) {
+    const fx = this.weddingFx, w = this.wedding;
+    if (!fx || !w || !this.weddingHall()) { this.weddingFx = null; return; }
+    const who = (id) => (id === this.player?.id ? this.player : this.others.get(id));
+    const a = who(w.groom), b = who(w.bride);
+    if (!a || !b) return;
+    fx.anim.update(dt * 1000);
+    const n = fx.anim.node, img = n && this.assets.image(n);
+    if (!img) return;
+    const o = n.origin || [0, 0], x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
+    ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+  }
+
   // ------------------------------------------------------------------ map
   async changeMap(id, { portal = null, portalIdx = null, pos = null } = {}) {
     if (this.loading && this.loadingId === id) return;
@@ -3977,6 +4103,7 @@ export class Game {
       if (!this.net) history.replaceState(null, '', `?map=${id}`);
       this.hooks.onMap?.(map);
       this.hud?.setMap(map);
+      if (this.pendingNotes?.length) this.showNotes(this.pendingNotes);   // notes still waiting: the balloon on every map
       this.fieldBgm = null;
       music.play(map.info.bgm);
       this.net?.mapLoaded();
@@ -5791,7 +5918,8 @@ export class Game {
     if (this.hasDisease(STUN)) {
       const hw = this.pressedSkill();   // Hero's Will still goes
       if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
-      if (p.ladder) { p.attack = null; this.advanceFrame(p.ladder.l ? 'ladder' : 'rope', 0); return; }
+      // on a ladder or rope you let go: with no input the plain physics runs, not the climb, and you fall
+      if (p.ladder) { p.ladder = null; p.attack = null; p.vx = 0; p.vy = 0; }
       this.coast(dt);
       this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
@@ -5975,9 +6103,10 @@ export class Game {
         }
         this.playerFall(dt, dir, inY, ms);
       } else {
+        const v0 = { vx: p.vx, vy: p.vy };   // the step moves by the average of these and the steered speeds
         if (dir) p.vx = accelerate(p.vx, dir * PHYS.airAccel, PHYS.airLimit, dt);
         else p.vx = approach(p.vx, 0, (p.vy < PHYS.maxFall ? PHYS.airDrag : PHYS.airDrag * 100) * dt);
-        this.playerFall(dt, dir, inY, ms);
+        this.playerFall(dt, dir, inY, ms, v0);
       }
       // falling or sinking (not on the way up) with up held catches a ladder / rope the step passed within 10px of
       if (!p.fh && p.vy > 0 && held('up') && this.canClimb()) {
@@ -6009,14 +6138,14 @@ export class Game {
     return { acc: 1, speed: ms.speed * pct / 100, v: ms.speed };
   }
   /** Off the ground: in water you swim (no gravity; left / right and up / down steer it), else you fall. */
-  playerFall(dt, dir = 0, inY = 0, ms = null) {
-    const p = this.player, fh = this.map.fh;
-    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe(ms || this.moveStats())); fh.fall(p, dt, p.ignoreFh, true); }
+  playerFall(dt, dir = 0, inY = 0, ms = null, v0 = null) {
+    const p = this.player, fh = this.map.fh, old = v0 || { vx: p.vx, vy: p.vy };
+    if (this.map.swimming(p.x, p.y)) { swimVelocity(p, dir, inY, dt, this.swimShoe(ms || this.moveStats())); fh.fall(p, dt, p.ignoreFh, true, old); }
     else {
       // Wings: falling no faster than its speed
       const glide = this.wings && performance.now() < this.wings.until ? this.wings.speed : 0;
       if (glide && p.vy + PHYS.gravity * dt > glide) p.vy = glide - PHYS.gravity * dt;
-      fh.fall(p, dt, p.ignoreFh);
+      fh.fall(p, dt, p.ignoreFh, false, glide ? { vx: old.vx, vy: p.vy } : old);   // a glide caps the fall itself
     }
   }
   /** In water a jump or a stroke is taken at most every 300ms. */
@@ -9166,7 +9295,7 @@ export class Game {
       if (this.meso < Math.trunc((absorbed * guard.x) / 100)) absorbed = Math.trunc((this.meso * 100) / guard.x);
       if (absorbed > 0) { lost = damage - absorbed; this.playSkillEffect(MESO_GUARD, p, false, 'special'); }
     }
-    this.petHitPots(m, lost, from);
+    this.petHitPots(m, lost, from, damage - lost);
     this.vfx?.damage(p, [lost], 'violet');
     if (CHAR_DAM[from]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[from]}`);
     setExpression(p, 1, HIT_FACE_TIME);
@@ -9709,6 +9838,7 @@ export class Game {
     map.drawPortals(ctx, cam);
     this.drawRingFx(ctx, cam);
     this.drawFx(ctx, cam);
+    this.drawWeddingFx(ctx, cam, this.frameDt || 0);
     this.drawKeyGauge(ctx, cam);
     map.drawBacks(ctx, cam, true);
     this.fieldMode?.drawOver?.(ctx, cam);

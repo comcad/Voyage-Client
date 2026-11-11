@@ -138,6 +138,14 @@ export class MessengerWin extends Win {
       this.members[e.pos] = { name: e.name, look: this.g.lookFrom(e.look), channel: e.channel };
       this.typing[e.pos] = false;
       if (e.announce) { this.say(`- '${e.name}' has entered.`); this.flash(); }
+    } else if (e.op === 'room') {
+      // the whole room again, with no lines: an empty spot is cleared, one left as it is is kept
+      e.seats.forEach((s, p) => {
+        if (s === undefined) return;
+        this.typing[p] = false;
+        if (s === null) delete this.members[p];
+        else this.members[p] = { name: s.name, look: this.g.lookFrom(s.look), channel: s.channel };
+      });
     } else if (e.op === 'remove') {
       if (e.pos >= 0 && e.pos < 3) { this.say(`- '${name(e.pos)}' have left the room.`); this.flash(); this.typing[e.pos] = false; }
       delete this.members[e.pos];
