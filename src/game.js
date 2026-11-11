@@ -10211,10 +10211,13 @@ export class Game {
     const cam = { ...real, x: ix + (this.shake?.dx || 0), y: iy + (this.shake?.dy || 0) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    // backgrounds (and the screen's own weather) move at their own rates: drawn from the camera as it is, not shifted
+    const view = { ...real, x: real.x + (this.shake?.dx || 0), y: real.y + (this.shake?.dy || 0) };
+    const unshifted = (fn) => { ctx.save(); ctx.translate(real.x - ix, real.y - iy); fn(); ctx.restore(); };
+    map.drawBacks(ctx, view, false);
     this.cam = cam;
     ctx.save();
     ctx.translate(ix - real.x, iy - real.y);
-    map.drawBacks(ctx, cam, false);
 
     // shop owners and their booths go down first: everyone else walks in front of a shop
     const inShop = (e) => e.box?.type === 4;
@@ -10248,11 +10251,11 @@ export class Game {
     this.drawFx(ctx, cam);
     this.drawWeddingFx(ctx, cam, this.frameDt || 0);
     this.drawKeyGauge(ctx, cam);
-    map.drawBacks(ctx, cam, true);
+    unshifted(() => map.drawBacks(ctx, view, true));
     this.fieldMode?.drawOver?.(ctx, cam);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
-    this.weather.draw(ctx);
+    unshifted(() => this.weather.draw(ctx));
     this.mapleTV.draw(ctx, cam, this.map);
     drawPartyHp(ctx, this, cam);
     this.drawMapTips(ctx, cam);

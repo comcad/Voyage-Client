@@ -1,6 +1,6 @@
 import { pad, isCanvas, frames } from './assets.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
-import { BASE_W, BASE_H, snapPx } from './view.js';
+import { BASE_W, BASE_H, snapPx, PIXEL_SCALE } from './view.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -283,30 +283,42 @@ export class GameMap {
   }
 
   /**
-   * Layers that share a scale are drawn together at 1x into a canvas of their own, which is then scaled onto the view
-   * as one picture. Scaled one by one, pieces meant to meet inside a scaled image (Ellinia's light beams) would meet
-   * on fractional pixels and leave a 1px line where they overlap or part.
+   * Backgrounds, from the camera as it is (not a whole pixel), each at its own rate, placed on the canvas's own pixel
+   * grid so they glide as the view does. Layers that share a scale other than 1 are drawn together into a canvas of
+   * their own at about the canvas's density, which is then scaled onto the view as one picture: scaled one by one,
+   * pieces meant to meet inside a scaled image (Ellinia's light beams) would meet on fractional pixels and leave a 1px
+   * line where they overlap or part.
    */
   drawBacks(ctx, cam, front) {
     const list = this.backs.filter((b) => !!b.front === front);
-    const t = ctx.getTransform(), plain = t.a === 1 && t.d === 1 && !t.b && !t.c;
+    GRID = PIXEL_SCALE;
     for (let i = 0; i < list.length;) {
       const m = this.backScale(cam, list[i]);
       let j = i + 1;
       while (j < list.length && this.backScale(cam, list[j]) === m) j++;
-      if (j - i > 1 && (m !== 1 || !plain)) this.drawBackRun(ctx, cam, list.slice(i, j), m);
+      if (j - i > 1 && m !== 1) this.drawBackRun(ctx, cam, list.slice(i, j), m);
       else for (let n = i; n < j; n++) this.drawBack(ctx, cam, list[n], m);
       i = j;
     }
+    GRID = 1;
   }
   drawBackRun(ctx, cam, run, m) {
-    const W = Math.ceil(cam.w / m), H = Math.ceil(cam.h / m), c = (this.backCanvas ??= document.createElement('canvas'));
-    // it only ever grows (each run uses its top-left W x H), so runs of other scales don't reallocate it every frame
-    if (c.width < W || c.height < H) { c.width = Math.max(c.width, W); c.height = Math.max(c.height, H); }
+    // D canvas pixels per unit: as near one per screen pixel as a whole number gets; the last step to the screen is
+    // smoothed when it isn't one to one, so the picture doesn't crawl as it moves
+    const D = Math.max(1, Math.round(m * PIXEL_SCALE)), W = Math.ceil(cam.w / m), H = Math.ceil(cam.h / m);
+    const c = (this.backCanvas ??= document.createElement('canvas'));
+    // it only ever grows (each run uses its top-left part), so runs of other scales don't reallocate it every frame
+    if (c.width < W * D || c.height < H * D) { c.width = Math.max(c.width, W * D); c.height = Math.max(c.height, H * D); }
     const o = c.getContext('2d');
-    o.clearRect(0, 0, W, H); o.imageSmoothingEnabled = false;
+    o.setTransform(1, 0, 0, 1, 0, 0); o.clearRect(0, 0, W * D, H * D);
+    o.setTransform(D, 0, 0, D, 0, 0); o.imageSmoothingEnabled = false;
+    GRID = D;
     for (const b of run) this.drawBack(o, cam, b, m, true);
-    ctx.drawImage(c, 0, 0, W, H, 0, 0, W * m, H * m);
+    GRID = PIXEL_SCALE;
+    ctx.save();
+    ctx.imageSmoothingEnabled = Math.abs(m * PIXEL_SCALE - D) > 1e-3;
+    ctx.drawImage(c, 0, 0, W * D, H * D, 0, 0, W * m, H * m);
+    ctx.restore();
   }
 
   /**
@@ -466,8 +478,10 @@ export class GameMap {
   }
 }
 
-// rounds a hair up, so edges that are equal but for float error (x.4999.. and x.5) land on the same pixel
-const snap = (v) => Math.round(v + 1e-6);
+// rounds a hair up, so edges that are equal but for float error (x.4999.. and x.5) land on the same pixel; on whole
+// game pixels (tiles, objects, portals), or on a finer grid while backgrounds are drawn (see drawBacks)
+let GRID = 1;
+const snap = (v) => Math.round(v * GRID + 1e-6) / GRID;
 /** w, h: a scaled size; its edges are rounded rather than its size, so scaled pieces that meet stay touching. */
 function drawImg(ctx, img, x, y, flip, w = img.width, h = img.height) {
   if (w !== img.width || h !== img.height) { w = snap(x + w) - snap(x); h = snap(y + h) - snap(y); }
