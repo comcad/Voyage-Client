@@ -1,6 +1,6 @@
 import { pad, isCanvas, frames } from './assets.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
-import { BASE_W, BASE_H } from './view.js';
+import { BASE_W, BASE_H, snapPx } from './view.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -451,7 +451,7 @@ export class GameMap {
       const img = this.assets.image(t.node);
       if (!img) continue;
       const or = t.node.origin || [0, 0];
-      ctx.drawImage(img, Math.round(t.x - or[0] - cam.x), Math.round(t.y - or[1] - cam.y));
+      ctx.drawImage(img, snap(t.x - or[0] - cam.x), snap(t.y - or[1] - cam.y));   // tiles on whole game pixels: no seams
     }
   }
 
@@ -461,7 +461,7 @@ export class GameMap {
       const img = this.assets.image(p.anim.node);
       if (!img) continue;
       const o = p.anim.node.origin || [0, 0];
-      ctx.drawImage(img, Math.round(p.x - o[0] - cam.x), Math.round(p.y - o[1] - cam.y));
+      ctx.drawImage(img, snap(p.x - o[0] - cam.x), snap(p.y - o[1] - cam.y));
     }
   }
 }
@@ -1420,7 +1420,7 @@ export class Life {
     if (this.respawnTimer > 0) return;
     // an NPC imitating a character: that character instead of its own art, with its name tag
     if (this.drawAvatar) {
-      const sx = Math.round(this.x - cam.x), sy = Math.round(this.y - cam.y);
+      const sx = snapPx(this.x - cam.x), sy = snapPx(this.y - cam.y);
       this.drawAvatar(ctx, sx, sy);
       if (this.name && !this.hideName) nameTag(ctx, this.name, sx, sy + 4, '#ff0');
       return;
@@ -1431,7 +1431,7 @@ export class Life {
     const img = assets.image(node);
     if (!img) return;
     const o = node.origin || [0, 0];
-    const sx = Math.round(this.x - cam.x), sy = Math.round(this.y - cam.y);
+    const sx = snapPx(this.x - cam.x), sy = snapPx(this.y - cam.y);
     ctx.save();
     if (this.fadeInAt !== undefined) {
       const k = (performance.now() - this.fadeInAt) / 800;

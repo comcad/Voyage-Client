@@ -80,7 +80,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings } from './settings.js';
-import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution } from './view.js';
+import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale } from './view.js';
 import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
@@ -1172,7 +1172,7 @@ export class Game {
     if (x < 0 || !this.map || this.windows?.top(x, y) || this.statusBar?.contains?.(x, y)) return 0;
     x *= UI_SCALE; y *= UI_SCALE;
     if (this.playerAt(x, y)) return 2;
-    const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    const wx = x + snapPx(this.cam.x), wy = y + snapPx(this.cam.y);
     for (const e of this.map.life) {
       if (e.kind !== 'Npc' || e.oid === null) continue;
       const b = e.box();
@@ -1182,7 +1182,7 @@ export class Game {
   }
   playerAt(x, y) { for (const rp of this.others.values()) if (this.hitsChar(rp, x, y)) return rp; return null; }
   hitsChar(ent, x, y) {
-    const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    const wx = x + snapPx(this.cam.x), wy = y + snapPx(this.cam.y);
     const box = ent.morphView?.box(ent.x, ent.y, drawnRight(ent));   // morphed: the frame's lt / rb
     if (box) return wx >= box.left && wx <= box.right && wy >= box.top && wy <= box.bottom;
     return wx >= ent.x - 18 && wx <= ent.x + 18 && wy >= ent.y - 64 && wy <= ent.y;
@@ -1805,7 +1805,7 @@ export class Game {
       const n = p.anim.node, img = n && this.assets.image(n);
       if (!img) continue;
       const o = n.origin || [0, 0];
-      ctx.drawImage(img, Math.round((a.x + b.x) / 2 - cam.x - o[0]), Math.round((a.y + b.y) / 2 - 20 - cam.y - o[1]));
+      ctx.drawImage(img, snapPx((a.x + b.x) / 2 - cam.x - o[0]), snapPx((a.y + b.y) / 2 - 20 - cam.y - o[1]));
     }
   }
   /** A New Year card to send: a free Etc slot, then its window. */
@@ -2277,7 +2277,7 @@ export class Game {
       const img = this.assets.image(h.node);
       if (!img) continue;
       const o = h.node.origin || [0, 0], x = ent.x + h.x + Math.cos(h.a) * 5, y = ent.y - 65 + h.y + Math.sin(h.a) * 5;
-      ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+      ctx.drawImage(img, snapPx(x - o[0] - cam.x), snapPx(y - o[1] - cam.y));
     }
   }
   async setItemEffect(ent, id) {
@@ -2387,7 +2387,7 @@ export class Game {
       const o = node.origin || [0, 0];
       ctx.save();
       ctx.globalAlpha = l.anim.alpha;
-      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      ctx.translate(snapPx(x - cam.x), snapPx(y - cam.y));
       if (right && !l.fixed) ctx.scale(-1, 1);
       ctx.drawImage(img, -o[0], -o[1]);
       ctx.restore();
@@ -4258,7 +4258,7 @@ export class Game {
     const n = fx.anim.node, img = n && this.assets.image(n);
     if (!img) return;
     const o = n.origin || [0, 0], x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
-    ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+    ctx.drawImage(img, snapPx(x - o[0] - cam.x), snapPx(y - o[1] - cam.y));
   }
 
   // ------------------------------------------------------------------ map
@@ -5049,7 +5049,7 @@ export class Game {
       const o = node.origin || [0, 0];
       ctx.save();
       ctx.globalAlpha = a.alpha;
-      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      ctx.translate(snapPx(x - cam.x), snapPx(y - cam.y));
       if (flip) ctx.scale(-1, 1);
       ctx.drawImage(img, -o[0], -o[1]);
       ctx.restore();
@@ -5966,9 +5966,17 @@ export class Game {
   }
   start() {
     let last = performance.now();
+    let next = 0;
     const loop = (t) => {
       // the next frame is booked first: an error in one frame must never stop the game for good
       requestAnimationFrame(loop);
+      // System Option FRAME RATE: every screen refresh (VSync), or held to 60 / 30 a second on the refresh's beat
+      const cap = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : 0;
+      if (cap) {
+        if (t - next > 250 || next - t > cap) next = t;   // a pause, or a cap just changed: start the beat again
+        if (t < next - 1.5) return;
+        next += cap;
+      }
       const gap = (t - last) / 1000, dt = Math.min(gap, 0.05);
       last = t;
       if (this.map && !this.loading) {
@@ -7699,7 +7707,7 @@ export class Game {
   drawShip(ctx, cam) {
     const s = this.ship, img = s?.node && this.assets.image(s.node);
     if (!img || (s.state === 'gone' && performance.now() - s.t0 >= s.tMove)) return;
-    const o = s.node.origin || [0, 0], x = Math.round(this.shipX() - cam.x), y = Math.round(s.y - cam.y);
+    const o = s.node.origin || [0, 0], x = snapPx(this.shipX() - cam.x), y = snapPx(s.y - cam.y);
     if (!s.flip) { ctx.drawImage(img, x - o[0], y - o[1]); return; }
     ctx.save(); ctx.translate(x + o[0], y - o[1]); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
   }
@@ -7713,7 +7721,7 @@ export class Game {
     const imgs = parts.map((p) => this.assets.image(art.digits[p]));
     if (imgs.some((i) => !i)) return;
     const w = imgs.reduce((a, i) => a + i.width, 0);
-    let x = Math.round(c.x + (c.width - w) / 2 - cam.x);
+    let x = snapPx(c.x + (c.width - w) / 2 - cam.x);
     const cy = c.y + c.height / 2 - cam.y;
     for (const img of imgs) { ctx.drawImage(img, x, Math.round(cy - img.height / 2)); x += img.width; }
   }
@@ -7753,7 +7761,7 @@ export class Game {
         if (!img) continue;
         const o = n.origin || [0, 0];
         ctx.save(); ctx.globalAlpha *= t.anim.alpha;
-        ctx.drawImage(img, Math.round(t.x - o[0] - cam.x), Math.round(t.y - o[1] - cam.y));
+        ctx.drawImage(img, snapPx(t.x - o[0] - cam.x), snapPx(t.y - o[1] - cam.y));
         ctx.restore();
       }
     }
@@ -7837,7 +7845,7 @@ export class Game {
     return false;
   }
   drawDoors(ctx, cam) {
-    const at = (n, d) => { const img = n && this.assets.image(n), o = n?.origin || [0, 0]; if (img) ctx.drawImage(img, Math.round(d.x - o[0] - cam.x), Math.round(d.y - o[1] - cam.y)); };
+    const at = (n, d) => { const img = n && this.assets.image(n), o = n?.origin || [0, 0]; if (img) ctx.drawImage(img, snapPx(d.x - o[0] - cam.x), snapPx(d.y - o[1] - cam.y)); };
     for (const d of this.doors?.values() || []) {
       if (!d.anim?.node) continue;
       ctx.save();
@@ -7846,7 +7854,7 @@ export class Game {
       if (d.frame) at(d.frame, d);   // a town door's frame, just behind it
       ctx.save(); ctx.globalAlpha *= d.anim.alpha; at(d.anim.node, d); ctx.restore();
       // a party member's door has their name over it (its box's fill and colour were lost: drawn as a name tag)
-      if (d.name) nameTag(ctx, d.name, Math.round(d.x - cam.x), Math.round(d.y - 136 - cam.y));
+      if (d.name) nameTag(ctx, d.name, snapPx(d.x - cam.x), snapPx(d.y - 136 - cam.y));
       ctx.restore();
     }
   }
@@ -9115,7 +9123,7 @@ export class Game {
     const o = node.origin || [0, 0];
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+    ctx.translate(snapPx(x - cam.x), snapPx(y - cam.y));
     if (flip) ctx.scale(-1, 1);
     if (zoom !== 1) ctx.scale(zoom, zoom);
     ctx.drawImage(img, -o[0], -o[1]);
@@ -9144,7 +9152,7 @@ export class Game {
     }
     const art = this.basicUi[GAUGE1.has(c.id) ? 'KeyDownBar1' : 'KeyDownBar'];
     const img = (n) => n && this.assets.image(n), bar = img(art?.bar), gauge = img(art?.gauge), grad = img(art?.graduation);
-    const p = this.player, x = Math.round(p.x - 36 - cam.x), y = Math.round(p.y - 100 - cam.y);
+    const p = this.player, x = snapPx(p.x - 36 - cam.x), y = snapPx(p.y - 100 - cam.y);
     const v = Math.min(69, Math.floor((c.t * 1000) / 15) + 2);
     if (bar) ctx.drawImage(bar, x, y);
     if (gauge && v >= 2) ctx.drawImage(gauge, x + 2, y + 2, v - 1, gauge.height);
@@ -9759,7 +9767,7 @@ export class Game {
       // on a ghost, it goes round with the ghost over its tombstone
       const g = this.ghostAt(p), px = g ? g.x : p.x, py = g ? g.y : p.y;
       const o = n.origin || [0, 0], y = d.head ? py - 65 : py;
-      ctx.drawImage(img, Math.round(px - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+      ctx.drawImage(img, snapPx(px - o[0] - cam.x), snapPx(y - o[1] - cam.y));
     }
   }
 
@@ -9966,7 +9974,7 @@ export class Game {
     for (const c of this.input.clicks) {
       // a double-click on a window (or the status bar) is the window's, never the NPC behind it
       if (this.windows?.top(c.x / UI_SCALE, c.y / UI_SCALE) || this.statusBar?.contains?.(c.x / UI_SCALE, c.y / UI_SCALE)) continue;
-      const [zx, zy] = this.unzoom(c.x, c.y), wx = zx + Math.round(this.cam.x), wy = zy + Math.round(this.cam.y);
+      const [zx, zy] = this.unzoom(c.x, c.y), wx = zx + snapPx(this.cam.x), wy = zy + snapPx(this.cam.y);
       // a click on your own chalkboard puts it away
       const cr = this.player.chalk && this.player.chalkRect;
       if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.closeChalkboard('The chalkboard has closed.'); return; }
@@ -10084,11 +10092,14 @@ export class Game {
     this.camF = { x: p.x, y: p.y - CAM_LIFT };
     this.placeCamera();
   }
-  /** Centre the view on the filtered point, held inside the map. */
+  /**
+   * Centre the view on the filtered point, held inside the map. It moves on the canvas's own pixel grid: whole game
+   * pixels at scale 1, finer steps above it, so it glides instead of jumping a game pixel (2-4 screen pixels) at once.
+   */
   placeCamera() {
-    const c = { x: Math.trunc(this.camF.x) - VIEW_W / 2, y: Math.trunc(this.camF.y) - VIEW_H / 2 };
+    const c = { x: this.camF.x - VIEW_W / 2, y: this.camF.y - VIEW_H / 2 };
     this.clampCamera(c);
-    this.cam.x = Math.round(c.x); this.cam.y = Math.round(c.y);
+    this.cam.x = snapPx(c.x); this.cam.y = snapPx(c.y);
   }
 
   clampCamera(c = this.cam) {
@@ -10105,11 +10116,19 @@ export class Game {
     const c = this.canvas, dpr = window.devicePixelRatio || 1;
     // System Option PICTURE QUALITY: NORMAL draws one canvas pixel per game pixel, BEST the screen's density
     const best = Math.max(1, Math.min(4, ((c.clientWidth || VIEW_W) * dpr) / VIEW_W));
-    const k = 1 + (best - 1) * Math.max(0, Math.min(1, settings.quality));
-    const w = Math.round(VIEW_W * k), h = Math.round(VIEW_H * k);
+    const want = 1 + (best - 1) * Math.max(0, Math.min(1, settings.quality));
+    // a whole number of canvas pixels per game pixel: at a fraction some columns of the art get one pixel more than
+    // their neighbours, and which ones changes as the view moves (lines crawling over the picture)
+    const k = want < 1.25 ? 1 : Math.min(4, Math.max(2, Math.round(want)));
+    const w = VIEW_W * k, h = VIEW_H * k;
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-    this.ctx.setTransform(w / VIEW_W, 0, 0, h / VIEW_H, 0, 0);
+    this.ctx.setTransform(k, 0, 0, k, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
+    setPixelScale(k);
+    // the last stretch to the window is smoothed unless it is one to one (stretched pixel for pixel by a fraction, the
+    // columns would be uneven again)
+    const mode = Math.abs((c.clientWidth || VIEW_W) * dpr - w) < 1 ? 'pixelated' : 'auto';
+    if (c.style.imageRendering !== mode) c.style.imageRendering = mode;
   }
 
   /** System Option SCREEN SIZE / UI SIZE: the view, the bar and the open windows follow the new size. */
@@ -10185,9 +10204,16 @@ export class Game {
       ctx.save(); ctx.scale(UI_SCALE, UI_SCALE); this.windows?.draw(ctx); ctx.restore();
       return;
     }
-    const cam = { ...this.cam, x: Math.round(this.cam.x) + (this.shake?.dx || 0), y: Math.round(this.cam.y) + (this.shake?.dy || 0) };
+    // the world is drawn from the camera's whole game pixel, then moved by the rest of it (a step of the canvas's grid),
+    // so everything placed on whole pixels stays on the grid and the view still glides; this.cam is the whole-pixel
+    // camera while it is drawn
+    const real = this.cam, ix = Math.floor(real.x), iy = Math.floor(real.y);
+    const cam = { ...real, x: ix + (this.shake?.dx || 0), y: iy + (this.shake?.dy || 0) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    this.cam = cam;
+    ctx.save();
+    ctx.translate(ix - real.x, iy - real.y);
     map.drawBacks(ctx, cam, false);
 
     // shop owners and their booths go down first: everyone else walks in front of a shop
@@ -10244,6 +10270,8 @@ export class Game {
       ctx.restore();
     }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
+    ctx.restore();
+    this.cam = real;
     this.applyZoom();
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
     this.vfx?.drawScreen(ctx);
@@ -10361,7 +10389,7 @@ export class Game {
       if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
       else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
       if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
-      this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
+      this.drawCharTags(ctx, ent, look, local, snapPx(sx), snapPx(sy) + 4);
       return;
     }
     this.drawSetFx(ctx, cam, ent, false, gx, gy);
@@ -10398,10 +10426,10 @@ export class Game {
       const oy = node.origin?.[1] ?? img.height;
       ctx.globalAlpha = d.alpha;
       if (d.angle) {                            // spinning on its way down: turn about the icon's middle
-        ctx.save(); ctx.translate(Math.round(x - cam.x), Math.round(y - oy + img.height / 2 - cam.y)); ctx.rotate(d.angle);
+        ctx.save(); ctx.translate(snapPx(x - cam.x), snapPx(y - oy + img.height / 2 - cam.y)); ctx.rotate(d.angle);
         ctx.drawImage(img, Math.round(-img.width / 2), Math.round(-img.height / 2));
         ctx.restore();
-      } else ctx.drawImage(img, Math.round(x - img.width / 2 - cam.x), Math.round(y - oy - cam.y));
+      } else ctx.drawImage(img, snapPx(x - img.width / 2 - cam.x), snapPx(y - oy - cam.y));
       ctx.globalAlpha = 1;
     }
   }
@@ -10437,7 +10465,7 @@ export class Game {
       if (this.vfx?.drawBalloon(ctx, cam, ghost || e, text, style)) continue;   // a quote ring's balloon   // ChatBalloon.img; the drawn box is the offline fallback
       const lines = wrap(ctx, text, 160);
       const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14, h = lines.length * 15 + 8;
-      const x = Math.round(e.x - cam.x - w / 2), y = Math.round(e.y - cam.y - 90 - h);
+      const x = snapPx(e.x - cam.x - w / 2), y = snapPx(e.y - cam.y - 90 - h);
       ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.strokeStyle = '#555';
       roundRect(ctx, x, y, w, h, 6); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#222'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';

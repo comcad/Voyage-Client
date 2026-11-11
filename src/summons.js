@@ -1,4 +1,5 @@
 import { frames } from './assets.js';
+import { snapPx } from './view.js';
 
 /**
  * Summons (Puppet, Silver Hawk, Summon Dragon, Beholder, Octopus...): Skill/<job>.img/skill/<id>/summon holds
@@ -191,7 +192,7 @@ export class Summon {
     const fr = this.anim(this.state), node = fr[this.frame], img = node && this.g.assets.image(node);
     if (!img) return;
     const o = node.origin || [img.width / 2, img.height];
-    const x = Math.round(this.x - cam.x), y = Math.round(this.y - cam.y);
+    const x = snapPx(this.x - cam.x), y = snapPx(this.y - cam.y);
     ctx.save();
     if (node.a0 !== undefined && node.a0 < 255) ctx.globalAlpha = node.a0 / 255;
     if (this.facingRight) { ctx.translate(x, y); ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); }

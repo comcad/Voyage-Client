@@ -5,7 +5,7 @@ import { uiText, timeLeft, overlayText } from './ui/wzui.js';
 import { richText } from './ui/richtext.js';
 import { textRef } from './ui/dialogs.js';
 import { settings } from './settings.js';
-import { UI_W, VIEW_W, VIEW_H } from './view.js';
+import { UI_W, VIEW_W, VIEW_H, snapPx } from './view.js';
 import { config } from './config.js';
 
 /**
@@ -209,7 +209,7 @@ export class WorldFx {
     // quest icons above NPC heads
     for (const [e] of this.questIcons) {
       const r = this.questIconRect(e);
-      if (r) ctx.drawImage(r.img, Math.round(r.x - cam.x), Math.round(r.y - cam.y));
+      if (r) ctx.drawImage(r.img, snapPx(r.x - cam.x), snapPx(r.y - cam.y));
     }
     // level up / job change / quest clear, following their character
     for (const a of this.anims) drawAt(ctx, im, a.anim.node, a.ent.x - cam.x, a.ent.y - cam.y, a.anim.alpha);
@@ -234,7 +234,7 @@ export class WorldFx {
     if (!n.glyphs && !this.layoutNumber(n)) return;
     ctx.save();
     ctx.globalAlpha = n.t <= NUM_OPAQUE ? 1 : (NUM_MS - n.t) / (NUM_MS - NUM_OPAQUE);
-    const x = Math.round(n.x - cam.x), y = Math.round(n.y - cam.y - (NUM_RISE * n.t) / NUM_MS);
+    const x = snapPx(n.x - cam.x), y = snapPx(n.y - cam.y - (NUM_RISE * n.t) / NUM_MS);
     for (const g of n.glyphs) {
       if (g.clip) ctx.drawImage(g.img, 0, 0, g.clip, g.img.height, x + g.x, y + g.y, g.clip, g.img.height);
       else ctx.drawImage(g.img, x + g.x, y + g.y);
@@ -311,7 +311,7 @@ export class WorldFx {
       lines = balloonLines(ctx, text, inner || wrap);
       W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2); H = lines.length * lh;
     }
-    const cx = Math.round(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = Math.round(ent.y - cam.y - 86 - H - 6);
+    const cx = snapPx(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = snapPx(ent.y - cam.y - 86 - H - 6);
     // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
     const o = (k) => B[k]?.origin || [0, 0];
     // a hint's balloon is see-through: its pieces are put together on their own canvas, the arrow replacing what is
@@ -511,7 +511,7 @@ function deep(node, depth) {
  * black - holding the HP (46px at full) in 3 rows of its colour over a row of dark red.
  */
 function mobHpBar(ctx, e, cam, pct, color) {
-  const b = e.hitBox(), x = Math.round((b.left + b.right) / 2 - cam.x) - 26, y = Math.round(b.top - cam.y) - 30;
+  const b = e.hitBox(), x = snapPx((b.left + b.right) / 2 - cam.x) - 26, y = snapPx(b.top - cam.y) - 30;
   const w = Math.floor((Math.max(0, Math.min(100, pct)) * 46) / 100);
   ctx.fillStyle = '#000'; ctx.fillRect(x, y, 52, 10);
   ctx.fillStyle = '#fff'; ctx.fillRect(x + 1, y + 1, 50, 8);
@@ -521,7 +521,7 @@ function mobHpBar(ctx, e, cam, pct, color) {
 }
 /** Its level and name in yellow under its feet, each in its own see-through dark tag: the name centred, its level left of it. */
 function mobNameTag(ctx, e, cam, info) {
-  const x = Math.round(e.x - cam.x), y = Math.round(e.y - cam.y) + 2;
+  const x = snapPx(e.x - cam.x), y = snapPx(e.y - cam.y) + 2;
   ctx.save();
   ctx.font = '12px "Segoe UI", system-ui, sans-serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';

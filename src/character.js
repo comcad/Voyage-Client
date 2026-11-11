@@ -1,4 +1,5 @@
 import { pad, isCanvas, frames } from './assets.js';
+import { snapPx } from './view.js';
 
 /**
  * Character avatar assembly (body + head + face + hair + equips).
@@ -362,10 +363,13 @@ export function mountCanvases(mount) {
   return out;
 }
 
-/** whole: snap to whole game pixels (crisp); false lets slow drifts like a ghost's circle move smoothly. */
+/**
+ * whole: snap to the canvas's pixel grid (crisp: whole game pixels at scale 1, finer above it); false lets slow drifts
+ * like a ghost's circle move freely.
+ */
 export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true) {
   ctx.save();
-  ctx.translate(whole ? Math.round(x) : x, whole ? Math.round(y) : y);
+  ctx.translate(whole ? snapPx(x) : x, whole ? snapPx(y) : y);
   if (facingRight) ctx.scale(-1, 1);
   if (parts.move) ctx.translate(parts.move[0], parts.move[1]);
   if (parts.flip) ctx.scale(-1, 1);

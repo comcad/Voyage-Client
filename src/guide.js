@@ -2,6 +2,7 @@ import { frames } from './assets.js';
 import { Anim } from './map.js';
 import { richText, drawRich } from './ui/richtext.js';
 import { textRef } from './ui/dialogs.js';
+import { snapPx } from './view.js';
 
 /**
  * The beginner guide (SPAWN_GUIDE / TALK_GUIDE / CLICK_GUIDE): a summon of your own, skill 10001013 for the Cygnus
@@ -129,7 +130,7 @@ export class Guide {
 
   draw(ctx, cam) {
     const fr = this.anim(), node = fr[this.frame], img = node && this.g.assets.image(node);
-    const x = Math.round(this.x - cam.x), y = Math.round(this.y - cam.y);
+    const x = snapPx(this.x - cam.x), y = snapPx(this.y - cam.y);
     if (img) {
       const o = node.origin || [img.width / 2, img.height];
       ctx.save();

@@ -1,6 +1,6 @@
 import { music, sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
-import { settings, saveSettings, MOB_INFO } from '../settings.js';
+import { settings, saveSettings, MOB_INFO, FPS_CHOICES } from '../settings.js';
 import { RESOLUTIONS, VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, maxUiScale, resolutionName, resolutionIndex } from '../view.js';
 
 /**
@@ -127,31 +127,32 @@ export class GameOptWin extends Win {
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
  *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
- * Four rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
- * under them: SCREEN SIZE (the game's resolution, a combo box), UI SIZE (a slider from 100% to as large as the
+ * Five rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
+ * under them: SCREEN SIZE (the game's resolution, a combo box), FRAME RATE (a combo box: VSync draws a frame on every
+ * screen refresh, 60 FPS / 30 FPS hold it to that many a second), UI SIZE (a slider from 100% to as large as the
  * screen size allows, in 10% steps, its value beside it; it takes effect when let go), ZOOM (a slider from 100% to
  * 200% in 10% steps, its value beside it: the view closes in on your character as you drag, the interface keeping
  * its size) and FIT TO SCREEN (a check box: the game takes the window's own size, nothing stretched and no black
  * bars; SCREEN SIZE is greyed out then, showing the size in use).
  * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
- * the art, 90px lower with the added rows.
+ * the art, 150px lower with the added rows.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
  */
 const ROW_Y = (i) => 46 + i * 30;
 const SLIDERS = {
   quality: { row: 0, x0: 104, x1: 238 }, bgm: { row: 1, x0: 92, x1: 208 }, sound: { row: 2, x0: 92, x1: 208 },
   mouse: { row: 4, x0: 96, x1: 238, disabled: true }, hpAlert: { row: 5, x0: 100, x1: 244 }, mpAlert: { row: 6, x0: 100, x1: 244 },
-  uiScale: { row: 11, x0: 100, x1: 236 }, zoom: { row: 12, x0: 100, x1: 236 },
+  uiScale: { row: 12, x0: 100, x1: 236 }, zoom: { row: 13, x0: 100, x1: 236 },
 };
 /** ZOOM's range: 100% .. 200%. */
 const ZOOM_MAX = 2;
 const MUTE_X = 246, COMBO = { x: 66, w: 172 }, CHECK_X = 64, VIEW_X = 61;   // WINDOW / FULL SCREEN start further left
 const SHOT_PLACES = ['Downloads Folder'];
-const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, FIT_ROW = 13, ADDED = 4, WIN_H = ART_H + ADDED * 30;
+const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, FIT_ROW = 14, FPS_ROW = 11, ADDED = 5, WIN_H = ART_H + ADDED * 30;
 // the labels' 5x7 letters (white on a dark outline) and the rows' digits (navy, as the art's 100%)
 const GLYPHS = {
   F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'], T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
-  O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'],
+  O: ['.###.', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'], A: ['.###.', '#...#', '#...#', '#####', '#...#', '#...#', '#...#'],
   U: ['#...#', '#...#', '#...#', '#...#', '#...#', '#...#', '.###.'], ' ': ['...', '...', '...', '...', '...', '...', '...'],
   0: ['.####.', '#....#', '#....#', '#....#', '#....#', '#....#', '.####.'], 1: ['.#', '##', '.#', '.#', '.#', '.#', '.#'],
   2: ['.####.', '#....#', '.....#', '...##.', '.##...', '#.....', '######'], 3: ['.####.', '#....#', '.....#', '..###.', '.....#', '#....#', '.####.'],
@@ -229,7 +230,8 @@ export class SysOptWin extends Win {
     return [{ row: 3, items: SHOT_PLACES, value: 0, set: () => {} },
       { row: 8, items: MOB_INFO, value: settings.mobInfo, set: (i) => { settings.mobInfo = i; saveSettings(); } },
       settings.fit ? { row: SIZE_ROW, items: [`${VIEW_W} x ${VIEW_H}  Auto`], value: 0, off: true, set: () => {} }
-        : { row: SIZE_ROW, items: RESOLUTIONS.map(resolutionName), value: resolutionIndex(), set: (i) => this.setResolution(i) }];
+        : { row: SIZE_ROW, items: RESOLUTIONS.map(resolutionName), value: resolutionIndex(), set: (i) => this.setResolution(i) },
+      { row: FPS_ROW, items: FPS_CHOICES.map(([, name]) => name), value: Math.max(0, FPS_CHOICES.findIndex(([v]) => v === settings.fps)), set: (i) => { settings.fps = FPS_CHOICES[i][0]; saveSettings(); } }];
   }
   setResolution(i) {
     const [w, h] = RESOLUTIONS[i];
@@ -255,9 +257,10 @@ export class SysOptWin extends Win {
       const c = this.letters = document.createElement('canvas'), lc = c.getContext('2d');
       c.width = 299; c.height = ADDED * 30;
       this.label(lc, 'SCREEN', 32, 6); this.label(lc, 'SIZE', 32, 16);
-      this.label(lc, 'UI SIZE', 32, 41);
-      this.label(lc, 'ZOOM', 32, 71);
-      this.label(lc, 'FIT TO', 32, 96); this.label(lc, 'SCREEN', 32, 106);
+      this.label(lc, 'FRAME', 32, 36); this.label(lc, 'RATE', 32, 46);
+      this.label(lc, 'UI SIZE', 32, 71);
+      this.label(lc, 'ZOOM', 32, 101);
+      this.label(lc, 'FIT TO', 32, 126); this.label(lc, 'SCREEN', 32, 136);
       this.label(lc, 'USE THE WINDOW SIZE', CHECK_X + 16, ROW_Y(FIT_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
     }
     ctx.drawImage(this.letters, 0, ROWS_END);
