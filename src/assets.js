@@ -38,9 +38,6 @@ export async function nodeAt(assets, path) {
   return n ?? null;
 }
 
-/** How many queued canvases load at once (the browser allows six requests to the server at a time). */
-const QUEUE_LOADS = 4;
-
 export class Assets {
   constructor(base = '/assets') {
     this.base = base;
@@ -84,35 +81,6 @@ export class Assets {
     if (!isCanvas(node)) return null;
     const e = this._entry(node);
     return e.ready ? e.img : null;
-  }
-
-  /**
-   * Loads canvases ahead of time (see preload.js): a few at a time, behind whatever is asked for to draw now, priority
-   * 0 before 1 before 2; ones already loaded or loading are left out. Held while holdQueue() says so (a map loading).
-   */
-  enqueue(nodes, pri = 1) {
-    const q = (this.queues ??= [[], [], []].map((list) => ({ list, head: 0 })))[pri];
-    for (const n of nodes) if (isCanvas(n) && !this.imgCache.has(n._canvas)) q.list.push(n);
-    this.pump();
-  }
-  /** How many canvases still wait in the queue at this priority. */
-  waiting(pri) { const q = this.queues?.[pri]; return q ? q.list.length - q.head : 0; }
-  pump() {
-    if (!this.queues) return;
-    if (this.holdQueue?.()) {
-      if (!this.holdTimer) this.holdTimer = setTimeout(() => { this.holdTimer = 0; this.pump(); }, 250);
-      return;
-    }
-    this.inFlight ??= 0;
-    while (this.inFlight < QUEUE_LOADS) {
-      const q = this.queues.find((x) => x.head < x.list.length);
-      if (!q) return;
-      const n = q.list[q.head++];
-      if (q.head === q.list.length) { q.list.length = 0; q.head = 0; }
-      if (this.imgCache.has(n._canvas)) continue;
-      this.inFlight++;
-      this._entry(n).promise.then(() => { this.inFlight--; this.pump(); });
-    }
   }
 
   preload(nodes, onProgress) {

@@ -41,21 +41,6 @@ const app = express();
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false, dotfiles: 'allow' }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
 app.get('/config.json', (req, res) => res.json(CLIENT_CONFIG));
-// every body, head, face and hair the assets have, by id (the client loads them ahead of time in the background)
-let characterIndex = null;
-app.get('/character-index.json', (req, res) => {
-  if (!characterIndex) {
-    const ids = (dir) => {
-      try {
-        return fs.readdirSync(path.join(ASSETS_DIR, 'Character', dir)).map((f) => /^(\d{8})\.img\.json$/.exec(f)?.[1])
-          .filter(Boolean).map(Number).sort((a, b) => a - b);
-      } catch { return []; }
-    };
-    const top = ids('');
-    characterIndex = { body: top.filter((n) => n >= 2000 && n < 3000), head: top.filter((n) => n >= 12000 && n < 13000), face: ids('Face'), hair: ids('Hair') };
-  }
-  res.json(characterIndex);
-});
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
 
 const server = http.createServer(app);
