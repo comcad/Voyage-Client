@@ -677,7 +677,9 @@ export class Life {
     const dies = Object.keys(this.src).filter((k) => k.startsWith('die')).length;
     const name = type === 3 ? 'skill1' : ['die1', 'die2', 'dieF'][Math.floor(Math.random() * dies)];
     if (name && name !== 'die1' && this.src[name]) this.anims.die1 = new Anim(this.src[name], false);
+    this.dieAction = { die1: 9, die2: 10, dieF: 11, skill1: 21 }[name] ?? 9;   // its action number, for the line it says
     this.state = ''; this.setState('die1'); if (!this.anims.die1) this.removed = true;
+    else this.onDie?.(this);
   }
 
   allFrames() { return [...Object.values(this.anims), ...(this.tv ? [this.tv.msg.anim, this.tv.ad.anim] : [])].flatMap((a) => a.frames); }

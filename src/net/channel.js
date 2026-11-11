@@ -1067,6 +1067,17 @@ export class ChannelSession {
     on(S.CLOSE_RANGE_ATTACK, readAttack('melee'));
     on(S.RANGED_ATTACK, readAttack('ranged'));
     on(S.MAGIC_ATTACK, readAttack('magic'));
+    // a blow from someone's full Energy Charge: read as a melee attack; they play no action for it
+    on(S.ENERGY_ATTACK, readAttack('energy'));
+    // a monster's line: its speak entry and the line in it (Cosmic's SHOW_MAGNET)
+    on(S.MOB_SPEAKING, (r) => { const oid = r.int(), s = r.int(); this.emit('mobSpeak', oid, s, r.int()); });
+    // the family privilege in use: its type (0: none), the privilege's index, two more values, then its time left
+    on(S.FAMILY_SET_PRIVILEGE, (r) => {
+      const type = r.ubyte();
+      if (!type) { this.emit('familyPrivilege', null); return; }
+      const a = r.int(), b = r.int(), c = r.int(), neg = r.ubyte() !== 0, ms = r.int();
+      this.emit('familyPrivilege', { type, a, b, c, ms: neg ? -ms : ms });
+    });
 
     on(S.KEYMAP, (r) => {
       if (r.ubyte() !== 0) return;

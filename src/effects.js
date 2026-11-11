@@ -370,12 +370,18 @@ export class WorldFx {
     for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - i * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
     return null;
   }
-  buffList() { const now = Date.now(); return this.game.buffs.filter((b) => b.until > now && !(b.source === 5221006 && this.game.battleshipHp === 0)); }
+  buffList() {
+    const now = Date.now(), fp = this.game.familyPrivilege;
+    const list = this.game.buffs.filter((b) => b.until > now && !(b.source === 5221006 && this.game.battleshipHp === 0));
+    // a family privilege in use: UIWindow.img/Family/RightIcon/<type>, timed like a buff (no source: nothing ends it)
+    if (fp && fp.until > now) list.push({ source: 0, family: fp.type, until: fp.until, dur: fp.dur });
+    return list;
+  }
   get buffTop() { return this.boss ? 46 : 4; }
   drawBuffs(ctx) {
     const g = this.game, now = Date.now();
     this.buffList().forEach((b, i) => {
-      const node = b.source > 0 ? g.skills?.icon(b.source) : this.itemIcon(-b.source);
+      const node = b.family !== undefined ? this.W?.Family?.RightIcon?.[b.family] : b.source > 0 ? g.skills?.icon(b.source) : this.itemIcon(-b.source);
       if (b.source > 0 && !node) g.skills?.ensure(b.source);
       const img = node && this.assets.image(node);
       if (!img) { if (node) this.assets.preload([node]); return; }

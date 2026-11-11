@@ -1469,6 +1469,60 @@ export class Game {
     else if (key === 'Blue_Stage') { if (this.praidTeam === 1) this.praidStage = n; else if (this.praidTeam === 0) this.praidOtherStage = n; }
     else if (key === 'Bamboo_Used') this.bambooUsed = n;
   }
+  /**
+   * A monster's speak table: info/speak/0, 1... (action -1), then each action's speak in the client's action order
+   * (move, stand, jump, fly, regen, bomb, hit1, hit2, hitF, die1, die2, dieF, attack1-8, attackF, skill1-16, skillF,
+   * chase, miss); each with its lines "0", "1"... up to the first missing or empty one.
+   */
+  speakTable(m) {
+    const src = m.src || {};
+    if (src._speak) return src._speak;
+    const acts = ['move', 'stand', 'jump', 'fly', 'regen', 'bomb', 'hit1', 'hit2', 'hitF', 'die1', 'die2', 'dieF',
+      ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => `attack${n}`), 'attackF', ...Array.from({ length: 16 }, (_, n) => `skill${n + 1}`), 'skillF', 'chase', 'miss'];
+    const lines = (n) => { const out = []; for (let i = 0; typeof n?.[i] === 'string' && n[i]; i++) out.push(n[i]); return out; };
+    const t = [], info = src.info?.speak;
+    for (let i = 0; info?.[i] && typeof info[i] === 'object'; i++) t.push({ action: -1, lines: lines(info[i]) });
+    acts.forEach((a, k) => { const sp = src[a]?.speak; if (sp) t.push({ action: k, lines: lines(sp) }); });
+    Object.defineProperty(src, '_speak', { value: t, enumerable: false });
+    return t;
+  }
+  /** info/speak/con: the words are clear when one of your pets out is the one named, or a quest is in the state named. */
+  speakClear(m) {
+    const con = Object.entries(m.src?.info?.speak?.con || {}).filter(([k]) => /^\d+$/.test(k)).map(([, v]) => v);
+    if (!con.length) return true;
+    const pets = new Set(this.myPets?.().map((p) => p.id));
+    const state = (id) => { const s = this.quests?.status(id) ?? 0; return s === 1 || s === 2 ? s : this.quests?.canStart(id, this.textCtx()) ? 0 : -1; };
+    return con.some((c) => (c.quest && state(Number(c.quest.questID)) === Number(c.quest.state)) || (c.pet && pets.has(Number(c.pet))));
+  }
+  /**
+   * A monster's line (MOB_SPEAKING s, l, or -1, -1 by itself as it dies): entry s's line l - an info/speak entry only
+   * while no balloon of its is up - or, dying, the first entry for its death action and a random line. Unless its
+   * conditions hold every run of letters comes out as one x per two. Its chatBalloon (ChatBalloon.img/mob/<n>) shows
+   * over it for 5s and fades over 0.6s (a death line for the death's length, the last fifth fading), and the chat log
+   * gets "name : line" in yellow.
+   */
+  mobSay(m, s, l) {
+    const t = this.speakTable(m);
+    if (!t.length || s >= t.length) return;
+    let e, line, life = 5.6, fade = 0.6;
+    if (s < 0) {
+      if (!m.dying || s !== -1 || l !== -1) return;
+      e = t.find((x) => x.action === (m.dieAction ?? 9));
+      if (!e?.lines.length) return;
+      line = e.lines[Math.floor(Math.random() * e.lines.length)];
+      const d = (m.anims?.die1?.frames || []).reduce((n, f) => n + (Number(f.delay) || 100), 0) / 1000;
+      if (d > 0) { life = d; fade = d / 5; }
+    } else {
+      e = t[s];
+      if (l < 0 || l >= e.lines.length || !(e.action === 0 || e.action > 0x27 || !m.chat)) return;
+      line = e.lines[l];
+    }
+    if (!line) return;
+    if (!this.speakClear(m)) line = line.replace(/[^ \t\n.,!'"]+/g, (w) => 'x'.repeat(Math.ceil(w.length / 2)));
+    m.chat = { text: line, t: life, fade, style: Number(m.src?.info?.speak?.chatBalloon) || 0 };
+    const name = this.windows.strings.mob?.[Number(m.spawn?.id)]?.name || '';
+    this.hud.message(`${name} : ${line}`, '#ffff00');
+  }
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
     const open = (w) => w && this.windows.order.includes(w);
@@ -2924,6 +2978,9 @@ export class Game {
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
       exclusiveAnswered: () => this.releaseExclusive(),
+      // a family privilege in use: its icon (Family/RightIcon/<type>) in the buff row until it runs out
+      familyPrivilege: (p) => { this.familyPrivilege = p ? { type: p.type, index: p.a, until: Date.now() + p.ms, dur: Math.max(1, p.ms) } : null; },
+      mobSpeak: later((oid, s, l) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.mobSay(m, s, l); }),
       // the Zakum Shrine / Horntail's Cave closing (a pink line); a random transform potion that failed
       bossShrine: later((which, kind, min) => {
         if (min < 0) return;
@@ -4067,6 +4124,7 @@ export class Game {
     e.controlled = controlled;
     if (kind === 'Mob') {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
+      e.onDie = (m) => this.mobSay(m, -1, -1);   // a dying monster says its death line by itself
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
       // one we control tells the server each path it plans, as it starts on it
       e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity); };
@@ -4270,7 +4328,8 @@ export class Game {
       rp.charge.until = performance.now() + 2000;
       if (rp.charge.pose) delay = rp.look.attackDelay(rp.charge.pose) * this.attackScale(Math.max(2, Math.min(10, a.speed ?? 6)));
     }
-    if (rp && !holding) {
+    // (an Energy Charge blow plays no action, skill art or shake on its maker)
+    if (rp && !holding && a.kind !== 'energy') {
       rp.attack = this.actionName(a.action); rp.facingRight = !a.facingLeft;
       rp.frame = 0; rp.frameT = 0; rp.action = rp.attack;
       rp.attackScale = this.attackScale(Math.max(2, Math.min(10, a.speed ?? 6)));
@@ -5687,6 +5746,7 @@ export class Game {
     this.revealChildren();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.hypnoTouch();
+    for (const e of this.map.life) if (e.kind === 'Mob' && e.chat && (e.chat.t -= dt) <= 0) e.chat = null;   // monsters' lines run out
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
     if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
@@ -9938,6 +9998,14 @@ export class Game {
     // NPCs: the arrow just over the head; not while a quest icon is there
     for (const e of this.map.life) {
       if (!e.chat || this.vfx?.questIcons.has(e)) continue;
+      // a monster's line: its ChatBalloon.img/mob/<n> over its body, fading at the end (the height over it is inferred)
+      if (e.kind === 'Mob') {
+        const b = e.hitBox?.();
+        ctx.save(); ctx.globalAlpha *= Math.max(0, Math.min(1, e.chat.t / (e.chat.fade || 0.6)));
+        this.vfx?.drawBalloon(ctx, cam, { x: e.x, y: (b ? b.top : e.y - 80) + 77 }, e.chat.text, `mob/${e.chat.style || 0}`);
+        ctx.restore();
+        continue;
+      }
       const top = e.anims.stand?.frames[0]?.origin?.[1] ?? 80;
       this.vfx?.drawBalloon(ctx, cam, { x: e.x, y: e.y - top + 77 }, e.chat.text, 'npc');
     }
