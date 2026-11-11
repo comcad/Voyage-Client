@@ -70,6 +70,7 @@ import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
 import { PerfMeter } from './perfmeter.js';
 import { Preloader } from './preload.js';
+import { CharPath } from './movepath.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -272,45 +273,29 @@ class RemotePlayer {
     const st = STANCE_NAMES[d.stance >> 1];
     if (st && st !== 'walk') this.state = st;
     this.action = look.standAction(); this.frame = 0; this.frameT = 0;
-    this.path = null; this.attack = null; this.chat = null;
+    this.attack = null; this.chat = null;
     this.fhId = d.fh || 0;
+    this.mp = new CharPath(this.x, this.y);   // their movement, played as the client plays it (movepath.js)
+    this.pose = (e) => this.takePose(e);
   }
-  /**
-   * Their movement queues behind what is still playing (as the client does); with more than 1.1s queued it plays 10%
-   * faster, and with more than 5s it jumps to the end.
-   */
-  applyMovement(moves) {
-    const steps = moves.filter((m) => m.x !== undefined || m.stance !== undefined);
-    if (!steps.length) return;
-    if (this.path) this.path.steps.push(...steps);
-    else this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
-    const left = this.path.steps.slice(this.path.i).reduce((t, m) => t + (m.duration || 0), 0);
-    if (left > 5000) {
-      const end = [...this.path.steps].reverse().find((m) => m.x !== undefined);
-      if (end) { this.x = end.x; this.y = end.y; }
-      this.path = null;
-    }
+  /** Movement still playing (MOVE_PLAYER), or null. */
+  get path() { return this.mp.playing ? this.mp : null; }
+  /** Put somewhere by anything but their path while standing still: playback picks up from there. */
+  rebase() {
+    const c = this.mp.cur;
+    if (!this.mp.playing && (Math.abs(c.x - this.x) > 1 || Math.abs(c.y - this.y) > 1)) this.mp.reset(this.x, this.y);
+  }
+  /** Their movement queues behind what is still playing (CharPath: 30ms ticks, curves through each element's speed). */
+  applyMovement(moves) { this.rebase(); this.mp.queue(moves); }
+  /** A path element's pose (bit 0 faces left) and floor: a foothold, or -id of a ladder / rope; 0 (in the air) keeps the last. */
+  takePose(e) {
+    if (e.fh) this.fhId = e.fh;
+    if (e.stance !== undefined) { this.facingRight = !(e.stance & 1); this.state = STANCE_NAMES[e.stance >> 1]; }
   }
   update(dt) {
-    if (this.path) {
-      const p = this.path, s = p.steps[p.i];
-      const dur = Math.max(1, s.duration ?? 60) / 1000;   // 0: at once (a jump's start)
-      const queued = p.steps.slice(p.i).reduce((t, m) => t + (m.duration || 0), 0) - p.t * 1000;
-      p.t += queued > 1100 ? dt * 1.1 : dt;
-      const k = Math.min(1, p.t / dur);
-      if (s.x !== undefined) { this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k; }
-      if (s.fh) this.fhId = s.fh;   // a foothold, or -id of a ladder / rope; 0 (in the air) keeps the last
-      if (s.stance !== undefined) {
-        this.facingRight = !(s.stance & 1);
-        const st = STANCE_NAMES[s.stance >> 1];
-        this.state = st;
-      }
-      if (k >= 1) {
-        if (s.x !== undefined) { p.fromX = s.x; p.fromY = s.y; }
-        p.t = 0; p.i++;
-        if (p.i >= p.steps.length) this.path = null;
-      }
-    }
+    this.rebase();
+    const at = this.mp.play(dt, this.pose);
+    this.x = at.x; this.y = at.y;
     const look = this.look;
     if (this.charge && (this.attack || performance.now() > this.charge.until)) this.charge = null;
     const ready = this.state === 'stand' && performance.now() < (this.alertUntil || 0);

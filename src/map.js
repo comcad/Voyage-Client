@@ -1,6 +1,7 @@
 import { pad, isCanvas, frames } from './assets.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { BASE_W, BASE_H, snapPx, PIXEL_SCALE } from './view.js';
+import { roundAway, pathKeys, hermite } from './movepath.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -552,23 +553,6 @@ const STATUS_TURN = { n: 0, every: 22, tick: 30 };
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
 /** How much of a path is still to play, in ms. */
-/** Round half away from zero, as the client rounds a drawn position. */
-const roundAway = (v) => (v >= 0 ? Math.trunc(v + 0.5) : Math.trunc(v - 0.499999999));
-/**
- * A path's elements as playback keys: where each ends, its speed (px/s), pose, floor and time. A jump's or a blow's
- * element (no position of its own) keeps the point before with its speed; equip changes and the like are left out.
- */
-function pathKeys(moves, from) {
-  const keys = [];
-  let px = from.x, py = from.y;
-  for (const m of moves) {
-    if (m.cmd === 10 || m.cmd === 14 || m.cmd === 21) continue;
-    const abs = m.x !== undefined;
-    const k = { type: m.cmd, x: abs ? m.x : px, y: abs ? m.y : py, vx: (abs ? m.vx : m.rx) || 0, vy: (abs ? m.vy : m.ry) || 0, stance: m.stance, fh: m.fh || 0, dur: Math.max(0, m.duration || 0) };
-    keys.push(k); px = k.x; py = k.y;
-  }
-  return keys;
-}
 const aiWait = (base, spread) => (Math.floor((base + Math.random() * spread) / 90) * 30) / 1000;
 
 /**
@@ -729,10 +713,8 @@ export class Life {
       const e = p.q[0];
       if (e.type === 3) { b.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy }; jumped = true; }
       else {
-        const s = p.t / e.dur, s2 = s * s, D = p.t * 0.001;
-        const h00 = 2 * s2 * s - 3 * s2 + 1, h01 = 3 * s2 - 2 * s2 * s, h10 = (s2 - 2 * s + 1) * D, h11 = (s2 - s) * D;
-        const nx = h00 * b.x0 + h01 * e.x + h10 * b.vx0 + h11 * e.vx, ny = h00 * b.y0 + h01 * e.y + h10 * b.vy0 + h11 * e.vy;
-        b.cur = { x: nx, y: ny, vx: (nx - b.cur.x) * (1000 / 30), vy: (ny - b.cur.y) * (1000 / 30) };
+        const n = hermite(b, e, p.t);
+        b.cur = { x: n.x, y: n.y, vx: (n.x - b.cur.x) * (1000 / 30), vy: (n.y - b.cur.y) * (1000 / 30) };
       }
       if (!this.keepPose) this.takePose(e);
     } else this.path = null;
