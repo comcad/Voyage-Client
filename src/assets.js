@@ -38,12 +38,23 @@ export async function nodeAt(assets, path) {
   return n ?? null;
 }
 
+/**
+ * How many images load at once. The rest wait their turn by priority: 0 what is drawn now (a map, a window, someone
+ * arriving, an NPC), 1 poses someone may take next, 2 face expressions. Started all at once, a crowd arriving was
+ * thousands of loads in flight and the browser locked up.
+ */
+const IMAGE_SLOTS = 12;
+/** A load that hasn't finished in this long gives its slot up (it still counts once it comes in). */
+const SLOT_TIMEOUT_MS = 20000;
+
 export class Assets {
   constructor(base = '/assets') {
     this.base = base;
     this.jsonCache = new Map();
     this.imgCache = new Map();
     this.loaded = 0; this.loadedPx = 0;   // images loaded so far and their pixels (the /fps report)
+    this.waiting = [[], [], []]; this.waitHead = [0, 0, 0];   // images waiting for a slot, by priority
+    this.inFlight = 0;
   }
 
   json(path) {
@@ -58,35 +69,67 @@ export class Assets {
     return this.jsonCache.get(path);
   }
 
-  _entry(node) {
+  _entry(node, pri = 0) {
     let e = this.imgCache.get(node._canvas);
     // one that failed to load (a dropped connection) is tried again 5s later, three tries in all
     const retry = e?.err && e.tries < 3 && performance.now() - e.failedAt > 5000;
     if (!e || retry) {
-      const img = new Image(), tries = e?.tries || 0;
-      e = { img, ready: false, tries };
-      e.promise = new Promise((res) => {
-        // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
-        img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
-        img.onerror = () => { e.err = true; e.tries = tries + 1; e.failedAt = performance.now(); res(null); };
-      });
-      img.src = `${this.base}/${node._canvas}`;
+      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: this.waiting.length, started: false };
+      e.promise = new Promise((res) => { e.settle = res; });
       this.imgCache.set(node._canvas, e);
     }
+    // asked for sooner than it was waiting for: it moves up (and is passed over where it waited before)
+    if (!e.started && pri < e.pri) { e.pri = pri; this.waiting[pri].push(e); this._pump(); }
     return e;
   }
 
-  /** Returns the loaded image, or null while it is still loading (it starts loading on first call). */
+  /** Starts waiting images while there are free slots, most urgent first. */
+  _pump() {
+    while (this.inFlight < IMAGE_SLOTS) {
+      const e = this._next();
+      if (!e) return;
+      this._load(e);
+    }
+  }
+
+  _next() {
+    for (let p = 0; p < this.waiting.length; p++) {
+      const q = this.waiting[p];
+      while (this.waitHead[p] < q.length) {
+        const e = q[this.waitHead[p]++];
+        if (!e.started) return e;
+      }
+      q.length = 0; this.waitHead[p] = 0;
+    }
+    return null;
+  }
+
+  _load(e) {
+    e.started = true; this.inFlight++;
+    let held = true;
+    const release = () => { if (held) { held = false; this.inFlight--; this._pump(); } };
+    const guard = setTimeout(release, SLOT_TIMEOUT_MS);
+    const img = new Image();
+    e.img = img;
+    const finish = (ok) => { clearTimeout(guard); release(); e.settle(ok ? img : null); };
+    // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
+    img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; finish(true); }; if (img.decode) img.decode().then(done, done); else done(); };
+    img.onerror = () => { e.err = true; e.tries++; e.failedAt = performance.now(); finish(false); };
+    img.src = e.src;
+  }
+
+  /** Returns the loaded image, or null while it is still loading (it starts loading on first call, first in line). */
   image(node) {
     if (!isCanvas(node)) return null;
     const e = this._entry(node);
     return e.ready ? e.img : null;
   }
 
-  preload(nodes, onProgress) {
+  /** Loads canvases at a priority (see IMAGE_SLOTS), resolving once all are in; onProgress(done, total) after each. */
+  preload(nodes, onProgress, pri = 0) {
     const list = nodes.filter(isCanvas);
     let done = 0;
-    return Promise.all(list.map((n) => this._entry(n).promise.then(() => onProgress?.(++done, list.length))));
+    return Promise.all(list.map((n) => this._entry(n, pri).promise.then(() => onProgress?.(++done, list.length))));
   }
 }
 

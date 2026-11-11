@@ -717,6 +717,8 @@ const CURSE_TEXT = {
   136: 'The fear of darkness has overtaken you! Your range of vision has been narrowed.',
 };
 const FADE_MS = 600;   // map changes: the old map dims to black over this, the new one lights up over it
+/** A map lights up once what came with it is in, or after this long: a bigger crowd comes in as it loads. */
+const ARRIVALS_MS = 4000;
 /**
  * Skills that reach out to their range once the swing has a target: Slash Blast, Coma (sword, axe, Dawn Warrior's)
  * and Charged Blow. Others with only a range keep to the swing.
@@ -3337,7 +3339,7 @@ export class Game {
       }),
       showChair: later((id, itemId) => { const rp = this.others.get(id); if (rp) rp.chair = itemId; if (itemId) this.chairArt(itemId); }),
       cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
-      removePlayer: later((id) => { this.vfx?.untomb(this.others.get(id)); this.others.delete(id); this.dragons.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
+      removePlayer: later((id) => { this.spawning?.delete(id); this.vfx?.untomb(this.others.get(id)); this.others.delete(id); this.dragons.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
       spawnDragon: later((d) => this.dragons.set(d.owner, new Dragon(d))),
       moveDragon: later((owner, start, moves) => this.dragons.get(owner)?.move(start, moves)),
       petSpawn: later((d) => this.addPet(d)),
@@ -3374,7 +3376,7 @@ export class Game {
       }),
       petPotion: (kind, id) => { (this.petPotions ??= {})[kind] = id || null; },
       petEffect: later((owner, slot, effect) => { const pet = this.pets.get(`${owner ?? this.player.id}:${slot}`); if (pet) this.petEffect(pet, effect); }),
-      movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
+      movePlayer: later((id, moves) => { const rp = this.others.get(id); if (rp) rp.applyMovement(moves); else this.spawning?.get(id)?.push((r) => r.applyMovement(moves)); }),
       playerLook: later((id, look, rings) => { const rp = this.others.get(id); if (rp) rp.rings = rings; this.updateOtherLook(id, look); }),
       attack: later((a) => this.onRemoteAttack(a)),
       expression: later((id, emote) => { const rp = this.others.get(id); if (rp) { setExpression(rp, emote); this.emotionEffect(rp, emote); } }),
@@ -4288,7 +4290,6 @@ export class Game {
       this.weather.stop(false);   // weather belongs to the map it fell on
       // a chalkboard can't be held up where stores open
       if (this.player.chalk && Number(map.info?.personalShop)) this.closeChalkboard('You cannot use the chalkboard here.');
-      this.fade = { dir: 'in', t0: performance.now() };
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
@@ -4316,6 +4317,13 @@ export class Game {
       this.fieldBgm = null;
       music.play(map.info.bgm);
       this.net?.mapLoaded();
+      // the players, NPCs, monsters and drops that came with the map are set up before it lights up, as the client has
+      // them from its first frame
+      status = 'Loading characters...';
+      if (slow) this.hooks.onLoading?.(true, status);
+      await this.settleArrivals(current, ARRIVALS_MS);
+      if (!current()) return;
+      this.fade = { dir: 'in', t0: performance.now() };
     } catch (e) {
       console.error(e);
       if (current()) this.hooks.onError?.(e.message);
@@ -4328,6 +4336,28 @@ export class Game {
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
       this.questAlert?.refresh();   // what this map, your items and your level offer
+    }
+  }
+
+  /**
+   * While a map is still dark: handles what has come in for it (spawns wait in this.queue while it loads), and what
+   * comes in meanwhile, until all of it is set up or `ms` is up. Whatever is still loading then shows when it's in.
+   */
+  async settleArrivals(current, ms) {
+    const until = performance.now() + ms;
+    let open = 0;
+    const run = () => {
+      const q = this.queue; this.queue = [];
+      for (const fn of q) {
+        let r;
+        try { r = fn(); } catch (e) { console.error(e); continue; }
+        if (r && typeof r.then === 'function') { open++; r.then(() => open--, () => open--); }
+      }
+    };
+    run();
+    while (current() && (open > 0 || this.queue.length) && performance.now() < until) {
+      await new Promise((res) => setTimeout(res, 50));
+      run();
     }
   }
 
@@ -4510,12 +4540,17 @@ export class Game {
     if (rp) for (const fn of waiting) fn(rp);
   }
   async addOther(d) {
+    const map = this.map;
     // on an event field that dresses its teams, their team's outfit instead
     const equips = this.fieldMode?.teamLook?.(d.look.gender, d.team) || lookEquipIds(d.look);
     const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips });
     await look.load();
-    await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']));
-    if (!this.map) return;
+    // they show once the pose they arrive in is in; how they move about loads behind it
+    const st = STANCE_NAMES[d.stance >> 1];
+    const first = [look.standAction(), { jump: 'jump', ladder: 'ladder', rope: 'rope', prone: 'prone', sit: 'sit', fly: 'fly', alert: 'alert', dead: 'dead' }[st]];
+    await this.assets.preload(lookCanvases(look, first.filter((p) => p && look.has(p))));
+    if (!map || this.map !== map || !this.spawning?.has(d.id)) return;   // gone from the map (or you left it) while their look loaded
+    this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']), null, 1);
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look; rp.team = d.team;
@@ -4786,7 +4821,7 @@ export class Game {
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     if (!this.direction) return;
     this.look = look; this.directionDressed = true;
-    this.assets.preload(lookCanvases(look, look.actionList()));
+    this.assets.preload(lookCanvases(look, look.actionList()), null, 1);
   }
   directionAction(action) {
     const p = this.player;
@@ -4815,7 +4850,7 @@ export class Game {
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
-    this.assets.preload(lookCanvases(look, look.actionList())); // skill animations, in the background
+    this.assets.preload(lookCanvases(look, look.actionList()), null, 1); // skill animations, in the background
   }
 
   /**
@@ -6009,7 +6044,7 @@ export class Game {
           if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
           for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open
         }
-      }
+      } else if (this.map && this.loading) this.dimWhileLoading();
       this.input.endFrame();
       this._frames++; this._fpsT += dt;
       if (this._fpsT >= 1) { this.fps = this._frames; this._frames = 0; this._fpsT = 0; }
@@ -10347,6 +10382,19 @@ export class Game {
     ctx.restore();
     const dark = this.darkness;
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
+    this.drawnDark = dark;
+  }
+
+  /**
+   * Nothing is drawn while a map loads, so the last frame stays up: it dims the rest of the way to black as the fade
+   * would have it, and a long load reads as the map changing rather than the game stopping.
+   */
+  dimWhileLoading() {
+    const was = this.drawnDark || 0, k = this.darkness;
+    if (k <= was || was >= 1) return;
+    this.ctx.fillStyle = `rgba(0,0,0,${1 - (1 - k) / (1 - was)})`;
+    this.ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    this.drawnDark = k;
   }
 
   /**
