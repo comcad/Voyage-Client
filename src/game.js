@@ -5983,7 +5983,7 @@ export class Game {
       // System Option FRAME RATE: every screen refresh (VSync), or held to 60 / 30 a second on the refresh's beat
       const cap = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : 0;
       if (cap) {
-        if (t - next > 250 || next - t > cap) next = t;   // a pause, or a cap just changed: start the beat again
+        if (t - next > cap || next - t > cap) next = t;   // a late frame, a pause, or a cap just changed: start the beat again
         // (a refresh up to 40% of a frame early still draws: a display at 60.1Hz must not drop one now and then)
         if (t < next - cap * 0.4) return;
         next += cap;
@@ -10429,7 +10429,7 @@ export class Game {
     else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
-    this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
+    this.drawCharTags(ctx, ent, look, local, snapPx(sx), snapPx(sy) + 4);
   }
 
 

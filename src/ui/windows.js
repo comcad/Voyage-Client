@@ -1723,11 +1723,15 @@ class MiniMapWin extends Win {
   layout() {
     const st = this.available() ? this.state : 2, v = this.view(), n = this.names();
     this.shown = st;
-    const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
-    ctx.font = 'bold 12px Arial, sans-serif';
-    const streetW = Math.ceil(ctx.measureText(n.streetName || '').width), mapW = Math.ceil(ctx.measureText(n.mapName || '').width);
-    ctx.font = '12px Arial, sans-serif';
-    const barMapW = Math.ceil(ctx.measureText(n.mapName || '').width), barStreetW = Math.ceil(ctx.measureText(n.streetName || '').width);
+    const key = `${n.streetName || ''}\n${n.mapName || ''}`;
+    if (this.textW?.key !== key) {
+      const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
+      ctx.font = 'bold 12px Arial, sans-serif';
+      const streetW = Math.ceil(ctx.measureText(n.streetName || '').width), mapW = Math.ceil(ctx.measureText(n.mapName || '').width);
+      ctx.font = '12px Arial, sans-serif';
+      this.textW = { key, streetW, mapW, barMapW: Math.ceil(ctx.measureText(n.mapName || '').width), barStreetW: Math.ceil(ctx.measureText(n.streetName || '').width) };
+    }
+    const { streetW, mapW, barMapW, barStreetW } = this.textW;
     const vw = v?.vw || 0, vh = v?.vh || 0, m = this.mark() ? 40 : 0;
     if (st === 0) { this.w = Math.max(streetW + 5 + m, mapW + 5 + m, vw) + 12; this.w = Math.max(120, this.w); this.h = vh + 87; this.top = 72; }
     else if (st === 1) { this.w = Math.max(vw + 12, 120); this.h = vh + 43; this.top = 29; }
@@ -1828,10 +1832,20 @@ class MiniMapWin extends Win {
     for (const p of g.map.portals) if (p.pt === 2 || p.pt === 7) put(H.portal, p.x, p.y);
     for (const k of ['friend', 'guild', 'guildmaster', 'party', 'partymaster', 'match']) for (const o of lists[k]) put(H[k], o.x, o.y);
     // NPCs from the map's own life list, marked by the spawned NPC's quests: plain, then can-complete, then can-start on top
-    const q = g.quests, qctx = g.textCtx?.(), end = [], start = [];
+    // (looked up once a second, as the marks over the NPCs' heads are: checking every quest of every NPC each frame
+    // made a lot of garbage)
+    const now = performance.now(), end = [], start = [];
+    if (this.marks?.map !== g.map || now - this.marks.at >= 1000) {
+      const q = g.quests, qctx = q && g.textCtx?.(), kind = new Map();
+      for (const e of this.npcs()) {
+        const mk = qctx ? q.npcQuests(e.id, qctx) : null;
+        kind.set(e, mk?.complete?.length ? 'end' : mk?.start?.length ? 'start' : null);
+      }
+      this.marks = { map: g.map, at: now, kind };
+    }
     for (const e of this.npcs()) {
-      const mk = q && qctx ? q.npcQuests(e.id, qctx) : null;
-      if (mk?.complete?.length) end.push(e); else if (mk?.start?.length) start.push(e); else put(H.npc, e.x, e.y);
+      const k = this.marks.kind.get(e);
+      if (k === 'end') end.push(e); else if (k === 'start') start.push(e); else put(H.npc, e.x, e.y);
     }
     for (const e of end) put(H.endnpc, e.x, e.y);
     for (const e of start) put(H.startnpc, e.x, e.y);

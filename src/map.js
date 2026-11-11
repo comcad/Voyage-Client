@@ -478,24 +478,29 @@ export class GameMap {
   drawLayer(ctx, cam, l) {
     const layer = this.layers[l];
     if (!layer) return;
+    // only what is on screen (a pixel to spare): a wide map has a thousand pieces and most are far off
+    const vw = (cam.w ?? Infinity) + 2, vh = (cam.h ?? Infinity) + 2;
+    const off = (x, y, img) => x > vw || y > vh || x + img.width < -2 || y + img.height < -2;
     for (const o of layer.objs) {
       if (!o.visible || !o.active) continue;
       const node = o.anim.node;
       const img = this.assets.image(node);
       if (!img) continue;
-      const or = node.origin || [0, 0];
-      const x = o.f ? o.x + or[0] - img.width : o.x - or[0];
+      const ox = node.origin?.[0] ?? 0, oy = node.origin?.[1] ?? 0;
+      const x = (o.f ? o.x + ox - img.width : o.x - ox) - cam.x, y = o.y - oy - cam.y;
+      if (off(x, y, img)) continue;
       const alpha = o.anim.alpha;
       if (alpha <= 0) continue;
       if (alpha < 1) { ctx.save(); ctx.globalAlpha = alpha; }
-      drawImg(ctx, img, x - cam.x, o.y - or[1] - cam.y, o.f);
+      drawImg(ctx, img, x, y, o.f);
       if (alpha < 1) ctx.restore();
     }
     for (const t of layer.tiles) {
       const img = this.assets.image(t.node);
       if (!img) continue;
-      const or = t.node.origin || [0, 0];
-      ctx.drawImage(img, snap(t.x - or[0] - cam.x), snap(t.y - or[1] - cam.y));   // tiles on whole game pixels: no seams
+      const x = t.x - (t.node.origin?.[0] ?? 0) - cam.x, y = t.y - (t.node.origin?.[1] ?? 0) - cam.y;
+      if (off(x, y, img)) continue;
+      ctx.drawImage(img, snap(x), snap(y));   // tiles on whole game pixels: no seams
     }
   }
 

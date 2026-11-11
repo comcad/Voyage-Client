@@ -63,7 +63,8 @@ export class Assets {
       const img = new Image();
       e = { img, ready: false };
       e.promise = new Promise((res) => {
-        img.onload = () => { e.ready = true; res(img); };
+        // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
+        img.onload = () => { const done = () => { e.ready = true; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
         img.onerror = () => res(null);
       });
       img.src = `${this.base}/${node._canvas}`;
