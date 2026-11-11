@@ -5974,7 +5974,8 @@ export class Game {
       const cap = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : 0;
       if (cap) {
         if (t - next > 250 || next - t > cap) next = t;   // a pause, or a cap just changed: start the beat again
-        if (t < next - 1.5) return;
+        // (a refresh up to 40% of a frame early still draws: a display at 60.1Hz must not drop one now and then)
+        if (t < next - cap * 0.4) return;
         next += cap;
       }
       const gap = (t - last) / 1000, dt = Math.min(gap, 0.05);

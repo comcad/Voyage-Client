@@ -1,5 +1,6 @@
 import { pad } from './assets.js';
 import { Anim } from './map.js';
+import { snapPx } from './view.js';
 
 /**
  * Kites and banners (508xxxx): the item's iconReward looping at (x - 3, y - 100), bobbing sin(phase) x 3 with the
@@ -36,7 +37,7 @@ export class Kites {
       const p = this.pos(k), o = n.origin || [0, 0];
       ctx.save();
       if (k.fade !== null) ctx.globalAlpha *= Math.max(0, k.fade / 1000);
-      ctx.drawImage(img, Math.round(p.x - cam.x - o[0]), Math.round(p.y - cam.y - o[1]));
+      ctx.drawImage(img, snapPx(p.x - cam.x - o[0]), snapPx(p.y - cam.y - o[1]));
       ctx.restore();
     }
   }

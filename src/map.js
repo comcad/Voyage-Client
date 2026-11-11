@@ -296,28 +296,53 @@ export class GameMap {
       const m = this.backScale(cam, list[i]);
       let j = i + 1;
       while (j < list.length && this.backScale(cam, list[j]) === m) j++;
-      if (j - i > 1 && m !== 1) this.drawBackRun(ctx, cam, list.slice(i, j), m);
+      const box = j - i > 1 && m !== 1 ? this.runBox(cam, list.slice(i, j), m) : null;
+      if (box) this.drawBackRun(ctx, cam, list.slice(i, j), m, box);
       else for (let n = i; n < j; n++) this.drawBack(ctx, cam, list[n], m);
       i = j;
     }
     GRID = 1;
   }
-  drawBackRun(ctx, cam, run, m) {
-    // D canvas pixels per unit: as near one per screen pixel as a whole number gets; the last step to the screen is
-    // smoothed when it isn't one to one, so the picture doesn't crawl as it moves
-    const D = Math.max(1, Math.round(m * PIXEL_SCALE)), W = Math.ceil(cam.w / m), H = Math.ceil(cam.h / m);
+  /**
+   * Whether a run of scaled layers needs to be drawn as one picture, and over what part of the view: only when its
+   * pieces slide over each other (different scroll rates: Ellinia's light beams), the box round what of them shows.
+   * Otherwise (null) they go straight onto the canvas: pieces that keep their places meet on the same canvas pixels.
+   */
+  runBox(cam, run, m) {
+    // how it moves: by time or with the view, on each axis (tiling doesn't change that)
+    const rate = (q) => `${HSCROLL.has(q.type) ? 't' : 'v'}${q.rx}/${VSCROLL.has(q.type) ? 't' : 'v'}${q.ry}`;
+    if (!run.some((b) => rate(b) !== rate(run[0]))) return null;
+    const rects = [];
+    for (const b of run) {
+      const p = this.backPlace(cam, b, m, false);
+      if (p) for (const y of p.ys) for (const x of p.xs) rects.push({ x, y, r: x + p.w, b: y + p.h });
+    }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of rects) {
+      if (q.r <= 0 || q.b <= 0 || q.x >= cam.w || q.y >= cam.h) continue;
+      x0 = Math.min(x0, Math.max(0, q.x)); y0 = Math.min(y0, Math.max(0, q.y)); x1 = Math.max(x1, Math.min(cam.w, q.r)); y1 = Math.max(y1, Math.min(cam.h, q.b));
+    }
+    return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : { x: 0, y: 0, w: 0, h: 0 };
+  }
+  drawBackRun(ctx, cam, run, m, box) {
+    // D buffer pixels per unit, the canvas's own density (cheap: the buffer is 1/m^2 of the box on the canvas); the
+    // stretch by m to the screen is smoothed, so the picture doesn't crawl as it moves. Only the box is drawn.
+    const D = PIXEL_SCALE;
+    const ux0 = Math.floor((box.x / m) * D) / D, uy0 = Math.floor((box.y / m) * D) / D;
+    const bw = Math.ceil(((box.x + box.w) / m) * D) - ux0 * D, bh = Math.ceil(((box.y + box.h) / m) * D) - uy0 * D;
+    if (bw <= 0 || bh <= 0) return;
     const c = (this.backCanvas ??= document.createElement('canvas'));
-    // it only ever grows (each run uses its top-left part), so runs of other scales don't reallocate it every frame
-    if (c.width < W * D || c.height < H * D) { c.width = Math.max(c.width, W * D); c.height = Math.max(c.height, H * D); }
+    // it only ever grows (each run uses its top-left part), so runs of other sizes don't reallocate it every frame
+    if (c.width < bw || c.height < bh) { c.width = Math.max(c.width, bw); c.height = Math.max(c.height, bh); }
     const o = c.getContext('2d');
-    o.setTransform(1, 0, 0, 1, 0, 0); o.clearRect(0, 0, W * D, H * D);
-    o.setTransform(D, 0, 0, D, 0, 0); o.imageSmoothingEnabled = false;
+    o.setTransform(1, 0, 0, 1, 0, 0); o.clearRect(0, 0, bw, bh);
+    o.setTransform(D, 0, 0, D, -ux0 * D, -uy0 * D); o.imageSmoothingEnabled = false;
     GRID = D;
     for (const b of run) this.drawBack(o, cam, b, m, true);
     GRID = PIXEL_SCALE;
     ctx.save();
     ctx.imageSmoothingEnabled = Math.abs(m * PIXEL_SCALE - D) > 1e-3;
-    ctx.drawImage(c, 0, 0, W * D, H * D, 0, 0, W * m, H * m);
+    ctx.drawImage(c, 0, 0, bw, bh, ux0 * m, uy0 * m, (bw / D) * m, (bh / D) * m);
     ctx.restore();
   }
 
@@ -335,9 +360,18 @@ export class GameMap {
   }
   /** unit: drawn at 1x into a canvas the view is 1/m of (see drawBacks). */
   drawBack(ctx, cam, b, m = this.backScale(cam, b), unit = false) {
+    const p = this.backPlace(cam, b, m, unit);
+    if (!p) return;
+    ctx.save();
+    ctx.globalAlpha = ((b.alpha ?? b.a ?? 255) / 255) * b.anim.alpha;
+    for (const dy of p.ys) for (const dx of p.xs) drawImg(ctx, p.img, dx, dy, b.f, p.w, p.h);
+    ctx.restore();
+  }
+  /** Where back b's copies go this frame (view coordinates, or the unit ones of a run's buffer), and their size. */
+  backPlace(cam, b, m, unit) {
     const node = b.anim.node;
     const img = this.assets.image(node);
-    if (!img) return;
+    if (!img) return null;
     const o = node.origin || [0, 0];
     let W = cam.w, H = cam.h, x, y;
     if (HSCROLL.has(b.type)) x = b.x + this.scroll * b.rx * 5 - cam.x;
@@ -355,11 +389,7 @@ export class GameMap {
     let xs = [x], ys = [y];
     if (HTILE.has(b.type) && cx > 0) { xs = []; for (let s = ((x % cx) + cx) % cx - cx; s < W; s += cx) xs.push(s); }
     if (VTILE.has(b.type) && cy > 0) { ys = []; for (let s = ((y % cy) + cy) % cy - cy; s < H; s += cy) ys.push(s); }
-
-    ctx.save();
-    ctx.globalAlpha = ((b.alpha ?? b.a ?? 255) / 255) * b.anim.alpha;
-    for (const dy of ys) for (const dx of xs) drawImg(ctx, img, dx, dy, b.f, w, h);
-    ctx.restore();
+    return { img, xs, ys, w, h };
   }
 
   /**
@@ -1515,7 +1545,7 @@ const argb = (clr) => `#${((Number(clr) >>> 0) & 0xffffff).toString(16).padStart
  * for an icon; white: the White Label Ring look. Returns the whole tag's left and height.
  */
 export function nameTag(ctx, text, x, y, color = '#fff', { icon = 0, white = false } = {}) {
-  x = Math.round(x); y = Math.round(y);
+  x = snapPx(x); y = snapPx(y);   // on the canvas's grid, as the character it hangs under
   ctx.font = white ? `bold ${TAG_FONT}` : TAG_FONT;
   const w = Math.ceil(ctx.measureText(text).width) + 5, h = 16, left = x - Math.floor((w + icon) / 2), bx = left + icon;
   if (white) {
@@ -1538,10 +1568,11 @@ export function nameTag(ctx, text, x, y, color = '#fff', { icon = 0, white = fal
  * Returns its height, 0 while its art is loading, -1 when there is no art.
  */
 export function artTag(ctx, assets, N, text, x, y, font = TAG_FONT) {
+  // (on the canvas's grid, as the character it hangs under)
   if (!N?.w || !N?.c || !N?.e) return -1;
   const w = assets.image(N.w), c = assets.image(N.c), e = assets.image(N.e);
   if (!w || !c || !e) return 0;
-  x = Math.round(x); y = Math.round(y);
+  x = snapPx(x); y = snapPx(y);
   ctx.font = font;
   const tw = Math.ceil(ctx.measureText(text).width), mid = Math.max(1, Math.ceil(tw / c.width)) * c.width;
   const ox = (n, d) => n.origin?.[0] ?? d, oy = (n) => n.origin?.[1] ?? 0, wo = ox(N.w, w.width);
