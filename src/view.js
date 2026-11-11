@@ -12,6 +12,11 @@ export let VIEW_W = BASE_W, VIEW_H = BASE_H;
  * be bigger to tap; a window taller than that is dragged up to reach its bottom).
  */
 export let UI_SCALE = 1, UI_W = BASE_W, UI_H = BASE_H;
+/** Canvas pixels per game pixel, a whole number (see Game.fitBacking); moving things are drawn on that finer grid. */
+export let PIXEL_SCALE = 1;
+export function setPixelScale(k) { PIXEL_SCALE = k; }
+/** A world position on the canvas's own pixel grid: whole game pixels at scale 1, finer above it. */
+export const snapPx = (v) => Math.round(v * PIXEL_SCALE) / PIXEL_SCALE;
 
 export const resolutionName = ([w, h]) => `${w} x ${h}`;
 export function resolutionIndex() {

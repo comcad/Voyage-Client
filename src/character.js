@@ -1,4 +1,5 @@
 import { pad, isCanvas, frames } from './assets.js';
+import { snapPx } from './view.js';
 
 /**
  * Character avatar assembly (body + head + face + hair + equips).
@@ -47,6 +48,11 @@ const ATTACK_POSES = {
   9: ['swingT1', 'swingT2', 'swingT2'],
 };
 const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
+/** Every pose a look's weapon attacks in: its swings and stabs, and its shots. */
+export function weaponPoses(look) {
+  const t = look?.weapon?.info?.attack;
+  return [...new Set([...(ATTACK_POSES[t] || ['swingO1', 'swingO2', 'swingO3', 'stabO1']), ...(SHOOT_POSES[t] || [])])];
+}
 
 /**
  * A ghost's body pose for each avatar pose (anything else stands; the dead stay dead), and the plain pose its head,
@@ -362,10 +368,13 @@ export function mountCanvases(mount) {
   return out;
 }
 
-/** whole: snap to whole game pixels (crisp); false lets slow drifts like a ghost's circle move smoothly. */
+/**
+ * whole: snap to the canvas's pixel grid (crisp: whole game pixels at scale 1, finer above it); false lets slow drifts
+ * like a ghost's circle move freely.
+ */
 export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true) {
   ctx.save();
-  ctx.translate(whole ? Math.round(x) : x, whole ? Math.round(y) : y);
+  ctx.translate(whole ? snapPx(x) : x, whole ? snapPx(y) : y);
   if (facingRight) ctx.scale(-1, 1);
   if (parts.move) ctx.translate(parts.move[0], parts.move[1]);
   if (parts.flip) ctx.scale(-1, 1);

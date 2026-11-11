@@ -82,7 +82,9 @@ export class Connection {
     if (wi >= 0) { this.waiters.splice(wi, 1)[0].res(r, op); return; }
     const fn = this.handlers.get(op);
     if (fn) {
+      const t0 = this.timing ? performance.now() : 0;
       try { fn(r, op); } catch (e) { console.error(`handler 0x${op.toString(16)} failed`, e); }
+      this.timing?.(op, performance.now() - t0);   // set by the /fps meter
     } else {
       // Several replies can arrive in one chunk before the caller re-arms expect(); keep them.
       this.backlog.push({ op, r });

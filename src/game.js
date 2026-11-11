@@ -68,6 +68,9 @@ import { OwlWin, OwlResultWin } from './ui/owl.js';
 import { openMaker, makerOutcome } from './ui/maker.js';
 import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
+import { PerfMeter } from './perfmeter.js';
+import { Preloader } from './preload.js';
+import { CharPath } from './movepath.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -79,8 +82,8 @@ import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
-import { settings } from './settings.js';
-import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution } from './view.js';
+import { settings, saveSettings } from './settings.js';
+import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale } from './view.js';
 import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
@@ -270,45 +273,29 @@ class RemotePlayer {
     const st = STANCE_NAMES[d.stance >> 1];
     if (st && st !== 'walk') this.state = st;
     this.action = look.standAction(); this.frame = 0; this.frameT = 0;
-    this.path = null; this.attack = null; this.chat = null;
+    this.attack = null; this.chat = null;
     this.fhId = d.fh || 0;
+    this.mp = new CharPath(this.x, this.y);   // their movement, played as the client plays it (movepath.js)
+    this.pose = (e) => this.takePose(e);
   }
-  /**
-   * Their movement queues behind what is still playing (as the client does); with more than 1.1s queued it plays 10%
-   * faster, and with more than 5s it jumps to the end.
-   */
-  applyMovement(moves) {
-    const steps = moves.filter((m) => m.x !== undefined || m.stance !== undefined);
-    if (!steps.length) return;
-    if (this.path) this.path.steps.push(...steps);
-    else this.path = { steps, i: 0, t: 0, fromX: this.x, fromY: this.y };
-    const left = this.path.steps.slice(this.path.i).reduce((t, m) => t + (m.duration || 0), 0);
-    if (left > 5000) {
-      const end = [...this.path.steps].reverse().find((m) => m.x !== undefined);
-      if (end) { this.x = end.x; this.y = end.y; }
-      this.path = null;
-    }
+  /** Movement still playing (MOVE_PLAYER), or null. */
+  get path() { return this.mp.playing ? this.mp : null; }
+  /** Put somewhere by anything but their path while standing still: playback picks up from there. */
+  rebase() {
+    const c = this.mp.cur;
+    if (!this.mp.playing && (Math.abs(c.x - this.x) > 1 || Math.abs(c.y - this.y) > 1)) this.mp.reset(this.x, this.y);
+  }
+  /** Their movement queues behind what is still playing (CharPath: 30ms ticks, curves through each element's speed). */
+  applyMovement(moves) { this.rebase(); this.mp.queue(moves); }
+  /** A path element's pose (bit 0 faces left) and floor: a foothold, or -id of a ladder / rope; 0 (in the air) keeps the last. */
+  takePose(e) {
+    if (e.fh) this.fhId = e.fh;
+    if (e.stance !== undefined) { this.facingRight = !(e.stance & 1); this.state = STANCE_NAMES[e.stance >> 1]; }
   }
   update(dt) {
-    if (this.path) {
-      const p = this.path, s = p.steps[p.i];
-      const dur = Math.max(1, s.duration ?? 60) / 1000;   // 0: at once (a jump's start)
-      const queued = p.steps.slice(p.i).reduce((t, m) => t + (m.duration || 0), 0) - p.t * 1000;
-      p.t += queued > 1100 ? dt * 1.1 : dt;
-      const k = Math.min(1, p.t / dur);
-      if (s.x !== undefined) { this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k; }
-      if (s.fh) this.fhId = s.fh;   // a foothold, or -id of a ladder / rope; 0 (in the air) keeps the last
-      if (s.stance !== undefined) {
-        this.facingRight = !(s.stance & 1);
-        const st = STANCE_NAMES[s.stance >> 1];
-        this.state = st;
-      }
-      if (k >= 1) {
-        if (s.x !== undefined) { p.fromX = s.x; p.fromY = s.y; }
-        p.t = 0; p.i++;
-        if (p.i >= p.steps.length) this.path = null;
-      }
-    }
+    this.rebase();
+    const at = this.mp.play(dt, this.pose);
+    this.x = at.x; this.y = at.y;
     const look = this.look;
     if (this.charge && (this.attack || performance.now() > this.charge.until)) this.charge = null;
     const ready = this.state === 'stand' && performance.now() < (this.alertUntil || 0);
@@ -1172,7 +1159,7 @@ export class Game {
     if (x < 0 || !this.map || this.windows?.top(x, y) || this.statusBar?.contains?.(x, y)) return 0;
     x *= UI_SCALE; y *= UI_SCALE;
     if (this.playerAt(x, y)) return 2;
-    const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    const wx = x + snapPx(this.cam.x), wy = y + snapPx(this.cam.y);
     for (const e of this.map.life) {
       if (e.kind !== 'Npc' || e.oid === null) continue;
       const b = e.box();
@@ -1182,7 +1169,7 @@ export class Game {
   }
   playerAt(x, y) { for (const rp of this.others.values()) if (this.hitsChar(rp, x, y)) return rp; return null; }
   hitsChar(ent, x, y) {
-    const wx = x + Math.round(this.cam.x), wy = y + Math.round(this.cam.y);
+    const wx = x + snapPx(this.cam.x), wy = y + snapPx(this.cam.y);
     const box = ent.morphView?.box(ent.x, ent.y, drawnRight(ent));   // morphed: the frame's lt / rb
     if (box) return wx >= box.left && wx <= box.right && wy >= box.top && wy <= box.bottom;
     return wx >= ent.x - 18 && wx <= ent.x + 18 && wy >= ent.y - 64 && wy <= ent.y;
@@ -1747,6 +1734,7 @@ export class Game {
   }
   /** A map change takes the flowerpot windows down and puts them back up where they were (with any the Cash Shop took down). */
   cycleRaise() {
+    if (!this.windows) return;   // (the offline map viewer has no windows)
     const ids = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);
     for (const id of ids) this.closeRaise(id);
     ids.push(...(this.raiseKept || []).filter((id) => !ids.includes(id))); this.raiseKept = null;
@@ -1805,7 +1793,7 @@ export class Game {
       const n = p.anim.node, img = n && this.assets.image(n);
       if (!img) continue;
       const o = n.origin || [0, 0];
-      ctx.drawImage(img, Math.round((a.x + b.x) / 2 - cam.x - o[0]), Math.round((a.y + b.y) / 2 - 20 - cam.y - o[1]));
+      ctx.drawImage(img, snapPx((a.x + b.x) / 2 - cam.x - o[0]), snapPx((a.y + b.y) / 2 - 20 - cam.y - o[1]));
     }
   }
   /** A New Year card to send: a free Etc slot, then its window. */
@@ -2277,7 +2265,7 @@ export class Game {
       const img = this.assets.image(h.node);
       if (!img) continue;
       const o = h.node.origin || [0, 0], x = ent.x + h.x + Math.cos(h.a) * 5, y = ent.y - 65 + h.y + Math.sin(h.a) * 5;
-      ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+      ctx.drawImage(img, snapPx(x - o[0] - cam.x), snapPx(y - o[1] - cam.y));
     }
   }
   async setItemEffect(ent, id) {
@@ -2387,7 +2375,7 @@ export class Game {
       const o = node.origin || [0, 0];
       ctx.save();
       ctx.globalAlpha = l.anim.alpha;
-      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      ctx.translate(snapPx(x - cam.x), snapPx(y - cam.y));
       if (right && !l.fixed) ctx.scale(-1, 1);
       ctx.drawImage(img, -o[0], -o[1]);
       ctx.restore();
@@ -4258,7 +4246,7 @@ export class Game {
     const n = fx.anim.node, img = n && this.assets.image(n);
     if (!img) return;
     const o = n.origin || [0, 0], x = (a.x + b.x) / 2, y = (a.y + b.y) / 2;
-    ctx.drawImage(img, Math.round(x - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+    ctx.drawImage(img, snapPx(x - o[0] - cam.x), snapPx(y - o[1] - cam.y));
   }
 
   // ------------------------------------------------------------------ map
@@ -4341,6 +4329,7 @@ export class Game {
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
       this.questAlert?.refresh();   // what this map, your items and your level offer
+      this.preloadOwn();
     }
   }
 
@@ -4539,6 +4528,7 @@ export class Game {
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     if (d.hearts) this.setHearts(rp, d.hearts);
     this.others.set(d.id, rp);
+    this.preloader?.player(look, d.job);   // their attacks and their job's skills, in the background
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
@@ -4549,6 +4539,7 @@ export class Game {
     const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
     await look.load();
     rp.look = look; rp.lookData = lookData;
+    this.preloader?.player(look, rp.job);
   }
 
   onChat(c) {
@@ -4828,7 +4819,22 @@ export class Game {
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
-    this.assets.preload(lookCanvases(look, look.actionList())); // skill animations, in the background
+    this.preloadOwn();
+  }
+
+  /**
+   * In the background (preload.js): every pose your look has, your job's skill effects, and (once) every body, head,
+   * face and hair. On each map you enter and whenever your look is rebuilt; what is already in is skipped.
+   */
+  preloadOwn() {
+    if (!this.net || !this.look) return;
+    this.preloader ??= new Preloader(this);
+    if (this.preloaded?.look !== this.look || this.preloaded?.job !== this.stats?.job) {
+      this.preloaded = { look: this.look, job: this.stats?.job };
+      this.assets.enqueue(lookCanvases(this.look, this.look.actionList()), 0);
+      this.preloader.job(this.stats?.job, this.look);
+    }
+    this.preloader.everyone();
   }
 
   /**
@@ -5049,7 +5055,7 @@ export class Game {
       const o = node.origin || [0, 0];
       ctx.save();
       ctx.globalAlpha = a.alpha;
-      ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+      ctx.translate(snapPx(x - cam.x), snapPx(y - cam.y));
       if (flip) ctx.scale(-1, 1);
       ctx.drawImage(img, -o[0], -o[1]);
       ctx.restore();
@@ -5680,6 +5686,36 @@ export class Game {
     try { return JSON.parse(localStorage.getItem('maple.gameopt') || '{}')[key] !== false; } catch { return true; }
   }
   sendChat(text) {
+    // /fps: the performance meter on or off (a Voyage tool, kept with the System Option choices)
+    if (/^\/fps$/i.test(text.trim())) {
+      settings.fpsMeter = !settings.fpsMeter; saveSettings();
+      if (!settings.fpsMeter) { this.perf?.detach(this); this.perf = null; }
+      this.hud?.message?.(`The performance meter is ${settings.fpsMeter ? 'on' : 'off'}. Type /fps again to ${settings.fpsMeter ? 'hide' : 'show'} it.`, CHAT_COLORS.notice);
+      return;
+    }
+    // /fps copy: the meter's report of recent hitches onto the clipboard (and into the browser console)
+    if (/^\/fps\s+copy$/i.test(text.trim())) {
+      const say = (m) => this.hud?.message?.(m, CHAT_COLORS.notice);
+      if (!settings.fpsMeter || !this.perf) {
+        settings.fpsMeter = true; saveSettings();
+        say('The performance meter is on now. Play until it hitches, then type /fps copy again.');
+        return;
+      }
+      const report = this.perf.report(this);
+      console.log(report);
+      const fallback = () => {
+        const ta = document.createElement('textarea');
+        ta.value = report; ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+        document.body.appendChild(ta); ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch { /* blocked */ }
+        ta.remove();
+        say(ok ? 'Copied the /fps report.' : "Couldn't copy the /fps report: it's in the browser console (F12).");
+      };
+      if (navigator.clipboard?.writeText && window.isSecureContext) navigator.clipboard.writeText(report).then(() => say('Copied the /fps report.'), fallback);
+      else fallback();
+      return;
+    }
     if (!this.net) { this.player.chat = { text, t: 5 }; return; }
     let m = text.match(/^\/(?:w|whisper)\s+(\S+)\s+(.+)$/i);
     if (m) { this.whisperTo(m[1], m[2]); return; }
@@ -5966,13 +6002,28 @@ export class Game {
   }
   start() {
     let last = performance.now();
+    let next = 0;
     const loop = (t) => {
       // the next frame is booked first: an error in one frame must never stop the game for good
       requestAnimationFrame(loop);
+      const meter = settings.fpsMeter ? (this.perf ??= new PerfMeter()) : null;
+      meter?.offer(t);
+      // System Option FRAME RATE: every screen refresh (VSync), or held to 60 / 30 a second on the refresh's beat
+      const cap = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : 0;
+      if (cap) {
+        if (t - next > cap || next - t > cap) next = t;   // a late frame, a pause, or a cap just changed: start the beat again
+        // (a refresh up to 40% of a frame early still draws: a display at 60.1Hz must not drop one now and then)
+        if (t < next - cap * 0.4) return;
+        next += cap;
+      }
       const gap = (t - last) / 1000, dt = Math.min(gap, 0.05);
       last = t;
       if (this.map && !this.loading) {
-        try { if (gap > 0.25) this.catchUpPaths(gap - dt); this.update(dt); this.render(); } catch (e) {
+        try {
+          if (gap > 0.25) this.catchUpPaths(gap - dt);
+          const u0 = performance.now(); this.update(dt); const u1 = performance.now(); this.render();
+          if (meter) { meter.frame(t, u1 - u0, performance.now() - u1, this); meter.draw(this.ctx, this); }
+        } catch (e) {
           const key = String(e?.message);
           if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
           for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open
@@ -7699,7 +7750,7 @@ export class Game {
   drawShip(ctx, cam) {
     const s = this.ship, img = s?.node && this.assets.image(s.node);
     if (!img || (s.state === 'gone' && performance.now() - s.t0 >= s.tMove)) return;
-    const o = s.node.origin || [0, 0], x = Math.round(this.shipX() - cam.x), y = Math.round(s.y - cam.y);
+    const o = s.node.origin || [0, 0], x = snapPx(this.shipX() - cam.x), y = snapPx(s.y - cam.y);
     if (!s.flip) { ctx.drawImage(img, x - o[0], y - o[1]); return; }
     ctx.save(); ctx.translate(x + o[0], y - o[1]); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
   }
@@ -7713,7 +7764,7 @@ export class Game {
     const imgs = parts.map((p) => this.assets.image(art.digits[p]));
     if (imgs.some((i) => !i)) return;
     const w = imgs.reduce((a, i) => a + i.width, 0);
-    let x = Math.round(c.x + (c.width - w) / 2 - cam.x);
+    let x = snapPx(c.x + (c.width - w) / 2 - cam.x);
     const cy = c.y + c.height / 2 - cam.y;
     for (const img of imgs) { ctx.drawImage(img, x, Math.round(cy - img.height / 2)); x += img.width; }
   }
@@ -7753,7 +7804,7 @@ export class Game {
         if (!img) continue;
         const o = n.origin || [0, 0];
         ctx.save(); ctx.globalAlpha *= t.anim.alpha;
-        ctx.drawImage(img, Math.round(t.x - o[0] - cam.x), Math.round(t.y - o[1] - cam.y));
+        ctx.drawImage(img, snapPx(t.x - o[0] - cam.x), snapPx(t.y - o[1] - cam.y));
         ctx.restore();
       }
     }
@@ -7837,7 +7888,7 @@ export class Game {
     return false;
   }
   drawDoors(ctx, cam) {
-    const at = (n, d) => { const img = n && this.assets.image(n), o = n?.origin || [0, 0]; if (img) ctx.drawImage(img, Math.round(d.x - o[0] - cam.x), Math.round(d.y - o[1] - cam.y)); };
+    const at = (n, d) => { const img = n && this.assets.image(n), o = n?.origin || [0, 0]; if (img) ctx.drawImage(img, snapPx(d.x - o[0] - cam.x), snapPx(d.y - o[1] - cam.y)); };
     for (const d of this.doors?.values() || []) {
       if (!d.anim?.node) continue;
       ctx.save();
@@ -7846,7 +7897,7 @@ export class Game {
       if (d.frame) at(d.frame, d);   // a town door's frame, just behind it
       ctx.save(); ctx.globalAlpha *= d.anim.alpha; at(d.anim.node, d); ctx.restore();
       // a party member's door has their name over it (its box's fill and colour were lost: drawn as a name tag)
-      if (d.name) nameTag(ctx, d.name, Math.round(d.x - cam.x), Math.round(d.y - 136 - cam.y));
+      if (d.name) nameTag(ctx, d.name, snapPx(d.x - cam.x), snapPx(d.y - 136 - cam.y));
       ctx.restore();
     }
   }
@@ -9115,7 +9166,7 @@ export class Game {
     const o = node.origin || [0, 0];
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.translate(Math.round(x - cam.x), Math.round(y - cam.y));
+    ctx.translate(snapPx(x - cam.x), snapPx(y - cam.y));
     if (flip) ctx.scale(-1, 1);
     if (zoom !== 1) ctx.scale(zoom, zoom);
     ctx.drawImage(img, -o[0], -o[1]);
@@ -9144,7 +9195,7 @@ export class Game {
     }
     const art = this.basicUi[GAUGE1.has(c.id) ? 'KeyDownBar1' : 'KeyDownBar'];
     const img = (n) => n && this.assets.image(n), bar = img(art?.bar), gauge = img(art?.gauge), grad = img(art?.graduation);
-    const p = this.player, x = Math.round(p.x - 36 - cam.x), y = Math.round(p.y - 100 - cam.y);
+    const p = this.player, x = snapPx(p.x - 36 - cam.x), y = snapPx(p.y - 100 - cam.y);
     const v = Math.min(69, Math.floor((c.t * 1000) / 15) + 2);
     if (bar) ctx.drawImage(bar, x, y);
     if (gauge && v >= 2) ctx.drawImage(gauge, x + 2, y + 2, v - 1, gauge.height);
@@ -9759,7 +9810,7 @@ export class Game {
       // on a ghost, it goes round with the ghost over its tombstone
       const g = this.ghostAt(p), px = g ? g.x : p.x, py = g ? g.y : p.y;
       const o = n.origin || [0, 0], y = d.head ? py - 65 : py;
-      ctx.drawImage(img, Math.round(px - o[0] - cam.x), Math.round(y - o[1] - cam.y));
+      ctx.drawImage(img, snapPx(px - o[0] - cam.x), snapPx(y - o[1] - cam.y));
     }
   }
 
@@ -9966,7 +10017,7 @@ export class Game {
     for (const c of this.input.clicks) {
       // a double-click on a window (or the status bar) is the window's, never the NPC behind it
       if (this.windows?.top(c.x / UI_SCALE, c.y / UI_SCALE) || this.statusBar?.contains?.(c.x / UI_SCALE, c.y / UI_SCALE)) continue;
-      const [zx, zy] = this.unzoom(c.x, c.y), wx = zx + Math.round(this.cam.x), wy = zy + Math.round(this.cam.y);
+      const [zx, zy] = this.unzoom(c.x, c.y), wx = zx + snapPx(this.cam.x), wy = zy + snapPx(this.cam.y);
       // a click on your own chalkboard puts it away
       const cr = this.player.chalk && this.player.chalkRect;
       if (cr && wx >= cr.x && wx < cr.x + cr.w && wy >= cr.y && wy < cr.y + cr.h) { this.closeChalkboard('The chalkboard has closed.'); return; }
@@ -10084,11 +10135,14 @@ export class Game {
     this.camF = { x: p.x, y: p.y - CAM_LIFT };
     this.placeCamera();
   }
-  /** Centre the view on the filtered point, held inside the map. */
+  /**
+   * Centre the view on the filtered point, held inside the map. It moves on the canvas's own pixel grid: whole game
+   * pixels at scale 1, finer steps above it, so it glides instead of jumping a game pixel (2-4 screen pixels) at once.
+   */
   placeCamera() {
-    const c = { x: Math.trunc(this.camF.x) - VIEW_W / 2, y: Math.trunc(this.camF.y) - VIEW_H / 2 };
+    const c = { x: this.camF.x - VIEW_W / 2, y: this.camF.y - VIEW_H / 2 };
     this.clampCamera(c);
-    this.cam.x = Math.round(c.x); this.cam.y = Math.round(c.y);
+    this.cam.x = snapPx(c.x); this.cam.y = snapPx(c.y);
   }
 
   clampCamera(c = this.cam) {
@@ -10105,11 +10159,19 @@ export class Game {
     const c = this.canvas, dpr = window.devicePixelRatio || 1;
     // System Option PICTURE QUALITY: NORMAL draws one canvas pixel per game pixel, BEST the screen's density
     const best = Math.max(1, Math.min(4, ((c.clientWidth || VIEW_W) * dpr) / VIEW_W));
-    const k = 1 + (best - 1) * Math.max(0, Math.min(1, settings.quality));
-    const w = Math.round(VIEW_W * k), h = Math.round(VIEW_H * k);
+    const want = 1 + (best - 1) * Math.max(0, Math.min(1, settings.quality));
+    // a whole number of canvas pixels per game pixel: at a fraction some columns of the art get one pixel more than
+    // their neighbours, and which ones changes as the view moves (lines crawling over the picture)
+    const k = want < 1.25 ? 1 : Math.min(4, Math.max(2, Math.round(want)));
+    const w = VIEW_W * k, h = VIEW_H * k;
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
-    this.ctx.setTransform(w / VIEW_W, 0, 0, h / VIEW_H, 0, 0);
+    this.ctx.setTransform(k, 0, 0, k, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
+    setPixelScale(k);
+    // the last stretch to the window is smoothed unless it is one to one (stretched pixel for pixel by a fraction, the
+    // columns would be uneven again)
+    const mode = Math.abs((c.clientWidth || VIEW_W) * dpr - w) < 1 ? 'pixelated' : 'auto';
+    if (c.style.imageRendering !== mode) c.style.imageRendering = mode;
   }
 
   /** System Option SCREEN SIZE / UI SIZE: the view, the bar and the open windows follow the new size. */
@@ -10177,6 +10239,23 @@ export class Game {
     return z ? [z.sx + x / z.z, z.sy + y / z.z] : [x, y];
   }
 
+  /**
+   * Whether something standing at (x, y) can show: reaching mx to either side, `up` above and `down` below. The world
+   * is drawn whole each frame, so what is well off screen is skipped (a Voyage addition). No position: drawn.
+   */
+  inView(x, y, mx, up, down) {
+    const v = this.viewBox;
+    if (!v || !Number.isFinite(x) || !Number.isFinite(y)) return true;
+    return x + mx > v.l && x - mx < v.r && y + down > v.t && y - up < v.b;
+  }
+  /** A monster's or NPC's frame, with room for what shows around it (status icons, name tags, a Maple TV's screens). */
+  lifeInView(e) {
+    if (e.tv || e.drawAvatar) return this.inView(e.x, e.y, 400, 450, 200);
+    const v = this.viewBox, b = e.box?.();
+    if (!v || !b || !Number.isFinite(b.left) || !Number.isFinite(b.top)) return true;
+    return b.right + 100 > v.l && b.left - 100 < v.r && b.bottom + 100 > v.t && b.top - 150 < v.b;
+  }
+
   render() {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
@@ -10185,10 +10264,21 @@ export class Game {
       ctx.save(); ctx.scale(UI_SCALE, UI_SCALE); this.windows?.draw(ctx); ctx.restore();
       return;
     }
-    const cam = { ...this.cam, x: Math.round(this.cam.x) + (this.shake?.dx || 0), y: Math.round(this.cam.y) + (this.shake?.dy || 0) };
+    // the world is drawn from the camera's whole game pixel, then moved by the rest of it (a step of the canvas's grid),
+    // so everything placed on whole pixels stays on the grid and the view still glides; this.cam is the whole-pixel
+    // camera while it is drawn
+    const real = this.cam, ix = Math.floor(real.x), iy = Math.floor(real.y);
+    const cam = { ...real, x: ix + (this.shake?.dx || 0), y: iy + (this.shake?.dy || 0) };
+    this.viewBox = { l: cam.x, t: cam.y, r: cam.x + (cam.w ?? VIEW_W), b: cam.y + (cam.h ?? VIEW_H) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    map.drawBacks(ctx, cam, false);
+    // backgrounds (and the screen's own weather) move at their own rates: drawn from the camera as it is, not shifted
+    const view = { ...real, x: real.x + (this.shake?.dx || 0), y: real.y + (this.shake?.dy || 0) };
+    const unshifted = (fn) => { ctx.save(); ctx.translate(real.x - ix, real.y - iy); fn(); ctx.restore(); };
+    map.drawBacks(ctx, view, false);
+    this.cam = cam;
+    ctx.save();
+    ctx.translate(ix - real.x, iy - real.y);
 
     // shop owners and their booths go down first: everyone else walks in front of a shop
     const inShop = (e) => e.box?.type === 4;
@@ -10197,8 +10287,8 @@ export class Game {
     for (let l = 0; l < 8; l++) {
       if (l === 3) this.fieldMode?.drawWorld?.(ctx, cam);   // an event field's pieces stand just behind page 3
       map.drawLayer(ctx, cam, l);
-      for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
-      if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
+      for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l && this.lifeInView(e)) e.draw(ctx, cam, this.assets);
+      if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l && this.inView(r.x, r.y, 400, 500, 250)) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
       if (l === playerLayer) this.drawDoors(ctx, cam);
@@ -10213,8 +10303,8 @@ export class Game {
       for (const c of chars) if (c.page === l) c.draw();
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
-    for (const e of mobs) if (e.flying && !e.doomArt) e.draw(ctx, cam, this.assets);   // flyers go over every layer
-    for (const sm of this.summons.values()) sm.draw(ctx, cam);
+    for (const e of mobs) if (e.flying && !e.doomArt && this.lifeInView(e)) e.draw(ctx, cam, this.assets);   // flyers go over every layer
+    for (const sm of this.summons.values()) if (this.inView(sm.x, sm.y, 350, 450, 200)) sm.draw(ctx, cam);
     this.guide?.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
@@ -10222,11 +10312,11 @@ export class Game {
     this.drawFx(ctx, cam);
     this.drawWeddingFx(ctx, cam, this.frameDt || 0);
     this.drawKeyGauge(ctx, cam);
-    map.drawBacks(ctx, cam, true);
+    unshifted(() => map.drawBacks(ctx, view, true));
     this.fieldMode?.drawOver?.(ctx, cam);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
-    this.weather.draw(ctx);
+    unshifted(() => this.weather.draw(ctx));
     this.mapleTV.draw(ctx, cam, this.map);
     drawPartyHp(ctx, this, cam);
     this.drawMapTips(ctx, cam);
@@ -10244,6 +10334,8 @@ export class Game {
       ctx.restore();
     }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
+    ctx.restore();
+    this.cam = real;
     this.applyZoom();
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
     this.vfx?.drawScreen(ctx);
@@ -10292,15 +10384,15 @@ export class Game {
   drawOrder(ctx, cam, inShop) {
     const p = this.player, list = [];
     const put = (z, slot, draw) => list.push({ page: z.page, k: -10 * z.zMass + slot, draw });
-    for (const e of this.map.life) if (e.kind === 'Npc') put(e.fh ? { page: e.fh.layer, zMass: e.fh.zMass } : { page: 7, zMass: 0 }, 5, () => e.draw(ctx, cam, this.assets));
+    for (const e of this.map.life) if (e.kind === 'Npc' && this.lifeInView(e)) put(e.fh ? { page: e.fh.layer, zMass: e.fh.zMass } : { page: 7, zMass: 0 }, 5, () => e.draw(ctx, cam, this.assets));
     const onBack = (owner) => { for (const pet of this.pets.values()) if (pet.onBack && pet.owner === owner) pet.draw(ctx, cam); };
     for (const rp of this.others.values()) {
       rp.z = this.zFrom(rp.fhId, rp.z);
-      if (!inShop(rp)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); this.drawHearts(ctx, cam, rp, this.frameDt); onBack(rp.id); });
+      if (!inShop(rp) && this.inView(rp.x, rp.y, 350, 450, 200)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); this.drawHearts(ctx, cam, rp, this.frameDt); onBack(rp.id); });
     }
     for (const pet of this.pets.values()) {
       pet.z = pet.mine ? (pet.fh ? { page: pet.fh.layer, zMass: pet.fh.zMass } : pet.z || { page: 7, zMass: 0 }) : this.zFrom(pet.fhId, pet.z);
-      if (!pet.onBack) put(pet.z, pet.mine ? 8 : 3, () => pet.draw(ctx, cam));
+      if (!pet.onBack && this.inView(pet.x, pet.y, 200, 250, 120)) put(pet.z, pet.mine ? 8 : 3, () => pet.draw(ctx, cam));
     }
     this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
       : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
@@ -10361,7 +10453,7 @@ export class Game {
       if (ent.box?.type === 4) this.boards.drawShopBoard(ctx, this.cam, ent, sx, sy);
       else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
       if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
-      this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
+      this.drawCharTags(ctx, ent, look, local, snapPx(sx), snapPx(sy) + 4);
       return;
     }
     this.drawSetFx(ctx, cam, ent, false, gx, gy);
@@ -10383,7 +10475,7 @@ export class Game {
     else if (ent.box?.type === 1 || ent.box?.type === 2) this.boards.drawGameBoard(ctx, this.cam, ent, sx, sy);
     if (ent.chalk) this.drawChalkboard(ctx, ent, sx, sy); else ent.chalkRect = null;
     if (!dead) this.drawCombo(ctx, ent, sx, sy, local ? this.comboValue() : ent.combo || 0);
-    this.drawCharTags(ctx, ent, look, local, Math.round(sx), Math.round(sy) + 4);
+    this.drawCharTags(ctx, ent, look, local, snapPx(sx), snapPx(sy) + 4);
   }
 
 
@@ -10394,14 +10486,15 @@ export class Game {
       const img = this.assets.image(node);
       if (!img) continue;
       const x = d.cx, y = d.landed && !d.pickedBy ? Math.trunc(d.y + 3 * Math.sin(d.phase)) : d.cy;
+      if (!this.inView(x, y, 80, 100, 60)) continue;
       // icons hang from their left edge (origin x ~0), so centre them on the spot they lie on
       const oy = node.origin?.[1] ?? img.height;
       ctx.globalAlpha = d.alpha;
       if (d.angle) {                            // spinning on its way down: turn about the icon's middle
-        ctx.save(); ctx.translate(Math.round(x - cam.x), Math.round(y - oy + img.height / 2 - cam.y)); ctx.rotate(d.angle);
+        ctx.save(); ctx.translate(snapPx(x - cam.x), snapPx(y - oy + img.height / 2 - cam.y)); ctx.rotate(d.angle);
         ctx.drawImage(img, Math.round(-img.width / 2), Math.round(-img.height / 2));
         ctx.restore();
-      } else ctx.drawImage(img, Math.round(x - img.width / 2 - cam.x), Math.round(y - oy - cam.y));
+      } else ctx.drawImage(img, snapPx(x - img.width / 2 - cam.x), snapPx(y - oy - cam.y));
       ctx.globalAlpha = 1;
     }
   }
@@ -10410,13 +10503,13 @@ export class Game {
     // pets talk from just over their heads, without a name in front
     // a pet's balloon sits on top of the pet: its standing frame's height, so a tall pet's is higher
     for (const pet of this.pets.values()) {
-      if (!pet.chat || pet.hidden) continue;
+      if (!pet.chat || pet.hidden || !this.inView(pet.x, pet.y, 250, 350, 80)) continue;
       const at = pet.drawPos(), top = Number(pet.data?.stand0?.[0]?.origin?.[1]) || 33;
       this.vfx?.drawBalloon(ctx, cam, { x: at.x, y: at.y - top + 77 }, pet.chat.text, `pet/${pet.chat.style || 0}`);
     }
     // NPCs: the arrow just over the head; not while a quest icon is there
     for (const e of this.map.life) {
-      if (!e.chat || this.vfx?.questIcons.has(e)) continue;
+      if (!e.chat || this.vfx?.questIcons.has(e) || !this.inView(e.x, e.y, 300, 500, 100)) continue;
       // a monster's line: its ChatBalloon.img/mob/<n> over its body, fading at the end (the height over it is inferred)
       if (e.kind === 'Mob') {
         const b = e.hitBox?.();
@@ -10428,7 +10521,7 @@ export class Game {
       const top = e.anims.stand?.frames[0]?.origin?.[1] ?? 80;
       this.vfx?.drawBalloon(ctx, cam, { x: e.x, y: e.y - top + 77 }, e.chat.text, 'npc');
     }
-    const list = [this.player, ...this.others.values()].filter((e) => e.chat);
+    const list = [this.player, ...this.others.values()].filter((e) => e.chat && (e === this.player || this.inView(e.x, e.y, 300, 450, 100)));
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
     for (const e of list) {
       const text = `${e.name} : ${e.chat.text}`, quote = (e === this.player ? this.look : e.look)?.chatBalloon;
@@ -10437,7 +10530,7 @@ export class Game {
       if (this.vfx?.drawBalloon(ctx, cam, ghost || e, text, style)) continue;   // a quote ring's balloon   // ChatBalloon.img; the drawn box is the offline fallback
       const lines = wrap(ctx, text, 160);
       const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14, h = lines.length * 15 + 8;
-      const x = Math.round(e.x - cam.x - w / 2), y = Math.round(e.y - cam.y - 90 - h);
+      const x = snapPx(e.x - cam.x - w / 2), y = snapPx(e.y - cam.y - 90 - h);
       ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.strokeStyle = '#555';
       roundRect(ctx, x, y, w, h, 6); ctx.fill(); ctx.stroke();
       ctx.fillStyle = '#222'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';

@@ -1,4 +1,5 @@
 import { Anim } from './map.js';
+import { snapPx } from './view.js';
 import { sfx } from './audio.js';
 import { npcTalk } from './ui/dialogs.js';
 import { questFlow } from './ui/quests-ui.js';
@@ -104,13 +105,13 @@ export class QuestAlert {
     const f = this.anim?.node, p = this.g.player, im = f && this.g.assets.image(f);
     if (!im || !p) return null;
     const o = f.origin || [0, 0], a = this.g.headAnchor();   // QuestAlert's pos is 1: the avatar's head vector
-    return { x: Math.round(a.x - o[0]), y: Math.round(a.y - o[1]), w: im.width, h: im.height, im };
+    return { x: snapPx(a.x - o[0]), y: snapPx(a.y - o[1]), w: im.width, h: im.height, im };   // with the head, on the canvas's grid
   }
   draw(ctx, cam) {
     const r = this.rect();
     if (!r) return;
     ctx.save(); ctx.globalAlpha = this.anim.alpha;
-    ctx.drawImage(r.im, r.x - Math.round(cam.x), r.y - Math.round(cam.y));
+    ctx.drawImage(r.im, r.x - cam.x, r.y - cam.y);
     ctx.restore();
   }
   hits(wx, wy) { const r = this.rect(); return !!r && wx >= r.x && wx < r.x + r.w && wy >= r.y && wy < r.y + r.h; }

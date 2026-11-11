@@ -3,7 +3,7 @@ import { pad, frames } from '../assets.js';
 import { nameTag } from '../map.js';
 import { drawParts } from '../character.js';
 import { Win, allCanvases } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
+import { UI_W, UI_H, snapPx } from '../view.js';
 
 // ==================================================================== guild emblems
 const MARK_KIND = { 2: 'Animal', 3: 'Plant', 4: 'Pattern', 5: 'Letter', 9: 'Etc' };
@@ -35,7 +35,7 @@ export function drawPartyHp(ctx, game, cam) {
     if (m.id === game.player.id) continue;
     const e = game.others.get(m.id);
     if (!e || e.hidden) continue;
-    const x = Math.round(e.x - cam.x) - 26, y = Math.round(e.y - cam.y) - 89;
+    const x = snapPx(e.x - cam.x) - 26, y = snapPx(e.y - cam.y) - 89;
     const f = Math.max(0, Math.min(46, Math.floor(((m.hp || 0) * 46) / Math.max(1, m.maxHp || 0))));
     ctx.fillStyle = '#000'; ctx.fillRect(x, y, 52, 10);
     ctx.fillStyle = '#fff'; ctx.fillRect(x + 1, y + 1, 50, 8);

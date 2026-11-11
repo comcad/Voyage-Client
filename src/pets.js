@@ -3,6 +3,7 @@ import { sfx } from './audio.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { allCanvases } from './ui/windows.js';
 import { config } from './config.js';
+import { snapPx } from './view.js';
 
 /**
  * Pets (Item/Pet/<id>.img). Your own run a small AI on the 30ms clock that feeds the same walk / jump
@@ -401,7 +402,7 @@ export class Pet {
   draw(ctx, cam) {
     if (this.hidden) return;
     const fr = frames(this.node()), node = fr[this.frame] || fr[0], img = node && this.g.assets.image(node), at = this.drawPos();
-    const x = Math.round(at.x - cam.x), y = Math.round(at.y - cam.y);
+    const x = snapPx(at.x - cam.x), y = snapPx(at.y - cam.y);
     if (img) {
       const o = node.origin || [img.width / 2, img.height];
       ctx.save();
