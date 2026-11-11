@@ -68,6 +68,7 @@ import { OwlWin, OwlResultWin } from './ui/owl.js';
 import { openMaker, makerOutcome } from './ui/maker.js';
 import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
+import { PerfMeter } from './perfmeter.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -79,7 +80,7 @@ import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
-import { settings } from './settings.js';
+import { settings, saveSettings } from './settings.js';
 import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale } from './view.js';
 import { config } from './config.js';
 import { DirectionScene } from './direction.js';
@@ -1747,6 +1748,7 @@ export class Game {
   }
   /** A map change takes the flowerpot windows down and puts them back up where they were (with any the Cash Shop took down). */
   cycleRaise() {
+    if (!this.windows) return;   // (the offline map viewer has no windows)
     const ids = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);
     for (const id of ids) this.closeRaise(id);
     ids.push(...(this.raiseKept || []).filter((id) => !ids.includes(id))); this.raiseKept = null;
@@ -5680,6 +5682,12 @@ export class Game {
     try { return JSON.parse(localStorage.getItem('maple.gameopt') || '{}')[key] !== false; } catch { return true; }
   }
   sendChat(text) {
+    // /fps: the performance meter on or off (a Voyage tool, kept with the System Option choices)
+    if (/^\/fps$/i.test(text.trim())) {
+      settings.fpsMeter = !settings.fpsMeter; saveSettings();
+      this.hud?.message?.(`The performance meter is ${settings.fpsMeter ? 'on' : 'off'}. Type /fps again to ${settings.fpsMeter ? 'hide' : 'show'} it.`, CHAT_COLORS.notice);
+      return;
+    }
     if (!this.net) { this.player.chat = { text, t: 5 }; return; }
     let m = text.match(/^\/(?:w|whisper)\s+(\S+)\s+(.+)$/i);
     if (m) { this.whisperTo(m[1], m[2]); return; }
@@ -5970,6 +5978,8 @@ export class Game {
     const loop = (t) => {
       // the next frame is booked first: an error in one frame must never stop the game for good
       requestAnimationFrame(loop);
+      const meter = settings.fpsMeter ? (this.perf ??= new PerfMeter()) : null;
+      meter?.offer(t);
       // System Option FRAME RATE: every screen refresh (VSync), or held to 60 / 30 a second on the refresh's beat
       const cap = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : 0;
       if (cap) {
@@ -5981,7 +5991,11 @@ export class Game {
       const gap = (t - last) / 1000, dt = Math.min(gap, 0.05);
       last = t;
       if (this.map && !this.loading) {
-        try { if (gap > 0.25) this.catchUpPaths(gap - dt); this.update(dt); this.render(); } catch (e) {
+        try {
+          if (gap > 0.25) this.catchUpPaths(gap - dt);
+          const u0 = performance.now(); this.update(dt); const u1 = performance.now(); this.render();
+          if (meter) { meter.frame(t, u1 - u0, performance.now() - u1); meter.draw(this.ctx, this); }
+        } catch (e) {
           const key = String(e?.message);
           if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
           for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open

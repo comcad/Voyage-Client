@@ -291,6 +291,7 @@ export class GameMap {
    */
   drawBacks(ctx, cam, front) {
     const list = this.backs.filter((b) => !!b.front === front);
+    if (!front) this.bufStats = { n: 0, px: 0 };   // for the /fps meter
     GRID = PIXEL_SCALE;
     for (let i = 0; i < list.length;) {
       const m = this.backScale(cam, list[i]);
@@ -331,6 +332,7 @@ export class GameMap {
     const ux0 = Math.floor((box.x / m) * D) / D, uy0 = Math.floor((box.y / m) * D) / D;
     const bw = Math.ceil(((box.x + box.w) / m) * D) - ux0 * D, bh = Math.ceil(((box.y + box.h) / m) * D) - uy0 * D;
     if (bw <= 0 || bh <= 0) return;
+    if (this.bufStats) { this.bufStats.n++; this.bufStats.px += bw * bh; }
     const c = (this.backCanvas ??= document.createElement('canvas'));
     // it only ever grows (each run uses its top-left part), so runs of other sizes don't reallocate it every frame
     if (c.width < bw || c.height < bh) { c.width = Math.max(c.width, bw); c.height = Math.max(c.height, bh); }
