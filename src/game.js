@@ -3387,7 +3387,7 @@ export class Game {
       }),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
-        if (e && !e.pending) e.controlled = true; else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
+        if (e && !e.pending) { e.controlled = true; e.fly = null; } else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
         if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);   // what it was already under
         if (aggro && e && !e.pending) e.chase(this.player);      // the server wants it after us
       }),
@@ -4210,13 +4210,13 @@ export class Game {
     const e = await map.createLife(kind, spawn);
     if (!e || this.map !== map || this.lifeByOid.get(d.oid) !== entry) return;
     if (kind === 'Mob') { e.y = d.y; e.facingRight = !(d.stance & 1); }
-    e.controlled = controlled;
+    e.controlled = controlled; e.fly = null;   // a flyer taken over starts its AI afresh
     if (kind === 'Mob') {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
       e.onDie = (m) => this.mobSay(m, -1, -1);   // a dying monster says its death line by itself
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
       // one we control tells the server each path it plans, as it starts on it
-      e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity); };
+      e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying) this.net?.moveMob(m.oid, start, moves, activity, 0, 0, m.flying ? m.fly : null); };
     }
     // an NPC we control asks the server what it does next, and does what comes back
     if (kind === 'Npc' && controlled) e.onNpcAction = (n, action, chat) => this.net?.npcAction(n.oid, action, chat);

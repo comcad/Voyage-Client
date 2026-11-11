@@ -1655,11 +1655,12 @@ export class ChannelSession {
   /** activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its id/level). */
   /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
   npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
-  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0) {
+  /** `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else). */
+  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null) {
     const id = this.moveId++ & 0x7fff;
     (this.mobMoveIds ??= new Map()).set(oid, id);
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
-      .byte(0).byte(activity).byte(skill).byte(level).short(0).zero(8).byte(0).int(0).pos(start);
+      .byte(0).byte(activity).byte(skill).byte(level).short(0).byte(0).int(0).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
     writeMovement(w, moves);
     this.send(w);
   }

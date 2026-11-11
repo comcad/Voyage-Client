@@ -66,6 +66,22 @@ export class Footholds {
     this.ceiling = Number.isFinite(this.top) ? this.top - 300 : -Infinity;   // nothing in the air goes higher
     // the side walls: the outermost foothold ends, 30px in (a map with info/VRLimit narrows them, see Map)
     this.wallL = this.left + 30; this.wallR = this.right - 30;
+    this.ground = Number.isFinite(this.bottom) ? this.bottom + 10 : Infinity;   // nothing in the air goes lower
+  }
+  /**
+   * The footholds by group id (the group under the layer, whatever the layer; walls and undersides too), in load
+   * order, with how far each group reaches left and right: where a flyer picks its spots.
+   */
+  flyGroups() {
+    if (this._fly) return this._fly;
+    const ids = [], range = new Map(), list = new Map();
+    for (const f of this.all) {
+      const g = f.zMass;
+      if (!list.has(g)) { ids.push(g); list.set(g, []); range.set(g, [Infinity, -Infinity]); }
+      list.get(g).push(f);
+      const r = range.get(g); r[0] = Math.min(r[0], f.x1, f.x2); r[1] = Math.max(r[1], f.x1, f.x2);
+    }
+    return (this._fly = { ids, range, list });
   }
 
   get(id) { return this.byId.get(id); }
