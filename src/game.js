@@ -82,6 +82,7 @@ import { readSets, wornSet } from './seteff.js';
 import { EnergyBarWin } from './ui/energybar.js';
 import { GuildBBSWin } from './ui/guildbbs.js';
 import { FredrickWin } from './ui/fredrick.js';
+import { WitchTowerScore, GuildBossField } from './guildboss.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -1523,6 +1524,13 @@ export class Game {
     m.chat = { text: line, t: life, fade, style: Number(m.src?.info?.speak?.chatBalloon) || 0 };
     const name = this.windows.strings.mob?.[Number(m.spawn?.id)]?.name || '';
     this.hud.message(`${name} : ${line}`, '#ffff00');
+  }
+  /** WITCH_TOWER_SCORE: only on a Witch Tower map (fieldType 21); the first one opens the key count. */
+  async onWitchTowerScore(score) {
+    if (Number(this.map?.info?.fieldType) !== 21) return;
+    const map = this.map, w = await (this.witchTowerLoad ??= new WitchTowerScore(this).load());
+    if (this.map !== map) return;
+    this.witchTower = w; w.score = score;
   }
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
@@ -3028,6 +3036,9 @@ export class Game {
       fame: (f) => this.onFame(f),
       exclusiveAnswered: () => this.releaseExclusive(),
       // a family privilege in use: its icon (Family/RightIcon/<type>) in the buff row until it runs out
+      witchTowerScore: later((s) => this.onWitchTowerScore(s)),
+      guildBossHealer: later((y) => this.guildBoss?.healerMove(y)),
+      guildBossPulley: later((s) => this.guildBoss?.pulleyState(s)),
       familyPrivilege: (p) => { this.familyPrivilege = p ? { type: p.type, index: p.a, until: Date.now() + p.ms, dur: Math.max(1, p.ms) } : null; },
       mobSpeak: later((oid, s, l) => { const m = this.lifeByOid.get(oid); if (m && !m.pending) this.mobSay(m, s, l); }),
       // the Zakum Shrine / Horntail's Cave closing (a pink line); a random transform potion that failed
@@ -4114,6 +4125,11 @@ export class Game {
       this.vfx?.mapChanged();
       this.others.clear(); this.clearDrops(); this.lifeByOid.clear(); this.pets.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.cycleRaise(); this.reactors?.clear();
       if (this.owlResult) this.windows.close(this.owlResult);
+      this.witchTower = this.witchTowerLoad = null; this.guildBoss = null;
+      if (Number(map.info?.fieldType) === 8 && (map.data?.healer || map.data?.pulley)) {
+        const gb = new GuildBossField(this, map);
+        gb.load().then(() => { if (this.map === map) this.guildBoss = gb; });
+      }
       this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
       this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
       // a spawn portal with 0x80 set is a Mystic Door's slot: in town its door portal, elsewhere where the door was opened
@@ -5786,6 +5802,7 @@ export class Game {
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.guide?.update(dt);
+    this.guildBoss?.update(dt);
     this.updateDiseases(dt);
     this.updateAranCombo(dt);
     (this.dojo ??= new DojoWindow(this)).update(dt);
@@ -6582,7 +6599,7 @@ export class Game {
       targets = first ? [first, ...this.mobsIn(this.skillBox(p, skillId, lv), p.x, p.y, first).slice(0, mobCount - 1)] : [];
     }
     const looks = skillId === BAND_OF_THIEVES ? this.thiefLooks(skillId, targets.length) : [];
-    if (this.net) this.after(hitDelay, () => this.hitReactors(kind, skillId, lv, pose));
+    if (this.net) this.after(hitDelay, () => { this.hitReactors(kind, skillId, lv, pose); if (kind === 'melee') this.guildBoss?.swing(this.attackBox(kind, skillId, lv, pose)); });
     const max = this.net ? (skillId ? skillMaxDamage(this, skillId, lv, kind) : kind === 'magic' ? 1 : this.maxDamage(pose)) : 25;
     // Snipe's shot strikes for 199,999 less up to 10,000
     const roll = () => (skillId === SNIPE ? Math.trunc(199999 - Math.random() * 10000)
@@ -9837,6 +9854,7 @@ export class Game {
       for (const e of mobs) if ((e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
+      if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
       if (l === playerLayer) this.drawDoors(ctx, cam);
       if (l === playerLayer) this.vfx?.drawTombs(ctx, cam);   // behind every character, so a ghost floats in front of its stone
       if (l === playerLayer) {
@@ -9891,6 +9909,7 @@ export class Game {
       this.drawClock(ctx);
       this.dojo?.draw(ctx);
       this.pyramid?.draw(ctx);
+      this.witchTower?.draw(ctx);
       this.questMsg?.draw(ctx);         // quest progress, near the top
       this.drawQuestTimers(ctx);
       this.hud?.draw?.(ctx);            // what you gain, in the lower-right corner

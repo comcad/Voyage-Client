@@ -1076,6 +1076,10 @@ export class ChannelSession {
     // a monster's line: its speak entry and the line in it (Cosmic's SHOW_MAGNET)
     on(S.MOB_SPEAKING, (r) => { const oid = r.int(), s = r.int(); this.emit('mobSpeak', oid, s, r.int()); });
     // the family privilege in use: its type (0: none), the privilege's index, two more values, then its time left
+    // WITCH_TOWER_SCORE: the keys you hold; GUILD_BOSS_HEALER_MOVE: the healer's new y; GUILD_BOSS_PULLEY_STATE: the pulley's state
+    on(S.WITCH_TOWER_SCORE, (r) => this.emit('witchTowerScore', r.ubyte()));
+    on(S.GUILD_BOSS_HEALER_MOVE, (r) => this.emit('guildBossHealer', r.short()));
+    on(S.GUILD_BOSS_PULLEY_STATE, (r) => this.emit('guildBossPulley', r.ubyte()));
     on(S.FAMILY_SET_PRIVILEGE, (r) => {
       const type = r.ubyte();
       if (!type) { this.emit('familyPrivilege', null); return; }
@@ -1765,6 +1769,8 @@ export class ChannelSession {
   }
 
   /** DAMAGE_REACTOR: an attack reached it. stance: 0/1 in the air facing left/right, 2/3 on the ground. */
+  /** The guild boss field's pulley, struck while its state is 0: no body. */
+  pullGuildBossPulley() { this.send(new PacketWriter(C.GUILD_BOSS_PULLEY_HIT)); }
   damageReactor(oid, charPos, stance, skill = 0) {
     this.send(new PacketWriter(C.DAMAGE_REACTOR).int(oid).int(charPos).short(stance).int(0).int(skill));
   }
