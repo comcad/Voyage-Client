@@ -69,7 +69,6 @@ import { openMaker, makerOutcome } from './ui/maker.js';
 import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
 import { PerfMeter } from './perfmeter.js';
-import { Preloader } from './preload.js';
 import { CharPath } from './movepath.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
@@ -4329,7 +4328,6 @@ export class Game {
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
       this.questAlert?.refresh();   // what this map, your items and your level offer
-      this.preloadOwn();
     }
   }
 
@@ -4528,7 +4526,6 @@ export class Game {
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     if (d.hearts) this.setHearts(rp, d.hearts);
     this.others.set(d.id, rp);
-    this.preloader?.player(look, d.job);   // their attacks and their job's skills, in the background
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
@@ -4539,7 +4536,6 @@ export class Game {
     const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
     await look.load();
     rp.look = look; rp.lookData = lookData;
-    this.preloader?.player(look, rp.job);
   }
 
   onChat(c) {
@@ -4819,22 +4815,7 @@ export class Game {
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
-    this.preloadOwn();
-  }
-
-  /**
-   * In the background (preload.js): every pose your look has, your job's skill effects, and (once) every body, head,
-   * face and hair. On each map you enter and whenever your look is rebuilt; what is already in is skipped.
-   */
-  preloadOwn() {
-    if (!this.net || !this.look) return;
-    this.preloader ??= new Preloader(this);
-    if (this.preloaded?.look !== this.look || this.preloaded?.job !== this.stats?.job) {
-      this.preloaded = { look: this.look, job: this.stats?.job };
-      this.assets.enqueue(lookCanvases(this.look, this.look.actionList()), 0);
-      this.preloader.job(this.stats?.job, this.look);
-    }
-    this.preloader.everyone();
+    this.assets.preload(lookCanvases(look, look.actionList())); // skill animations, in the background
   }
 
   /**
