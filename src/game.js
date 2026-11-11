@@ -69,6 +69,7 @@ import { openMaker, makerOutcome } from './ui/maker.js';
 import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
 import { PerfMeter } from './perfmeter.js';
+import { Preloader } from './preload.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -4343,6 +4344,7 @@ export class Game {
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
       this.questAlert?.refresh();   // what this map, your items and your level offer
+      this.preloadOwn();
     }
   }
 
@@ -4541,6 +4543,7 @@ export class Game {
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     if (d.hearts) this.setHearts(rp, d.hearts);
     this.others.set(d.id, rp);
+    this.preloader?.player(look, d.job);   // their attacks and their job's skills, in the background
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
@@ -4551,6 +4554,7 @@ export class Game {
     const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
     await look.load();
     rp.look = look; rp.lookData = lookData;
+    this.preloader?.player(look, rp.job);
   }
 
   onChat(c) {
@@ -4830,7 +4834,22 @@ export class Game {
     await look.load();
     await this.assets.preload(lookCanvases(look, PRELOAD_ACTIONS));
     this.look = look;
-    this.assets.preload(lookCanvases(look, look.actionList())); // skill animations, in the background
+    this.preloadOwn();
+  }
+
+  /**
+   * In the background (preload.js): every pose your look has, your job's skill effects, and (once) every body, head,
+   * face and hair. On each map you enter and whenever your look is rebuilt; what is already in is skipped.
+   */
+  preloadOwn() {
+    if (!this.net || !this.look) return;
+    this.preloader ??= new Preloader(this);
+    if (this.preloaded?.look !== this.look || this.preloaded?.job !== this.stats?.job) {
+      this.preloaded = { look: this.look, job: this.stats?.job };
+      this.assets.enqueue(lookCanvases(this.look, this.look.actionList()), 0);
+      this.preloader.job(this.stats?.job, this.look);
+    }
+    this.preloader.everyone();
   }
 
   /**
@@ -10235,6 +10254,23 @@ export class Game {
     return z ? [z.sx + x / z.z, z.sy + y / z.z] : [x, y];
   }
 
+  /**
+   * Whether something standing at (x, y) can show: reaching mx to either side, `up` above and `down` below. The world
+   * is drawn whole each frame, so what is well off screen is skipped (a Voyage addition). No position: drawn.
+   */
+  inView(x, y, mx, up, down) {
+    const v = this.viewBox;
+    if (!v || !Number.isFinite(x) || !Number.isFinite(y)) return true;
+    return x + mx > v.l && x - mx < v.r && y + down > v.t && y - up < v.b;
+  }
+  /** A monster's or NPC's frame, with room for what shows around it (status icons, name tags, a Maple TV's screens). */
+  lifeInView(e) {
+    if (e.tv || e.drawAvatar) return this.inView(e.x, e.y, 400, 450, 200);
+    const v = this.viewBox, b = e.box?.();
+    if (!v || !b || !Number.isFinite(b.left) || !Number.isFinite(b.top)) return true;
+    return b.right + 100 > v.l && b.left - 100 < v.r && b.bottom + 100 > v.t && b.top - 150 < v.b;
+  }
+
   render() {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
@@ -10248,6 +10284,7 @@ export class Game {
     // camera while it is drawn
     const real = this.cam, ix = Math.floor(real.x), iy = Math.floor(real.y);
     const cam = { ...real, x: ix + (this.shake?.dx || 0), y: iy + (this.shake?.dy || 0) };
+    this.viewBox = { l: cam.x, t: cam.y, r: cam.x + (cam.w ?? VIEW_W), b: cam.y + (cam.h ?? VIEW_H) };
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     // backgrounds (and the screen's own weather) move at their own rates: drawn from the camera as it is, not shifted
@@ -10265,8 +10302,8 @@ export class Game {
     for (let l = 0; l < 8; l++) {
       if (l === 3) this.fieldMode?.drawWorld?.(ctx, cam);   // an event field's pieces stand just behind page 3
       map.drawLayer(ctx, cam, l);
-      for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l) e.draw(ctx, cam, this.assets);
-      if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l) r.draw(ctx, cam, this.assets);
+      for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l && this.lifeInView(e)) e.draw(ctx, cam, this.assets);
+      if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l && this.inView(r.x, r.y, 400, 500, 250)) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
       if (l === playerLayer) this.drawDoors(ctx, cam);
@@ -10281,8 +10318,8 @@ export class Game {
       for (const c of chars) if (c.page === l) c.draw();
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
     }
-    for (const e of mobs) if (e.flying && !e.doomArt) e.draw(ctx, cam, this.assets);   // flyers go over every layer
-    for (const sm of this.summons.values()) sm.draw(ctx, cam);
+    for (const e of mobs) if (e.flying && !e.doomArt && this.lifeInView(e)) e.draw(ctx, cam, this.assets);   // flyers go over every layer
+    for (const sm of this.summons.values()) if (this.inView(sm.x, sm.y, 350, 450, 200)) sm.draw(ctx, cam);
     this.guide?.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
@@ -10362,15 +10399,15 @@ export class Game {
   drawOrder(ctx, cam, inShop) {
     const p = this.player, list = [];
     const put = (z, slot, draw) => list.push({ page: z.page, k: -10 * z.zMass + slot, draw });
-    for (const e of this.map.life) if (e.kind === 'Npc') put(e.fh ? { page: e.fh.layer, zMass: e.fh.zMass } : { page: 7, zMass: 0 }, 5, () => e.draw(ctx, cam, this.assets));
+    for (const e of this.map.life) if (e.kind === 'Npc' && this.lifeInView(e)) put(e.fh ? { page: e.fh.layer, zMass: e.fh.zMass } : { page: 7, zMass: 0 }, 5, () => e.draw(ctx, cam, this.assets));
     const onBack = (owner) => { for (const pet of this.pets.values()) if (pet.onBack && pet.owner === owner) pet.draw(ctx, cam); };
     for (const rp of this.others.values()) {
       rp.z = this.zFrom(rp.fhId, rp.z);
-      if (!inShop(rp)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); this.drawHearts(ctx, cam, rp, this.frameDt); onBack(rp.id); });
+      if (!inShop(rp) && this.inView(rp.x, rp.y, 350, 450, 200)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); this.drawHearts(ctx, cam, rp, this.frameDt); onBack(rp.id); });
     }
     for (const pet of this.pets.values()) {
       pet.z = pet.mine ? (pet.fh ? { page: pet.fh.layer, zMass: pet.fh.zMass } : pet.z || { page: 7, zMass: 0 }) : this.zFrom(pet.fhId, pet.z);
-      if (!pet.onBack) put(pet.z, pet.mine ? 8 : 3, () => pet.draw(ctx, cam));
+      if (!pet.onBack && this.inView(pet.x, pet.y, 200, 250, 120)) put(pet.z, pet.mine ? 8 : 3, () => pet.draw(ctx, cam));
     }
     this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
       : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
@@ -10464,6 +10501,7 @@ export class Game {
       const img = this.assets.image(node);
       if (!img) continue;
       const x = d.cx, y = d.landed && !d.pickedBy ? Math.trunc(d.y + 3 * Math.sin(d.phase)) : d.cy;
+      if (!this.inView(x, y, 80, 100, 60)) continue;
       // icons hang from their left edge (origin x ~0), so centre them on the spot they lie on
       const oy = node.origin?.[1] ?? img.height;
       ctx.globalAlpha = d.alpha;
@@ -10480,13 +10518,13 @@ export class Game {
     // pets talk from just over their heads, without a name in front
     // a pet's balloon sits on top of the pet: its standing frame's height, so a tall pet's is higher
     for (const pet of this.pets.values()) {
-      if (!pet.chat || pet.hidden) continue;
+      if (!pet.chat || pet.hidden || !this.inView(pet.x, pet.y, 250, 350, 80)) continue;
       const at = pet.drawPos(), top = Number(pet.data?.stand0?.[0]?.origin?.[1]) || 33;
       this.vfx?.drawBalloon(ctx, cam, { x: at.x, y: at.y - top + 77 }, pet.chat.text, `pet/${pet.chat.style || 0}`);
     }
     // NPCs: the arrow just over the head; not while a quest icon is there
     for (const e of this.map.life) {
-      if (!e.chat || this.vfx?.questIcons.has(e)) continue;
+      if (!e.chat || this.vfx?.questIcons.has(e) || !this.inView(e.x, e.y, 300, 500, 100)) continue;
       // a monster's line: its ChatBalloon.img/mob/<n> over its body, fading at the end (the height over it is inferred)
       if (e.kind === 'Mob') {
         const b = e.hitBox?.();
@@ -10498,7 +10536,7 @@ export class Game {
       const top = e.anims.stand?.frames[0]?.origin?.[1] ?? 80;
       this.vfx?.drawBalloon(ctx, cam, { x: e.x, y: e.y - top + 77 }, e.chat.text, 'npc');
     }
-    const list = [this.player, ...this.others.values()].filter((e) => e.chat);
+    const list = [this.player, ...this.others.values()].filter((e) => e.chat && (e === this.player || this.inView(e.x, e.y, 300, 450, 100)));
     ctx.font = '12px "Segoe UI", system-ui, sans-serif';
     for (const e of list) {
       const text = `${e.name} : ${e.chat.text}`, quote = (e === this.player ? this.look : e.look)?.chatBalloon;

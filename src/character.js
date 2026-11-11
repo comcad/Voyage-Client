@@ -48,6 +48,11 @@ const ATTACK_POSES = {
   9: ['swingT1', 'swingT2', 'swingT2'],
 };
 const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
+/** Every pose a look's weapon attacks in: its swings and stabs, and its shots. */
+export function weaponPoses(look) {
+  const t = look?.weapon?.info?.attack;
+  return [...new Set([...(ATTACK_POSES[t] || ['swingO1', 'swingO2', 'swingO3', 'stabO1']), ...(SHOOT_POSES[t] || [])])];
+}
 
 /**
  * A ghost's body pose for each avatar pose (anything else stands; the dead stay dead), and the plain pose its head,
