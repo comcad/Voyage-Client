@@ -167,8 +167,8 @@ function readMobStats(r, has) {
  */
 const REMOTE_STATS = [[7, 1, 'speed'], [21, 1, 'combo'], [22, 4, 'weaponCharge'], [17, 4, 'stun'], [20, 4, 'darkness'],
   [19, 4, 'seal'], [30, 4, 'weakness'], [31, 4, 'curse'], [18, 'poison', 'poison'], [26, 0, 'shadowPartner'],
-  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [34, 2, 'ghost'], [39, 4, 'attract'], [41, 4, 'spiritJavelin'],
-  [47, 4], [49, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
+  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [49, 2, 'ghost'], [39, 4, 'attract'], [41, 4, 'spiritJavelin'],
+  [47, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
   [71, 4], [75, 4], [76, 4], [77, 4]];
 const TWO_STATE_NAMES = ['energyCharged', 'dashSpeed', 'dashJump', 'ride', 'partyBooster', 'guidedBullet', 'undead'];
 /**
@@ -1225,6 +1225,12 @@ export class ChannelSession {
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         b.morph = values[popcount(mask >> 32n) + popcount(mask & 0x1n)];
       }
+      // Ghost (second mask 0x20000): read right after a morph; its value is 1 for a ghost, 2 for the spaceship
+      if (pick === normal && mask & 0x20000n) {
+        r.pos = start;
+        const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
+        b.ghost = values[popcount(mask >> 32n) + popcount(mask & 0x3n)] || 0;
+      }
       // Shadow Stars: its one stat picks the star it throws (the item 2069999 above it)
       if (pick === normal && n === 1 && mask === 0x100n) { r.pos = start; b.shadowStars = r.short(); }
       // Power Stance / Freeze Standing: its one stat is the % chance not to be knocked back
@@ -1340,6 +1346,7 @@ export class ChannelSession {
     on(S.GIVE_FOREIGN_BUFF, (r) => {
       const id = r.int(), m1 = r.long(), m2 = r.long(), st = readRemoteStats(r, m1, m2);
       if (st.ride) { this.emit('foreignMount', id, st.ride.value); return; }
+      if (st.ghost !== undefined) this.emit('foreignGhost', id, st.ghost);
       if (st.morph !== undefined) { this.emit('foreignMorph', id, st.morph); return; }
       // Dark Sight (or Wind Walk, when its bit comes in the first long): drawn see-through
       if (st.darkSight || BigInt.asUintN(64, m1) & 0x400000000n) this.emit('foreignHidden', id);

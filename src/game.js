@@ -513,7 +513,7 @@ const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 122101
 const SHOUT = 1111008;
 const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
 /** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
-const MORPH = 0x2n;
+const MORPH = 0x2n, GHOST_MASK = 0x20000n;
 const STUN_MASTERY = 5110000, BERSERK = 1320006, WIND_WALK = 13101006, VANISH = 14100005, DARK_SIGHTS = [4001003, 14001003];
 /** Body Pressure (Aran): the monster your body touches takes its damage. */
 const BODY_PRESSURE = 21101003;
@@ -1227,6 +1227,22 @@ export class Game {
     await apply();
     if (!init) this.transformFx(ent, onRope, id !== 1000 && id !== 1001);
   }
+  /**
+   * Ghost (its buff's value: 1 the Ghost Candy's ghost, 2 the spaceship; 0 none): the body takes the ghost poses, and
+   * only the hair, cap, eye accessory and earrings stay on; the set effect, item effects and hearts go, and a ghost (1)
+   * wears item 5010999's effect. A change, but not on spawning, plays Transform as a morph's does.
+   */
+  setGhost(ent, v, init = false) {
+    v = Number(v) || 0;
+    const prev = ent.ghost || 0, local = ent === this.player;
+    if (prev === v) return;
+    ent.ghost = v;
+    const look = local ? this.look : ent.look;
+    if (look) look.ghost = v;
+    if (v === 1) { if (ent.fxBeforeGhost === undefined) ent.fxBeforeGhost = ent.itemFxId || 0; this.setItemEffect(ent, 5010999); }
+    else if (ent.fxBeforeGhost !== undefined) { const own = ent.fxBeforeGhost; delete ent.fxBeforeGhost; this.setItemEffect(ent, own); }
+    if (!init) this.transformFx(ent, local ? !!this.player.ladder : ent.action === 'ladder' || ent.action === 'rope', true);
+  }
   transformFx(ent, onRope, sound) {
     this.vfx?.play(onRope ? 'Transform' : 'TransformOnLadder', ent);
     if (sound) sfx.play('Game/Transform');
@@ -1671,7 +1687,7 @@ export class Game {
   }
   /** Morphed: why not (an item morph that can't be cancelled by a click says only that). */
   async transformRefusal() {
-    const now = Date.now(), m = (this.buffs || []).find((b) => b.until > now && b.source < 0 && (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & MORPH) !== 0n);
+    const now = Date.now(), m = (this.buffs || []).find((b) => b.until > now && b.source < 0 && (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & (MORPH | GHOST_MASK)) !== 0n);
     const fixed = m && Number((await itemInfo(this.assets, -m.source))?.noCancelMouse);
     this.hud.message(fixed ? 'Unavailable while transforming.'
       : 'Unavailable while transforming. Please right-click the icon at the top right corner to cancel the transformation.', CHAT_COLOR.error);
@@ -2185,7 +2201,7 @@ export class Game {
     const anim = new Anim(fx, true);
     await this.assets.preload(anim.frames);
     const here = () => ent === this.player || this.others.get(ent.id) === ent;
-    this.fx.push({ anim, follow: ent, keep: () => ent.consumeFxId === id && here() && !ent.morph });
+    this.fx.push({ anim, follow: ent, keep: () => ent.consumeFxId === id && here() && !ent.morph && !ent.ghost });
   }
   /**
    * Heart-Shaped Chocolates (5110000): n % 10 small hearts (ItemEff.img/5110000/0) and n / 10 big ones (/1) over their
@@ -2214,7 +2230,7 @@ export class Game {
     ent.hearts = list;
   }
   drawHearts(ctx, cam, ent, dt) {
-    if (!ent.hearts || ent.morph) return;
+    if (!ent.hearts || ent.morph || ent.ghost) return;
     for (const h of ent.hearts) {
       h.a += (dt || 0) * Math.PI;   // once round every 2000ms
       const img = this.assets.image(h.node);
@@ -2293,7 +2309,7 @@ export class Game {
   /** The set effect's layers behind `ent` (z < 0) or in front, from its feet (raised with it on a mount), mirrored with it unless fixed. */
   drawSetFx(ctx, cam, ent, front, dx = 0, dy = 0) {
     const layers = ent.setFx?.layers;
-    if (!layers?.length) return;
+    if (!layers?.length || ent.ghost) return;   // a ghost shows no set effect
     const right = drawnRight(ent), look = ent === this.player ? this.look : ent.look;
     const [rx, ry] = look ? this.mountRaise(ent, look) : [0, 0];   // on a mount it rides up with you
     for (const l of layers) {
@@ -3415,6 +3431,7 @@ export class Game {
       healNumber: later((id, amount) => { const ent = id === null ? this.player : this.others.get(id); if (ent && amount > 0) this.vfx?.damage(ent, [amount], 'blue'); }),
       foreignDisease: later((id, d) => this.onForeignDisease(id, d)),
       foreignMorph: later((id, morph) => this.onOther(id, (rp) => this.setMorph(rp, morph))),
+      foreignGhost: later((id, v) => this.onOther(id, (rp) => this.setGhost(rp, v))),
       foreignCancel: later((id, m1, m2) => this.onOther(id, (rp) => {
         if (rp.diseases) rp.diseases = rp.diseases.filter((x) => !((x.m1 & m1) || (x.m2 & m2)));
         if (BigInt.asUintN(64, BigInt(m2)) & COMBO_MASK) rp.combo = 0;
@@ -3422,6 +3439,7 @@ export class Game {
         if (BigInt.asUintN(64, BigInt(m2)) & DS_MASK || BigInt.asUintN(64, BigInt(m1)) & WW_MASK) rp.hidden = false;
         if (BigInt.asUintN(64, BigInt(m2)) & SP_MASK) rp.partner = false;
         if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(rp, 0);
+        if (BigInt.asUintN(64, BigInt(m2)) & GHOST_MASK) this.setGhost(rp, 0);
         const lo = BigInt.asUintN(64, BigInt(m2)), hi = BigInt.asUintN(64, BigInt(m1));
         if (lo & SOUL_ARROW_MASK) rp.soulArrow = false;
         if (lo & WEAPON_CHARGE_MASK) rp.weaponCharge = 0;
@@ -3558,6 +3576,7 @@ export class Game {
         if (b.mount && Math.floor(b.mount / 10000) === 193 && !isSkillVehicle(b.mount) && this.player.ladder) { this.net?.cancelBuff(5221006); return; }
         if (b.mount) { this.riding = { item: b.mount, skill: b.source }; this.mountData(b.mount); if (b.source === 5221006) this.battleshipHp = undefined; }
         if (b.morph) { this.morphReason = b.morphSource; this.setMorph(this.player, b.morph); }
+        if (b.ghost) this.setGhost(this.player, b.ghost);
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         if (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & BARRIER_MASK) this.after(0, () => this.barrierShield(this.player));
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
@@ -3566,6 +3585,7 @@ export class Game {
       cancelBuff: (m1, m2) => {
         if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) this.riding = null;
         if (BigInt.asUintN(64, BigInt(m2)) & MORPH) this.setMorph(this.player, 0);
+        if (BigInt.asUintN(64, BigInt(m2)) & GHOST_MASK) this.setGhost(this.player, 0);
         this.buffs = this.buffs.filter((b) => !((b.m1 & m1) || (b.m2 & m2)));
         this.diseases = (this.diseases || []).filter((d) => !((d.m1 & m1) || (d.m2 & m2)));
       },
@@ -5283,7 +5303,7 @@ export class Game {
     const allowed = Object.values(this.map?.info?.allowedItem || {}).map(Number);
     if ((this.map?.info?.fieldLimit || 0) & 0x400 && !allowed.includes(id)) { this.hud.message('This item cannot be used here.', CHAT_COLOR.error); return; }
     if (ride === 190) { this.hud.message('Not available while riding on the tamed monster.', CHAT_COLOR.error); return; }
-    if ((type === 221 || type === 236) && ride === 193) return;
+    if ((type === 221 || type === 236) && (ride === 193 || this.player.morph || this.player.ghost)) return;   // not on a vehicle, morphed or a ghost
     if (!this.canExclusive(200)) return;
     this.net.useItem(slot, id);
     this.lockExclusive();
@@ -6414,6 +6434,7 @@ export class Game {
     if (this.hasDisease(SEAL) && !HEROS_WILLS.has(id)) return false;   // sealed by a monster: only Hero's Will
     // morphed: a potion morph or the Oak Barrel (going in or out too) uses no skill; a transformation not these
     const mt = this.morphTpl();
+    if (this.player.ghost) { this.transformRefusal(); return false; }   // a ghost uses no skill
     if ((mt && !mt.superman) || performance.now() < (this.barrelUntil || 0)) return false;
     if (mt?.superman && SUPERMAN_BLOCKED.has(id)) return false;
     const sb = this.skills, lv = sb.level(id);
@@ -7729,6 +7750,7 @@ export class Game {
   sitChair(itemId) {
     const p = this.player;
     if (p.seat) { this.standUp(); return; }
+    if (p.ghost) { this.transformRefusal(); return; }   // nor sits
     if (!this.canSit()) return;
     p.seat = { id: null, item: itemId }; p.vx = 0;
     this.chairArt(itemId);
@@ -10009,6 +10031,7 @@ export class Game {
     ctx.save(); ctx.translate(Math.round(x), Math.round(y)); if (ent.facingRight) ctx.scale(-1, 1); ctx.drawImage(img, -o[0], -o[1]); ctx.restore();
   }
   drawChar(ctx, cam, ent, look, local) {
+    if (look) look.ghost = ent.ghost || 0;   // (a look built again carries it on)
     // on a mount (not as a ghost: dead clears it): the mount, its saddle and mount equipment, the rider
     // on it; the mount's frames run on their own clock from when its pose last changed
     const mountId = local ? this.riding?.item : ent.mount, mount = ent.action !== 'dead' && this.mountData(mountId)?.img;
