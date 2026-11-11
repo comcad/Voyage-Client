@@ -501,7 +501,23 @@ const STATUS_TURN = { n: 0, every: 22, tick: 30 };
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
 /** How much of a path is still to play, in ms. */
-const pathLeft = (p) => p.steps.slice(p.i).reduce((t, s) => t + s.duration, 0) - p.t;
+/** Round half away from zero, as the client rounds a drawn position. */
+const roundAway = (v) => (v >= 0 ? Math.trunc(v + 0.5) : Math.trunc(v - 0.499999999));
+/**
+ * A path's elements as playback keys: where each ends, its speed (px/s), pose, floor and time. A jump's or a blow's
+ * element (no position of its own) keeps the point before with its speed; equip changes and the like are left out.
+ */
+function pathKeys(moves, from) {
+  const keys = [];
+  let px = from.x, py = from.y;
+  for (const m of moves) {
+    if (m.cmd === 10 || m.cmd === 14 || m.cmd === 21) continue;
+    const abs = m.x !== undefined;
+    const k = { type: m.cmd, x: abs ? m.x : px, y: abs ? m.y : py, vx: (abs ? m.vx : m.rx) || 0, vy: (abs ? m.vy : m.ry) || 0, stance: m.stance, fh: m.fh || 0, dur: Math.max(0, m.duration || 0) };
+    keys.push(k); px = k.x; py = k.y;
+  }
+  return keys;
+}
 const aiWait = (base, spread) => (Math.floor((base + Math.random() * spread) / 90) * 30) / 1000;
 
 /**
@@ -593,45 +609,105 @@ export class Life {
     // network state: oid set for server-spawned life; `controlled` = we run its AI and report moves
     this.oid = spawn.oid ?? null;
     this.controlled = false;
-    this.path = null;       // remote movement being replayed
+    this.path = null;       // the path being played (its keys still to come), see playPath
+    this.pb = null;         // the playback's state between ticks
     this.removed = false;
   }
 
   get online() { return this.oid !== null; }
 
   /**
-   * A path from its controller (MOVE_MONSTER): its points are queued after whatever is still to play, as the client
-   * does it (one with an action starts afresh). More than 5s behind, it jumps to the end.
+   * A path from its controller (MOVE_MONSTER), queued after whatever is still to play; one with an action (an attack,
+   * a skill) starts afresh from where it is shown now. The packet's start point isn't used.
    */
   applyMovement(start, moves, act = -1) {
-    const steps = moves.filter((m) => m.x !== undefined).map((m) => ({ ...m, duration: Math.max(0, m.duration || 0) }));
-    // a path with an action (an attack, a skill) or one starting with a blow's push replaces what was still to play,
-    // from where it is now
-    if ((act >= 0 || moves[0]?.cmd === 2) && this.path) this.path = null;
-    if (!steps.length) return;
-    const p = this.path || (this.path = { steps: [], i: 0, t: 0, fromX: this.x, fromY: this.y });
-    p.steps = p.steps.slice(p.i).concat(steps); p.i = 0;
-    if (pathLeft(p) > 5000) { const last = steps[steps.length - 1]; this.path = null; this.x = last.x; this.y = last.y; this.takePose(last); }
+    if (act >= 0) this.cutPath();
+    const q = this.path?.q, last = q?.[q.length - 1];
+    this.queueKeys(pathKeys(moves, last || this.pb?.cur || { x: this.x, y: this.y }));
+  }
+  /** Our own plan, queued for playing the same way (its first jump or blow element keeps where it is now). */
+  queueOwn(moves) { this.queueKeys(pathKeys(moves, this.pb?.cur || { x: this.x, y: this.y })); }
+  /**
+   * Keys go after what is queued. Under 1100ms queued it plays at 30ms a tick, from there at 33 (catching up); over
+   * 6100ms it is dropped for a jump to the last key.
+   */
+  queueKeys(keys) {
+    if (!keys.length) return;
+    const p = this.path || (this.path = { q: [], t: 0, total: 0, rate: 30 });
+    p.q.push(...keys);
+    p.total += keys.reduce((s, k) => s + k.dur, 0);
+    p.rate = p.total < 1100 ? 30 : 33;
+    if (p.total > 6100) { const last = p.q[p.q.length - 1]; p.q = [{ ...last, type: 3, dur: 0 }]; p.total = 0; }
+  }
+  /** What's still to play goes; the next path starts from where it is shown now, at the speed it has now. */
+  cutPath() {
+    this.path = null;
+    const b = this.pb;
+    if (b) { b.x0 = b.cur.x; b.y0 = b.cur.y; b.vx0 = b.cur.vx; b.vy0 = b.cur.vy; }
+  }
+  /** Moved by something else (a pull, a blow): playback picks up from there, standing still. */
+  rebasePath() {
+    const b = this.pb;
+    if (!b) return;
+    b.cur = { x: this.x, y: this.y, vx: 0, vy: 0 }; b.prev = { x: this.x, y: this.y };
+    b.x0 = this.x; b.y0 = this.y; b.vx0 = b.vy0 = 0;
   }
   /**
-   * Play its path: each point is where it is at the end of that point's time, in that pose and facing, and it glides
-   * there in a straight line. A path more than a second behind plays faster until it has caught up.
+   * One 30ms tick of its path. Keys whose time is up are passed (each sets where it is, its speed and pose); within
+   * the next one it is on the curve through the last key and that one, each with its speed (a jump keeps its
+   * place but sets the speed it leaves at); a jump key (3) puts it there at once. False when nothing was queued.
    */
-  _replay(dt, keepPose = false) {
-    const p = this.path;
-    const left = pathLeft(p);
-    p.t += dt * 1000 * (left > 1000 && !this.controlled ? left / 1000 : 1);   // one we control plays its own plan in real time
-    while (p.i < p.steps.length) {
-      const s = p.steps[p.i];
-      if (!keepPose) this.takePose(s);
-      if (p.t < s.duration) {
-        const k = p.t / s.duration;
-        this.x = p.fromX + (s.x - p.fromX) * k; this.y = p.fromY + (s.y - p.fromY) * k;
-        return;
-      }
-      p.t -= s.duration; p.fromX = this.x = s.x; p.fromY = this.y = s.y; p.i++;
+  pathTick() {
+    const p = this.path, b = this.pb;
+    b.prev = { x: b.cur.x, y: b.cur.y };
+    if (!p || !p.q.length) { this.path = null; return false; }
+    p.t += p.rate;
+    let jumped = false;
+    while (p.q.length) {
+      const e = p.q[0];
+      if (p.t < e.dur) break;
+      p.t -= e.dur;
+      b.x0 = e.x; b.y0 = e.y; b.vx0 = e.vx; b.vy0 = e.vy;
+      b.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy };
+      if (e.type === 3) jumped = true;
+      if (!this.keepPose) this.takePose(e);
+      p.q.shift();
     }
-    this.path = null;
+    p.total -= p.rate;
+    if (p.q.length && p.total > 0) {
+      const e = p.q[0];
+      if (e.type === 3) { b.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy }; jumped = true; }
+      else {
+        const s = p.t / e.dur, s2 = s * s, D = p.t * 0.001;
+        const h00 = 2 * s2 * s - 3 * s2 + 1, h01 = 3 * s2 - 2 * s2 * s, h10 = (s2 - 2 * s + 1) * D, h11 = (s2 - s) * D;
+        const nx = h00 * b.x0 + h01 * e.x + h10 * b.vx0 + h11 * e.vx, ny = h00 * b.y0 + h01 * e.y + h10 * b.vy0 + h11 * e.vy;
+        b.cur = { x: nx, y: ny, vx: (nx - b.cur.x) * (1000 / 30), vy: (ny - b.cur.y) * (1000 / 30) };
+      }
+      if (!this.keepPose) this.takePose(e);
+    } else this.path = null;
+    if (jumped) b.prev = { x: b.cur.x, y: b.cur.y };   // no gliding across a jump
+    return true;
+  }
+  /**
+   * Its path plays on the client's 30ms clock, a tick ahead of the screen, and is drawn between the last two ticks
+   * (rounded half away from zero). One we control plans its next path when nothing is left to play, once the server
+   * has answered the last one it sent (MOVE_MONSTER_RESPONSE); meanwhile it waits where its path ended.
+   */
+  playPath(dt, keepPose = false) {
+    let b = this.pb;
+    if (!b || (!this.path && (Math.abs(b.cur.x - this.x) > 1 || Math.abs(b.cur.y - this.y) > 1))) {
+      b = this.pb = { cur: { x: this.x, y: this.y, vx: 0, vy: 0 }, prev: { x: this.x, y: this.y }, x0: this.x, y0: this.y, vx0: 0, vy0: 0, acc: b?.acc || 0 };
+    }
+    this.keepPose = keepPose;
+    b.acc += dt * 1000;
+    while (b.acc > 0) {
+      b.acc -= 30;
+      if (!this.pathTick() && this.controlled && this.online && !this.moveWait && !keepPose && !this.dying) { this.x = b.cur.x; this.y = b.cur.y; this.planPath(); }
+    }
+    this.keepPose = false;
+    const k = -b.acc / 30;
+    this.x = roundAway(b.cur.x + (b.prev.x - b.cur.x) * k);
+    this.y = roundAway(b.cur.y + (b.prev.y - b.cur.y) * k);
   }
   /** A path point's pose (its stance: 1 walk, 2 stand, 3 jump, 6 fly, 16 chase; bit 0 faces left) and floor. */
   takePose(s) {
@@ -665,7 +741,7 @@ export class Life {
       } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance, duration: 30 });
     }
     for (const k of Object.keys(sim)) if (!PLAYED.has(k)) this[k] = sim[k];
-    this.path = { steps: moves, i: 0, t: 0, fromX: this.x, fromY: this.y };
+    this.queueOwn(moves);
     this.onPath?.(this, start, moves);
   }
 
@@ -758,7 +834,7 @@ export class Life {
       else if (reuse()) Object.assign(reuse(), e);
       else moves.push(e);
     }
-    this.path = { steps: moves.filter((m) => m.cmd === 0), i: 0, t: 0, fromX: this.x, fromY: this.y };
+    this.queueOwn(moves);
     this.onPath?.(this, start, moves);
   }
 
@@ -806,7 +882,9 @@ export class Life {
     this.facingRight = fromRight;
     if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
     // fromRight: the blow came from the right, so it slides away to the left
-    if (this.controlled) this.path = null;
+    if (this.controlled) this.cutPath();
+    // a flyer we control is pushed straight back (see planFlyHit)
+    if (this.flying) this.flyPush = { v: (fromRight ? -1 : 1) * (strong ? 300 : 130), brake: strong ? 200 : 400 };
     // one that can't move (no move, jump or fly: Horntail's and Zakum's parts) isn't pushed
     if (!this.flying && this.canMove && (this.controlled || !this.online)) {
       const push = (fromRight ? -1 : 1) * (strong ? 300 : 130);
@@ -824,6 +902,7 @@ export class Life {
    * It then plays that same plan itself, so everyone sees one thing.
    */
   planHit(hitMs, stance) {
+    if (this.flying) { this.planFlyHit(stance); return; }
     const sim = Object.create(this), start = { x: Math.round(this.x), y: Math.round(this.y) };
     sim.setState = function (st) { if (this.anims[st]) this.state = st; };
     const moves = [], hold = Math.max(300, hitMs);
@@ -848,7 +927,32 @@ export class Life {
     for (const m of moves) { if (m.phase === 1 && m.fh) { m.vx = 0; m.vy = 0; } delete m.phase; }
     for (const k of Object.keys(sim)) if (!PLAYED.has(k) && k !== 'recoil') this[k] = sim[k];
     this.recoil = 0;   // the plan carries the slide
-    this.path = { steps: moves.filter((m) => m.cmd === 0), i: 0, t: 0, fromX: this.x, fromY: this.y };
+    this.queueOwn(moves);
+    this.onPath?.(this, start, moves);
+  }
+  /**
+   * A flyer we control struck: the client's plain blow for a flyer - the push sets it off at 130px/s away from the
+   * blow (300 for a strong one), braking at 400px/s^2 (200), in 30ms steps of average speed inside the map's box,
+   * recorded as its path in the pose it had. It flies on from a stop. (How long the client records it isn't read:
+   * here until it stops.)
+   */
+  planFlyHit(stance) {
+    const P = this.flyPush;
+    this.flyPush = null;
+    if (!P || !this.canMove) return;
+    const fh = this.footholds, start = { x: Math.round(this.x), y: Math.round(this.y) }, moves = [{ cmd: 2, rx: Math.trunc(P.v), ry: 0, stance, duration: 0 }];
+    let x = this.x, v = P.v;
+    const y = Math.max(fh.ceiling, Math.min(fh.ground - 1, this.y));
+    for (let t = 0; t < 3000 && v !== 0; t += 30) {
+      const v0 = v;
+      v = v > 0 ? Math.max(0, v - P.brake * 0.03) : Math.min(0, v + P.brake * 0.03);
+      x = Math.max(fh.wallL, Math.min(fh.wallR - 1, x + (v0 + v) * 0.03 * 0.5));
+      const e = { cmd: 0, x: Math.trunc(x), y: Math.trunc(y), vx: Math.trunc(v), vy: 0, fh: 0, stance, duration: 30 }, l = moves[moves.length - 1];
+      if (l.cmd === 0 && Math.sign(l.vx) === Math.sign(e.vx)) Object.assign(l, { ...e, duration: l.duration + 30 });
+      else moves.push(e);
+    }
+    if (this.fly) { this.fly.vx = 0; this.fly.vy = 0; }
+    this.queueOwn(moves);
     this.onPath?.(this, start, moves);
   }
   /** One we control being pulled (Rush, Monster Magnet): the server hears its whole slide at once, as with a blow. */
@@ -936,21 +1040,21 @@ export class Life {
     }
     if (this.pull && this.state !== 'die1') {
       // a pulled monster's path picks up from where the pull leaves it (one we control plans a new one)
-      if (this.controlled) this.path = null; else if (this.path) { this.path.fromX = this.x; this.path.fromY = this.y; }
-      this.pullStep(dt); return;
+      if (this.controlled) this.cutPath();
+      this.pullStep(dt); this.rebasePath(); return;
     }
     if (this.online) {
       if (this.state === 'die1') { if (anim?.done || !anim) this.removed = true; return; }
       if (this.recoil && this.fh) this.recoilStep(dt);
       if (this.state === 'hit1') {
         this.hitTimer -= dt;
-        if (this.controlled && this.path) this._replay(dt, true);   // its planned slide, keeping the hit pose
+        if (this.controlled && this.path) this.playPath(dt, true);   // its planned slide, keeping the hit pose
         if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand');
         return;
       }
-      if (!this.controlled) { if (this.path) this._replay(dt); return; }
+      if (!this.controlled) { this.playPath(dt); return; }
     }
-    if (this.held) { this.path = null; return; }
+    if (this.held) { this.cutPath(); return; }
     if (this.respawnTimer > 0) {
       this.respawnTimer -= dt;
       if (this.respawnTimer <= 0) {
@@ -965,8 +1069,8 @@ export class Life {
     // a chase lasts 3-4 minutes from the last time it was set on someone
     if (this.aggro !== this.chased) { this.chased = this.aggro; this.chaseT = 180 + Math.random() * 60; }
     if (this.aggro && (this.chaseT -= dt) <= 0) this.aggro = this.chased = null;
-    if ((this.fh || this.flying) && this.tryAttack(dt)) { this.path = null; return; }   // an attack cuts its path short
-    if (this.online) { if (!this.path) this.planPath(); this._replay(dt); return; }
+    if ((this.fh || this.flying) && this.tryAttack(dt)) { this.cutPath(); return; }   // an attack cuts its path short
+    if (this.online) { this.playPath(dt); return; }
     this.step(dt);
   }
   /** Its AI and movement for one step of `dt` seconds. */

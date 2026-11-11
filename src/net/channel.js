@@ -1743,8 +1743,9 @@ export class ChannelSession {
   npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
   /** `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else). */
   moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null) {
-    const id = this.moveId++ & 0x7fff;
-    (this.mobMoveIds ??= new Map()).set(oid, id);
+    // each monster counts its own moves
+    const id = (((this.mobMoveIds ??= new Map()).get(oid) ?? 0) + 1) & 0x7fff;
+    this.mobMoveIds.set(oid, id);
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
       .byte(0).byte(activity).byte(skill).byte(level).short(0).byte(0).int(0).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
     writeMovement(w, moves);
