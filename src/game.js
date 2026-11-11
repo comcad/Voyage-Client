@@ -70,7 +70,7 @@ import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
 import { PerfMeter } from './perfmeter.js';
 import { Preloader } from './preload.js';
-import { CharPath } from './movepath.js';
+import { CharPath, CATCH_UP } from './movepath.js';
 import { MinigameCreateWin, MinigameRoomWin } from './ui/minigame.js';
 import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResultWin } from './ui/cashwins.js';
 import { StorageWin } from './ui/storage.js';
@@ -3343,7 +3343,10 @@ export class Game {
       moveDragon: later((owner, start, moves) => this.dragons.get(owner)?.move(start, moves)),
       petSpawn: later((d) => this.addPet(d)),
       petRemove: later((owner, slot, reason) => this.removePet(owner, slot, reason)),
-      petMove: later((owner, slot, moves) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.applyMovement(moves); }),
+      petMove: later((owner, slot, moves) => {
+        const move = () => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.applyMovement(moves); };
+        if (this.spawning?.has(owner)) this.onOther(owner, move); else move();   // a loading owner's pet: once it's in
+      }),
       // others' pets act out what their owner's client says; yours already did
       petChat: later((owner, slot, type, act, text, balloon) => { const pet = this.pets.get(`${owner}:${slot}`); if (pet && !pet.mine) pet.react(type, act, text, balloon); }),
       petCommand: later((owner, slot, type, cmd, ok, balloon) => this.onPetCommand(owner, slot, type, cmd, ok, balloon)),
@@ -3375,7 +3378,9 @@ export class Game {
       }),
       petPotion: (kind, id) => { (this.petPotions ??= {})[kind] = id || null; },
       petEffect: later((owner, slot, effect) => { const pet = this.pets.get(`${owner ?? this.player.id}:${slot}`); if (pet) this.petEffect(pet, effect); }),
-      movePlayer: later((id, moves) => this.others.get(id)?.applyMovement(moves)),
+      // held for one still loading (see spawnPlayer), rather than lost: they would come in where they were, then glide
+      // to where their next path starts
+      movePlayer: later((id, moves) => this.onOther(id, (rp) => rp.applyMovement(moves))),
       playerLook: later((id, look, rings) => { const rp = this.others.get(id); if (rp) rp.rings = rings; this.updateOtherLook(id, look); }),
       attack: later((a) => this.onRemoteAttack(a)),
       expression: later((id, emote) => { const rp = this.others.get(id); if (rp) { setExpression(rp, emote); this.emotionEffect(rp, emote); } }),
@@ -4510,13 +4515,23 @@ export class Game {
     try { await this.addOther(d); } finally { if (this.spawning.get(d.id) === waiting) this.spawning.delete(d.id); }
     const rp = this.others.get(d.id);
     if (rp) for (const fn of waiting) fn(rp);
+    // what they did while they loaded is already over: with more than the client's catch-up's worth queued they go
+    // straight to where they are now (the client shows a player the moment it arrives, so it never has this backlog)
+    if (rp && rp.mp.total >= CATCH_UP) rp.mp.skip();
   }
   async addOther(d) {
     // on an event field that dresses its teams, their team's outfit instead
     const equips = this.fieldMode?.teamLook?.(d.look.gender, d.team) || lookEquipIds(d.look);
-    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips });
+    // what they need to show goes ahead of everything but what is drawn now; ahead of that too when they arrive on
+    // screen (entering a crowded map, those in view come first)
+    const pri = this.nearCam(d.x, d.y) ? 'urgent' : 'spawn';
+    const look = new CharacterLook(this.assets, { skin: d.look.skin, face: d.look.face, hair: d.look.hair, gender: d.look.gender, equips, pri });
     await look.load();
-    await this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']));
+    // they show once their pose as they arrive is in (a crowd arriving would otherwise wait on every pose of every
+    // player); their other poses follow in the background, and anything drawn before then is fetched first
+    const st = STANCE_NAMES[d.stance >> 1];
+    const pose = { walk: look.walkAction(), jump: 'jump', prone: 'prone', ladder: 'ladder', rope: 'rope', alert: 'alert', sit: 'sit', fly: 'fly', dead: 'dead' }[st];
+    await this.assets.preload(lookCanvases(look, [look.standAction(), pose].filter((a) => a && look.has(a))), null, pri);
     if (!this.map) return;
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
@@ -4528,7 +4543,6 @@ export class Game {
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     if (d.hearts) this.setHearts(rp, d.hearts);
     this.others.set(d.id, rp);
-    this.preloader?.player(look, d.job);   // their attacks and their job's skills, in the background
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
@@ -4536,10 +4550,10 @@ export class Game {
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
     const equips = this.fieldMode?.teamLook?.(lookData.gender, rp.team) || lookEquipIds(lookData);   // a team outfit stays on
-    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
+    const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips, pri: this.nearCam(rp.x, rp.y) ? 'urgent' : 'spawn' });
     await look.load();
+    await this.assets.preload(lookCanvases(look, [look.standAction()]), null, 'spawn');   // no bare frames on the change
     rp.look = look; rp.lookData = lookData;
-    this.preloader?.player(look, rp.job);
   }
 
   onChat(c) {
@@ -6036,8 +6050,29 @@ export class Game {
     requestAnimationFrame(loop);
   }
 
+  /**
+   * Players who have come within about a screen of the view (checked four times a second): their attacks and their
+   * job's skill effects load in the background (preload.js), once per look. Loading them for everyone who arrives
+   * doesn't scale: a crowded town is a hundred players of twenty-odd jobs, tens of thousands of images.
+   */
+  /** Whether a point is on screen or nearly, by the camera as it is now (for what arrives between frames). */
+  nearCam(x, y) {
+    const c = this.cam;
+    return !!c && x > c.x - 200 && x < c.x + (c.w || VIEW_W) + 200 && y > c.y - 300 && y < c.y + (c.h || VIEW_H) + 300;
+  }
+
+  preloadNear(dt) {
+    if (!this.preloader || !this.viewBox || (this.nearT = (this.nearT || 0) - dt) > 0) return;
+    this.nearT = 0.25;
+    const w = this.cam.w || VIEW_W, h = this.cam.h || VIEW_H;
+    for (const rp of this.others.values()) {
+      if (rp.preloaded !== rp.look && this.inView(rp.x, rp.y, w, h, h)) { rp.preloaded = rp.look; this.preloader.player(rp.look, rp.job); }
+    }
+  }
+
   update(dt) {
     this.frameDt = dt;
+    this.preloadNear(dt);
     this.padInput?.poll();
     if (this.inCashShop) { this.windows?.update(dt); return; }   // the shop screen is all there is
     if (this.uiLocked || this.uiDisabled) { const i = this.input; i.down.clear(); i.pressed.clear(); i.repeats.clear(); i.clicks.length = 0; }

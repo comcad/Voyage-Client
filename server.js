@@ -41,6 +41,35 @@ const app = express();
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false, dotfiles: 'allow' }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
 app.get('/config.json', (req, res) => res.json(CLIENT_CONFIG));
+// Many asset files in one response, for the client's batched downloads (src/assets.js Batcher): one round trip
+// instead of one per file. Each file is its length (4 bytes, big-endian; 0xFFFFFFFF when there is no such file)
+// then its bytes, in the order asked. Only files inside the assets folder.
+const ASSETS_ROOT = path.resolve(ASSETS_DIR);
+app.get('/assets-batch', async (req, res) => {
+  const list = String(req.query.f || '').split('|').filter(Boolean).slice(0, 64);
+  const files = await Promise.all(list.map(async (p) => {
+    const full = path.resolve(ASSETS_ROOT, p);
+    if (!full.startsWith(ASSETS_ROOT + path.sep)) return null;
+    try { return await fs.promises.readFile(full); } catch { return null; }
+  }));
+  const out = [];
+  for (const b of files) {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(b ? b.length : 0xffffffff);
+    out.push(len);
+    if (b) out.push(b);
+  }
+  res.set({ 'Content-Type': 'application/octet-stream', 'Cache-Control': 'no-store' });
+  res.end(Buffer.concat(out));
+});
+// The assets' version (their folders' latest change): the client keeps batched files in a local cache under it, so
+// new assets aren't hidden behind old copies.
+let assetsVersion = '0';
+try {
+  const times = [ASSETS_ROOT, ...fs.readdirSync(ASSETS_ROOT).map((d) => path.join(ASSETS_ROOT, d))].map((p) => fs.statSync(p).mtimeMs);
+  assetsVersion = Math.round(Math.max(...times)).toString(36);
+} catch { /* no assets folder: version 0 */ }
+app.get('/assets-version', (req, res) => res.json({ v: assetsVersion }));
 // every body, head, face and hair the assets have, by id (the client loads them ahead of time in the background)
 let characterIndex = null;
 app.get('/character-index.json', (req, res) => {

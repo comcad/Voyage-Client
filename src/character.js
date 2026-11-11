@@ -62,8 +62,9 @@ const GHOST_POSE = { walk1: 'ghostwalk', walk2: 'ghostwalk', jump: 'ghostjump', 
 const GHOST_PLAIN = { ghostwalk: 'walk1', ghoststand: 'stand1', ghostjump: 'jump', ghostproneStab: 'proneStab', ghostfly: 'fly', ghostladder: 'ladder', ghostrope: 'rope', ghostsit: 'sit' };
 
 export class CharacterLook {
-  constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [], gender = null } = {}) {
-    this.assets = assets; this.gender = gender;
+  /** pri: the priority its data loads at (Assets PRI): 'spawn' or 'urgent' for a player arriving. */
+  constructor(assets, { skin = 0, face = 20000, hair = 30030, equips = [], gender = null, pri = 'normal' } = {}) {
+    this.assets = assets; this.gender = gender; this.pri = pri;
     this.skin = skin; this.faceId = face; this.hairId = hair; this.equipIds = equips;
     this.equips = [];
   }
@@ -72,18 +73,18 @@ export class CharacterLook {
     const a = this.assets;
     let base;
     [this.body, this.head, this.face, this.hair, base] = await Promise.all([
-      a.json(`Character/${pad(2000 + this.skin, 8)}.img`),
-      a.json(`Character/${pad(12000 + this.skin, 8)}.img`),
-      a.json(`Character/Face/${pad(this.faceId, 8)}.img`),
-      a.json(`Character/Hair/${pad(this.hairId, 8)}.img`),
-      this.skin ? a.json('Character/00002000.img') : null,
+      a.json(`Character/${pad(2000 + this.skin, 8)}.img`, this.pri),
+      a.json(`Character/${pad(12000 + this.skin, 8)}.img`, this.pri),
+      a.json(`Character/Face/${pad(this.faceId, 8)}.img`, this.pri),
+      a.json(`Character/Hair/${pad(this.hairId, 8)}.img`, this.pri),
+      this.skin ? a.json('Character/00002000.img', this.pri) : null,
     ]);
     // only the first skin's body has the skill poses (alert2, somersault, brandish1...): frames pointing at the basic
     // poses, which every skin has, so another skin takes them from there and draws them in its own colour
     if (base && this.body) this.body = { ...base, ...this.body };
-    const load = (id) => equipPath(id) && a.json(equipPath(id));
+    const load = (id) => equipPath(id) && a.json(equipPath(id), this.pri);
     const ids = [...this.equipIds], medal = ids.find((id) => Math.floor(id / 10000) === 114) || 0;
-    const [eq, medalInfo] = await Promise.all([Promise.all(ids.map(load)), medal && a.json(`Character/Accessory/${pad(medal, 8)}.img`)]);
+    const [eq, medalInfo] = await Promise.all([Promise.all(ids.map(load)), medal && a.json(`Character/Accessory/${pad(medal, 8)}.img`, this.pri)]);
     // the medal worn, and its tag art (UI/NameTag.img/medal/<medalTag>)
     this.medal = medal; this.medalTag = Number(medalInfo?.info?.medalTag) || 0;
     // the top and pants shown: an overall over pants hides them, unless the overall is a normal one and the pants
@@ -137,10 +138,11 @@ export class CharacterLook {
       if (cat(i) === 111 && Number(info.chatBalloon)) this.chatBalloon = Number(info.chatBalloon);
       if (info.effect?.path && !this.equipFx.some((f) => f.id === ids[i])) this.equipFx.push({ id: ids[i], effect: info.effect });
     });
-    // the face's expressions (blink, smile...) load in the background; until a frame is ready the default shows
+    // the face's expressions (blink, smile...) load in the background, behind players arriving; until a frame is
+    // ready the default shows
     const exprs = [this.face, ...this.faceAcc].flatMap((n) => Object.entries(n || {}).filter(([k]) => k !== 'info')
       .flatMap(([, e]) => [e, ...Object.values(e || {})]).flatMap((f) => [f, ...Object.values(f || {})]));
-    a.preload(exprs);
+    a.enqueue(exprs, 0);
   }
 
   /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */

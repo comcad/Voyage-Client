@@ -5,8 +5,9 @@ import { jobBooks, bookFile } from './skills.js';
 /**
  * Loading ahead of time (a Voyage addition: the original client reads its files from disk as it needs them).
  * - After logging in: every body and head (each skin, every pose), then every face and every hair, in the background.
- * - A character who appears or changes clothes: everything their look draws moving about and attacking with their
- *   weapon, and their hair; then every skill effect of their job line and the poses those skills use.
+ * - A character who comes within about a screen of you (and again after a change of clothes): everything their look
+ *   draws moving about and attacking with their weapon, and their hair; then every skill effect of their job line and
+ *   the poses those skills use (see Game.preloadNear).
  * It all goes through the assets' queue (Assets.enqueue): a few files at a time, behind whatever is needed to draw
  * now, characters first, and held while a map loads.
  */
@@ -37,7 +38,7 @@ export class Preloader {
     this.a.holdQueue = () => !!game.loading;   // a map loading goes first
   }
 
-  /** A character who appeared or changed clothes: their look moving about and attacking, their hair, their job's skills. */
+  /** A character near you: their look moving about and attacking, their hair, their job's skills. */
   player(look, job) {
     if (!look?.body) return;
     const poses = [...new Set([...MOVES, ...weaponPoses(look)])].filter((p) => look.has(p));
@@ -48,6 +49,8 @@ export class Preloader {
   /** Every skill effect of a job line (once per job), and the poses its skills use in this look. */
   async job(job, look) {
     if (job === undefined || job === null || !Number.isFinite(Number(job))) return;
+    const first = !this.jobs.has(job);   // marked before the files load: several of one job arriving queue its art once
+    this.jobs.add(job);
     const trees = await Promise.all(jobBooks(Number(job)).map((b) => this.a.json(bookFile(b))));
     const art = [], poses = new Set();
     for (const t of trees) {
@@ -56,7 +59,7 @@ export class Preloader {
         for (const [k, v] of Object.entries(s || {})) if (!NOT_ART.has(k)) canvases(v, art);
       }
     }
-    if (!this.jobs.has(job)) { this.jobs.add(job); this.a.enqueue(art, 1); }
+    if (first) this.a.enqueue(art, 1);
     if (look?.body) this.a.enqueue(lookCanvases(look, [...poses].filter((p) => look.has(p))), 1);
   }
 

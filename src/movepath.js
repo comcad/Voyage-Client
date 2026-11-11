@@ -40,7 +40,8 @@ export function hermite(b, e, t) {
  * with over 5550ms queued it is dropped for a jump to the last key. (A character's path counts in half seconds, the
  * half second its owner sends one in; a monster's in whole ones: 1100 and 6100, see Life.)
  */
-const CATCH_UP = 550, TOO_FAR = CATCH_UP + 5000;
+export const CATCH_UP = 550;
+const TOO_FAR = CATCH_UP + 5000;
 export class CharPath {
   constructor(x, y) { this.reset(x, y); }
   /** Standing at (x, y), nothing to play. */
@@ -51,6 +52,12 @@ export class CharPath {
     this.acc = this.acc || 0;
   }
   get playing() { return this.q.length > 0; }
+  /** Straight to the last key queued, at once (a backlog that built up while the player was still loading). */
+  skip() {
+    if (!this.q.length) return;
+    const last = this.q[this.q.length - 1];
+    this.q = [{ ...last, type: 3, dur: 0 }]; this.total = 0;
+  }
   /** A path, after whatever is still to play (it starts from the last key queued, or from where it is now). */
   queue(moves) {
     const keys = pathKeys(moves, this.q[this.q.length - 1] || this.cur);
