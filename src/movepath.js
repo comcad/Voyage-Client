@@ -80,7 +80,8 @@ export class CharPath {
    * and floor); within the next one it is on the curve (a teleport key, 3, puts it there at once).
    */
   tick(pose) {
-    this.prev = { x: this.cur.x, y: this.cur.y };
+    const cur = this.cur, prev = this.prev;
+    prev.x = cur.x; prev.y = cur.y;
     if (!this.q.length) return;
     const rate = this.short && this.total < LOW ? STRETCH : this.rate;
     this.t += rate;
@@ -90,7 +91,7 @@ export class CharPath {
       if (this.t < e.dur) break;
       this.t -= e.dur;
       this.x0 = e.x; this.y0 = e.y; this.vx0 = e.vx; this.vy0 = e.vy;
-      this.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy };
+      cur.x = e.x; cur.y = e.y; cur.vx = e.vx; cur.vy = e.vy;
       if (e.type === 3) jumped = true;
       pose(e);
       this.q.shift();
@@ -98,14 +99,17 @@ export class CharPath {
     this.total -= rate;
     if (this.q.length && this.total > 0) {
       const e = this.q[0];
-      if (e.type === 3) { this.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy }; jumped = true; }
+      if (e.type === 3) { cur.x = e.x; cur.y = e.y; cur.vx = e.vx; cur.vy = e.vy; jumped = true; }
       else {
-        const n = hermite(this, e, this.t);
-        this.cur = { x: n.x, y: n.y, vx: (n.x - this.cur.x) * (1000 / 30), vy: (n.y - this.cur.y) * (1000 / 30) };
+        // hermite(), inline: no object for each tick of each player
+        const s = this.t / e.dur, s2 = s * s, D = this.t * 0.001;
+        const h00 = 2 * s2 * s - 3 * s2 + 1, h01 = 3 * s2 - 2 * s2 * s, h10 = (s2 - 2 * s + 1) * D, h11 = (s2 - s) * D;
+        const nx = h00 * this.x0 + h01 * e.x + h10 * this.vx0 + h11 * e.vx, ny = h00 * this.y0 + h01 * e.y + h10 * this.vy0 + h11 * e.vy;
+        cur.vx = (nx - cur.x) * (1000 / 30); cur.vy = (ny - cur.y) * (1000 / 30); cur.x = nx; cur.y = ny;
       }
       pose(e);
     } else { this.q = []; this.t = 0; this.total = 0; }
-    if (jumped) this.prev = { x: this.cur.x, y: this.cur.y };   // no gliding across a teleport
+    if (jumped) { prev.x = cur.x; prev.y = cur.y; }   // no gliding across a teleport
   }
   /**
    * Plays dt seconds on the 30ms clock, a tick ahead of the screen, and returns where to draw: between the last two
@@ -114,7 +118,8 @@ export class CharPath {
   play(dt, pose) {
     this.acc += dt * 1000;
     while (this.acc > 0) { this.acc -= 30; this.tick(pose); }
-    const k = -this.acc / 30;
-    return { x: roundAway(this.cur.x + (this.prev.x - this.cur.x) * k), y: roundAway(this.cur.y + (this.prev.y - this.cur.y) * k) };
+    const k = -this.acc / 30, at = (this.at ??= { x: 0, y: 0 });
+    at.x = roundAway(this.cur.x + (this.prev.x - this.cur.x) * k); at.y = roundAway(this.cur.y + (this.prev.y - this.cur.y) * k);
+    return at;
   }
 }

@@ -41,9 +41,17 @@ export class Preloader {
   /** A character near you: their look moving about and attacking, their hair, their job's skills. */
   player(look, job) {
     if (!look?.body) return;
-    const poses = [...new Set([...MOVES, ...weaponPoses(look)])].filter((p) => look.has(p));
-    this.a.enqueue([...lookCanvases(look, poses), ...canvases(look.hair)], 0);
+    this.poses(look, [...new Set([...MOVES, ...weaponPoses(look)])], 0);
+    this.a.slicer.add(() => this.a.enqueue(canvases(look.hair), 0));
     this.job(job, look);
+  }
+
+  /**
+   * What a look draws in these poses, queued to load at this priority (Assets.enqueue). Working it out is a few frames
+   * of every part of every pose, so it goes a pose to a slice (Assets.slicer) rather than holding up a frame.
+   */
+  poses(look, list, pri) {
+    for (const p of list) if (look.has(p)) this.a.slicer.add(() => this.a.enqueue(lookCanvases(look, [p]), pri));
   }
 
   /** Every skill effect of a job line (once per job), and the poses its skills use in this look. */
@@ -52,15 +60,15 @@ export class Preloader {
     const first = !this.jobs.has(job);   // marked before the files load: several of one job arriving queue its art once
     this.jobs.add(job);
     const trees = await Promise.all(jobBooks(Number(job)).map((b) => this.a.json(bookFile(b))));
-    const art = [], poses = new Set();
+    const poses = new Set();
     for (const t of trees) {
       for (const s of Object.values(t?.skill || {})) {
         for (const p of Object.values(s?.action || {})) if (typeof p === 'string') poses.add(p);
-        for (const [k, v] of Object.entries(s || {})) if (!NOT_ART.has(k)) canvases(v, art);
+        // each skill's art is gathered in a slice of its own
+        if (first) this.a.slicer.add(() => { const art = []; for (const [k, v] of Object.entries(s || {})) if (!NOT_ART.has(k)) canvases(v, art); this.a.enqueue(art, 1); });
       }
     }
-    if (first) this.a.enqueue(art, 1);
-    if (look?.body) this.a.enqueue(lookCanvases(look, [...poses].filter((p) => look.has(p))), 1);
+    if (look?.body) this.poses(look, [...poses], 1);
   }
 
   /** Once, after logging in: every body and head, then every face and hair, without getting in the way. */

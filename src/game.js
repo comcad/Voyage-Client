@@ -292,6 +292,8 @@ class RemotePlayer {
     if (e.fh) this.fhId = e.fh;
     if (e.stance !== undefined) { this.facingRight = !(e.stance & 1); this.state = STANCE_NAMES[e.stance >> 1]; }
   }
+  /** Their path played on by sec seconds (catching up after the tab was hidden or a long frame). */
+  catchUp(sec) { const at = this.mp.play(sec, this.pose); this.x = at.x; this.y = at.y; }
   update(dt) {
     this.rebase();
     const at = this.mp.play(dt, this.pose);
@@ -787,23 +789,51 @@ const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's b
  * edges rounded to whole screen pixels; two pieces that touch round to the same edge and close up.
  */
 function snapToPixels(ctx) {
-  const draw = ctx.drawImage.bind(ctx);
-  ctx.drawImage = function (img, ...a) {
-    const m = ctx.getTransform();
-    if (m.b || m.c || (m.a === 1 && m.d === 1 && m.e === Math.round(m.e) && m.f === Math.round(m.f))) return draw(img, ...a);
+  const P = CanvasRenderingContext2D.prototype;
+  const pDraw = P.drawImage, pSave = P.save, pRestore = P.restore, pSet = P.setTransform, pReset = P.resetTransform;
+  const pTranslate = P.translate, pScale = P.scale, pRotate = P.rotate, pTransform = P.transform;
+  // The transform, kept alongside the context's own as its methods change it: reading it back (getTransform) made an
+  // object on every draw, hundreds a frame. A canvas resize resets the context, so a size change reads it afresh.
+  // (Fixed arguments throughout: these run hundreds of times a frame, and a rest parameter is an array each call.)
+  const m = new Float64Array(6), stack = [];
+  let depth = 0, cw = -1, ch = -1;
+  const put = (a, b, c, d, e, f) => { m[0] = a; m[1] = b; m[2] = c; m[3] = d; m[4] = e; m[5] = f; };
+  const sync = () => { const t = P.getTransform.call(ctx); put(t.a, t.b, t.c, t.d, t.e, t.f); depth = 0; cw = ctx.canvas.width; ch = ctx.canvas.height; };
+  put(1, 0, 0, 1, 0, 0);
+  ctx.save = function () { pSave.call(ctx); (stack[depth++] ??= new Float64Array(6)).set(m); };
+  ctx.restore = function () { pRestore.call(ctx); if (depth > 0) m.set(stack[--depth]); };
+  ctx.setTransform = function (a, b, c, d, e, f) {
+    if (arguments.length >= 6) { pSet.call(ctx, a, b, c, d, e, f); put(a, b, c, d, e, f); }
+    else if (a && typeof a === 'object') { pSet.call(ctx, a); put(a.a ?? 1, a.b ?? 0, a.c ?? 0, a.d ?? 1, a.e ?? 0, a.f ?? 0); }
+    else { pSet.call(ctx); put(1, 0, 0, 1, 0, 0); }
+  };
+  ctx.resetTransform = function () { pReset.call(ctx); put(1, 0, 0, 1, 0, 0); };
+  ctx.translate = function (x, y) { pTranslate.call(ctx, x, y); m[4] += m[0] * x + m[2] * y; m[5] += m[1] * x + m[3] * y; };
+  ctx.scale = function (x, y) { pScale.call(ctx, x, y); m[0] *= x; m[1] *= x; m[2] *= y; m[3] *= y; };
+  ctx.rotate = function (r) { pRotate.call(ctx, r); sync(); };
+  ctx.transform = function (a, b, c, d, e, f) { pTransform.call(ctx, a, b, c, d, e, f); sync(); };
+  const whole = (v) => Math.abs(v - Math.round(v)) < 1e-6;
+  ctx.drawImage = function (img, a1, a2, a3, a4, a5, a6, a7, a8) {
+    if (ctx.canvas.width !== cw || ctx.canvas.height !== ch) sync();
+    const n = arguments.length - 1, ma = m[0], md = m[3], me = m[4], mf = m[5];
     let sx = 0, sy = 0, sw = img.width, sh = img.height, dx, dy, dw, dh;
-    if (a.length === 2) { [dx, dy] = a; dw = sw; dh = sh; }
-    else if (a.length === 4) [dx, dy, dw, dh] = a;
-    else [sx, sy, sw, sh, dx, dy, dw, dh] = a;
-    // the rectangle's corners on screen, rounded; a mirrored draw (negative scale) just swaps the ends
-    let x0 = Math.round(m.a * dx + m.e), x1 = Math.round(m.a * (dx + dw) + m.e);
-    let y0 = Math.round(m.d * dy + m.f), y1 = Math.round(m.d * (dy + dh) + m.f);
-    ctx.save();
-    ctx.setTransform(Math.sign(m.a) || 1, 0, 0, Math.sign(m.d) || 1, 0, 0);
-    if (m.a < 0) { x0 = -x0; x1 = -x1; }
-    if (m.d < 0) { y0 = -y0; y1 = -y1; }
-    draw(img, sx, sy, sw, sh, x0, y0, x1 - x0, y1 - y0);
-    ctx.restore();
+    if (n === 2) { dx = a1; dy = a2; dw = sw; dh = sh; }
+    else if (n === 4) { dx = a1; dy = a2; dw = a3; dh = a4; }
+    else { sx = a1; sy = a2; sw = a3; sh = a4; dx = a5; dy = a6; dw = a7; dh = a8; }
+    // the rectangle's corners on screen; already on whole pixels (the usual case), or turned, it is drawn as it is;
+    // otherwise rounded, a mirrored draw (negative scale) just swapping the ends
+    const fx0 = ma * dx + me, fx1 = ma * (dx + dw) + me, fy0 = md * dy + mf, fy1 = md * (dy + dh) + mf;
+    if (m[1] || m[2] || (whole(fx0) && whole(fx1) && whole(fy0) && whole(fy1))) {
+      if (n === 2) pDraw.call(ctx, img, a1, a2); else if (n === 4) pDraw.call(ctx, img, a1, a2, a3, a4); else pDraw.call(ctx, img, a1, a2, a3, a4, a5, a6, a7, a8);
+      return;
+    }
+    let x0 = Math.round(fx0), x1 = Math.round(fx1), y0 = Math.round(fy0), y1 = Math.round(fy1);
+    pSave.call(ctx);
+    pSet.call(ctx, Math.sign(ma) || 1, 0, 0, Math.sign(md) || 1, 0, 0);
+    if (ma < 0) { x0 = -x0; x1 = -x1; }
+    if (md < 0) { y0 = -y0; y1 = -y1; }
+    pDraw.call(ctx, img, sx, sy, sw, sh, x0, y0, x1 - x0, y1 - y0);
+    pRestore.call(ctx);
   };
   return ctx;
 }
@@ -4862,7 +4892,7 @@ export class Game {
     this.preloader ??= new Preloader(this);
     if (this.preloaded?.look !== this.look || this.preloaded?.job !== this.stats?.job) {
       this.preloaded = { look: this.look, job: this.stats?.job };
-      this.assets.enqueue(lookCanvases(this.look, this.look.actionList()), 0);
+      this.preloader.poses(this.look, this.look.actionList(), 0);
       this.preloader.job(this.stats?.job, this.look);
     }
     this.preloader.everyone();
@@ -5053,9 +5083,10 @@ export class Game {
     if (!this.itemEff) { this.itemEff = this.assets.json('Effect/ItemEff.img').then((j) => { this.itemEff = j || null; }); return; }
     if (this.itemEff instanceof Promise) return;
     this.player.rings = this.ownRings();
-    const ents = [this.player, ...this.others.values()];
+    const all = [this.player, ...this.others.values()];
     const anim = (n) => { const a = n && frames(n).length ? new Anim(n) : null; if (a) this.assets.preload(a.frames); return a; };
     for (const kind of ['couple', 'friend', 'marriage']) {
+      const ents = all.filter((e) => e.rings?.[kind]);   // pairs only among those wearing one (a crowd has few)
       for (let i = 0; i < ents.length; i++) {
         for (let j = i + 1; j < ents.length; j++) {
           const a = ents[i], b = ents[j], ra = a.rings?.[kind], rb = b.rings?.[kind];
@@ -6021,10 +6052,11 @@ export class Game {
    * every queued path at once, in 50ms steps, until it is used up or nothing is left to play.
    */
   catchUpPaths(sec) {
+    // players: their paths alone, all the missed time at once (the playback steps its own 30ms ticks)
+    for (const rp of this.others.values()) if (rp.path) rp.catchUp(sec);
     const STEP = 0.05;
     for (let t = 0; t < sec; t += STEP) {
       let any = false;
-      for (const rp of this.others.values()) if (rp.path) { rp.update(STEP); any = true; }
       for (const pet of this.pets.values()) if (!pet.mine && pet.path) { pet.replay(STEP); any = true; }
       for (const sm of this.summons.values()) if (sm.path) { sm.replay(STEP); any = true; }
       for (const m of this.map?.life || []) if (m.path && m.online && !m.controlled && m.playPath) { m.playPath(STEP); any = true; }
@@ -6082,8 +6114,9 @@ export class Game {
     if (!this.preloader || !this.viewBox || (this.nearT = (this.nearT || 0) - dt) > 0) return;
     this.nearT = 0.25;
     const w = this.cam.w || VIEW_W, h = this.cam.h || VIEW_H;
+    let n = 0;   // a few a check: entering a crowded map, everyone near would otherwise start at once
     for (const rp of this.others.values()) {
-      if (rp.preloaded !== rp.look && this.inView(rp.x, rp.y, w, h, h)) { rp.preloaded = rp.look; this.preloader.player(rp.look, rp.job); }
+      if (rp.preloaded !== rp.look && this.inView(rp.x, rp.y, w, h, h)) { rp.preloaded = rp.look; this.preloader.player(rp.look, rp.job); if (++n >= 4) break; }
     }
   }
 

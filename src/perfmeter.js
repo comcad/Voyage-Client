@@ -142,7 +142,7 @@ export class PerfMeter {
       gl?.getExtension('WEBGL_lose_context')?.loseContext();
     } catch { /* ignore */ }
     let px = 0, n = 0;
-    for (const e of a?.imgCache?.values() || []) if (e.ready && e.img) { n++; px += (e.img.naturalWidth || 0) * (e.img.naturalHeight || 0); }
+    for (const e of a?.imgCache?.values() || []) if (e.ready && e.img) { n++; px += (e.img.width || 0) * (e.img.height || 0); }
     out.push(`Voyage /fps report ${new Date().toISOString()}`);
     out.push(`browser: ${navigator.userAgent}`);
     out.push(`gpu: ${gpu}`);

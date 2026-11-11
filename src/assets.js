@@ -38,6 +38,8 @@ export async function nodeAt(assets, path) {
   return n ?? null;
 }
 
+/** What an entry's bytes become once it is decoded (the Blob isn't kept). */
+const NO_BYTES = Promise.resolve(null);
 /** How many canvases loaded ahead (Assets.enqueue) are out at once: about one batch's worth. */
 const QUEUE_LOADS = 40;
 /**
@@ -104,7 +106,8 @@ class Batcher {
     f.promise = new Promise((resolve, reject) => { f.resolve = resolve; f.reject = reject; });
     this.files.set(path, f);
     const queue = () => { this.pending[PRI[f.pri] ?? 2].add(path); this.schedule(); };
-    this.cache.then((c) => (c ? c.match(this.url(path)) : null)).then((hit) => (hit ? hit.blob() : null)).then((blob) => {
+    // each hit read in a slice of its own: a crowd arriving is thousands of reads, each a call into the browser
+    this.cache.then((c) => (c ? c.match(this.url(path)) : null)).then((hit) => (hit ? this.a.slicer.add(() => hit.blob(), f.pri) : null)).then((blob) => {
       if (!blob) { queue(); return; }
       this.files.delete(path); f.resolve(blob);
     }, queue);
@@ -233,36 +236,46 @@ export class Assets {
   }
 
   /** pri (see PRI): one already waiting is moved up when it is asked for at a higher priority. */
+  /**
+   * A canvas's entry: its bytes (e.bytes, a Blob or null) come in a batch (Batcher); it is decoded (decoded(e)) when it
+   * is first wanted. One that failed to load (a dropped connection) is tried again 5s later, three tries in all.
+   */
   _entry(node, pri = 'normal') {
     let e = this.imgCache.get(node._canvas);
-    // one that failed to load (a dropped connection) is tried again 5s later, three tries in all
     const retry = e?.err && e.tries < 3 && performance.now() - e.failedAt > 5000;
     if (!e || retry) {
-      const img = new Image(), tries = e?.tries || 0;
-      e = { img, ready: false, tries, pri };
-      e.promise = new Promise((res) => {
-        // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
-        img.onload = () => { const done = () => { e.ready = true; img.onload = img.onerror = null; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; res(img); }; if (img.decode) img.decode().then(done, done); else done(); };
-        img.onerror = () => { e.err = true; e.tries = tries + 1; e.failedAt = performance.now(); res(null); };
-      });
-      // its bytes come in a batch (Batcher) and are shown from memory; none (no such file) or a dropped connection is
-      // a failed load
-      this.files.get(node._canvas, pri).then((blob) => {
-        if (!blob) { img.onerror(); return; }
-        const url = URL.createObjectURL(blob), done = () => URL.revokeObjectURL(url);
-        img.addEventListener('load', done, { once: true }); img.addEventListener('error', done, { once: true });
-        img.src = url;
-      }, () => img.onerror());
+      const tries = e?.tries || 0;
+      e = { img: null, ready: false, tries, pri, promise: null };
+      e.bytes = this.files.get(node._canvas, pri).then((blob) => { if (!blob) this.failed(e, tries); return blob; }, () => { this.failed(e, tries); return null; });
       this.imgCache.set(node._canvas, e);
     } else if (!e.ready && !e.err && (PRI[pri] ?? 2) < (PRI[e.pri] ?? 2)) { e.pri = pri; this.files.bump(node._canvas, pri); }
     return e;
   }
+  failed(e, tries) { e.err = true; e.tries = tries + 1; e.failedAt = performance.now(); }
+  /**
+   * The entry's image, decoded off the main thread (an ImageBitmap: no image element, no blob URL, both of which cost
+   * the main thread a round trip to the browser per image); resolves null when it couldn't be had. Loaded ahead, an
+   * image keeps only its compressed bytes until it is first wanted.
+   */
+  decoded(e) {
+    e.promise ??= e.bytes
+      .then((blob) => (blob ? createImageBitmap(blob) : null))
+      .then((bmp) => {
+        if (!bmp) return null;
+        e.img = bmp; e.ready = true; e.bytes = NO_BYTES;
+        this.loaded++; this.loadedPx += bmp.width * bmp.height;
+        return bmp;
+      }, () => { this.failed(e, e.tries); return null; });
+    return e.promise;
+  }
 
-  /** Returns the loaded image, or null while it is still loading (it starts loading on first call). */
+  /** Returns the loaded image, or null while it is still loading (it starts loading, and decoding, on first call). */
   image(node) {
     if (!isCanvas(node)) return null;
     const e = this._entry(node, 'urgent');
-    return e.ready ? e.img : null;
+    if (e.ready) return e.img;
+    if (!e.err) this.decoded(e);
+    return null;
   }
 
   /**
@@ -292,14 +305,14 @@ export class Assets {
       this.queued.delete(n._canvas);
       if (this.imgCache.has(n._canvas)) continue;
       this.inFlight++;
-      this._entry(n).promise.then(() => { this.inFlight--; this.pump(); });
+      this._entry(n).bytes.then(() => { this.inFlight--; this.pump(); });   // its bytes only: decoded when first drawn
     }
   }
 
   preload(nodes, onProgress, pri = 'normal') {
     const list = nodes.filter(isCanvas);
     let done = 0;
-    return Promise.all(list.map((n) => this._entry(n, pri).promise.then(() => onProgress?.(++done, list.length))));
+    return Promise.all(list.map((n) => this.decoded(this._entry(n, pri)).then(() => onProgress?.(++done, list.length))));
   }
 }
 
