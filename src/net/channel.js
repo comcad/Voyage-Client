@@ -289,7 +289,14 @@ export class ChannelSession {
         // best sellers: 9 tabs x 2 genders x 5 of (category, gender, SN)
         for (let i = 0; i < 90; i++) { r.int(); r.int(); d.best.push(r.int()); }
         for (let n = r.short(); n > 0; n--) d.stock.set(r.int(), r.int());   // 1 sold out, 2 not at this hour
-        for (let n = r.short(); n > 0; n--) r.skip(0x68);                      // limited goods
+        // limited goods: item, up to 10 SNs, state (-1 on sale, 1 / 0xC0 sold out, 2 / 0xBF not now), total, left,
+        // flags (1 count, 2 dates, 4 weekdays, 8 hours), start / end date (YYYYMMDD), start / end hour, Sun..Sat
+        for (let n = r.short(); n > 0; n--) {
+          const itemId = r.int(), sns = []; for (let i = 0; i < 10; i++) sns.push(r.int());
+          const rec = { itemId, sns: sns.filter(Boolean), state: r.int(), total: r.int(), remaining: r.int(), flags: r.int(), start: r.int(), end: r.int(), startHour: r.int(), endHour: r.int(), days: [] };
+          for (let i = 0; i < 7; i++) rec.days.push(r.int());
+          (d.limited ??= []).push(rec);
+        }
         for (let n = r.short(); n > 0; n--) r.skip(0x44);                      // free-trial windows
         r.ubyte(); d.level = r.int();
       } catch (e) { console.warn('SET_CASH_SHOP: short packet', e); }
@@ -353,7 +360,7 @@ export class ChannelSession {
       else if (op === 0x8D) { const got = []; for (let n = r.int(); n > 0; n--) got.push({ count: r.short(), pos: r.short(), itemId: r.int() }); this.emit('csMesoBought', got); }
       else if (op === 0x87 || op === 0x91) { const item = readCashItem(r); this.emit('csRing', { item, to: r.string(), itemId: r.int(), count: r.short() }); }
       else if (op === 0x6E) this.emit('csExpired', r.long());
-      else if (op === 0x47) { r.int(); const sn = r.int(); this.emit('csStock', sn, r.int()); }
+      else if (op === 0x47) { const itemId = r.int(), sn = r.int(); this.emit('csStock', sn, r.int(), itemId); }
       // a failure: the reason, and for 0xBF / 0xC0 (not at this hour / sold out) the SN
       else if (CS_FAILS.has(op)) {
         const reason = r.ubyte(), sn = (reason === 0xBF || reason === 0xC0) && r.available >= 4 ? r.int() : 0;
@@ -366,6 +373,7 @@ export class ChannelSession {
       else if (op === 0x64) this.emit('csSlots', 'character', r.short());
       else if (op === 0x9E || op === 0xA0) this.emit('csTransferBought', op === 0x9E ? 'name' : 'world', readCashItem(r));
       else if (op === 0x9B) r.ubyte();
+      else if (op === 0x9A) { const sn = r.int(); this.emit('csAccountLimit', sn, r.ubyte()); }   // a one-per-account answer
       // a cash item deleted from the locker (0x85: with the Maple Points it was worth)
       else if (op === 0x6C) this.emit('csDeleted', r.long(), null);
       else if (op === 0x85) { const sn = r.long(); this.emit('csDeleted', sn, r.int()); }
@@ -2114,6 +2122,8 @@ export class ChannelSession {
   nameTransfer(cid, birthday) { this.send(new PacketWriter(C.NAME_TRANSFER).int(cid).int(birthday)); }
   worldTransfer(cid, birthday) { this.send(new PacketWriter(C.WORLD_TRANSFER).int(cid).int(birthday)); }
   checkNewName(name) { this.send(new PacketWriter(C.CHECK_CHAR_NAME).string(name)); }
+  /** Asks whether a one-per-account item may still be bought (sn 0: the account-wide answer). */
+  csLimitQuery(sn) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x28).int(sn)); }
   csNameChange(sn, oldName, newName) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x2E).int(sn).string(oldName).string(newName)); }
   csWorldTransfer(sn, world) { this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(0x31).int(sn).int(world)); }
   /** A ring for a partner: 0x1D a couple ring, 0x23 a friendship ring; birthday, wallet (1 NX Credit / 4 NX Prepaid), SN, partner, message */

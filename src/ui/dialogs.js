@@ -1185,6 +1185,42 @@ function tipSale(ctx, it, x, y, W) {
   tipCentre(ctx, `Original Price : ${o} Cash`, x, y, W, TIP_FONT.body, '#fff');
   tipPair(ctx, 'Discount Price :', TIP_FONT.body, '#fff', `${pct}%`, TIP_FONT.body, TIP_SALE, x, y + 16, W);
 }
+/**
+ * The Cash Shop's limited-sale guide at the foot of a commodity's tooltip (it.limited: its limited-goods record).
+ * Its lines: two empty; the dates (flag 2); the weekdays it sells on, Mon to Sun (flag 4; none when all 7); the hours
+ * (flag 8); how many are sold and left (flag 1 with a total) or that it sells for a limited time; "Hurry!!!"; two
+ * empty. "[ Limited Sale Guide ]" in gold is centred 14px down, then from the second line, 31px down, each line
+ * centred and 18px on (an empty one 8px), the 4th from the end in gold. The tooltip grows 16px for each line. The
+ * order of the date's day and month and the end hour are unverified.
+ */
+const LIMITED_DAYS = ['[Sun]', '[Mon]', '[Tues]', '[Wed]', '[Thur]', '[Fri]', '[Sat]'];
+function tipLimitedLines(r) {
+  const f = tipNum(r.flags), L = ['', ''];
+  const date = (d) => [Math.floor(d / 100) % 100, d % 100].map((v) => String(v).padStart(2, ' ')).concat(String(Math.floor(d / 10000)).padStart(4, ' ')).join('/');
+  if (f & 2) L.push(`From ${date(tipNum(r.start))}   (mm/dd/yyyy)`, `to ${date(tipNum(r.end))}     (mm/dd/yyyy)`);
+  if (f & 4) {
+    const on = [1, 2, 3, 4, 5, 6, 0].filter((i) => tipNum(r.days?.[i]));
+    if (on.length < 7) L.push(`${on.map((i) => LIMITED_DAYS[i]).join('')} only`);
+  }
+  if (f & 8) L.push(`from ${String(tipNum(r.startHour)).padStart(2, '0')}:00 to ${String(tipNum(r.endHour)).padStart(2, '0')}:00`);
+  if (f & 1 && tipNum(r.total) >= 1) L.push(`Only ${tipNum(r.total)} will be sold.`, `There are currently ${tipNum(r.remaining)} left.`);
+  else L.push('This item will be on sale only for this limited time.');
+  L.push('Hurry!!!', '', '');
+  return L;
+}
+const tipLimitedH = (it) => (it.limited ? 16 * tipLimitedLines(it.limited).length : 0);
+const tipLimitedW = (ctx, it) => (it.limited ? Math.ceil(Math.max(...tipLimitedLines(it.limited).map((l) => tipW(ctx, l, TIP_FONT.body)))) + 20 : 0);
+function tipLimited(ctx, it, x, y, W) {
+  if (!it.limited) return;
+  const L = tipLimitedLines(it.limited), gold = TIP_TITLE[2];
+  tipCentre(ctx, '[ Limited Sale Guide ]', x, y + 14, W, TIP_FONT.body, gold);
+  let ly = y + 31;
+  for (let i = 1; i < L.length; i++) {
+    if (!L[i]) { ly += 8; continue; }
+    tipCentre(ctx, L[i], x, ly, W, TIP_FONT.body, i === L.length - 4 ? gold : '#fff');
+    ly += 18;
+  }
+}
 // my may be { bottom }: the tip ends there (over the quick slots, so it doesn't cover them)
 const tipPlace = (mx, my, W, H) => [Math.max(0, Math.min(mx, UI_W - 1 - W)), Math.max(0, Math.min(typeof my === 'object' ? my.bottom - H : my, UI_H - 1 - H))];
 
@@ -1325,6 +1361,7 @@ function equipTip(ctx, mgr, it, info, mx, my) {
   let W = 236;
   W = Math.max(W, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
   for (const [l, v, fo] of rows) W = Math.max(W, Math.ceil(tipW(ctx, l, TIP_FONT.small) + tipW(ctx, v, fo)) + 20);
+  W = Math.max(W, tipLimitedW(ctx, it));
   const desc = tipWrap(ctx, text, 208), descH = tipWrapH(desc), sale = tipOnSale(it);
   // a first tag line wider than the box wraps; the second is given the first one's height
   const ownH = owner ? 19 : 0, tagW = tags[0] ? tipW(ctx, tags[0], TIP_FONT.body) : 0;
@@ -1333,7 +1370,7 @@ function equipTip(ctx, mgr, it, info, mx, my) {
   // the Cash Shop's tooltip shows the item's sample picture (info/sample) centred above the description
   const sample = cs && tipIsCanvas(info.sample) ? info.sample : null, sImg = sample && mgr.image(sample);
   const sampleH = sample ? (sImg?.height || sample._h || 0) + 5 : 0;
-  const H = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0) + sampleH;
+  const H0 = base + 166 + rows.length * 13 + descH + (sale ? 35 : 0) + sampleH, H = H0 + tipLimitedH(it);
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
@@ -1372,9 +1409,10 @@ function equipTip(ctx, mgr, it, info, mx, my) {
     tipText(ctx, l, x + 16, ry, TIP_FONT.small, TIP_LABEL);
     if (v) tipText(ctx, v, x + 16 + tipW(ctx, l, TIP_FONT.small), ry, fo, '#fff');
   });
-  if (sale) tipSale(ctx, it, x, y + H - descH - 39, W);
-  if (sImg) ctx.drawImage(sImg, x + ((W - sImg.width) >> 1), y + H - descH - (sale ? 35 : 0) - 3 - sampleH);
-  tipDrawWrap(ctx, desc, x + 10, y + H - descH - (cs ? 3 : 5));
+  if (sale) tipSale(ctx, it, x, y + H0 - descH - 39, W);
+  if (sImg) ctx.drawImage(sImg, x + ((W - sImg.width) >> 1), y + H0 - descH - (sale ? 35 : 0) - 3 - sampleH);
+  tipDrawWrap(ctx, desc, x + 10, y + H0 - descH - (cs ? 3 : 5));
+  tipLimited(ctx, it, x, y + H0, W);
 }
 
 function itemTip(ctx, mgr, it, info, mx, my) {
@@ -1391,12 +1429,12 @@ function itemTip(ctx, mgr, it, info, mx, my) {
   let text = mgr.desc(id) || '';
   if (!pet && it.flag !== undefined && tipNum(info.tradeAvailable) && !(f & 0x02)) text += (text ? '\n' : '') + TIP_SCISSORS;
   const reqLv = pet ? 0 : tipNum(info.reqLevel), showReq = reqLv > 0 || Math.floor(id / 10000) === 301;
-  const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20);
+  const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20, tipLimitedW(ctx, it));
   const desc = tipWrap(ctx, text, W - 20 - 92 - 3), descH = tipWrapH(desc), sale = tipOnSale(it);
   const head = pet ? (period ? 16 : 0) + (gift ? 16 : 0)
     : tagH + (period ? 20 : 0) + (spouse ? 16 : 0) + (owner ? 16 : 0) + (gift ? 16 : 0);
   const top = head + (showReq ? 44 : 32);
-  const H = Math.max(head + 116 + (showReq ? 12 : 0), top + descH + 8) + (sale ? 35 : 0);
+  const H0 = Math.max(head + 116 + (showReq ? 12 : 0), top + descH + 8) + (sale ? 35 : 0), H = H0 + tipLimitedH(it);
   const [x, y] = tipPlace(mx, my, W, H);
 
   tipFrame(ctx, x, y, W, H);
@@ -1425,4 +1463,5 @@ function itemTip(ctx, mgr, it, info, mx, my) {
     ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, sy - 4, W - 12, 1);
     tipSale(ctx, it, x, sy + 4, W);
   }
+  tipLimited(ctx, it, x, y + H0, W);
 }
