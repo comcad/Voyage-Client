@@ -2,6 +2,7 @@ import { VIEW_W, PIXEL_SCALE } from './view.js';
 import { settings } from './settings.js';
 import { spriteStats } from './character.js';
 import { config } from './config.js';
+import { frameMaker } from './framemaker.js';
 import { BUILD } from './build.js';
 
 /**
@@ -186,6 +187,8 @@ export class PerfMeter {
     out.push(`FRAME RATE ${settings.fps}  zoom ${settings.zoom ?? 1}  quality ${settings.quality ?? '-'}  map ${game.map?.id ?? '-'}  images ${n} (${(px * 4 / 1e6).toFixed(0)} MB decoded)`);
     const sp = spriteStats();
     out.push(`character frame images (/fps sprites): ${sp.on ? `on, ${sp.n} kept (${(sp.px / 1e6).toFixed(1)} Mpx)` : 'off'}`);
+    const fm = frameMaker.stats();
+    out.push(`  frames made ahead, off the page's thread (/fps worker): ${fm.broken ? 'not in this browser' : !fm.wanted && !fm.made ? 'off' : `${fm.on ? 'on' : fm.wanted ? 'starting' : 'off'}, ${fm.made} made (${fm.ms.toFixed(0)} ms each to come back), ${fm.failed} couldn't be, ${fm.waiting} in hand`}`);
     out.push(`character sheets (/fps sheets): ${!config.characterSheets ? 'not packed by this server' : a?.useSheets ? `on, ${a.sheets} loaded` : `off (${a?.sheets ?? 0} loaded before)`}`);
     if (performance.memory) out.push(`js heap ${(performance.memory.usedJSHeapSize / 1e6).toFixed(0)} / ${(performance.memory.jsHeapSizeLimit / 1e6).toFixed(0)} MB`);
     out.push(`last 2 s: ${s.fps} fps, frame ${num(s.avg)} ms avg, ${num(s.max)} worst, update ${num(s.upd)} ms, draw ${num(s.ren)} ms (max ${num(s.renMax)})`);

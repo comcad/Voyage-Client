@@ -184,6 +184,7 @@ Voyage-Client/
 ├── public/
 │   ├── index.html
 │   ├── style.css
+│   ├── FrameWorker.js    # worker that puts character frames together off the page's thread (/fps worker)
 │   └── Voyage.js         # built client bundle: gitignored, generated at build/boot
 ├── src/
 │   ├── main.js           # entry point
