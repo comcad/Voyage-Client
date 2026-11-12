@@ -93,6 +93,12 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false, setHeader
 const server = http.createServer(app);
 
 const HEARTBEAT = 10000;
+// What a game server sends goes on to the browser in batches. Sent on as it comes, every packet is a frame and a TCP
+// segment of its own: a busy map is two thousand of 60 bytes a second, each acknowledged, and on a wireless or a far
+// link one of them lost holds up everything behind it (every other player stops at once until it is sent again).
+// Together they are a hundred or so a second. Nothing waits when little is coming: the first packet goes at once,
+// and what follows within RELAY_MS of it goes together (or sooner, once there is RELAY_BYTES of it).
+const RELAY_MS = 10, RELAY_BYTES = 16384;
 const wss = new WebSocketServer({ server, path: '/ws' });
 setInterval(() => {
   for (const ws of wss.clients) {
@@ -113,11 +119,25 @@ wss.on('connection', (ws, req) => {
 
   const sock = net.connect(port, host);
   sock.setNoDelay(true);
-  sock.on('data', (d) => ws.readyState === ws.OPEN && ws.send(d));
-  sock.on('close', () => ws.close());
+  let held = [], heldBytes = 0, timer = null, sentAt = 0;
+  const flush = () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!heldBytes) return;
+    const out = held.length === 1 ? held[0] : Buffer.concat(held, heldBytes);
+    held = []; heldBytes = 0; sentAt = Date.now();
+    if (ws.readyState === ws.OPEN) ws.send(out);
+  };
+  sock.on('data', (d) => {
+    held.push(d); heldBytes += d.length;
+    if (heldBytes >= RELAY_BYTES) { flush(); return; }
+    if (timer) return;
+    const wait = RELAY_MS - (Date.now() - sentAt);
+    if (wait <= 0) flush(); else timer = setTimeout(flush, wait);
+  });
+  sock.on('close', () => { flush(); ws.close(); });
   sock.on('error', (e) => { console.log(`bridge ${host}:${port} ${e.message}`); ws.close(1011, e.message); });
   ws.on('message', (d) => sock.write(d));
-  ws.on('close', () => sock.destroy());
+  ws.on('close', () => { if (timer) clearTimeout(timer); sock.destroy(); });
 });
 
 server.listen(PORT, HOST, () => {

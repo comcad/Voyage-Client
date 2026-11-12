@@ -420,7 +420,7 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
  * character (Dark Sight, hidden) is see-through as a whole now rather than part over part. Up to SPRITE_PX pixels
  * are kept, the longest unused going first. A frame wanted on screen now is made on the page, a few ms a frame at
  * most (makeSprite), and a character whose frame isn't made yet keeps its last one up meanwhile (Game.drawChar);
- * frames made ahead of their first use can be made off the page's thread instead (framemaker.js, /fps worker).
+ * frames made ahead of their first use are made off the page's thread where the browser can (framemaker.js).
  */
 export let charSprites = true;
 const SPRITE_PX = 24e6, SPRITE_MS = 3, ARRIVAL_MS = 4;
@@ -491,8 +491,8 @@ function frameJob(parts, assets) {
 /**
  * Makes a kept frame's image if it can be made now. 'made': it is there.
  *
- * Mode 'warm' is a frame made ahead of its first use (Game.warmSprites): with /fps worker on, the frame maker makes
- * those off the page's thread (framemaker.js), 'asked', and nothing is drawn here for them. Every other frame is wanted on
+ * Mode 'warm' is a frame made ahead of its first use (Game.warmSprites): the frame maker makes those off the page's
+ * thread (framemaker.js), 'asked', and nothing is drawn here for them. Every other frame is wanted on
  * screen now and is made here, where its art already is: sent off, it came back a frame or two late (a crowd
  * arriving took half as long again). One made here while the maker has it in hand stays; one the maker can't make
  * is made here from then on.

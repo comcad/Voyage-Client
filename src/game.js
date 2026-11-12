@@ -819,7 +819,7 @@ export class Game {
   constructor(canvas, assets, look, hooks = {}, net = null) {
     // (opaque: nothing shows through the game, so the browser needn't blend it with the page behind)
     this.canvas = canvas; this.ctx = snapToPixels(canvas.getContext('2d', { alpha: false }));
-    this.frames = frameMaker;   // (frames made ahead of use, made off the page's thread: off unless /fps worker switches it on)
+    this.frames = frameMaker; frameMaker.start();   // frames made ahead of use are made off the page's thread, where the browser can
     canvas.width = VIEW_W; canvas.height = VIEW_H; this.ctx.resync?.();   // (a resized canvas starts its context over)
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
@@ -4586,9 +4586,9 @@ export class Game {
     }
   }
   /**
-   * Has the frames waiting (warmLook) made, so a player who starts walking already has them: with what is left of
-   * this frame's time for making frame images or, with /fps worker on, off the page's thread (they are asked for
-   * here, 48 a frame). One whose art isn't in yet goes to the back.
+   * Has the frames waiting (warmLook) made, so a player who starts walking already has them: off the page's thread
+   * where the browser can (they are asked for here, 48 a frame; /fps worker), otherwise with what is left of this
+   * frame's time for making frame images. One whose art isn't in yet goes to the back.
    */
   warmSprites() {
     const list = this.warm;
@@ -5762,7 +5762,7 @@ export class Game {
       this.hud?.message?.(`Characters are drawn ${charSprites ? 'from one kept image a frame' : 'part by part'}. Type /fps sprites again to switch.`, CHAT_COLORS.notice);
       return;
     }
-    // /fps worker: frames made ahead of their first use made off the page's thread (off unless switched on here), to compare
+    // /fps worker: frames made ahead of their first use made off the page's thread (on, where the browser can) or on the page, to compare
     if (/^\/fps\s+worker$/i.test(text.trim())) {
       const on = frameMaker.toggle();
       this.hud?.message?.(frameMaker.broken ? 'This browser can\'t make character frames off the page\'s thread: they are made on the page.'
