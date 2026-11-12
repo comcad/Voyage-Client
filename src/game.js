@@ -275,14 +275,17 @@ class RemotePlayer {
     this.attack = null; this.chat = null;
     this.fhId = d.fh || 0;
     this.mp = new CharPath(this.x, this.y);   // their movement, played as the client plays it (movepath.js)
+    this.shown = { x: this.x, y: this.y };   // where their movement last put them
     this.pose = (e) => this.takePose(e);
   }
   /** Movement still playing (MOVE_PLAYER), or null. */
   get path() { return this.mp.playing ? this.mp : null; }
-  /** Put somewhere by anything but their path while standing still: playback picks up from there. */
+  /**
+   * Put somewhere by anything but their path while standing still: playback picks up from there. A path that has run
+   * out isn't that: the next one curves on from its last key at that key's speed.
+   */
   rebase() {
-    const c = this.mp.cur;
-    if (!this.mp.playing && (Math.abs(c.x - this.x) > 1 || Math.abs(c.y - this.y) > 1)) this.mp.reset(this.x, this.y);
+    if (!this.mp.playing && (this.x !== this.shown.x || this.y !== this.shown.y)) this.mp.reset(this.x, this.y);
   }
   /** Their movement queues behind what is still playing (CharPath: 30ms ticks, curves through each element's speed). */
   applyMovement(moves) { this.rebase(); this.mp.queue(moves); }
@@ -294,7 +297,7 @@ class RemotePlayer {
   update(dt) {
     this.rebase();
     const at = this.mp.play(dt, this.pose);
-    this.x = at.x; this.y = at.y;
+    this.x = at.x; this.y = at.y; this.shown = at;
     const look = this.look;
     if (this.charge && (this.attack || performance.now() > this.charge.until)) this.charge = null;
     const ready = this.state === 'stand' && performance.now() < (this.alertUntil || 0);
