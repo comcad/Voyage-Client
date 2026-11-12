@@ -9,6 +9,12 @@
 
 /** Round half away from zero, as the client rounds a drawn position. */
 export const roundAway = (v) => (v >= 0 ? Math.trunc(v + 0.5) : Math.trunc(v - 0.499999999));
+/**
+ * The same onto a grid of 1/grid px: the canvas's own pixels (view.js PIXEL_SCALE), whole game pixels at scale 1 and
+ * finer above it, the steps the camera and your own character move in. On whole game pixels, someone walking beside
+ * you would wobble a screen pixel against the map as the camera glides.
+ */
+export const roundTo = (v, grid = 1) => (grid === 1 ? roundAway(v) : roundAway(v * grid) / grid);
 
 /**
  * A path's elements as playback keys: where each ends, its speed (px/s), pose, floor and time. A jump's or a blow's
@@ -94,12 +100,12 @@ export class CharPath {
   }
   /**
    * Plays dt seconds on the 30ms clock, a tick ahead of the screen, and returns where to draw: between the last two
-   * ticks, rounded half away from zero.
+   * ticks, rounded half away from zero onto a 1/grid px grid (roundTo).
    */
-  play(dt, pose) {
+  play(dt, pose, grid = 1) {
     this.acc += dt * 1000;
     while (this.acc > 0) { this.acc -= 30; this.tick(pose); }
     const k = -this.acc / 30;
-    return { x: roundAway(this.cur.x + (this.prev.x - this.cur.x) * k), y: roundAway(this.cur.y + (this.prev.y - this.cur.y) * k) };
+    return { x: roundTo(this.cur.x + (this.prev.x - this.cur.x) * k, grid), y: roundTo(this.cur.y + (this.prev.y - this.cur.y) * k, grid) };
   }
 }

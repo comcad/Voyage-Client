@@ -82,7 +82,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings, saveSettings } from './settings.js';
-import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale } from './view.js';
+import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale, PIXEL_SCALE } from './view.js';
 import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
@@ -297,7 +297,7 @@ class RemotePlayer {
   }
   update(dt) {
     this.rebase();
-    const at = this.mp.play(dt, this.pose);
+    const at = this.mp.play(dt, this.pose, PIXEL_SCALE);   // on the canvas's pixels, as the camera and you move
     this.x = at.x; this.y = at.y; this.shown = at;
     const look = this.look;
     if (this.charge && (this.attack || performance.now() > this.charge.until)) this.charge = null;
