@@ -3,7 +3,8 @@
  * each where the mover ended up, how fast it was then moving (px/s), its pose, its floor and how long it took. They
  * queue behind what is still playing and play on a 30ms clock: within an element the mover is on the cubic Hermite
  * curve through the element before and this one, each with its speed, so a jump arcs as it did for the one jumping.
- * It is drawn between the last two ticks of that clock.
+ * It is drawn between the last two ticks of that clock. When all of it has played the mover waits on the last element,
+ * and the next path curves on from there at that element's speed.
  */
 
 /** Round half away from zero, as the client rounds a drawn position. */
