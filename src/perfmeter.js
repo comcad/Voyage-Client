@@ -1,5 +1,6 @@
 import { VIEW_W, PIXEL_SCALE } from './view.js';
 import { settings } from './settings.js';
+import { spriteStats } from './character.js';
 
 /**
  * The /fps meter (a Voyage tool, not part of the original client), over the last two seconds:
@@ -177,6 +178,8 @@ export class PerfMeter {
     out.push(`gpu: ${gpu}`);
     out.push(`window ${c.clientWidth}x${c.clientHeight} @${window.devicePixelRatio || 1}x  canvas ${c.width}x${c.height} (${PIXEL_SCALE}x)  view ${game.cam.w}x${game.cam.h}  display ${Math.round(s.refresh)} Hz`);
     out.push(`FRAME RATE ${settings.fps}  zoom ${settings.zoom ?? 1}  quality ${settings.quality ?? '-'}  map ${game.map?.id ?? '-'}  images ${n} (${(px * 4 / 1e6).toFixed(0)} MB decoded)`);
+    const sp = spriteStats();
+    out.push(`character frame images (/fps sprites): ${sp.on ? `on, ${sp.n} kept (${(sp.px / 1e6).toFixed(1)} Mpx)` : 'off'}`);
     if (performance.memory) out.push(`js heap ${(performance.memory.usedJSHeapSize / 1e6).toFixed(0)} / ${(performance.memory.jsHeapSizeLimit / 1e6).toFixed(0)} MB`);
     out.push(`last 2 s: ${s.fps} fps, frame ${num(s.avg)} ms avg, ${num(s.max)} worst, update ${num(s.upd)} ms, draw ${num(s.ren)} ms (max ${num(s.renMax)})`);
     if (s.drew) out.push(`  drawing on average: ${topParts(s.drew, 8, 0.1)}`);

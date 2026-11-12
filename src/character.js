@@ -212,6 +212,8 @@ export class CharacterLook {
     if (this.loaded && !this.unready) {
       if (!this.composed || this.composed.size >= 512) this.composed = new Map();
       this.composed.set(key, out);
+      // kept and lasting: drawParts may draw it from one image. One with an expression lasts a blink, so no.
+      if (!expr) out.still = true;
     }
     return out;
   }
@@ -396,11 +398,62 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
   if (parts.flip) ctx.scale(-1, 1);
   if (parts.rotate) ctx.rotate((parts.rotate * Math.PI) / 180);
   if (alpha !== 1) ctx.globalAlpha = alpha;
-  for (const p of parts) {
-    const img = assets.image(p.node);
-    if (img) ctx.drawImage(img, p.x, p.y);
+  const sprite = charSprites && parts.still ? partsSprite(parts, assets) : null;
+  if (sprite) ctx.drawImage(sprite.c, sprite.x, sprite.y);
+  else {
+    for (const p of parts) {
+      const img = assets.image(p.node);
+      if (img) ctx.drawImage(img, p.x, p.y);
+    }
   }
   ctx.restore();
+}
+
+/**
+ * A character's frame drawn from one image (a Voyage matter, for crowds): its parts, all loaded, put together once at
+ * game resolution into a canvas of their own and drawn with one call instead of one a part (about 18). The game's
+ * canvas draws game pixels as blocks (no smoothing), so the one image scaled up shows the same pixels. A see-through
+ * character (Dark Sight, hidden) is see-through as a whole now rather than part over part. Up to SPRITE_PX pixels
+ * are kept, the longest unused going first; at most SPRITE_BUILDS are made in a frame, the rest drawn part by part
+ * until their turn.
+ */
+export let charSprites = true;
+const SPRITE_PX = 16e6, SPRITE_BUILDS = 24;
+const sprites = new Map();   // parts -> sprite, the longest unused first
+let spritePx = 0, builds = 0;
+/** /fps sprites: drawn from one image a frame (on) or part by part. */
+export function setCharSprites(on) {
+  charSprites = !!on;
+  if (!charSprites) { for (const k of sprites.keys()) delete k.sprite; sprites.clear(); spritePx = 0; }
+}
+/** A new frame on the screen: frame images may be made again. */
+export function spriteFrame() { builds = 0; }
+/** For /fps copy: how many frame images are kept, and their pixels. */
+export function spriteStats() { return { on: charSprites, n: sprites.size, px: spritePx }; }
+function partsSprite(parts, assets) {
+  let s = parts.sprite;
+  if (s) { sprites.delete(parts); sprites.set(parts, s); return s; }
+  if (builds >= SPRITE_BUILDS) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of parts) {
+    const img = assets.image(p.node);
+    if (!img) return null;   // not all in yet: part by part until they are
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + img.width); y1 = Math.max(y1, p.y + img.height);
+  }
+  const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
+  if (!(w > 0 && h > 0) || w * h > 1e6) return null;
+  builds++;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const o = c.getContext('2d');
+  for (const p of parts) o.drawImage(assets.image(p.node), p.x - x0, p.y - y0);
+  s = { c, x: x0, y: y0, px: w * h };
+  parts.sprite = s; sprites.set(parts, s); spritePx += s.px;
+  while (spritePx > SPRITE_PX && sprites.size > 1) {
+    const [k, v] = sprites.entries().next().value;
+    sprites.delete(k); delete k.sprite; spritePx -= v.px;
+  }
+  return s;
 }
 
 /** Every canvas this look can draw for the given actions, for preloading. */

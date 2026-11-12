@@ -1,6 +1,6 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
-import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose } from './character.js';
+import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
@@ -5045,10 +5045,11 @@ export class Game {
     const ents = [this.player, ...this.others.values()];
     const anim = (n) => { const a = n && frames(n).length ? new Anim(n) : null; if (a) this.assets.preload(a.frames); return a; };
     for (const kind of ['couple', 'friend', 'marriage']) {
-      for (let i = 0; i < ents.length; i++) {
-        for (let j = i + 1; j < ents.length; j++) {
-          const a = ents[i], b = ents[j], ra = a.rings?.[kind], rb = b.rings?.[kind];
-          if (!ra || !rb) continue;
+      // only those wearing a ring of this kind can make a pair: a crowd wearing none is one look each, not every pair
+      const worn = ents.filter((e) => e.rings?.[kind]);
+      for (let i = 0; i < worn.length; i++) {
+        for (let j = i + 1; j < worn.length; j++) {
+          const a = worn[i], b = worn[j], ra = a.rings[kind], rb = b.rings[kind];
           const paired = kind === 'marriage' ? (ra.partner && ra.partner === b.id) || (rb.partner && rb.partner === a.id)
             : (ra.ring && ra.partner === rb.ring) || (rb.ring && rb.partner === ra.ring);
           const dx = Math.abs(a.x - b.x), dy = Math.abs(a.y - b.y);
@@ -5711,6 +5712,12 @@ export class Game {
       settings.fpsMeter = !settings.fpsMeter; saveSettings();
       if (!settings.fpsMeter) { this.perf?.detach(this); this.perf = null; }
       this.hud?.message?.(`The performance meter is ${settings.fpsMeter ? 'on' : 'off'}. Type /fps again to ${settings.fpsMeter ? 'hide' : 'show'} it.`, CHAT_COLORS.notice);
+      return;
+    }
+    // /fps sprites: characters drawn from one kept image a frame (on, the default) or part by part, to compare
+    if (/^\/fps\s+sprites$/i.test(text.trim())) {
+      setCharSprites(!charSprites);
+      this.hud?.message?.(`Characters are drawn ${charSprites ? 'from one kept image a frame' : 'part by part'}. Type /fps sprites again to switch.`, CHAT_COLORS.notice);
       return;
     }
     // /fps copy: the meter's report of recent hitches onto the clipboard (and into the browser console)
@@ -10294,6 +10301,7 @@ export class Game {
 
   render() {
     this.fitBacking();
+    spriteFrame();   // a new frame: characters' frame images may be made again (character.js)
     const ctx = this.ctx, map = this.map, p = this.player;
     // with /fps on, what the drawing goes on, part by part (perfmeter.js): each lap adds the time since the last one
     const P = (this.drawParts = settings.fpsMeter && this.perf ? { backs: 0, map: 0, mobs: 0, chars: 0, other: 0, fx: 0, ui: 0 } : null);
