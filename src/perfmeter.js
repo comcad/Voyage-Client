@@ -20,7 +20,10 @@ import { settings } from './settings.js';
  * The numbers are worked out four times a second; the graph moves every frame.
  *
  * `/fps copy` copies a report of the hitches: for each, what happened between the two frames (images that finished
- * loading, packets handled and their time, garbage collected, the browser's long frames) and the machine's details.
+ * loading, packets handled and their time, garbage collected, the browser's long frames), what the frame before it
+ * drew in its time (backgrounds, map, monsters, characters, effects, interface, the rest) and how many images it drew
+ * for the first time (the browser readies an image for the screen the first time it is drawn), and the machine's
+ * details.
  */
 const SPAN = 2000, BARS = 180, W = 236, PAD = 6, HITCH_SPAN = 30000, LONG_SPAN = 60000;
 export class PerfMeter {
@@ -53,13 +56,13 @@ export class PerfMeter {
     const conn = game?.net?.conn;
     if (conn && conn.timing !== this.onPacket) conn.timing = this.onPacket;
     const a = game?.assets, heap = performance.memory?.usedJSHeapSize ?? 0;
-    const mark = { loaded: a?.loaded || 0, loadedPx: a?.loadedPx || 0, heap, pkN: this.pk.n, pkMs: this.pk.ms };
+    const mark = { loaded: a?.loaded || 0, loadedPx: a?.loadedPx || 0, heap, pkN: this.pk.n, pkMs: this.pk.ms, firsts: a?.firstDraws || 0 };
     const prev = this.frames[this.frames.length - 1], was = this.mark;
     if (prev && was) {
       const gap = t - prev.t, want = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : this.refreshMs || 16.7;
       if (gap > Math.max(25, want * 1.6)) {
         this.hitches.push({
-          t, at: Date.now(), gap, upd: prev.upd, ren: prev.ren, game: prev.upd + prev.ren,
+          t, at: Date.now(), gap, upd: prev.upd, ren: prev.ren, game: prev.upd + prev.ren, drew: prev.parts, firsts: prev.firsts,
           images: mark.loaded - was.loaded, imagePx: mark.loadedPx - was.loadedPx,
           packets: mark.pkN - was.pkN, packetMs: mark.pkMs - was.pkMs, slowOp: this.pk.max ? this.pk.op : null, slowMs: this.pk.max,
           heap: heap && was.heap ? heap - was.heap : null,
@@ -70,7 +73,7 @@ export class PerfMeter {
     this.pk.max = 0;
     this.mark = mark;
     while (this.hitches.length && t - this.hitches[0].t > HITCH_SPAN) this.hitches.shift();
-    this.frames.push({ t, upd, ren });
+    this.frames.push({ t, upd, ren, parts: game?.drawParts ? { ...game.drawParts } : null, firsts: was ? mark.firsts - was.firsts : 0 });
     while (this.frames.length > BARS + 1 || (this.frames.length && t - this.frames[0].t > Math.max(SPAN, 4000))) this.frames.shift();
   }
   /** The meter is put away: packets stop being timed. */
@@ -161,9 +164,11 @@ export class PerfMeter {
       const parts = [
         `${((now - h.t) / 1000).toFixed(1)} s ago: ${Math.round(h.gap)} ms`,
         `game ${num(h.upd)} + ${num(h.ren)} ms`,
+        ...(h.drew ? [`drew ${Object.entries(h.drew).filter(([, v]) => v >= 0.5).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([k, v]) => `${k} ${num(v)}`).join(', ') || 'little'}`] : []),
         `packets ${h.packets} (${num(h.packetMs)} ms${h.slowOp !== null && h.slowMs > 2 ? `, slowest 0x${h.slowOp.toString(16)} ${num(h.slowMs)} ms` : ''})`,
         `outside ${num(outside)} ms`,
         `images ${h.images}${h.images ? ` (${(h.imagePx / 1e6).toFixed(2)} Mpx)` : ''}`,
+        `first drawn ${h.firsts ?? '-'}`,
       ];
       if (h.heap !== null) parts.push(h.heap < 0 ? `gc ${(-h.heap / 1e6).toFixed(1)} MB` : `heap +${(h.heap / 1024).toFixed(0)} KB`);
       parts.push(`at ${h.x},${h.y}`);

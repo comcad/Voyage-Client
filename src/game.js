@@ -10281,6 +10281,10 @@ export class Game {
   render() {
     this.fitBacking();
     const ctx = this.ctx, map = this.map, p = this.player;
+    // with /fps on, what the drawing goes on, part by part (perfmeter.js): each lap adds the time since the last one
+    const P = (this.drawParts = settings.fpsMeter && this.perf ? { backs: 0, map: 0, mobs: 0, chars: 0, other: 0, fx: 0, ui: 0 } : null);
+    let tm = P ? performance.now() : 0;
+    const lap = (k) => { if (!P) return; const n = performance.now(); P[k] += n - tm; tm = n; };
     if (this.inCashShop) {
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
       ctx.save(); ctx.scale(UI_SCALE, UI_SCALE); this.windows?.draw(ctx); ctx.restore();
@@ -10298,6 +10302,7 @@ export class Game {
     const view = { ...real, x: real.x + (this.shake?.dx || 0), y: real.y + (this.shake?.dy || 0) };
     const unshifted = (fn) => { ctx.save(); ctx.translate(real.x - ix, real.y - iy); fn(); ctx.restore(); };
     map.drawBacks(ctx, view, false);
+    lap('backs');
     this.cam = cam;
     ctx.save();
     ctx.translate(ix - real.x, iy - real.y);
@@ -10309,7 +10314,9 @@ export class Game {
     for (let l = 0; l < 8; l++) {
       if (l === 3) this.fieldMode?.drawWorld?.(ctx, cam);   // an event field's pieces stand just behind page 3
       map.drawLayer(ctx, cam, l);
+      lap('map');
       for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l && this.lifeInView(e)) e.draw(ctx, cam, this.assets);
+      lap('mobs');
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l && this.inView(r.x, r.y, 400, 500, 250)) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
@@ -10322,11 +10329,15 @@ export class Game {
         for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
         if (inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.questAlert?.draw(ctx, cam); }
       }
+      lap('other');
       for (const c of chars) if (c.page === l) c.draw();
+      lap('chars');
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
+      lap('other');
     }
     for (const e of mobs) if (e.flying && !e.doomArt && this.lifeInView(e)) e.draw(ctx, cam, this.assets);   // flyers go over every layer
     for (const sm of this.summons.values()) if (this.inView(sm.x, sm.y, 350, 450, 200)) sm.draw(ctx, cam);
+    lap('mobs');
     this.guide?.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
@@ -10361,6 +10372,7 @@ export class Game {
     this.applyZoom();
     this.direction?.draw(ctx, VIEW_W / 2, VIEW_H / 2);
     this.vfx?.drawScreen(ctx);
+    lap('fx');
     const ui = !this.uiLocked;         // a locked UI (a scene) shows none of it but the scrolling notice
     ctx.save(); ctx.scale(UI_SCALE, UI_SCALE);   // the interface, at System Option's UI SIZE
     if (ui) {
@@ -10389,6 +10401,7 @@ export class Game {
     const dark = this.darkness;
     if (dark > 0) { ctx.fillStyle = `rgba(0,0,0,${dark})`; ctx.fillRect(0, 0, VIEW_W, VIEW_H); }
     this.drawnDark = dark;
+    lap('ui');
   }
 
   /**

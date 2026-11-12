@@ -55,6 +55,7 @@ export class Assets {
     this.loaded = 0; this.loadedPx = 0;   // images loaded so far and their pixels (the /fps report)
     this.waiting = [[], [], []]; this.waitHead = [0, 0, 0];   // images waiting for a slot, by priority
     this.inFlight = 0;
+    this.firstDraws = 0;   // images asked for to draw for the first time (the /fps meter)
   }
 
   json(path) {
@@ -122,7 +123,9 @@ export class Assets {
   image(node) {
     if (!isCanvas(node)) return null;
     const e = this._entry(node);
-    return e.ready ? e.img : null;
+    if (!e.ready) return null;
+    if (!e.drawn) { e.drawn = true; this.firstDraws++; }
+    return e.img;
   }
 
   /** Loads canvases at a priority (see IMAGE_SLOTS), resolving once all are in; onProgress(done, total) after each. */
