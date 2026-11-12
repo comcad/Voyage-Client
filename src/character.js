@@ -65,6 +65,7 @@ export class CharacterLook {
 
   async load() {
     const a = this.assets;
+    this.loaded = false; this.composed = null;
     let base;
     [this.body, this.head, this.face, this.hair, base] = await Promise.all([
       a.json(`Character/${pad(2000 + this.skin, 8)}.img`),
@@ -136,6 +137,7 @@ export class CharacterLook {
     const exprs = [this.face, ...this.faceAcc].flatMap((n) => Object.entries(n || {}).filter(([k]) => k !== 'info')
       .flatMap(([, e]) => [e, ...Object.values(e || {})]).flatMap((f) => [f, ...Object.values(f || {})]));
     a.preload(exprs, null, 2);
+    this.loaded = true;
   }
 
   /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */
@@ -196,8 +198,25 @@ export class CharacterLook {
   /**
    * Returns [{node, x, y, z}] in local coordinates (feet at 0,0, facing left).
    * expr = { name, frame }: a Face.img expression (smile, cry, blink...) in place of its default.
+   * The same pose, frame, expression and ghost always give the same parts, and every character on screen asks for its
+   * frame every frame, so each is worked out once and kept (512 at most, then they start over). Not kept: one asked
+   * for before the look has loaded, or one that fell back to the default face while the expression's art loads.
+   * What comes back is shared: read it, don't change it.
    */
   compose(action, frame, expr = null, mounted = false) {
+    const key = `${this.ghost || 0}|${action}|${frame}|${expr ? `${expr.name}|${expr.frame}` : ''}|${mounted ? 1 : 0}`;
+    const kept = this.composed?.get(key);
+    if (kept) return kept;
+    this.unready = false;
+    const out = this.build(action, frame, expr, mounted);
+    if (this.loaded && !this.unready) {
+      if (!this.composed || this.composed.size >= 512) this.composed = new Map();
+      this.composed.set(key, out);
+    }
+    return out;
+  }
+  /** Works out a frame's parts (compose keeps them). */
+  build(action, frame, expr, mounted) {
     // a ghost's body is its ghost pose; its head, face, hair and headgear take that pose's plain counterpart
     const ghost = this.ghost && action !== 'dead' ? GHOST_POSE[action] || 'ghoststand' : null;
     let bf = ghost ? this.body?.[ghost]?.[this.ghost]?.[frame] : this.body?.[action]?.[frame];
@@ -222,7 +241,9 @@ export class CharacterLook {
     add(this.head?.[ha]?.[hf] ?? (back ? this.head?.back : this.head?.front));
     if (bf.face !== 0 && !back) {
       const ex = expr && this.face?.[expr.name], node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null);
-      add(this.exprReady(node) ? node : this.face?.default);
+      const ready = this.exprReady(node);
+      if (node && !ready) this.unready = true;   // the default face until the expression's art is in
+      add(ready ? node : this.face?.default);
     }
     const hairFrame = this.hair?.[ha]?.[hf] ?? this.hair?.default;
     add(hairFrame, (v) => {
@@ -241,7 +262,7 @@ export class CharacterLook {
       if (!node && this.faceAcc?.has(eq) && !back && bf.face !== 0) {
         const ex = expr && eq[expr.name];
         node = ex?.[expr.frame] ?? (ex && Object.values(ex).some(isCanvas) ? ex : null);
-        if (!this.exprReady(node)) node = eq.default;
+        if (!this.exprReady(node)) { if (node) this.unready = true; node = eq.default; }
       }
       add(node);
     }
