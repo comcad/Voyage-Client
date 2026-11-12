@@ -7800,7 +7800,9 @@ export class Game {
     this.ship = null;
     if (!o?.shipObj) return;
     const map = this.map, x0 = o.x0 ?? o.x + (o.f ? -800 : 800);
-    const ship = { kind: Number(o.shipKind) || 0, x: o.x, y: o.y, x0, flip: !!o.f, tMove: (o.tMove || 1) * 1000, state: 'gone', from: x0, to: x0, t0: 0, node: null };
+    // z: the page it is drawn in (0 when the map names none)
+    const ship = { kind: Number(o.shipKind) || 0, x: o.x, y: o.y, x0, flip: !!o.f, tMove: (o.tMove || 1) * 1000, state: 'gone', from: x0, to: x0, t0: 0, node: null,
+      page: Math.max(0, Math.min(7, Math.trunc(Number(o.z) || 0))) };
     this.ship = ship;
     // Map/Obj/<image>[.img]/<path...>: usually vehicle.img (written with or without .img), the Genie's in acc8.img
     const [, img, path] = String(o.shipObj).match(/^Map\/Obj\/([^/]+?)(?:\.img)?\/(.+)$/) || [];
@@ -7981,10 +7983,31 @@ export class Game {
     }
     return false;
   }
-  drawDoors(ctx, cam) {
+  /**
+   * A Mystic Door's page: that of the floor under it (looked for from 5px above its feet), or, with none under it, of
+   * the floor (8px wide at least) whose middle is nearest.
+   */
+  doorPage(d) {
+    if (d.page === undefined || d.pageMap !== this.map) {
+      const fh = this.map?.fh;
+      let f = fh?.below(d.x, d.y - 5) || null;
+      if (!f && fh) {
+        let best = Infinity;
+        for (const c of fh.floors) {
+          if (c.x1 + 8 > c.x2) continue;
+          const dx = (c.x1 + c.x2) / 2 - d.x, dy = (c.y1 + c.y2) / 2 - d.y, q = dx * dx + dy * dy;
+          if (q < best) { best = q; f = c; }
+        }
+      }
+      d.page = f ? f.layer : 7; d.pageMap = this.map;
+    }
+    return d.page;
+  }
+  /** The Mystic Doors in a page (doorPage). */
+  drawDoors(ctx, cam, page) {
     const at = (n, d) => { const img = n && this.assets.image(n), o = n?.origin || [0, 0]; if (img) ctx.drawImage(img, snapPx(d.x - o[0] - cam.x), snapPx(d.y - o[1] - cam.y)); };
     for (const d of this.doors?.values() || []) {
-      if (!d.anim?.node) continue;
+      if (!d.anim?.node || this.doorPage(d) !== page) continue;
       ctx.save();
       // a town door being taken away fades over a second
       if (d.fadeFrom) ctx.globalAlpha *= Math.max(0, 1 - (performance.now() - d.fadeFrom) / 1000);
@@ -10387,22 +10410,22 @@ export class Game {
       if (l === 3) this.fieldMode?.drawWorld?.(ctx, cam);   // an event field's pieces stand just behind page 3
       map.drawLayer(ctx, cam, l);
       lap('map');
+      // each in its own page, whatever page you are on: the ship in the one its map names, over that page's own
+      // pieces; a Mystic Door in the page of the floor under it, behind the monsters and characters there
+      if (l === this.ship?.page) this.drawShip(ctx, cam);
+      this.drawDoors(ctx, cam, l);
+      lap('other');
       for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l && this.lifeInView(e)) e.draw(ctx, cam, this.assets);
       lap('mobs');
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l && this.inView(r.x, r.y, 400, 500, 250)) r.draw(ctx, cam, this.assets);
-      if (l === playerLayer) this.drawShip(ctx, cam);
       if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
-      if (l === playerLayer) this.drawDoors(ctx, cam);
-      if (l === playerLayer) this.vfx?.drawTombs(ctx, cam);   // behind every character, so a ghost floats in front of its stone
       if (l === playerLayer) {
         this.kites.draw(ctx, cam);
         this.drawCardPairs(ctx, cam);
       }
       lap('other');
-      for (const c of chars) if (c.page === l) this.drawOrdered(ctx, cam, c);
+      for (const c of chars) if (c.page === l) this.drawOrdered(ctx, cam, c);   // (a tombstone with them, just behind its ghost)
       lap('chars');
-      if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
-      lap('other');
     }
     this.warmSprites();
     lap('chars');
@@ -10412,6 +10435,7 @@ export class Game {
     this.guide?.draw(ctx, cam);
     this.drawDrops(ctx, cam);
     map.drawPortals(ctx, cam);
+    this.drawMists(ctx, cam);   // over every page of the map and all who stand in it, where effects are
     this.drawRingFx(ctx, cam);
     this.drawFx(ctx, cam);
     this.drawWeddingFx(ctx, cam, this.frameDt || 0);
@@ -10499,9 +10523,10 @@ export class Game {
     return last || { page: 7, zMass: 0 };
   }
   /**
-   * Characters, pets, NPCs and Hired Merchants, each drawn in its own page (the one its floor is in; a Hired Merchant's
-   * is merchantZ): a lower zMass in front, then other players, their pets, NPCs and Hired Merchants (a merchant has an
-   * NPC's depth), you and your pets, in that order. A pet up a ladder on its owner's back goes on right after them. A
+   * Characters, pets, NPCs, Hired Merchants and tombstones, each drawn in its own page (the one its floor is in; a
+   * Hired Merchant's is merchantZ, a tombstone's its ghost's): a lower zMass in front, then other players, their
+   * pets, NPCs and Hired Merchants (a merchant has an NPC's depth), you and your pets, in that order; a tombstone
+   * right behind whoever died. A pet up a ladder on its owner's back goes on right after them. A
    * shop owner and their booth go down first in their page: everyone else there walks in front of the shop.
    *
    * None of these follows the page you are on: drawn in it, merchants and shops went behind or in front of the
@@ -10531,6 +10556,11 @@ export class Game {
     this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
       : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
     if (inShop(p)) put(this.playerZ.page, 0, SHOP_FIRST + 1, 3, p); else put(this.playerZ.page, this.playerZ.zMass, 7, 3, p);
+    // a tombstone hangs just under whoever died: in their page, right behind them
+    for (const t of this.vfx?.tombs || []) {
+      const mine = t.ent === p, z = mine ? this.playerZ : t.ent?.z;
+      if (z && this.inView(t.x, t.y, 200, 700, 200)) put(z.page, z.zMass, (mine ? 7 : 2) - 0.5, 5, t);
+    }
     list.length = n;
     return list.sort((a, b) => a.k - b.k);
   }
@@ -10547,12 +10577,16 @@ export class Game {
     }
     return m.z;
   }
-  /** One of drawOrder's (0 an NPC, 1 another player, 2 a pet, 3 you, 4 a Hired Merchant), with what is drawn along with it. */
+  /**
+   * One of drawOrder's (0 an NPC, 1 another player, 2 a pet, 3 you, 4 a Hired Merchant, 5 a tombstone), with what is
+   * drawn along with it.
+   */
   drawOrdered(ctx, cam, o) {
     const e = o.ent;
     if (o.kind === 0) { e.draw(ctx, cam, this.assets); return; }
     if (o.kind === 2) { e.draw(ctx, cam); return; }
     if (o.kind === 4) { this.boards.drawMerchant(ctx, cam, e); return; }
+    if (o.kind === 5) { this.vfx.drawTomb(ctx, cam, e); return; }
     if (o.kind === 1) { this.drawChar(ctx, cam, e, e.look, false); this.drawDiseases(ctx, cam, e, e.diseases); this.drawHearts(ctx, cam, e, this.frameDt); }
     else { this.drawChar(ctx, cam, e, this.look, true); this.drawDiseases(ctx, cam); this.drawHearts(ctx, cam, e, this.frameDt); this.questAlert?.draw(ctx, cam); }
     for (const pet of this.pets.values()) if (pet.onBack && pet.owner === e.id) pet.draw(ctx, cam);   // a pet up a ladder on their back
