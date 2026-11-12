@@ -82,7 +82,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings, saveSettings } from './settings.js';
-import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale } from './view.js';
+import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale, PIXEL_SCALE } from './view.js';
 import { config } from './config.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
@@ -297,7 +297,7 @@ class RemotePlayer {
   }
   update(dt) {
     this.rebase();
-    const at = this.mp.play(dt, this.pose);
+    const at = this.mp.play(dt, this.pose, PIXEL_SCALE);   // on the canvas's pixels, as the camera and you move
     this.x = at.x; this.y = at.y; this.shown = at;
     const look = this.look;
     if (this.charge && (this.attack || performance.now() > this.charge.until)) this.charge = null;
@@ -6060,22 +6060,29 @@ export class Game {
 
   update(dt) {
     this.frameDt = dt;
+    // with /fps on, what the update goes on, part by part (perfmeter.js): each lap adds the time since the last one
+    const P = (this.updateParts = settings.fpsMeter && this.perf ? { map: 0, ui: 0, quests: 0, mobs: 0, you: 0, others: 0, fx: 0, timers: 0, rest: 0 } : null);
+    let tm = P ? performance.now() : 0;
+    const lap = (k) => { if (!P) return; const n = performance.now(); P[k] += n - tm; tm = n; };
     this.padInput?.poll();
     if (this.inCashShop) { this.windows?.update(dt); return; }   // the shop screen is all there is
     if (this.uiLocked || this.uiDisabled) { const i = this.input; i.down.clear(); i.pressed.clear(); i.repeats.clear(); i.clicks.length = 0; }
     if (this.direction) { this.direction.update(dt); if (this.direction.done) this.direction = null; }
     this.map.update(dt);
     this.map.updateHidden(this.player.x, this.player.y);
+    lap('map');
     this.statusBar?.update(dt);
     this.windows?.update(dt);
     this.vfx?.update(dt);
     this.weather.update(dt);
     this.kites.update(dt);
     this.fieldMode?.update?.(dt);
+    lap('ui');
     const p = this.player;
     if (p.morphView) p.morphView.update(p, p.action, !!p.attack, dt, p.attack ? p.attackScale || 1 : 1);
     for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
     this.questAlert?.update(dt * 1000); this.questAlert?.tick();
+    lap('quests');
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.guide?.update(dt);
@@ -6092,14 +6099,18 @@ export class Game {
     for (const e of this.map.life) if (e.kind === 'Mob' && e.chat && (e.chat.t -= dt) <= 0) e.chat = null;   // monsters' lines run out
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
+    lap('mobs');
     if (this.fade?.dir === 'out' || this.dead) this.pendingSkill = 0;   // a skill clicked as a ghost isn't kept for later
     if (this.fade?.dir !== 'out') { if (this.dead) this.updateDeadBody(dt); else this.updatePlayer(dt); }   // you stand still while the old map goes dark
+    lap('you');
     for (const rp of this.others.values()) { rp.update(dt); this.watchDeath(rp); stepExpression(rp, rp.look, dt); this.stepItemFx(rp, dt); this.stepEquipFx(rp, rp.look, dt); this.stepSetFx(rp, dt); }
+    lap('others');
     stepExpression(this.player, this.look, dt);
     this.stepItemFx(this.player, dt);
     this.stepSetFx(this.player, dt);
     this.stepEquipFx(this.player, this.look, dt);
     this.updateRingFx(dt);
+    lap('you');
     if (this.player.fh) this.ownerGroup = this.player.fh.group;
     for (const pet of this.pets.values()) pet.update(dt);
     for (const [oid, sm] of this.summons) { sm.update(dt); if (sm.gone) this.summons.delete(oid); }
@@ -6107,7 +6118,9 @@ export class Game {
     if (this.player.chat && (this.player.chat.t -= dt) <= 0) this.player.chat = null;
     this.updateDrops(dt);
     this.updateFx(dt);
+    lap('fx');
     this.runTimers(dt);
+    lap('timers');
     if (this.skillLoop && !this.skillLoop.held()) { this.skillLoop.stop(); this.skillLoop = null; }
     this.playTimeNote();
     this.mapleTip();
@@ -6118,6 +6131,7 @@ export class Game {
     this.updateCamera(dt);
     for (const e of this.effects) e.t += dt;
     this.effects = this.effects.filter((e) => e.t < 1.2);
+    lap('rest');
   }
 
   /**

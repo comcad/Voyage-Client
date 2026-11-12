@@ -1,7 +1,7 @@
 import { pad, isCanvas, frames } from './assets.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { BASE_W, BASE_H, snapPx, PIXEL_SCALE } from './view.js';
-import { roundAway, pathKeys, hermite } from './movepath.js';
+import { roundTo, pathKeys, hermite } from './movepath.js';
 
 const HTILE = new Set([1, 3, 4, 6, 7]);
 const VTILE = new Set([2, 3, 5, 6, 7]);
@@ -728,7 +728,9 @@ export class Life {
    */
   playPath(dt, keepPose = false) {
     let b = this.pb;
-    if (!b || (!this.path && (Math.abs(b.cur.x - this.x) > 1 || Math.abs(b.cur.y - this.y) > 1))) {
+    // moved by anything but its path while standing still: playback picks up from there. A path that has run out
+    // isn't that: the next one curves on from its last point at that point's speed.
+    if (!b || (!this.path && (this.x !== this.shownX || this.y !== this.shownY))) {
       b = this.pb = { cur: { x: this.x, y: this.y, vx: 0, vy: 0 }, prev: { x: this.x, y: this.y }, x0: this.x, y0: this.y, vx0: 0, vy0: 0, acc: b?.acc || 0 };
     }
     this.keepPose = keepPose;
@@ -739,8 +741,9 @@ export class Life {
     }
     this.keepPose = false;
     const k = -b.acc / 30;
-    this.x = roundAway(b.cur.x + (b.prev.x - b.cur.x) * k);
-    this.y = roundAway(b.cur.y + (b.prev.y - b.cur.y) * k);
+    // on the canvas's pixels, as the camera and your own character move (movepath.js roundTo)
+    this.x = this.shownX = roundTo(b.cur.x + (b.prev.x - b.cur.x) * k, PIXEL_SCALE);
+    this.y = this.shownY = roundTo(b.cur.y + (b.prev.y - b.cur.y) * k, PIXEL_SCALE);
   }
   /** A path point's pose (its stance: 1 walk, 2 stand, 3 jump, 6 fly, 16 chase; bit 0 faces left) and floor. */
   takePose(s) {
