@@ -3,6 +3,7 @@ import { PacketReader, PacketWriter } from './packet.js';
 import { S, C } from './opcodes.js';
 
 export const VERSION = 83;
+const NOTHING = new Uint8Array(0);
 
 /**
  * One encrypted v83 session over a byte transport. The transport is anything with
@@ -45,32 +46,42 @@ export class Connection {
     });
   }
 
+  /**
+   * Bytes from the transport: every whole packet in them is handled, and the start of one cut short is kept for
+   * the bytes that follow. The packets are read off where they lie (a chunk can hold thousands of them: the relay
+   * sends in batches, and a link that stalled delivers all it held at once), so a chunk is gone over once.
+   */
   _data(chunk) {
-    const nb = new Uint8Array(this.buf.length + chunk.length);
-    nb.set(this.buf); nb.set(chunk, this.buf.length); this.buf = nb;
-    for (;;) {
-      if (!this.recv) {
-        // plaintext hello: u16 length, then payload
-        if (this.buf.length < 2) return;
-        const len = this.buf[0] | (this.buf[1] << 8);
-        if (this.buf.length < 2 + len) return;
-        const r = new PacketReader(this.buf.slice(2, 2 + len));
-        this.buf = this.buf.slice(2 + len);
-        const version = r.short(); const patch = r.string();
-        const sendIv = r.bytes(4), recvIv = r.bytes(4), locale = r.ubyte();
-        this.hello = { version, patch, locale };
-        this.send_ = new MapleCipher(sendIv, VERSION);
-        this.recv = new MapleCipher(recvIv, 0xffff - VERSION);
-        this._ready(this.hello);
-        continue;
+    let buf = chunk, at = 0;
+    if (this.buf.length) { buf = new Uint8Array(this.buf.length + chunk.length); buf.set(this.buf); buf.set(chunk, this.buf.length); }
+    try {
+      for (;;) {
+        const left = buf.length - at;
+        if (!this.recv) {
+          // plaintext hello: u16 length, then payload
+          if (left < 2) break;
+          const len = buf[at] | (buf[at + 1] << 8);
+          if (left < 2 + len) break;
+          const r = new PacketReader(buf.slice(at + 2, at + 2 + len));
+          at += 2 + len;
+          const version = r.short(); const patch = r.string();
+          const sendIv = r.bytes(4), recvIv = r.bytes(4), locale = r.ubyte();
+          this.hello = { version, patch, locale };
+          this.send_ = new MapleCipher(sendIv, VERSION);
+          this.recv = new MapleCipher(recvIv, 0xffff - VERSION);
+          this._ready(this.hello);
+          continue;
+        }
+        if (left < 4) break;
+        const len = MapleCipher.length(buf.subarray(at, at + 4));
+        if (left < 4 + len) break;
+        const body = buf.slice(at + 4, at + 4 + len);
+        at += 4 + len;
+        shandaDecrypt(this.recv.crypt(body));
+        this._dispatch(body);
       }
-      if (this.buf.length < 4) return;
-      const len = MapleCipher.length(this.buf);
-      if (this.buf.length < 4 + len) return;
-      const body = this.buf.slice(4, 4 + len);
-      this.buf = this.buf.slice(4 + len);
-      shandaDecrypt(this.recv.crypt(body));
-      this._dispatch(body);
+    } finally {
+      this.buf = at < buf.length ? buf.slice(at) : NOTHING;   // (what is left: the start of a packet, or nothing)
     }
   }
 

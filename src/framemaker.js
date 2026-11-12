@@ -10,11 +10,11 @@ import { BUILD } from './build.js';
  * where, the worker loads the sheets, draws the frame and hands back an image ready to draw. Nothing waits on it: a
  * frame wanted on screen before it is back is made on the page as before.
  *
- * It is off unless switched on with /fps worker, and the worker isn't started until then. Measured in Chromium with
- * 346 players arriving it is the slower way: putting frames together on the page costs next to nothing there, while
- * the worker loads every sheet a second time and its answers take the page's time (frames ready after 2.8s rather
- * than 1.5s, arrivals after 1.8s rather than 1.0s). It is kept to be tried where putting frames together on the page
- * costs more, which could not be measured: switch it on and compare /fps copy.
+ * It is on from the start; /fps worker switches to the page and back, to compare (/fps copy says how many frames it
+ * made and how long they took). Measured in Chromium with 346 players arriving it is not the faster way there:
+ * putting frames together on the page costs next to nothing in Chromium, while the worker loads every sheet a second
+ * time and its answers take the page's time (frames ready after 2.8s rather than 1.5s). It is for where putting
+ * frames together on the page costs more.
  *
  * Without a worker that can do this (an older browser, the file missing, the worker falling over or not answering)
  * every frame is made on the page whatever the switch says.
@@ -23,7 +23,7 @@ const AT_ONCE = 24;       // frames with the worker at a time; the rest wait her
 const ANSWER_MS = 5000;   // a frame not back in this long is left to the page; after three of those the worker is given up
 
 export const frameMaker = {
-  wanted: false,    // /fps worker
+  wanted: true,     // /fps worker
   worker: null, ready: false, broken: false,
   jobs: new Map(), queue: [], seq: 0, late: 0, watch: 0,
   made: 0, failed: 0, ms: 0,   // for /fps copy: frames made, ones that couldn't be, and the time they took to come back
@@ -31,7 +31,7 @@ export const frameMaker = {
   /** Whether frames are made by the worker now. */
   get on() { return this.wanted && this.ready && !this.broken; },
 
-  /** /fps worker: on (starting the worker the first time) or off. Returns whether it is wanted now. */
+  /** /fps worker: off, or on again (starting the worker if it never was). Returns whether it is wanted now. */
   toggle() {
     this.wanted = !this.wanted;
     if (this.wanted) this.start();

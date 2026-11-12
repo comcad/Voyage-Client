@@ -38,12 +38,23 @@ const RATES = [24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];   // di
 /** A frame's parts (update or drawing), biggest first: "chars 25.1, fx 6.2, ...", those of at least `min` ms. */
 const topParts = (parts, n = 4, min = 0.5) => Object.entries(parts || {}).filter(([, v]) => v >= min).sort((x, y) => y[1] - x[1]).slice(0, n)
   .map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ') || 'little';
+/** Nothing from the server for this long, while it was sending BUSY packets a second or more, counts as the link stalling. */
+const STALL_MS = 250, BUSY = 100, STALL_SPAN = 120000;
 export class PerfMeter {
   constructor() {
     this.frames = []; this.offers = []; this.hitches = []; this.cached = null; this.cachedAt = -1e9;
     // what happens between frames: packets handled (count, ms, the slowest), images loaded, the JS heap
     this.pk = { n: 0, ms: 0, max: 0, op: 0 };
-    this.onPacket = (op, ms) => { const p = this.pk; p.n++; p.ms += ms; if (ms > p.max) { p.max = ms; p.op = op; } };
+    // and when they stop coming: on a busy map packets come all the time, so a quarter of a second without one is the
+    // link holding them up (every other player stands still meanwhile), not the game
+    this.wire = { last: 0, from: 0, n: 0, rate: 0, stalls: [] };
+    this.onPacket = (op, ms) => {
+      const p = this.pk; p.n++; p.ms += ms; if (ms > p.max) { p.max = ms; p.op = op; }
+      const w = this.wire, now = performance.now();
+      if (w.last && now - w.last >= STALL_MS && w.rate >= BUSY) { w.stalls.push({ at: Date.now(), t: now, ms: now - w.last }); if (w.stalls.length > 40) w.stalls.shift(); }
+      if (now - w.from >= 1000) { w.rate = w.from ? (w.n * 1000) / (now - w.from) : 0; w.from = now; w.n = 0; }
+      w.n++; w.last = now;
+    };
     this.mark = null;
     // the browser's own record of frames over 50ms (Chrome), with what ran in them
     this.longs = [];
@@ -194,6 +205,10 @@ export class PerfMeter {
     out.push(`last 2 s: ${s.fps} fps, frame ${num(s.avg)} ms avg, ${num(s.max)} worst, update ${num(s.upd)} ms, draw ${num(s.ren)} ms (max ${num(s.renMax)})`);
     if (s.drew) out.push(`  drawing on average: ${topParts(s.drew, 8, 0.1)}`);
     if (s.updated) out.push(`  update on average: ${topParts(s.updated, 9, 0.1)}`);
+    {
+      const w = this.wire, t = performance.now(), recent = w.stalls.filter((x) => t - x.t < STALL_SPAN), clock = (at) => new Date(at).toISOString().slice(11, 19);
+      out.push(`from the server: ${Math.round(w.rate)} packets a second; nothing came for ${STALL_MS} ms or more ${recent.length} times in the last 2 minutes${recent.length ? ` (longest ${Math.round(Math.max(...recent.map((x) => x.ms)))} ms): ${recent.slice(-12).map((x) => `${clock(x.at)} ${Math.round(x.ms)} ms`).join(', ')}` : ''}`);
+    }
     out.push(`hitches in the last 30 s: ${this.hitches.length}`);
     const now = performance.now();
     const top = (parts) => topParts(parts);
