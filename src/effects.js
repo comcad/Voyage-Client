@@ -224,13 +224,11 @@ export class WorldFx {
       for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24, rich: true });
     }
   }
-  /** Tombstones, drawn behind the characters so the ghost floats in front. */
-  drawTombs(ctx, cam) {
-    const im = (n) => this.assets.image(n), now = performance.now();
-    for (const t of this.tombs) {
-      const drop = t.fresh ? Math.round(600 * Math.max(0, 1 - (now - t.t0) / 880)) : 0;
-      drawAt(ctx, im, t.anim.node, t.x - cam.x, t.y - drop - cam.y, 1);
-    }
+  /** A tombstone (the game draws each just behind its ghost, in the ghost's page: Game.drawOrder). */
+  drawTomb(ctx, cam, t) {
+    const im = (n) => this.assets.image(n);
+    const drop = t.fresh ? Math.round(600 * Math.max(0, 1 - (performance.now() - t.t0) / 880)) : 0;
+    drawAt(ctx, im, t.anim.node, t.x - cam.x, t.y - drop - cam.y, 1);
   }
 
   drawNumber(ctx, n, cam) {
