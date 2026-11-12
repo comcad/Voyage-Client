@@ -36,10 +36,11 @@ export function pathKeys(moves, from) {
  * Where the mover is `t` ms into key e, having left (b.x0, b.y0) at (b.vx0, b.vy0): the cubic Hermite curve through
  * the two points with their speeds (the speeds in px/s, so scaled by the time in seconds).
  */
-export function hermite(b, e, t) {
+export function hermite(b, e, t, out = {}) {
   const s = t / e.dur, s2 = s * s, D = t * 0.001;
   const h00 = 2 * s2 * s - 3 * s2 + 1, h01 = 3 * s2 - 2 * s2 * s, h10 = (s2 - 2 * s + 1) * D, h11 = (s2 - s) * D;
-  return { x: h00 * b.x0 + h01 * e.x + h10 * b.vx0 + h11 * e.vx, y: h00 * b.y0 + h01 * e.y + h10 * b.vy0 + h11 * e.vy };
+  out.x = h00 * b.x0 + h01 * e.x + h10 * b.vx0 + h11 * e.vx; out.y = h00 * b.y0 + h01 * e.y + h10 * b.vy0 + h11 * e.vy;
+  return out;   // (`out`: somewhere to put it, for a caller that asks every tick)
 }
 
 /**
@@ -72,7 +73,9 @@ export class CharPath {
    * and floor); within the next one it is on the curve (a teleport key, 3, puts it there at once).
    */
   tick(pose) {
-    this.prev = { x: this.cur.x, y: this.cur.y };
+    // (where it is and was are kept in the same two objects: a crowd ticking made thousands a second otherwise)
+    const cur = this.cur, prev = this.prev;
+    prev.x = cur.x; prev.y = cur.y;
     if (!this.q.length) return;
     this.t += this.rate;
     let jumped = false;
@@ -81,7 +84,7 @@ export class CharPath {
       if (this.t < e.dur) break;
       this.t -= e.dur;
       this.x0 = e.x; this.y0 = e.y; this.vx0 = e.vx; this.vy0 = e.vy;
-      this.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy };
+      cur.x = e.x; cur.y = e.y; cur.vx = e.vx; cur.vy = e.vy;
       if (e.type === 3) jumped = true;
       pose(e);
       this.q.shift();
@@ -89,14 +92,15 @@ export class CharPath {
     this.total -= this.rate;
     if (this.q.length && this.total > 0) {
       const e = this.q[0];
-      if (e.type === 3) { this.cur = { x: e.x, y: e.y, vx: e.vx, vy: e.vy }; jumped = true; }
+      if (e.type === 3) { cur.x = e.x; cur.y = e.y; cur.vx = e.vx; cur.vy = e.vy; jumped = true; }
       else {
-        const n = hermite(this, e, this.t);
-        this.cur = { x: n.x, y: n.y, vx: (n.x - this.cur.x) * (1000 / 30), vy: (n.y - this.cur.y) * (1000 / 30) };
+        const n = hermite(this, e, this.t, (this.onCurve ??= {}));
+        cur.vx = (n.x - cur.x) * (1000 / 30); cur.vy = (n.y - cur.y) * (1000 / 30);
+        cur.x = n.x; cur.y = n.y;
       }
       pose(e);
-    } else { this.q = []; this.t = 0; this.total = 0; }
-    if (jumped) this.prev = { x: this.cur.x, y: this.cur.y };   // no gliding across a teleport
+    } else { this.q.length = 0; this.t = 0; this.total = 0; }
+    if (jumped) { prev.x = cur.x; prev.y = cur.y; }   // no gliding across a teleport
   }
   /**
    * Plays dt seconds on the 30ms clock, a tick ahead of the screen, and returns where to draw: between the last two
@@ -105,7 +109,8 @@ export class CharPath {
   play(dt, pose, grid = 1) {
     this.acc += dt * 1000;
     while (this.acc > 0) { this.acc -= 30; this.tick(pose); }
-    const k = -this.acc / 30;
-    return { x: roundTo(this.cur.x + (this.prev.x - this.cur.x) * k, grid), y: roundTo(this.cur.y + (this.prev.y - this.cur.y) * k, grid) };
+    const k = -this.acc / 30, at = (this.at ??= {});   // (the same object each time, read at once by the caller)
+    at.x = roundTo(this.cur.x + (this.prev.x - this.cur.x) * k, grid); at.y = roundTo(this.cur.y + (this.prev.y - this.cur.y) * k, grid);
+    return at;
   }
 }
