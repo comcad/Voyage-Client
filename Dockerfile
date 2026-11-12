@@ -14,8 +14,9 @@ COPY . .
 # The server builds it again on start, with Build.Obfuscate from client.conf.
 RUN node build.mjs
 
-# Run as uid 1000, which rebuilds public/Voyage.js on start and writes /conf/client.conf
-RUN mkdir -p /conf && chown -R 1000:1000 /conf public
+# Run as uid 1000, which rebuilds public/Voyage.js on start, writes /conf/client.conf and keeps the character
+# sheets it makes from the assets in /app/cache
+RUN mkdir -p /conf cache && chown -R 1000:1000 /conf public cache
 USER 1000:1000
 
 # The server listens on 3000 by default (Server.Port in client.conf)

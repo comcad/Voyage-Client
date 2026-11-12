@@ -18,6 +18,9 @@ services:
       # Settings: conf/client.conf (port, Cosmic servers, obfuscation, quality of life),
       # made from conf/client.conf.dist on the first start. Restart after a change.
       - ./conf:/conf
+      # What the server makes from the assets (character sheets), kept between restarts.
+      # Safe to delete: it is made again on the next start. Must be writable by uid 1000.
+      - ./cache:/app/cache
     # Restart unless killed
     restart: unless-stopped
     # The client is a long-running server; no healthcheck needed, but a

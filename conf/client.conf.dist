@@ -57,6 +57,28 @@ Server.Port = 3000
 Server.AssetsDir = "assets"
 
 #
+#     Server.CharacterSheets
+#        Description: Packs each character file's many small images (one for every piece of every
+#                     frame of a pose) into a few sheets, so a crowd of players loads in hundreds
+#                     of requests instead of many thousands. The sheets are made from your assets
+#                     when the server starts (the first start takes a little longer; after that
+#                     only files that changed are made again) and kept in Server.CacheDir. The
+#                     assets folder is never written to.
+#        Default:     true
+#                     false - every image is sent on its own.
+
+Server.CharacterSheets = true
+
+#
+#     Server.CacheDir
+#        Description: The folder for what the server makes from the assets (the character sheets),
+#                     relative to the folder server.js is in. It can be deleted at any time: the
+#                     server makes it again on the next start.
+#        Default:     "cache"
+
+Server.CacheDir = "cache"
+
+#
 ###################################################################################################
 
 ###################################################################################################

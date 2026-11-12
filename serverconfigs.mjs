@@ -16,6 +16,9 @@ export const ServerConfigs = {
     return 3000;
   },
   get ASSETS_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.AssetsDir', 'assets')); },
+  /** Where the server keeps what it makes from the assets (the character sheets). */
+  get CACHE_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.CacheDir', 'cache')); },
+  get CHARACTER_SHEETS() { return ConfigMgr.getBoolean('Server.CharacterSheets', true); },
 
   // ----------------------------RELAY------------------------------
   /** name -> host, the first the default; a bare host is named after itself. */

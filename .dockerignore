@@ -1,5 +1,6 @@
 # Don't ship these into the build context (they're mounted at runtime or not needed)
 assets/
+cache/
 .git/
 node_modules/
 public/Voyage.js
