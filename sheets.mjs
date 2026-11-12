@@ -8,16 +8,23 @@ import { Worker, isMainThread, parentPort, workerData, threadId } from 'worker_t
 import { decodePng, encodePng } from './png.mjs';
 
 /**
- * Character sheets. A character file (a coat, a hair, a body) is a few to a few hundred small images, one for each
- * piece of each frame of each pose, and a crowd arriving asks for many thousands of them. Here each file's pieces are
- * packed into a few bigger images, its sheets, made from the assets when the server starts and kept in the cache
- * folder (the assets themselves are never written to, and nothing made from them is part of the client):
+ * Sheets. A character file (a coat, a hair, a body) is a few to a few hundred small images, one for each piece of
+ * each frame of each pose, and a crowd arriving asks for many thousands of them; a town's NPCs are hundreds more, a
+ * monster a few dozen, a tile set twenty or so. Here each file's images are packed into a few bigger images, its
+ * sheets, made from the assets when the server starts and kept in the cache folder (the assets themselves are never
+ * written to, and nothing made from them is part of the client).
  *
+ * A character file (Character/...):
  *   <file>/1.png   what anyone needs to stand, walk, jump, climb, sit and blink: asked for when they arrive
  *   <file>/2.png   every other pose and expression: asked for the first time one is needed
- *
  * A file with numbered groups of its own (a cash weapon's art for each kind of weapon, a saddle's for each mount)
- * gets the two for each group (30.1.png, 30.2.png...). Icons (info) are left as they are.
+ * gets the two for each group (30.1.png, 30.2.png...).
+ *
+ * An NPC (Npc/), a monster (Mob/), a tile set (Map/Tile/): everything in the file is used together, so
+ *   <file>/1.png   all of it
+ *
+ * Left as they are: icons and whatever else is under info; an image of BIG_PX or more, or longer than SIDE on a
+ * side (a sheet saves nothing on it); and a sheet whose images would come to more than SHEET_PX (a boss's frames).
  *
  * Next to the sheets goes a copy of the file's tree (gzipped: it is mostly the same names over and over) in which
  * every packed image says where it is:
@@ -28,25 +35,42 @@ import { decodePng, encodePng } from './png.mjs';
  */
 
 /** Raise when the packing changes: every sheet is made again. */
-const PACKING = 1;
+const PACKING = 2;
+const BIG_PX = 512 * 512, SIDE = 1024, SHEET_PX = 4e6;
 /** Poses (and a face's or hair's own entries) that go in a file's first sheet. */
 const FIRST = new Set(['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope', 'sit', 'dead',
   'default', 'backDefault', 'blink', 'front', 'back']);
 /** Character folders the avatar isn't put together from: left as they are. */
 const LEFT_OUT = new Set(['Afterimage', 'Dragon', 'PetEquip']);
-const FILE = /^Character\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.img$/;
 const SHEET = /^(?:\d+\.)?[12]$/, VERSION = /^[0-9a-f]{10}$/;
 const TREE = 'tree.json.gz';
+const NAME = '[A-Za-z0-9_.-]+';
+/** What is packed: the folder, which files in it, and the sheet each image goes in (see the top). */
+const KINDS = [
+  { root: 'Character', file: new RegExp(`^Character/(?:${NAME}/)*${NAME}\\.img$`), sheet: characterSheet },
+  { root: 'Npc', file: new RegExp(`^Npc/${NAME}\\.img$`), sheet: wholeSheet },
+  { root: 'Mob', file: new RegExp(`^Mob/${NAME}\\.img$`), sheet: wholeSheet },
+  { root: 'Map/Tile', file: new RegExp(`^Map/Tile/${NAME}\\.img$`), sheet: wholeSheet },
+];
 
 const version = (st) => crypto.createHash('sha1').update(`${PACKING}|${st.size}|${Math.floor(st.mtimeMs)}`).digest('hex').slice(0, 10);
-const usable = (rel) => FILE.test(rel) && !rel.split('/').some((s) => s === '.' || s === '..') && !LEFT_OUT.has(rel.split('/')[1]);
+/** The kind of file this is, or null for one that isn't packed. */
+function kindOf(rel) {
+  const parts = rel.split('/');
+  if (parts.some((s) => s === '.' || s === '..')) return null;
+  return KINDS.find((k) => k.file.test(rel) && !(k.root === 'Character' && LEFT_OUT.has(parts[1]))) || null;
+}
 
-/** The sheet an image goes in, from its place in the file (the keys leading to it); null for one left as it is. */
-function sheetFor(keys) {
+/** A character file's sheet for an image, from its place in the file (the keys leading to it); null for one left as it is. */
+function characterSheet(keys) {
   const group = /^\d+$/.test(keys[0]) && keys.length > 2 ? keys[0] : null, pose = group ? keys[1] : keys[0];
   if (pose === 'info' || keys[0] === 'info') return null;
   const tier = FIRST.has(pose) ? 1 : 2;
   return group ? `${group}.${tier}` : String(tier);
+}
+/** An NPC's, a monster's, a tile set's: one sheet for all of it but what is under info. */
+function wholeSheet(keys) {
+  return keys[0] === 'info' ? null : '1';
 }
 
 /**
@@ -91,12 +115,15 @@ export function makeSheets(assetsDir, cacheDir, rel) {
   const home = path.join(cacheDir, rel), dir = path.join(home, ver);
   if (fs.existsSync(path.join(dir, TREE))) return { ver, packed: true, made: false };
   if (fs.existsSync(path.join(dir, 'none'))) return { ver, packed: false, made: false };
+  const kind = kindOf(rel);
+  if (!kind) throw new Error('not a file that is packed');
   const tree = JSON.parse(fs.readFileSync(source, 'utf8')), sheets = new Map();
   (function walk(node, keys) {
     if (!node || typeof node !== 'object') return;
     if (typeof node._canvas === 'string') {
-      const name = sheetFor(keys);
-      if (name) { if (!sheets.has(name)) sheets.set(name, []); sheets.get(name).push(node); }
+      const name = kind.sheet(keys), w = node._w, h = node._h;
+      // (a big image is left as it is; so is one whose size the tree doesn't give)
+      if (name && w > 0 && h > 0 && w * h < BIG_PX && w <= SIDE && h <= SIDE) { if (!sheets.has(name)) sheets.set(name, []); sheets.get(name).push(node); }
     }
     for (const k in node) if (k[0] !== '_') walk(node[k], [...keys, k]);
   })(tree, []);
@@ -105,6 +132,7 @@ export function makeSheets(assetsDir, cacheDir, rel) {
   fs.mkdirSync(tmp, { recursive: true });
   let packed = false;
   for (const [name, nodes] of sheets) {
+    if (nodes.reduce((px, n) => px + n._w * n._h, 0) > SHEET_PX) continue;   // too much for one sheet: left as they are
     const images = [];
     for (const node of nodes) {
       // (one that can't be read is left as its own image)
@@ -135,7 +163,7 @@ export class SheetStore {
       makeDir(cacheDir);
       fs.accessSync(cacheDir, fs.constants.W_OK);
     } catch (e) {
-      log(`Character sheets are off: can't write to ${cacheDir} (${e.code || e.message}). Characters load image by image.`);
+      log(`Sheets are off: can't write to ${cacheDir} (${e.code || e.message}). Every image is sent on its own.`);
       return null;
     }
     return new SheetStore(assetsDir, cacheDir);
@@ -151,7 +179,7 @@ export class SheetStore {
     this.made = 0;
   }
 
-  /** The file's tree with its images' places (gzipped), or null: it has no sheets, or isn't a character file. */
+  /** The file's tree with its images' places (gzipped), or null: it has no sheets, or isn't a file that is packed. */
   async tree(rel) {
     const s = await this.look(rel, true);
     return s?.packed ? path.join(this.cacheDir, rel, s.ver, TREE) : null;
@@ -168,7 +196,7 @@ export class SheetStore {
 
   /** Where a file stands, making its sheets if they aren't there (ahead of the start-up run when `urgent`). */
   look(rel, urgent) {
-    if (!usable(rel)) return Promise.resolve(null);
+    if (!kindOf(rel)) return Promise.resolve(null);
     let p = this.asked.get(rel);
     if (!p) {
       p = this.find(rel, urgent).finally(() => this.asked.delete(rel));
@@ -186,7 +214,7 @@ export class SheetStore {
     let state = (await exists(path.join(dir, TREE))) ? { ver, packed: true } : (await exists(path.join(dir, 'none'))) ? { ver, packed: false } : null;
     if (!state) {
       // (one that can't be made is left as it is, and not tried again until the file changes)
-      const made = await this.run(rel, urgent).catch((e) => { console.log(`Character sheets: ${rel} left as it is (${e.message})`); return null; });
+      const made = await this.run(rel, urgent).catch((e) => { console.log(`Sheets: ${rel} left as it is (${e.message})`); return null; });
       if (made?.made) this.made++;
       state = { ver, packed: !!made?.packed };
     }
@@ -229,7 +257,7 @@ export class SheetStore {
   }
 
   /**
-   * The start-up run: every character file's sheets, made now if they aren't there (the first start with these
+   * The start-up run: every packed file's sheets, made now if they aren't there (the first start with these
    * assets, or after the assets changed). Resolves with how many files there are and how many were made.
    */
   async makeAll(log = console.log) {
@@ -237,22 +265,22 @@ export class SheetStore {
     const walk = async (dir, rel) => {
       for (const e of await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => [])) {
         if (e.isDirectory()) { if (!e.name.endsWith('.img')) await walk(path.join(dir, e.name), `${rel}/${e.name}`); }
-        else if (e.name.endsWith('.img.json') && usable(`${rel}/${e.name.slice(0, -5)}`)) files.push(`${rel}/${e.name.slice(0, -5)}`);
+        else if (e.name.endsWith('.img.json') && kindOf(`${rel}/${e.name.slice(0, -5)}`)) files.push(`${rel}/${e.name.slice(0, -5)}`);
       }
     };
-    await walk(path.join(this.assetsDir, 'Character'), 'Character');
+    for (const k of KINDS) await walk(path.join(this.assetsDir, k.root), k.root);
     const before = this.made;
     let next = 0, said = Date.now();
     const one = async () => {
       while (next < files.length) {
         await this.look(files[next++], false);
-        if (Date.now() - said > 10000 && this.made > before) { said = Date.now(); log(`Character sheets: ${next} of ${files.length} files...`); }
+        if (Date.now() - said > 10000 && this.made > before) { said = Date.now(); log(`Sheets: ${next} of ${files.length} files...`); }
       }
     };
     await Promise.all(Array.from({ length: this.size * 2 }, one));
     const made = this.made - before;
-    log(made ? `Character sheets ready: ${files.length} files, ${made} made in ${((Date.now() - t0) / 1000).toFixed(1)}s (kept in ${this.cacheDir}).`
-      : `Character sheets ready: ${files.length} files.`);
+    log(made ? `Sheets ready: ${files.length} files, ${made} made in ${((Date.now() - t0) / 1000).toFixed(1)}s (kept in ${this.cacheDir}).`
+      : `Sheets ready: ${files.length} files.`);
     // the run is over: two makers stay for what is asked for later (a file added or changed while the server is up)
     this.size = Math.min(this.size, 2);
     while (this.workers.length > this.size && this.idle.length) { const w = this.idle.pop(); this.retire(w); w.terminate(); }

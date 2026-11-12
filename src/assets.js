@@ -4,8 +4,8 @@
  * json('Character/00002000.img') -> property tree where
  *   - canvas nodes carry `_canvas` (path under /assets), `_w`, `_h`, origin, delay, z, map...
  *   - UOL links are already resolved to the node they point at
- *   - a character file's canvas nodes may carry `_at` ([sheet, x, y, w, h]): the server has packed the file's images
- *     into sheets, and the node's is at that place in that one (Assets.slice)
+ *   - a character's, an NPC's, a monster's or a tile set's canvas nodes may carry `_at` ([sheet, x, y, w, h]): the
+ *     server has packed the file's images into sheets, and the node's is at that place in that one (Assets.slice)
  */
 import { config } from './config.js';
 
@@ -48,6 +48,8 @@ export async function nodeAt(assets, path) {
  * thousands of loads in flight and the browser locked up.
  */
 const IMAGE_SLOTS = 12;
+/** The files the server packs into sheets, when it does (sheets.mjs): asked for with their images' places. */
+const PACKED = /^(?:Character|Npc|Mob)\/|^Map\/Tile\//;
 /** A load that hasn't finished in this long gives its slot up (it still counts once it comes in). */
 const SLOT_TIMEOUT_MS = 20000;
 
@@ -60,7 +62,8 @@ export class Assets {
     this.waiting = [[], [], []]; this.waitHead = [0, 0, 0];   // images waiting for a slot, by priority
     this.inFlight = 0;
     this.firstDraws = 0;   // images asked for to draw for the first time (the /fps meter)
-    this.useSheets = true;   // /fps sheets: character images drawn from the server's sheets, or each from its own file
+    this.useSheets = true;   // /fps sheets: packed images drawn from the server's sheets, or each from its own file
+    this.cuts = new WeakMap();   // canvas node -> its image cut out of its sheet, for whoever asks for it whole (image)
     this.sheets = 0;         // sheets loaded so far (the /fps report)
     this._slice = { img: null, x: 0, y: 0, w: 0, h: 0 };
   }
@@ -70,9 +73,9 @@ export class Assets {
       const wz = path.split('/')[0];
       const get = (url) => fetch(url).then((r) => (r.ok ? r.json() : null));
       const own = () => get(`${this.base}/${path}.json`);
-      // a character file is asked for with its images' places in the server's sheets, when the server packs them
-      // (one it has no sheets for comes back as it is); if that can't be had, the file as it is
-      const p = (config.characterSheets && wz === 'Character' ? get(`${this.base}/_sheets/${path}.json`).then((tree) => tree || own(), own) : own())
+      // a file the server packs into sheets is asked for with its images' places in them (one it has no sheets for
+      // comes back as it is); if that can't be had, the file as it is
+      const p = (config.sheets && PACKED.test(path) ? get(`${this.base}/_sheets/${path}.json`).then((tree) => tree || own(), own) : own())
         .then((tree) => (tree ? prepare(tree, wz) : null))
         .catch(() => { this.jsonCache.delete(path); return null; });   // a dropped connection: asked again next time
       this.jsonCache.set(path, p);
@@ -130,9 +133,26 @@ export class Assets {
     img.src = e.src;
   }
 
-  /** Returns the loaded image, or null while it is still loading (it starts loading on first call, first in line). */
+  /**
+   * Returns the loaded image, or null while it is still loading (it starts loading on first call, first in line).
+   * One packed in a sheet comes cut out of it, as an image of its own, made the first time it is asked for: what
+   * draws a lot of them (characters, NPCs, monsters, tiles) draws straight from the sheet instead (slice).
+   */
   image(node) {
     if (!isCanvas(node)) return null;
+    const sheet = this.sheetOf(node);
+    if (sheet) {
+      let cut = this.cuts.get(node);
+      if (cut) return cut;
+      const img = this.image(sheet);
+      if (!img) return null;
+      const at = node._at;
+      cut = document.createElement('canvas');
+      cut.width = at[3]; cut.height = at[4];
+      cut.getContext('2d').drawImage(img, at[1], at[2], at[3], at[4], 0, 0, at[3], at[4]);
+      this.cuts.set(node, cut);
+      return cut;
+    }
     const e = this._entry(node);
     if (!e.ready) return null;
     if (!e.drawn) { e.drawn = true; this.firstDraws++; }
@@ -147,7 +167,7 @@ export class Assets {
 
   /**
    * What a canvas node is drawn from: { img, x, y, w, h }, its place in the sheet the server packed it in (a
-   * character's pieces), or its own image, whole. Draw it with
+   * character's pieces, an NPC's or a monster's frames, a tile), or its own image, whole. Draw it with
    *   ctx.drawImage(s.img, s.x, s.y, s.w, s.h, dx, dy, s.w, s.h)
    * Null while that loads (it starts loading on the first call, first in line). The same object comes back every
    * call: use it before asking for the next.

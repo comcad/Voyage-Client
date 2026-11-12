@@ -5769,11 +5769,11 @@ export class Game {
         : `Character frames made ahead of time are made ${on ? 'off the page\'s thread' : 'on the page'} from now on. Type /fps worker again to switch.`, CHAT_COLORS.notice);
       return;
     }
-    // /fps sheets: character images drawn from the server's sheets (on, the default) or each from its own file, to compare
+    // /fps sheets: packed images (characters, NPCs, monsters, tiles) drawn from the server's sheets (on, the default) or each from its own file, to compare
     if (/^\/fps\s+sheets$/i.test(text.trim())) {
-      if (config.characterSheets) this.assets.useSheets = !this.assets.useSheets;
-      this.hud?.message?.(!config.characterSheets ? 'This server sends every character image on its own (Server.CharacterSheets is off, or its cache folder can\'t be written to).'
-        : `Character art comes ${this.assets.useSheets ? 'in sheets' : 'image by image'} from now on. Type /fps sheets again to switch.`, CHAT_COLORS.notice);
+      if (config.sheets) this.assets.useSheets = !this.assets.useSheets;
+      this.hud?.message?.(!config.sheets ? 'This server sends every image on its own (Server.Sheets is off, or its cache folder can\'t be written to).'
+        : `Characters, NPCs, monsters and tiles come ${this.assets.useSheets ? 'in sheets' : 'image by image'} from now on. Type /fps sheets again to switch.`, CHAT_COLORS.notice);
       return;
     }
     // /fps copy: the meter's report of recent hitches onto the clipboard (and into the browser console)
