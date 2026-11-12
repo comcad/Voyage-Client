@@ -723,6 +723,8 @@ const CURSE_TEXT = {
   136: 'The fear of darkness has overtaken you! Your range of vision has been narrowed.',
 };
 const FADE_MS = 600;   // map changes: the old map dims to black over this, the new one lights up over it
+/** A shop owner's place in their page's draw order: before everyone else in it (drawOrder). */
+const SHOP_FIRST = -1e6;
 /** A map lights up once what came with it is in, or after this long: a bigger crowd comes in as it loads. */
 const ARRIVALS_MS = 4000;
 /**
@@ -10378,7 +10380,6 @@ export class Game {
     ctx.save();
     ctx.translate(ix - real.x, iy - real.y);
 
-    // shop owners and their booths go down first: everyone else walks in front of a shop
     const inShop = (e) => e.box?.type === 4;
     const chars = this.drawOrder(ctx, cam, inShop), playerLayer = this.playerZ.page;
     const mobs = map.life.filter((e) => e.kind !== 'Npc').map((e) => ({ e, k: mobDepth(e) })).sort((a, b) => a.k - b.k).map((x) => x.e);
@@ -10394,11 +10395,8 @@ export class Game {
       if (l === playerLayer) this.drawDoors(ctx, cam);
       if (l === playerLayer) this.vfx?.drawTombs(ctx, cam);   // behind every character, so a ghost floats in front of its stone
       if (l === playerLayer) {
-        for (const m of this.boards.merchants.values()) this.boards.drawMerchant(ctx, cam, m);   // Hired Merchants, behind people
         this.kites.draw(ctx, cam);
         this.drawCardPairs(ctx, cam);
-        for (const rp of this.others.values()) if (inShop(rp)) this.drawChar(ctx, cam, rp, rp.look, false);
-        if (inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.questAlert?.draw(ctx, cam); }
       }
       lap('other');
       for (const c of chars) if (c.page === l) this.drawOrdered(ctx, cam, c);
@@ -10501,8 +10499,13 @@ export class Game {
     return last || { page: 7, zMass: 0 };
   }
   /**
-   * Characters, pets and NPCs, each drawn in its page: a lower zMass in front, then other players, their pets, NPCs,
-   * you and your pets, in that order. A pet up a ladder on its owner's back goes on right after them.
+   * Characters, pets, NPCs and Hired Merchants, each drawn in its own page (the one its floor is in; a Hired Merchant's
+   * is merchantZ): a lower zMass in front, then other players, their pets, NPCs and Hired Merchants (a merchant has an
+   * NPC's depth), you and your pets, in that order. A pet up a ladder on its owner's back goes on right after them. A
+   * shop owner and their booth go down first in their page: everyone else there walks in front of the shop.
+   *
+   * None of these follows the page you are on: drawn in it, merchants and shops went behind or in front of the
+   * ladders and platforms round them as you climbed from one platform to the next.
    */
   drawOrder(ctx, cam, inShop) {
     // (the list and its entries are kept from frame to frame, and say what to draw rather than carry a function for
@@ -10511,9 +10514,15 @@ export class Game {
     let n = 0;
     const put = (page, zMass, slot, kind, ent) => { const o = (list[n] ??= {}); n++; o.page = page; o.k = -10 * zMass + slot; o.kind = kind; o.ent = ent; };
     for (const e of this.map.life) if (e.kind === 'Npc' && this.lifeInView(e)) put(e.fh ? e.fh.layer : 7, e.fh ? e.fh.zMass : 0, 5, 0, e);
+    for (const m of this.boards.merchants.values()) {
+      if (!this.inView(m.x, m.y, 350, 450, 200)) continue;
+      const z = this.merchantZ(m);
+      put(z.page, z.zMass, 5, 4, m);
+    }
     for (const rp of this.others.values()) {
       rp.z = this.zFrom(rp.fhId, rp.z);
-      if (!inShop(rp) && this.inView(rp.x, rp.y, 350, 450, 200)) put(rp.z.page, rp.z.zMass, 2, 1, rp);
+      if (!this.inView(rp.x, rp.y, 350, 450, 200)) continue;
+      if (inShop(rp)) put(rp.z.page, 0, SHOP_FIRST, 1, rp); else put(rp.z.page, rp.z.zMass, 2, 1, rp);
     }
     for (const pet of this.pets.values()) {
       pet.z = pet.mine ? (pet.fh ? { page: pet.fh.layer, zMass: pet.fh.zMass } : pet.z || { page: 7, zMass: 0 }) : this.zFrom(pet.fhId, pet.z);
@@ -10521,15 +10530,29 @@ export class Game {
     }
     this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
       : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
-    if (!inShop(p)) put(this.playerZ.page, this.playerZ.zMass, 7, 3, p);
+    if (inShop(p)) put(this.playerZ.page, 0, SHOP_FIRST + 1, 3, p); else put(this.playerZ.page, this.playerZ.zMass, 7, 3, p);
     list.length = n;
     return list.sort((a, b) => a.k - b.k);
   }
-  /** One of drawOrder's (0 an NPC, 1 another player, 2 a pet, 3 you), with what is drawn along with it. */
+  /**
+   * A Hired Merchant's place in the draw order: the page and zMass of the foothold its spawn names. From a server
+   * that names none (0, as Cosmic sends) it is on page 7, over every layer of the map, as anything placed without a
+   * foothold is.
+   */
+  merchantZ(m) {
+    if (!m.z || m.zMap !== this.map) {
+      const f = m.fh > 0 ? this.map?.fh?.get(m.fh) : null;
+      m.z = f ? { page: f.layer, zMass: f.zMass } : { page: 7, zMass: 0 };
+      m.zMap = this.map;
+    }
+    return m.z;
+  }
+  /** One of drawOrder's (0 an NPC, 1 another player, 2 a pet, 3 you, 4 a Hired Merchant), with what is drawn along with it. */
   drawOrdered(ctx, cam, o) {
     const e = o.ent;
     if (o.kind === 0) { e.draw(ctx, cam, this.assets); return; }
     if (o.kind === 2) { e.draw(ctx, cam); return; }
+    if (o.kind === 4) { this.boards.drawMerchant(ctx, cam, e); return; }
     if (o.kind === 1) { this.drawChar(ctx, cam, e, e.look, false); this.drawDiseases(ctx, cam, e, e.diseases); this.drawHearts(ctx, cam, e, this.frameDt); }
     else { this.drawChar(ctx, cam, e, this.look, true); this.drawDiseases(ctx, cam); this.drawHearts(ctx, cam, e, this.frameDt); this.questAlert?.draw(ctx, cam); }
     for (const pet of this.pets.values()) if (pet.onBack && pet.owner === e.id) pet.draw(ctx, cam);   // a pet up a ladder on their back
