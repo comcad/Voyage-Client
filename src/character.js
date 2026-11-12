@@ -141,7 +141,7 @@ export class CharacterLook {
   }
 
   /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */
-  exprReady(n) { return !!n && (isCanvas(n) ? !!this.assets.image(n) : Object.values(n).filter(isCanvas).every((c) => this.assets.image(c))); }
+  exprReady(n) { return !!n && (isCanvas(n) ? this.assets.ready(n) : Object.values(n).filter(isCanvas).every((c) => this.assets.ready(c))); }
   /**
    * The body's frames for an avatar pose. A ghost (`ghost`: 1 the Ghost Candy's, 2 the spaceship) takes its ghost*
    * pose, the child named by its value.
@@ -405,8 +405,8 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
   if (sprite) ctx.drawImage(sprite.c, sprite.x, sprite.y);
   else {
     for (const p of parts) {
-      const img = assets.image(p.node);
-      if (img) ctx.drawImage(img, p.x, p.y);
+      const s = assets.slice(p.node);   // (its own image, or its place in its file's sheet)
+      if (s) ctx.drawImage(s.img, s.x, s.y, s.w, s.h, p.x, p.y, s.w, s.h);
     }
   }
   ctx.restore();
@@ -446,9 +446,9 @@ export function makeSprite(parts, assets, mode = '') {
   if (parts.sprite) return 'made';
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, missing = false;
   for (const p of parts) {
-    const img = assets.image(p.node);
-    if (!img) { missing = true; continue; }
-    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + img.width); y1 = Math.max(y1, p.y + img.height);
+    const s = assets.slice(p.node);
+    if (!s) { missing = true; continue; }
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + s.w); y1 = Math.max(y1, p.y + s.h);
   }
   if (missing) return 'missing';
   if (mode !== 'force' && (mode === 'arrival' ? arriving >= ARRIVAL_MS : spent >= SPRITE_MS)) return 'wait';
@@ -458,7 +458,7 @@ export function makeSprite(parts, assets, mode = '') {
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const o = c.getContext('2d');
-  for (const p of parts) o.drawImage(assets.image(p.node), p.x - x0, p.y - y0);
+  for (const p of parts) { const s = assets.slice(p.node); o.drawImage(s.img, s.x, s.y, s.w, s.h, p.x - x0, p.y - y0, s.w, s.h); }
   const s = { c, x: x0, y: y0, px: w * h };
   parts.sprite = s; sprites.set(parts, s); spritePx += s.px;
   while (spritePx > SPRITE_PX && sprites.size > 1) {

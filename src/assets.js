@@ -4,7 +4,11 @@
  * json('Character/00002000.img') -> property tree where
  *   - canvas nodes carry `_canvas` (path under /assets), `_w`, `_h`, origin, delay, z, map...
  *   - UOL links are already resolved to the node they point at
+ *   - a character file's canvas nodes may carry `_at` ([sheet, x, y, w, h]): the server has packed the file's images
+ *     into sheets, and the node's is at that place in that one (Assets.slice)
  */
+import { config } from './config.js';
+
 export const pad = (n, len) => String(n).padStart(len, '0');
 
 export const isCanvas = (v) => v !== null && typeof v === 'object' && typeof v._canvas === 'string';
@@ -56,13 +60,19 @@ export class Assets {
     this.waiting = [[], [], []]; this.waitHead = [0, 0, 0];   // images waiting for a slot, by priority
     this.inFlight = 0;
     this.firstDraws = 0;   // images asked for to draw for the first time (the /fps meter)
+    this.useSheets = true;   // /fps sheets: character images drawn from the server's sheets, or each from its own file
+    this.sheets = 0;         // sheets loaded so far (the /fps report)
+    this._slice = { img: null, x: 0, y: 0, w: 0, h: 0 };
   }
 
   json(path) {
     if (!this.jsonCache.has(path)) {
       const wz = path.split('/')[0];
-      const p = fetch(`${this.base}/${path}.json`)
-        .then((r) => (r.ok ? r.json() : null))
+      const get = (url) => fetch(url).then((r) => (r.ok ? r.json() : null));
+      const own = () => get(`${this.base}/${path}.json`);
+      // a character file is asked for with its images' places in the server's sheets, when the server packs them
+      // (one it has no sheets for comes back as it is); if that can't be had, the file as it is
+      const p = (config.characterSheets && wz === 'Character' ? get(`${this.base}/_sheets/${path}.json`).then((tree) => tree || own(), own) : own())
         .then((tree) => (tree ? prepare(tree, wz) : null))
         .catch(() => { this.jsonCache.delete(path); return null; });   // a dropped connection: asked again next time
       this.jsonCache.set(path, p);
@@ -75,7 +85,7 @@ export class Assets {
     // one that failed to load (a dropped connection) is tried again 5s later, three tries in all
     const retry = e?.err && e.tries < 3 && performance.now() - e.failedAt > 5000;
     if (!e || retry) {
-      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: this.waiting.length, started: false };
+      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') };
       e.promise = new Promise((res) => { e.settle = res; });
       this.imgCache.set(node._canvas, e);
     }
@@ -114,7 +124,7 @@ export class Assets {
     e.img = img;
     const finish = (ok) => { clearTimeout(guard); release(); e.settle(ok ? img : null); };
     // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
-    img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; finish(true); }; if (img.decode) img.decode().then(done, done); else done(); };
+    img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; if (e.sheet) this.sheets++; finish(true); }; if (img.decode) img.decode().then(done, done); else done(); };
     img.onerror = () => { e.err = true; e.tries++; e.failedAt = performance.now(); finish(false); };
     img.src = e.src;
   }
@@ -128,22 +138,68 @@ export class Assets {
     return e.img;
   }
 
-  /** Loads canvases at a priority (see IMAGE_SLOTS), resolving once all are in; onProgress(done, total) after each. */
+  /** The sheet a canvas node's image is packed in; none with sheets off, or when that sheet couldn't be loaded. */
+  _sheetOf(node) {
+    const sheet = this.useSheets ? node._sheet : null;
+    return sheet && !this.imgCache.get(sheet._canvas)?.err ? sheet : null;
+  }
+
+  /**
+   * What a canvas node is drawn from: { img, x, y, w, h }, its place in the sheet the server packed it in (a
+   * character's pieces), or its own image, whole. Draw it with
+   *   ctx.drawImage(s.img, s.x, s.y, s.w, s.h, dx, dy, s.w, s.h)
+   * Null while that loads (it starts loading on the first call, first in line). The same object comes back every
+   * call: use it before asking for the next.
+   */
+  slice(node) {
+    if (!isCanvas(node)) return null;
+    const sheet = this._sheetOf(node), img = this.image(sheet || node);
+    if (!img) return null;
+    const s = this._slice;
+    s.img = img;
+    if (sheet) { const at = node._at; s.x = at[1]; s.y = at[2]; s.w = at[3]; s.h = at[4]; }
+    else { s.x = 0; s.y = 0; s.w = img.width; s.h = img.height; }
+    return s;
+  }
+
+  /** Whether a canvas node can be drawn now (slice); it is asked for, first in line, when it can't. */
+  ready(node) { return isCanvas(node) && !!this.image(this._sheetOf(node) || node); }
+
+  /**
+   * Loads canvases at a priority (see IMAGE_SLOTS), resolving once all can be drawn (slice); onProgress(done, total)
+   * after each. One packed in a sheet waits for the sheet: a look's every piece for a pose comes in with a request a
+   * file rather than one a piece. A sheet that can't be had gives way to the canvas's own image.
+   */
   preload(nodes, onProgress, pri = 0) {
     const list = nodes.filter(isCanvas);
     let done = 0;
-    return Promise.all(list.map((n) => this._entry(n, pri).promise.then(() => onProgress?.(++done, list.length))));
+    return Promise.all(list.map((n) => {
+      const sheet = this._sheetOf(n);
+      const got = sheet ? this._entry(sheet, pri).promise.then((img) => img || this._entry(n, pri).promise) : this._entry(n, pri).promise;
+      return got.then(() => onProgress?.(++done, list.length));
+    }));
   }
 }
 
 function prepare(tree, wz) {
-  const seen = new Set();
+  const seen = new Set(), sheets = new Map();
   (function prefix(node) {
     if (!node || typeof node !== 'object' || seen.has(node)) return;
     seen.add(node);
     // the files' own child order (kept by the extractor) stays readable but out of every key listing
     if (Array.isArray(node._order)) Object.defineProperty(node, '_order', { value: node._order, enumerable: false, configurable: true, writable: true });
-    if (typeof node._canvas === 'string') node._canvas = `${wz}/${node._canvas}`;
+    if (typeof node._canvas === 'string') {
+      node._canvas = `${wz}/${node._canvas}`;
+      // packed in one of its file's sheets (`_at`): the node gets that sheet as `_sheet`, a canvas node of its own
+      // (one for everything in the sheet) kept out of every key listing
+      const at = node._at, cut = Array.isArray(at) && typeof at[0] === 'string' ? node._canvas.indexOf('.img/') : -1;
+      if (cut > 0) {
+        const src = `_sheets/${node._canvas.slice(0, cut + 4)}/${at[0]}.png`;
+        let sheet = sheets.get(src);
+        if (!sheet) sheets.set(src, (sheet = { _canvas: src }));
+        Object.defineProperty(node, '_sheet', { value: sheet, enumerable: false, configurable: true, writable: true });
+      }
+    }
     for (const k in node) prefix(node[k]);
   })(tree);
 

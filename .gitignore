@@ -1,5 +1,7 @@
 # --- Generated / runtime ---
 assets/
+# made from the assets by server.js (character sheets)
+/cache/
 test/
 notes/
 public/Voyage.js

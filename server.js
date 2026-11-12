@@ -4,11 +4,13 @@ import http from 'http';
 import net from 'net';
 import path from 'path';
 import fs from 'fs';
+import zlib from 'zlib';
 import { fileURLToPath } from 'url';
 import { WebSocketServer } from 'ws';
 import { build as buildClient } from './build.mjs';
 import { ConfigMgr, ConfigException, confDir } from './configmgr.mjs';
 import { ServerConfigs } from './serverconfigs.mjs';
+import { SheetStore } from './sheets.mjs';
 import { clientConfigs } from './src/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,6 +41,32 @@ const CLIENT_CONFIG = clientConfigs(ConfigMgr);
 const portAllowed = (p) => p === 8484 || (p >= 7575 && p <= 7699);
 
 const app = express();
+// Character files as sheets (sheets.mjs): a file's tree with each image's place in its sheets, and the sheets it
+// names. They are made from the assets as the server starts and kept in the cache folder; one asked for before
+// they are all there is made first.
+const sheets = ServerConfigs.CHARACTER_SHEETS ? SheetStore.open(ASSETS_DIR, path.join(ServerConfigs.CACHE_DIR, 'sheets')) : null;
+CLIENT_CONFIG.characterSheets = !!sheets;   // (what the client asks by: on only when the sheets can be kept)
+if (sheets) {
+  app.get(/^\/assets\/_sheets\/(Character\/.+\.img)\.json$/, (req, res, next) => {
+    if (/(^|\/)\.\.?(\/|$)/.test(req.params[0])) { res.status(404).end(); return; }
+    sheets.tree(req.params[0]).then((file) => {
+      if (file) {   // (kept gzipped, and sent so to every browser: all of them take it)
+        res.set({ 'Content-Type': 'application/json; charset=utf-8', Vary: 'Accept-Encoding' });
+        if (req.acceptsEncodings('gzip')) { res.set('Content-Encoding', 'gzip'); res.sendFile(file, { maxAge: '1d', dotfiles: 'allow' }); }
+        else { res.set('Cache-Control', 'public, max-age=86400'); fs.createReadStream(file).on('error', next).pipe(zlib.createGunzip()).on('error', next).pipe(res); }
+        return;
+      }
+      req.url = `/assets/${req.params[0]}.json`;   // no sheets for this one (a ring, a pet's accessory): the file as it is
+      next();
+    }, next);
+  });
+  // (a sheet's address has its file's version in it, so it never changes: the browser may keep it)
+  app.get(/^\/assets\/_sheets\/(Character\/.+\.img)\/((?:\d+\.)?[12])\.([0-9a-f]{10})\.png$/, (req, res, next) => {
+    sheets.sheet(req.params[0], req.params[1], req.params[2]).then((file) => {
+      if (file) res.sendFile(file, { maxAge: '1y', immutable: true, dotfiles: 'allow' }); else res.status(404).end();
+    }, next);
+  });
+}
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false, dotfiles: 'allow' }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
 app.get('/config.json', (req, res) => res.json(CLIENT_CONFIG));
@@ -95,4 +123,5 @@ wss.on('connection', (ws, req) => {
 server.listen(PORT, HOST, () => {
   console.log(`Voyage client on http://${HOST}:${PORT} (assets: ${ASSETS_DIR})`);
   console.log('Cosmic servers:', SERVERS);
+  if (sheets) sheets.makeAll().catch((e) => console.log(`Character sheets: the start-up run stopped (${e.message}); the rest are made as they are asked for.`));
 });

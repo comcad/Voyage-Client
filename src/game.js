@@ -5759,6 +5759,13 @@ export class Game {
       this.hud?.message?.(`Characters are drawn ${charSprites ? 'from one kept image a frame' : 'part by part'}. Type /fps sprites again to switch.`, CHAT_COLORS.notice);
       return;
     }
+    // /fps sheets: character images drawn from the server's sheets (on, the default) or each from its own file, to compare
+    if (/^\/fps\s+sheets$/i.test(text.trim())) {
+      if (config.characterSheets) this.assets.useSheets = !this.assets.useSheets;
+      this.hud?.message?.(!config.characterSheets ? 'This server sends every character image on its own (Server.CharacterSheets is off, or its cache folder can\'t be written to).'
+        : `Character art comes ${this.assets.useSheets ? 'in sheets' : 'image by image'} from now on. Type /fps sheets again to switch.`, CHAT_COLORS.notice);
+      return;
+    }
     // /fps copy: the meter's report of recent hitches onto the clipboard (and into the browser console)
     if (/^\/fps\s+copy$/i.test(text.trim())) {
       const say = (m) => this.hud?.message?.(m, CHAT_COLORS.notice);
