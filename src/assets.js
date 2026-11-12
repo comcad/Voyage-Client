@@ -85,7 +85,7 @@ export class Assets {
     // one that failed to load (a dropped connection) is tried again 5s later, three tries in all
     const retry = e?.err && e.tries < 3 && performance.now() - e.failedAt > 5000;
     if (!e || retry) {
-      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') };
+      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };
       e.promise = new Promise((res) => { e.settle = res; });
       this.imgCache.set(node._canvas, e);
     }
@@ -125,7 +125,8 @@ export class Assets {
     const finish = (ok) => { clearTimeout(guard); release(); e.settle(ok ? img : null); };
     // decoded before it counts as loaded: drawn undecoded, the first frame that shows it would decode it there and then
     img.onload = () => { const done = () => { e.ready = true; this.loaded++; this.loadedPx += img.naturalWidth * img.naturalHeight; if (e.sheet) this.sheets++; finish(true); }; if (img.decode) img.decode().then(done, done); else done(); };
-    img.onerror = () => { e.err = true; e.tries++; e.failedAt = performance.now(); finish(false); };
+    // (a sheet that can't be had says so on itself: its pieces come from their own images from then on, sheetOf)
+    img.onerror = () => { e.err = true; e.tries++; e.failedAt = performance.now(); if (e.sheet) e.sheet.failed = true; finish(false); };
     img.src = e.src;
   }
 
@@ -139,9 +140,9 @@ export class Assets {
   }
 
   /** The sheet a canvas node's image is packed in; none with sheets off, or when that sheet couldn't be loaded. */
-  _sheetOf(node) {
-    const sheet = this.useSheets ? node._sheet : null;
-    return sheet && !this.imgCache.get(sheet._canvas)?.err ? sheet : null;
+  sheetOf(node) {
+    const sheet = node._sheet;
+    return sheet && this.useSheets && !sheet.failed ? sheet : null;
   }
 
   /**
@@ -153,7 +154,7 @@ export class Assets {
    */
   slice(node) {
     if (!isCanvas(node)) return null;
-    const sheet = this._sheetOf(node), img = this.image(sheet || node);
+    const sheet = this.sheetOf(node), img = this.image(sheet || node);
     if (!img) return null;
     const s = this._slice;
     s.img = img;
@@ -163,7 +164,7 @@ export class Assets {
   }
 
   /** Whether a canvas node can be drawn now (slice); it is asked for, first in line, when it can't. */
-  ready(node) { return isCanvas(node) && !!this.image(this._sheetOf(node) || node); }
+  ready(node) { return isCanvas(node) && !!this.image(this.sheetOf(node) || node); }
 
   /**
    * Loads canvases at a priority (see IMAGE_SLOTS), resolving once all can be drawn (slice); onProgress(done, total)
@@ -174,18 +175,24 @@ export class Assets {
     const list = nodes.filter(isCanvas);
     let done = 0;
     return Promise.all(list.map((n) => {
-      const sheet = this._sheetOf(n);
+      const sheet = this.sheetOf(n);
       const got = sheet ? this._entry(sheet, pri).promise.then((img) => img || this._entry(n, pri).promise) : this._entry(n, pri).promise;
       return got.then(() => onProgress?.(++done, list.length));
     }));
   }
 }
 
+/**
+ * A tree as it was read, made ready: canvases get their place under /assets (and their sheet), the files' own child
+ * order goes out of every key listing, and every link (UOL) is put through to the node it points at. One walk down
+ * the tree, which notes the links with the nodes above them; then only the links are gone over (again for a link to
+ * a link, four times at most). Every map, character, monster and window is read through here, so it is kept light:
+ * nothing is copied or remembered for a node that has no link in it.
+ */
 function prepare(tree, wz) {
-  const seen = new Set(), sheets = new Map();
-  (function prefix(node) {
-    if (!node || typeof node !== 'object' || seen.has(node)) return;
-    seen.add(node);
+  if (!tree || typeof tree !== 'object') return tree;
+  const sheets = new Map(), links = [], above = [];
+  (function walk(node) {
     // the files' own child order (kept by the extractor) stays readable but out of every key listing
     if (Array.isArray(node._order)) Object.defineProperty(node, '_order', { value: node._order, enumerable: false, configurable: true, writable: true });
     if (typeof node._canvas === 'string') {
@@ -200,27 +207,26 @@ function prepare(tree, wz) {
         Object.defineProperty(node, '_sheet', { value: sheet, enumerable: false, configurable: true, writable: true });
       }
     }
-    for (const k in node) prefix(node[k]);
+    above.push(node);
+    for (const k in node) {
+      const v = node[k];
+      if (v === null || typeof v !== 'object') continue;
+      // a link: resolved below, relative to the node that holds it
+      if (typeof v._uol === 'string') { links.push({ node, k, above: above.slice() }); continue; }
+      if (Array.isArray(v) && !v.some((x) => x !== null && typeof x === 'object')) continue;   // (a vector, a list of names)
+      walk(v);
+    }
+    above.pop();
   })(tree);
 
-  // Resolve UOLs relative to the node that contains them. Repeat for chained links.
-  for (let pass = 0; pass < 4; pass++) {
-    let unresolved = 0;
-    const visited = new Set();
-    (function walk(node, ancestors) {
-      if (!node || typeof node !== 'object' || visited.has(node)) return;
-      visited.add(node);
-      const chain = [...ancestors, node];
-      for (const k in node) {
-        const v = node[k];
-        if (v && typeof v === 'object' && typeof v._uol === 'string') {
-          const target = resolveUol(chain, v._uol);
-          if (target && !(typeof target._uol === 'string')) node[k] = target;
-          else unresolved++;
-        } else walk(v, chain);
-      }
-    })(tree, []);
-    if (!unresolved) break;
+  for (let pass = 0; pass < 4 && links.length; pass++) {
+    let left = 0;
+    for (const l of links) {
+      const target = resolveUol(l.above, l.node[l.k]._uol);
+      if (target && typeof target._uol !== 'string') l.node[l.k] = target;
+      else links[left++] = l;   // (a link to a link not put through yet: next time round)
+    }
+    links.length = left;
   }
   return tree;
 }

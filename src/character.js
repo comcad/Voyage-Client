@@ -1,5 +1,6 @@
 import { pad, isCanvas, frames } from './assets.js';
 import { snapPx } from './view.js';
+import { frameMaker } from './framemaker.js';
 
 /**
  * Character avatar assembly (body + head + face + hair + equips).
@@ -417,8 +418,9 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
  * game resolution into a canvas of their own and drawn with one call instead of one a part (about 18). The game's
  * canvas draws game pixels as blocks (no smoothing), so the one image scaled up shows the same pixels. A see-through
  * character (Dark Sight, hidden) is see-through as a whole now rather than part over part. Up to SPRITE_PX pixels
- * are kept, the longest unused going first; they are made a few ms a frame at most (makeSprite), and a character
- * whose frame isn't made yet keeps its last one up meanwhile (Game.drawChar).
+ * are kept, the longest unused going first. They are made off the page's thread where the browser can (framemaker.js),
+ * and otherwise on the page a few ms a frame at most (makeSprite); a character whose frame isn't made yet keeps its
+ * last one up meanwhile (Game.drawChar).
  */
 export let charSprites = true;
 const SPRITE_PX = 24e6, SPRITE_MS = 3, ARRIVAL_MS = 4;
@@ -427,23 +429,105 @@ let spritePx = 0, spent = 0, arriving = 0;   // ms gone this frame on making fra
 /** /fps sprites: drawn from one image a frame (on) or part by part. */
 export function setCharSprites(on) {
   charSprites = !!on;
-  if (!charSprites) { for (const k of sprites.keys()) delete k.sprite; sprites.clear(); spritePx = 0; }
+  if (!charSprites) { for (const [k, v] of sprites) { delete k.sprite; letGo(v); } sprites.clear(); spritePx = 0; }
 }
 /** A new frame on the screen: frame images may be made again. */
 export function spriteFrame() { spent = 0; arriving = 0; }
 /** For /fps copy: how many frame images are kept, and their pixels. */
 export function spriteStats() { return { on: charSprites, n: sprites.size, px: spritePx }; }
+/** Keeps a frame's image (s.c: a canvas made here, or an image from the frame maker), letting go of the longest unused past SPRITE_PX. */
+function keepSprite(parts, s) {
+  parts.sprite = s; sprites.set(parts, s); spritePx += s.px;
+  while (spritePx > SPRITE_PX && sprites.size > 1) {
+    const [k, v] = sprites.entries().next().value;
+    sprites.delete(k); delete k.sprite; spritePx -= v.px;
+    letGo(v);
+  }
+}
 /**
- * Makes a kept frame's image if it can be made now. 'made': it is there. 'missing': some of its art hasn't loaded
- * (every part is asked for, so what is wanted on screen now loads first). 'wait': this frame's time for making them
- * is used up (the first draw of each part costs, so they are rationed by time, not number): SPRITE_MS for frames as
- * they are drawn, and ARRIVAL_MS of its own for mode 'arrival' (someone waiting to be added: they don't queue behind
- * what is drawn); mode 'force' makes it anyway, as while a map loads and nothing is on screen. 'no': not a frame that
- * is kept (an expression, a rider), too big, or /fps sprites is off.
+ * A frame's image is no longer kept. One from the frame maker holds memory the browser is slow to take back by
+ * itself, so it is closed: now, or, while someone is still drawn from it (holdFrame), once they aren't.
+ */
+function letGo(s) {
+  s.gone = true;
+  if (!s.held) s.c.close?.();
+}
+/**
+ * `ent` is drawn from this frame's image until their next whole frame is ready (Game.drawChar): they keep it
+ * themselves, since it may be let go from the kept ones meanwhile, and nobody is ever to go unseen (or be drawn from
+ * an image that has been closed) because their next frame isn't ready.
+ */
+export function holdFrame(ent, parts) {
+  const s = parts.sprite, old = ent.wholeSprite;
+  ent.wholeParts = parts;
+  if (old === s) return;
+  if (old) { old.held--; if (old.gone && !old.held) old.c.close?.(); }
+  s.held = (s.held || 0) + 1;
+  ent.wholeSprite = s;
+}
+/** Resolves once the frame maker has answered for a frame it was asked for (at once when it has nothing of it). */
+export function frameAnswered(parts) {
+  return parts.asked ? new Promise((res) => (parts.waiting ??= []).push(res)) : Promise.resolve();
+}
+/**
+ * What the frame maker needs to put a frame together: its size, and for each piece the image it is cut from (its
+ * file's sheet, or its own image), the rectangle cut out and where it goes. 'no': not a size that is kept. Null: a
+ * piece's size isn't known, so it is made on the page.
+ */
+function frameJob(parts, assets) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const urls = [], index = new Map(), cuts = [];
+  for (const p of parts) {
+    const n = p.node, sheet = assets.sheetOf(n), at = sheet ? n._at : null;
+    const w = at ? at[3] : n._w, h = at ? at[4] : n._h, src = (sheet || n)._canvas;
+    if (!(w > 0 && h > 0)) return null;
+    let i = index.get(src);
+    if (i === undefined) { i = urls.length; urls.push(`${assets.base}/${src}`); index.set(src, i); }
+    cuts.push(i, at ? at[1] : 0, at ? at[2] : 0, w, h, p.x, p.y);
+    x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + w); y1 = Math.max(y1, p.y + h);
+  }
+  const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
+  if (!(w > 0 && h > 0) || w * h > 1e6) return 'no';
+  for (let i = 0; i < cuts.length; i += 7) { cuts[i + 5] -= x0; cuts[i + 6] -= y0; }
+  return { w, h, x: x0, y: y0, urls, cuts };
+}
+/**
+ * Makes a kept frame's image if it can be made now. 'made': it is there. 'asked': the frame maker is making it off
+ * the page's thread (framemaker.js) and it will be there in a moment (frameAnswered); nothing is loaded or drawn here
+ * for it. Mode 'warm' is one made in advance: the maker takes those after the ones wanted now. Mode 'now' never
+ * asks: the frame is made here at once, as your own character's are (one that came a frame late the first time
+ * would be seen in every new move you make). One the maker can't make is made here from then on.
+ *
+ * Made here: 'missing': some of its art hasn't loaded (every part is asked for, so what is wanted on screen now loads
+ * first). 'wait': this frame's time for making them is used up (the first draw of each part costs, so they are
+ * rationed by time, not number): SPRITE_MS for frames as they are drawn, and ARRIVAL_MS of its own for mode 'arrival'
+ * (someone waiting to be added: they don't queue behind what is drawn); mode 'force' makes it anyway, as while a map
+ * loads and nothing is on screen.
+ *
+ * 'no': not a frame that is kept (an expression, a rider), too big, or /fps sprites is off.
  */
 export function makeSprite(parts, assets, mode = '') {
   if (!charSprites || !parts?.still) return 'no';
   if (parts.sprite) return 'made';
+  if (mode !== 'now') {
+    if (parts.asked) return 'asked';
+    if (!parts.here && frameMaker.on) {
+      const job = frameJob(parts, assets);
+      if (job === 'no') return 'no';
+      if (job) {
+        parts.asked = true;
+        frameMaker.ask(job, (image) => {
+          parts.asked = false;
+          if (!image) parts.here = true;   // (it couldn't be made there: here, the next time it is wanted)
+          else if (!charSprites || parts.sprite) image.close();   // switched off, or made here meanwhile
+          else keepSprite(parts, { c: image, x: job.x, y: job.y, px: job.w * job.h });
+          const waiting = parts.waiting;
+          if (waiting) { parts.waiting = null; for (const res of waiting) res(); }
+        }, mode !== 'warm');
+        return 'asked';
+      }
+    }
+  }
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, missing = false;
   for (const p of parts) {
     const s = assets.slice(p.node);
@@ -459,12 +543,7 @@ export function makeSprite(parts, assets, mode = '') {
   c.width = w; c.height = h;
   const o = c.getContext('2d');
   for (const p of parts) { const s = assets.slice(p.node); o.drawImage(s.img, s.x, s.y, s.w, s.h, p.x - x0, p.y - y0, s.w, s.h); }
-  const s = { c, x: x0, y: y0, px: w * h };
-  parts.sprite = s; sprites.set(parts, s); spritePx += s.px;
-  while (spritePx > SPRITE_PX && sprites.size > 1) {
-    const [k, v] = sprites.entries().next().value;
-    sprites.delete(k); delete k.sprite; spritePx -= v.px;
-  }
+  keepSprite(parts, { c, x: x0, y: y0, px: w * h });
   if (mode === 'arrival') arriving += performance.now() - t0; else spent += performance.now() - t0;
   return 'made';
 }
