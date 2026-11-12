@@ -8,6 +8,7 @@
  *     server has packed the file's images into sheets, and the node's is at that place in that one (Assets.slice)
  */
 import { config } from './config.js';
+import { spent } from './between.js';
 
 export const pad = (n, len) => String(n).padStart(len, '0');
 
@@ -61,7 +62,7 @@ export class Assets {
     this.loaded = 0; this.loadedPx = 0;   // images loaded so far and their pixels (the /fps report)
     this.waiting = [[], [], []]; this.waitHead = [0, 0, 0];   // images waiting for a slot, by priority
     this.inFlight = 0;
-    this.firstDraws = 0;   // images asked for to draw for the first time (the /fps meter)
+    this.firstDraws = 0; this.firstPx = 0;   // images asked for to draw for the first time, and their pixels (the /fps meter)
     this.useSheets = true;   // /fps sheets: packed images drawn from the server's sheets, or each from its own file
     this.cuts = new WeakMap();   // canvas node -> its image cut out of its sheet, for whoever asks for it whole (image)
     this.sheets = 0;         // sheets loaded so far (the /fps report)
@@ -71,12 +72,17 @@ export class Assets {
   json(path) {
     if (!this.jsonCache.has(path)) {
       const wz = path.split('/')[0];
-      const get = (url) => fetch(url).then((r) => (r.ok ? r.json() : null));
+      // (read as text and parsed here, which is what the browser's own json() does, so that its time can be told)
+      const get = (url) => fetch(url).then((r) => (r.ok ? r.text() : null)).then((text) => {
+        if (text === null) return null;
+        const t0 = performance.now();
+        try { return JSON.parse(text); } finally { spent('files', t0); }
+      });
       const own = () => get(`${this.base}/${path}.json`);
       // a file the server packs into sheets is asked for with its images' places in them (one it has no sheets for
       // comes back as it is); if that can't be had, the file as it is
       const p = (config.sheets && PACKED.test(path) ? get(`${this.base}/_sheets/${path}.json`).then((tree) => tree || own(), own) : own())
-        .then((tree) => (tree ? prepare(tree, wz) : null))
+        .then((tree) => { if (!tree) return null; const t0 = performance.now(); try { return prepare(tree, wz); } finally { spent('files', t0, 0); } })
         .catch(() => { this.jsonCache.delete(path); return null; });   // a dropped connection: asked again next time
       this.jsonCache.set(path, p);
     }
@@ -155,7 +161,7 @@ export class Assets {
     }
     const e = this._entry(node);
     if (!e.ready) return null;
-    if (!e.drawn) { e.drawn = true; this.firstDraws++; }
+    if (!e.drawn) { e.drawn = true; this.firstDraws++; this.firstPx += e.img.naturalWidth * e.img.naturalHeight; }
     return e.img;
   }
 

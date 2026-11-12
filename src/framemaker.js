@@ -1,4 +1,5 @@
 import { BUILD } from './build.js';
+import { spent } from './between.js';
 
 /**
  * Character frame images made off the page's thread (a Voyage matter, for crowds).
@@ -73,9 +74,11 @@ export const frameMaker = {
     const item = this.jobs.get(m.id);
     if (!item) { m.image?.close?.(); return; }   // (given up on)
     this.jobs.delete(m.id);
-    if (m.image) { this.made++; this.ms += performance.now() - item.t0; } else this.failed++;
+    const t0 = performance.now();
+    if (m.image) { this.made++; this.ms += t0 - item.t0; } else this.failed++;
     item.done(m.image || null);
     this.pump();
+    spent('worker', t0);
   },
 
   /** Frames the worker has had too long are left to the page; a worker that keeps doing that is given up. */
