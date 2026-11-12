@@ -5,13 +5,16 @@ import { settings } from './settings.js';
  * The /fps meter (a Voyage tool, not part of the original client), over the last two seconds:
  * - FPS: frames drawn in the last second, against the FRAME RATE choice;
  * - frame times between drawn frames (average, worst) and the 1% low (the frame rate of the slowest 1% of frames);
- * - the display's refresh rate (how often the browser offers a frame) and frames that came late (more than 1.5
- *   refreshes after the one before);
- * - hitches over the last 30 seconds (a frame more than 1.6 times as late as it should be, and at least 25ms): how
- *   many, and the latest with the game's own time for the frame before it. A hitch whose game time is small
+ * - the display's refresh rate (the quickest the browser has offered frames in the last minute: a page that can't keep
+ *   up is offered frames only as fast as it draws them, which would pass for a slower display) and frames that came
+ *   late (more than 1.5 refreshes after the one before);
+ * - hitches over the last 30 seconds (a frame more than 1.6 times as late as frames have lately been, and at least
+ *   25ms; a page that is slow all the time shows as a low FPS, not as hitches): how many, and the latest with the
+ *   game's own time for the frame before it. A hitch whose game time is small
  *   happened outside the game's code: the browser collecting garbage, decoding an image, or the graphics card;
  * - the game's own update and draw times. These are JavaScript only: the graphics card's share of a frame doesn't
- *   show here, it shows as late frames and a low FPS while these stay small;
+ *   show here, it shows as late frames and a low FPS while these stay small. The draw time's biggest parts, on
+ *   average (both breakdowns in /fps copy);
  * - the canvas, its scale and the view; how many background buffers a frame draws, and their size;
  * - a graph of the last 180 frame times, with the 60 and 30 fps lines: yellow a frame that missed a refresh (more
  *   than 1.5 refreshes after the one before, as a late frame above), red one that missed two or more. A frame a few
@@ -27,6 +30,9 @@ import { settings } from './settings.js';
  * details. A part that is big in one hitch and small in the next points at the browser collecting garbage then.
  */
 const SPAN = 2000, BARS = 180, W = 236, PAD = 6, HITCH_SPAN = 30000, LONG_SPAN = 60000;
+/** A frame's parts (update or drawing), biggest first: "chars 25.1, fx 6.2, ...", those of at least `min` ms. */
+const topParts = (parts, n = 4, min = 0.5) => Object.entries(parts || {}).filter(([, v]) => v >= min).sort((x, y) => y[1] - x[1]).slice(0, n)
+  .map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ') || 'little';
 export class PerfMeter {
   constructor() {
     this.frames = []; this.offers = []; this.hitches = []; this.cached = null; this.cachedAt = -1e9;
@@ -61,7 +67,7 @@ export class PerfMeter {
     const prev = this.frames[this.frames.length - 1], was = this.mark;
     if (prev && was) {
       const gap = t - prev.t, want = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : this.refreshMs || 16.7;
-      if (gap > Math.max(25, want * 1.6)) {
+      if (gap > Math.max(25, Math.max(want, this.typicalMs || 0) * 1.6)) {
         this.hitches.push({
           t, at: Date.now(), gap, upd: prev.upd, ren: prev.ren, game: prev.upd + prev.ren, drew: prev.parts, updated: prev.uparts, firsts: prev.firsts,
           images: mark.loaded - was.loaded, imagePx: mark.loadedPx - was.loadedPx,
@@ -87,9 +93,22 @@ export class PerfMeter {
     const og = [];
     for (let i = 1; i < this.offers.length; i++) og.push(this.offers[i] - this.offers[i - 1]);
     og.sort((a, b) => a - b);
-    const refresh = og.length ? og[og.length >> 1] : 16.7;
+    const offered = og.length ? og[og.length >> 1] : 16.7;
+    // the display's refresh: the quickest the browser has offered frames in the last minute
+    this.offeredMs ??= [];
+    this.offeredMs.push({ t: now, ms: offered });
+    while (this.offeredMs.length && now - this.offeredMs[0].t > 60000) this.offeredMs.shift();
+    const refresh = Math.min(...this.offeredMs.map((o) => o.ms));
     this.refreshMs = refresh;
     const sorted = [...recentGaps].sort((a, b) => a - b), avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
+    this.typicalMs = sorted.length ? sorted[sorted.length >> 1] : refresh;   // how long frames have lately taken
+    // what the drawing and the update went on lately, part by part, on average
+    const parts = (key) => {
+      const out = {}; let n = 0;
+      for (const x of recent) if (x[key]) { n++; for (const k in x[key]) out[k] = (out[k] || 0) + x[key][k]; }
+      for (const k in out) out[k] /= n;
+      return n ? out : null;
+    };
     const low = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))] : 0;
     const want = settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : refresh;
     return {
@@ -98,6 +117,7 @@ export class PerfMeter {
       refresh: 1000 / refresh, late: recentGaps.filter((g) => g > Math.max(want, refresh) * 1.5).length,
       upd: avg(recent.map((x) => x.upd)), updMax: Math.max(0, ...recent.map((x) => x.upd)),
       ren: avg(recent.map((x) => x.ren)), renMax: Math.max(0, ...recent.map((x) => x.ren)), now,
+      drew: parts('parts'), updated: parts('uparts'),
     };
   }
   draw(ctx, game) {
@@ -114,6 +134,7 @@ export class PerfMeter {
       [`late frames (2 s): ${s.late}`, s.late ? '#ffcc66' : '#fff'],
       [hitchText, h0 ? '#ffcc66' : '#fff'],
       [`update ${s.upd.toFixed(1)} ms (max ${s.updMax.toFixed(1)})  draw ${s.ren.toFixed(1)} ms (max ${s.renMax.toFixed(1)})`, '#fff'],
+      [`draw: ${topParts(s.drew, 3, 0.3)}`, '#ccc'],
       [`canvas ${c.width}x${c.height} (${PIXEL_SCALE}x)  view ${game.cam.w}x${game.cam.h}`, '#ccc'],
       [`window ${c.clientWidth}x${c.clientHeight} @${window.devicePixelRatio || 1}x  bg buffers ${buf?.n || 0}${buf?.n ? ` (${(buf.px / 1e6).toFixed(1)} Mpx)` : ''}`, '#ccc'],
     ];
@@ -158,10 +179,11 @@ export class PerfMeter {
     out.push(`FRAME RATE ${settings.fps}  zoom ${settings.zoom ?? 1}  quality ${settings.quality ?? '-'}  map ${game.map?.id ?? '-'}  images ${n} (${(px * 4 / 1e6).toFixed(0)} MB decoded)`);
     if (performance.memory) out.push(`js heap ${(performance.memory.usedJSHeapSize / 1e6).toFixed(0)} / ${(performance.memory.jsHeapSizeLimit / 1e6).toFixed(0)} MB`);
     out.push(`last 2 s: ${s.fps} fps, frame ${num(s.avg)} ms avg, ${num(s.max)} worst, update ${num(s.upd)} ms, draw ${num(s.ren)} ms (max ${num(s.renMax)})`);
+    if (s.drew) out.push(`  drawing on average: ${topParts(s.drew, 8, 0.1)}`);
+    if (s.updated) out.push(`  update on average: ${topParts(s.updated, 9, 0.1)}`);
     out.push(`hitches in the last 30 s: ${this.hitches.length}`);
     const now = performance.now();
-    // the biggest parts of a frame's update or drawing
-    const top = (parts) => Object.entries(parts).filter(([, v]) => v >= 0.5).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([k, v]) => `${k} ${num(v)}`).join(', ') || 'little';
+    const top = (parts) => topParts(parts);
     for (const h of this.hitches) {
       const outside = h.gap - h.game - h.packetMs;
       const parts = [
