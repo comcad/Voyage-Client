@@ -47,7 +47,12 @@ app.get('/build.json', (req, res) => res.set('Cache-Control', 'no-store').json({
 // The page is never kept by the browser and asks for the script and the stylesheet by the build's id, so a reload
 // always gets the current build (Safari is slow to let go of a module script it has).
 const INDEX = path.join(__dirname, 'public', 'index.html');
+// One line for each time a browser asks for the page or the script: which build a browser is given, and whether it
+// asked at all, is then on record (it showed nothing while Safari kept running a script it had kept).
+const asked = (req) => console.log(`${new Date().toISOString()} ${req.ip} asked for ${req.originalUrl}${req.headers['if-none-match'] || req.headers['if-modified-since'] ? ' (has a copy)' : ''}, build ${BUILD_ID}`);
+app.get('/Voyage.js', (req, res, next) => { asked(req); next(); });
 app.get(['/', '/index.html'], (req, res) => {
+  asked(req);
   let html;
   try { html = fs.readFileSync(INDEX, 'utf8'); } catch { res.status(404).end(); return; }
   const v = encodeURIComponent(BUILD_ID);
