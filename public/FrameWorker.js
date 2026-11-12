@@ -4,24 +4,33 @@
  * A job is a frame's pieces: for each, the image it is cut from (a character sheet, or a piece's own image), the
  * rectangle cut out of it and where it goes. The pieces are drawn into one image the frame's size, which goes back to
  * the page to be drawn with a single call. The images cut from are loaded and decoded here too, and kept (the ones
- * unused longest let go past SOURCE_PX), so the page's own thread does none of it.
+ * unused longest let go past SOURCE_PX), so the page's own thread does none of it. They are loaded a few at a time
+ * and at low priority: the page's own loads (someone arriving) are not to wait behind these.
  *
  *   in:   { id, w, h, urls: [...], cuts: [source, sx, sy, sw, sh, dx, dy, ...] }
  *   out:  { id, image }  or  { id, error }
  *   and once, on starting:  { ready: true }  or  { ready: false, error }
  */
 const SOURCE_PX = 16e6;
+const LOADS = 4;   // source images being loaded at a time
 const sources = new Map();   // url -> { image (a promise), px, uses }, the longest unused first
 let sourcePx = 0;
+
+let loading = 0;
+const queued = [];
+const turn = () => (loading < LOADS ? (loading++, Promise.resolve()) : new Promise((go) => queued.push(go)));
+const next = () => { const go = queued.shift(); if (go) go(); else loading--; };
 
 function source(url) {
   let s = sources.get(url);
   if (s) { sources.delete(url); sources.set(url, s); s.uses++; return s; }
   s = { px: 0, uses: 1, image: null };
-  s.image = fetch(url)
+  s.image = turn()
+    .then(() => fetch(url, { priority: 'low' }))
     .then((r) => { if (!r.ok) throw new Error(`${r.status} for ${url}`); return r.blob(); })
     .then((blob) => createImageBitmap(blob))
-    .then((image) => { s.px = image.width * image.height; sourcePx += s.px; return image; });
+    .then((image) => { s.px = image.width * image.height; sourcePx += s.px; return image; })
+    .finally(next);
   s.image.catch(() => { if (sources.get(url) === s) sources.delete(url); });   // (asked for again next time)
   sources.set(url, s);
   return s;

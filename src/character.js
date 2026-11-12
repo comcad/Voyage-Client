@@ -418,9 +418,9 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
  * game resolution into a canvas of their own and drawn with one call instead of one a part (about 18). The game's
  * canvas draws game pixels as blocks (no smoothing), so the one image scaled up shows the same pixels. A see-through
  * character (Dark Sight, hidden) is see-through as a whole now rather than part over part. Up to SPRITE_PX pixels
- * are kept, the longest unused going first. They are made off the page's thread where the browser can (framemaker.js),
- * and otherwise on the page a few ms a frame at most (makeSprite); a character whose frame isn't made yet keeps its
- * last one up meanwhile (Game.drawChar).
+ * are kept, the longest unused going first. A frame wanted on screen now is made on the page, a few ms a frame at
+ * most (makeSprite), and a character whose frame isn't made yet keeps its last one up meanwhile (Game.drawChar);
+ * frames made ahead of their first use can be made off the page's thread instead (framemaker.js, /fps worker).
  */
 export let charSprites = true;
 const SPRITE_PX = 24e6, SPRITE_MS = 3, ARRIVAL_MS = 4;
@@ -465,10 +465,7 @@ export function holdFrame(ent, parts) {
   s.held = (s.held || 0) + 1;
   ent.wholeSprite = s;
 }
-/** Resolves once the frame maker has answered for a frame it was asked for (at once when it has nothing of it). */
-export function frameAnswered(parts) {
-  return parts.asked ? new Promise((res) => (parts.waiting ??= []).push(res)) : Promise.resolve();
-}
+
 /**
  * What the frame maker needs to put a frame together: its size, and for each piece the image it is cut from (its
  * file's sheet, or its own image), the rectangle cut out and where it goes. 'no': not a size that is kept. Null: a
@@ -492,11 +489,13 @@ function frameJob(parts, assets) {
   return { w, h, x: x0, y: y0, urls, cuts };
 }
 /**
- * Makes a kept frame's image if it can be made now. 'made': it is there. 'asked': the frame maker is making it off
- * the page's thread (framemaker.js) and it will be there in a moment (frameAnswered); nothing is loaded or drawn here
- * for it. Mode 'warm' is one made in advance: the maker takes those after the ones wanted now. Mode 'now' never
- * asks: the frame is made here at once, as your own character's are (one that came a frame late the first time
- * would be seen in every new move you make). One the maker can't make is made here from then on.
+ * Makes a kept frame's image if it can be made now. 'made': it is there.
+ *
+ * Mode 'warm' is a frame made ahead of its first use (Game.warmSprites): with /fps worker on, the frame maker makes
+ * those off the page's thread (framemaker.js), 'asked', and nothing is drawn here for them. Every other frame is wanted on
+ * screen now and is made here, where its art already is: sent off, it came back a frame or two late (a crowd
+ * arriving took half as long again). One made here while the maker has it in hand stays; one the maker can't make
+ * is made here from then on.
  *
  * Made here: 'missing': some of its art hasn't loaded (every part is asked for, so what is wanted on screen now loads
  * first). 'wait': this frame's time for making them is used up (the first draw of each part costs, so they are
@@ -509,7 +508,7 @@ function frameJob(parts, assets) {
 export function makeSprite(parts, assets, mode = '') {
   if (!charSprites || !parts?.still) return 'no';
   if (parts.sprite) return 'made';
-  if (mode !== 'now') {
+  if (mode === 'warm') {
     if (parts.asked) return 'asked';
     if (!parts.here && frameMaker.on) {
       const job = frameJob(parts, assets);
@@ -521,9 +520,7 @@ export function makeSprite(parts, assets, mode = '') {
           if (!image) parts.here = true;   // (it couldn't be made there: here, the next time it is wanted)
           else if (!charSprites || parts.sprite) image.close();   // switched off, or made here meanwhile
           else keepSprite(parts, { c: image, x: job.x, y: job.y, px: job.w * job.h });
-          const waiting = parts.waiting;
-          if (waiting) { parts.waiting = null; for (const res of waiting) res(); }
-        }, mode !== 'warm');
+        });
         return 'asked';
       }
     }

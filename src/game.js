@@ -1,6 +1,6 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
-import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame, makeSprite, holdFrame, frameAnswered } from './character.js';
+import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame, makeSprite, holdFrame } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
@@ -819,7 +819,7 @@ export class Game {
   constructor(canvas, assets, look, hooks = {}, net = null) {
     // (opaque: nothing shows through the game, so the browser needn't blend it with the page behind)
     this.canvas = canvas; this.ctx = snapToPixels(canvas.getContext('2d', { alpha: false }));
-    this.frames = frameMaker; frameMaker.start();   // character frame images made off the page's thread, where the browser can
+    this.frames = frameMaker;   // (frames made ahead of use, made off the page's thread: off unless /fps worker switches it on)
     canvas.width = VIEW_W; canvas.height = VIEW_H; this.ctx.resync?.();   // (a resized canvas starts its context over)
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
@@ -4574,9 +4574,7 @@ export class Game {
    */
   async spriteMade(parts) {
     for (let i = 0; i < 120; i++) {
-      const made = makeSprite(parts, this.assets, this.loading ? 'force' : 'arrival');
-      if (made === 'asked') { await frameAnswered(parts); continue; }   // (the frame maker has it in hand: back in a moment)
-      if (made !== 'wait') return;
+      if (makeSprite(parts, this.assets, this.loading ? 'force' : 'arrival') !== 'wait') return;
       await new Promise((res) => requestAnimationFrame(res));
     }
   }
@@ -4588,8 +4586,9 @@ export class Game {
     }
   }
   /**
-   * With what is left of this frame's time for making frame images, makes the ones waiting (warmLook), so a player
-   * who starts walking already has the frames. One whose art isn't in yet goes to the back.
+   * Has the frames waiting (warmLook) made, so a player who starts walking already has them: with what is left of
+   * this frame's time for making frame images or, with /fps worker on, off the page's thread (they are asked for
+   * here, 48 a frame). One whose art isn't in yet goes to the back.
    */
   warmSprites() {
     const list = this.warm;
@@ -5763,12 +5762,11 @@ export class Game {
       this.hud?.message?.(`Characters are drawn ${charSprites ? 'from one kept image a frame' : 'part by part'}. Type /fps sprites again to switch.`, CHAT_COLORS.notice);
       return;
     }
-    // /fps worker: character frame images made off the page's thread (on, where the browser can) or on the page, to compare
+    // /fps worker: frames made ahead of their first use made off the page's thread (off unless switched on here), to compare
     if (/^\/fps\s+worker$/i.test(text.trim())) {
-      const usable = frameMaker.ready && !frameMaker.broken;
-      if (usable) frameMaker.wanted = !frameMaker.wanted;
-      this.hud?.message?.(!usable ? 'This browser can\'t make character frames off the page\'s thread: they are made on the page.'
-        : `Character frames are made ${frameMaker.wanted ? 'off the page\'s thread' : 'on the page'} from now on. Type /fps worker again to switch.`, CHAT_COLORS.notice);
+      const on = frameMaker.toggle();
+      this.hud?.message?.(frameMaker.broken ? 'This browser can\'t make character frames off the page\'s thread: they are made on the page.'
+        : `Character frames made ahead of time are made ${on ? 'off the page\'s thread' : 'on the page'} from now on. Type /fps worker again to switch.`, CHAT_COLORS.notice);
       return;
     }
     // /fps sheets: character images drawn from the server's sheets (on, the default) or each from its own file, to compare
@@ -10681,7 +10679,7 @@ export class Game {
     // go unseen because their next frame isn't ready)
     let whole = parts, held = null;
     if (parts.still) {
-      const made = makeSprite(parts, this.assets, local ? 'now' : '');   // (your own: made here, at once)
+      const made = makeSprite(parts, this.assets);
       if (made === 'made') holdFrame(ent, parts);
       else if (made !== 'no' && ent.wholeSprite) { whole = ent.wholeParts; held = ent.wholeSprite; }
     }
