@@ -132,10 +132,10 @@ export class CharacterLook {
       if (cat(i) === 111 && Number(info.chatBalloon)) this.chatBalloon = Number(info.chatBalloon);
       if (info.effect?.path && !this.equipFx.some((f) => f.id === ids[i])) this.equipFx.push({ id: ids[i], effect: info.effect });
     });
-    // the face's expressions (blink, smile...) load in the background; until a frame is ready the default shows
+    // the face's expressions (blink, smile...) load in the background, last; until a frame is ready the default shows
     const exprs = [this.face, ...this.faceAcc].flatMap((n) => Object.entries(n || {}).filter(([k]) => k !== 'info')
       .flatMap(([, e]) => [e, ...Object.values(e || {})]).flatMap((f) => [f, ...Object.values(f || {})]));
-    a.preload(exprs);
+    a.preload(exprs, null, 2);
   }
 
   /** An expression frame (the canvas, or the frame holding it) whose art has loaded. */
