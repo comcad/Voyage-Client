@@ -209,6 +209,8 @@ export class CharacterLook {
     if (kept) return kept;
     this.unready = false;
     const out = this.build(action, frame, expr, mounted);
+    // an expression whose art is still loading shows the default face: the frame without one, which is kept
+    if (expr && this.unready && this.loaded) return this.compose(action, frame, null, mounted);
     if (this.loaded && !this.unready) {
       if (!this.composed || this.composed.size >= 512) this.composed = new Map();
       this.composed.set(key, out);
@@ -414,46 +416,58 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
  * game resolution into a canvas of their own and drawn with one call instead of one a part (about 18). The game's
  * canvas draws game pixels as blocks (no smoothing), so the one image scaled up shows the same pixels. A see-through
  * character (Dark Sight, hidden) is see-through as a whole now rather than part over part. Up to SPRITE_PX pixels
- * are kept, the longest unused going first; at most SPRITE_BUILDS are made in a frame, the rest drawn part by part
- * until their turn.
+ * are kept, the longest unused going first; they are made a few ms a frame at most (makeSprite), and a character
+ * whose frame isn't made yet keeps its last one up meanwhile (Game.drawChar).
  */
 export let charSprites = true;
-const SPRITE_PX = 16e6, SPRITE_BUILDS = 24;
+const SPRITE_PX = 24e6, SPRITE_MS = 3;
 const sprites = new Map();   // parts -> sprite, the longest unused first
-let spritePx = 0, builds = 0;
+let spritePx = 0, spent = 0;   // spent: ms gone on making frame images this frame
 /** /fps sprites: drawn from one image a frame (on) or part by part. */
 export function setCharSprites(on) {
   charSprites = !!on;
   if (!charSprites) { for (const k of sprites.keys()) delete k.sprite; sprites.clear(); spritePx = 0; }
 }
 /** A new frame on the screen: frame images may be made again. */
-export function spriteFrame() { builds = 0; }
+export function spriteFrame() { spent = 0; }
 /** For /fps copy: how many frame images are kept, and their pixels. */
 export function spriteStats() { return { on: charSprites, n: sprites.size, px: spritePx }; }
-function partsSprite(parts, assets) {
-  let s = parts.sprite;
-  if (s) { sprites.delete(parts); sprites.set(parts, s); return s; }
-  if (builds >= SPRITE_BUILDS) return null;
+/**
+ * Makes a kept frame's image if it can be made now. 'made': it is there. 'wait': this frame's time for making them
+ * (SPRITE_MS: the first draw of each part costs, so they are rationed by time, not number) is used up; `force` makes
+ * it anyway, as while a map loads and nothing is on screen. 'missing': some of its art hasn't loaded. 'no': not a
+ * frame that is kept (an expression, a rider), too big, or /fps sprites is off.
+ */
+export function makeSprite(parts, assets, force = false) {
+  if (!charSprites || !parts?.still) return 'no';
+  if (parts.sprite) return 'made';
+  if (!force && spent >= SPRITE_MS) return 'wait';
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const p of parts) {
     const img = assets.image(p.node);
-    if (!img) return null;   // not all in yet: part by part until they are
+    if (!img) return 'missing';
     x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + img.width); y1 = Math.max(y1, p.y + img.height);
   }
   const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
-  if (!(w > 0 && h > 0) || w * h > 1e6) return null;
-  builds++;
+  if (!(w > 0 && h > 0) || w * h > 1e6) return 'no';
+  const t0 = performance.now();
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const o = c.getContext('2d');
   for (const p of parts) o.drawImage(assets.image(p.node), p.x - x0, p.y - y0);
-  s = { c, x: x0, y: y0, px: w * h };
+  const s = { c, x: x0, y: y0, px: w * h };
   parts.sprite = s; sprites.set(parts, s); spritePx += s.px;
   while (spritePx > SPRITE_PX && sprites.size > 1) {
     const [k, v] = sprites.entries().next().value;
     sprites.delete(k); delete k.sprite; spritePx -= v.px;
   }
-  return s;
+  spent += performance.now() - t0;
+  return 'made';
+}
+function partsSprite(parts, assets) {
+  const s = parts.sprite;
+  if (s) { sprites.delete(parts); sprites.set(parts, s); return s; }   // (used: to the back of the queue to go)
+  return makeSprite(parts, assets) === 'made' ? parts.sprite : null;
 }
 
 /** Every canvas this look can draw for the given actions, for preloading. */

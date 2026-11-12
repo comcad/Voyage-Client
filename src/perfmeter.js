@@ -31,6 +31,7 @@ import { spriteStats } from './character.js';
  * details. A part that is big in one hitch and small in the next points at the browser collecting garbage then.
  */
 const SPAN = 2000, BARS = 180, W = 236, PAD = 6, HITCH_SPAN = 30000, LONG_SPAN = 60000;
+const RATES = [24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];   // displays' refresh rates (Hz)
 /** A frame's parts (update or drawing), biggest first: "chars 25.1, fx 6.2, ...", those of at least `min` ms. */
 const topParts = (parts, n = 4, min = 0.5) => Object.entries(parts || {}).filter(([, v]) => v >= min).sort((x, y) => y[1] - x[1]).slice(0, n)
   .map(([k, v]) => `${k} ${v.toFixed(1)}`).join(', ') || 'little';
@@ -99,7 +100,10 @@ export class PerfMeter {
     this.offeredMs ??= [];
     this.offeredMs.push({ t: now, ms: offered });
     while (this.offeredMs.length && now - this.offeredMs[0].t > 60000) this.offeredMs.shift();
-    const refresh = Math.min(...this.offeredMs.map((o) => o.ms));
+    let refresh = Math.min(...this.offeredMs.map((o) => o.ms));
+    // (the quickest of a minute's reads runs a few percent fast: 63Hz on a 60Hz display. To the rate displays have.)
+    const rate = RATES.find((r) => Math.abs(1000 / refresh - r) / r < 0.06);
+    if (rate) refresh = 1000 / rate;
     this.refreshMs = refresh;
     const sorted = [...recentGaps].sort((a, b) => a - b), avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0);
     this.typicalMs = sorted.length ? sorted[sorted.length >> 1] : refresh;   // how long frames have lately taken

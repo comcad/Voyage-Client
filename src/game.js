@@ -1,6 +1,6 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
-import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame } from './character.js';
+import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame, makeSprite } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
@@ -91,6 +91,7 @@ import { GuildBBSWin } from './ui/guildbbs.js';
 import { FredrickWin } from './ui/fredrick.js';
 import { WitchTowerScore, GuildBossField } from './guildboss.js';
 import { FramePace } from './framepace.js';
+import { snapToPixels } from './snapdraw.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -785,34 +786,6 @@ const GUILD_ERROR = 'The guild request has not been accepted, due to unknown rea
 const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
   14: 'You cannot add a GM to your buddy list.', 15: 'That character is not registered.' };
 
-/**
- * At a fractional zoom (a high-density screen draws the 800x600 game at, say, 1.6x) pieces that meet in game
- * pixels meet on fractional screen pixels, and the browser softens each image's edge there: faint lines between
- * floor tiles and background pieces that shimmer as the camera moves. So every unrotated image is drawn with its
- * edges rounded to whole screen pixels; two pieces that touch round to the same edge and close up.
- */
-function snapToPixels(ctx) {
-  const draw = ctx.drawImage.bind(ctx);
-  ctx.drawImage = function (img, ...a) {
-    const m = ctx.getTransform();
-    if (m.b || m.c || (m.a === 1 && m.d === 1 && m.e === Math.round(m.e) && m.f === Math.round(m.f))) return draw(img, ...a);
-    let sx = 0, sy = 0, sw = img.width, sh = img.height, dx, dy, dw, dh;
-    if (a.length === 2) { [dx, dy] = a; dw = sw; dh = sh; }
-    else if (a.length === 4) [dx, dy, dw, dh] = a;
-    else [sx, sy, sw, sh, dx, dy, dw, dh] = a;
-    // the rectangle's corners on screen, rounded; a mirrored draw (negative scale) just swaps the ends
-    let x0 = Math.round(m.a * dx + m.e), x1 = Math.round(m.a * (dx + dw) + m.e);
-    let y0 = Math.round(m.d * dy + m.f), y1 = Math.round(m.d * (dy + dh) + m.f);
-    ctx.save();
-    ctx.setTransform(Math.sign(m.a) || 1, 0, 0, Math.sign(m.d) || 1, 0, 0);
-    if (m.a < 0) { x0 = -x0; x1 = -x1; }
-    if (m.d < 0) { y0 = -y0; y1 = -y1; }
-    draw(img, sx, sy, sw, sh, x0, y0, x1 - x0, y1 - y0);
-    ctx.restore();
-  };
-  return ctx;
-}
-
 /** This computer's wall-clock time, as ms whose UTC fields read as the local time. */
 const localWallMs = () => Date.now() - new Date().getTimezoneOffset() * 60000;
 
@@ -840,8 +813,9 @@ const mobDepth = (e) => {
 export class Game {
   /** net: ChannelSession when playing online, null for the offline map viewer. */
   constructor(canvas, assets, look, hooks = {}, net = null) {
-    this.canvas = canvas; this.ctx = snapToPixels(canvas.getContext('2d'));
-    canvas.width = VIEW_W; canvas.height = VIEW_H;
+    // (opaque: nothing shows through the game, so the browser needn't blend it with the page behind)
+    this.canvas = canvas; this.ctx = snapToPixels(canvas.getContext('2d', { alpha: false }));
+    canvas.width = VIEW_W; canvas.height = VIEW_H; this.ctx.resync?.();   // (a resized canvas starts its context over)
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
@@ -4551,8 +4525,11 @@ export class Game {
     await look.load();
     // they show once the pose they arrive in is in; how they move about loads behind it
     const st = STANCE_NAMES[d.stance >> 1];
-    const first = [look.standAction(), { jump: 'jump', ladder: 'ladder', rope: 'rope', prone: 'prone', sit: 'sit', fly: 'fly', alert: 'alert', dead: 'dead' }[st]];
-    await this.assets.preload(lookCanvases(look, first.filter((p) => p && look.has(p))));
+    const first = [look.standAction(), { jump: 'jump', ladder: 'ladder', rope: 'rope', prone: 'prone', sit: 'sit', fly: 'fly', alert: 'alert', dead: 'dead' }[st]].filter((p) => p && look.has(p));
+    await this.assets.preload(lookCanvases(look, first));
+    // and whole: the frame they arrive in is put together (character.js makeSprite) before they are added, so nobody
+    // goes up part by part
+    for (const act of first) await this.spriteMade(look.compose(act, 0));
     if (!map || this.map !== map || !this.spawning?.has(d.id)) return;   // gone from the map (or you left it) while their look loaded
     this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']), null, 1);
     const rp = new RemotePlayer(d, look);
@@ -4565,16 +4542,59 @@ export class Game {
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     if (d.hearts) this.setHearts(rp, d.hearts);
     this.others.set(d.id, rp);
+    this.warmLook(rp);
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
     for (const p of d.pets || []) this.addPet({ owner: d.id, ...p });
   }
 
+  /**
+   * Waits until a frame's image is made (character.js makeSprite): at once while a map loads (nothing is on screen),
+   * otherwise in its turn of each frame's time for it. One whose art failed to load, or that isn't kept, doesn't wait.
+   */
+  async spriteMade(parts) {
+    for (let i = 0; i < 120; i++) {
+      if (makeSprite(parts, this.assets, this.loading) !== 'wait') return;
+      await new Promise((res) => requestAnimationFrame(res));
+    }
+  }
+  /** A player's standing, walking and jumping frames, to be made ahead of their first use (warmSprites). */
+  warmLook(rp) {
+    const look = rp.look, list = (this.warm ??= []);
+    for (const act of new Set([look.standAction(), look.walkAction(), 'jump'])) {
+      if (look.has(act)) for (let f = 0; f < look.frameCount(act); f++) list.push({ rp, look, act, f });
+    }
+  }
+  /**
+   * With what is left of this frame's time for making frame images, makes the ones waiting (warmLook), so a player
+   * who starts walking already has the frames. One whose art isn't in yet goes to the back.
+   */
+  warmSprites() {
+    const list = this.warm;
+    if (!list?.length) return;
+    for (let n = Math.min(list.length, 48); n > 0; n--) {
+      const w = list.shift();
+      if (this.others.get(w.rp.id) !== w.rp || w.rp.look !== w.look) continue;   // gone, or dressed differently since
+      const made = makeSprite(w.look.compose(w.act, w.f), this.assets);
+      if (made === 'wait') { list.unshift(w); return; }
+      if (made === 'missing') list.push(w);
+    }
+  }
+
   async updateOtherLook(id, lookData) {
     const rp = this.others.get(id); if (!rp) return;
+    const seq = (rp.lookSeq = (rp.lookSeq || 0) + 1);
     const equips = this.fieldMode?.teamLook?.(lookData.gender, rp.team) || lookEquipIds(lookData);   // a team outfit stays on
     const look = new CharacterLook(this.assets, { skin: lookData.skin, face: lookData.face, hair: lookData.hair, gender: lookData.gender, equips });
     await look.load();
+    // the new look's art for the pose they are in (and standing) is in, and that frame put together, before it takes
+    // the old one's place: swapped in at once, they went blank and came back part by part
+    const now = [rp.action, look.standAction()].filter((a, i, l) => a && look.has(a) && l.indexOf(a) === i);
+    await this.assets.preload(lookCanvases(look, now));
+    for (const act of now) await this.spriteMade(look.compose(act, 0));
+    if (this.others.get(id) !== rp || rp.lookSeq !== seq) return;   // gone, or changed again since
     rp.look = look; rp.lookData = lookData;
+    this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']), null, 1);
+    this.warmLook(rp);
   }
 
   onChat(c) {
@@ -10207,7 +10227,7 @@ export class Game {
     // their neighbours, and which ones changes as the view moves (lines crawling over the picture)
     const k = want < 1.25 ? 1 : Math.min(4, Math.max(2, Math.round(want)));
     const w = VIEW_W * k, h = VIEW_H * k;
-    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; this.ctx.resync?.(); }   // (a resized canvas starts its context over)
     this.ctx.setTransform(k, 0, 0, k, 0, 0);
     this.ctx.imageSmoothingEnabled = false;
     setPixelScale(k);
@@ -10352,11 +10372,13 @@ export class Game {
         if (inShop(p)) { this.drawChar(ctx, cam, p, this.look, true); this.questAlert?.draw(ctx, cam); }
       }
       lap('other');
-      for (const c of chars) if (c.page === l) c.draw();
+      for (const c of chars) if (c.page === l) this.drawOrdered(ctx, cam, c);
       lap('chars');
       if (l === playerLayer) this.drawMists(ctx, cam);   // over the characters and monsters standing in it
       lap('other');
     }
+    this.warmSprites();
+    lap('chars');
     for (const e of mobs) if (e.flying && !e.doomArt && this.lifeInView(e)) e.draw(ctx, cam, this.assets);   // flyers go over every layer
     for (const sm of this.summons.values()) if (this.inView(sm.x, sm.y, 350, 450, 200)) sm.draw(ctx, cam);
     lap('mobs');
@@ -10443,8 +10465,10 @@ export class Game {
    * its page, zMass 0), kept while in the air; page 7 before it has stood anywhere.
    */
   zFrom(fhId, last) {
-    if (fhId > 0) { const f = this.map?.fh?.get(fhId); if (f) return { page: f.layer, zMass: f.zMass }; }
-    if (fhId < 0) { const l = this.map?.ladders?.find((x) => x.id === -fhId); if (l) return { page: Number(l.page) || 0, zMass: 0 }; }
+    // (the same place as last time is the same object: this is asked for every character every frame)
+    const same = (page, zMass) => (last && last.page === page && last.zMass === zMass ? last : { page, zMass });
+    if (fhId > 0) { const f = this.map?.fh?.get(fhId); if (f) return same(f.layer, f.zMass); }
+    if (fhId < 0) { const l = this.map?.ladders?.find((x) => x.id === -fhId); if (l) return same(Number(l.page) || 0, 0); }
     return last || { page: 7, zMass: 0 };
   }
   /**
@@ -10452,22 +10476,34 @@ export class Game {
    * you and your pets, in that order. A pet up a ladder on its owner's back goes on right after them.
    */
   drawOrder(ctx, cam, inShop) {
-    const p = this.player, list = [];
-    const put = (z, slot, draw) => list.push({ page: z.page, k: -10 * z.zMass + slot, draw });
-    for (const e of this.map.life) if (e.kind === 'Npc' && this.lifeInView(e)) put(e.fh ? { page: e.fh.layer, zMass: e.fh.zMass } : { page: 7, zMass: 0 }, 5, () => e.draw(ctx, cam, this.assets));
-    const onBack = (owner) => { for (const pet of this.pets.values()) if (pet.onBack && pet.owner === owner) pet.draw(ctx, cam); };
+    // (the list and its entries are kept from frame to frame, and say what to draw rather than carry a function for
+    // it: a crowd's made hundreds of objects and functions every frame, all to be collected)
+    const p = this.player, list = (this.orderList ??= []);
+    let n = 0;
+    const put = (page, zMass, slot, kind, ent) => { const o = (list[n] ??= {}); n++; o.page = page; o.k = -10 * zMass + slot; o.kind = kind; o.ent = ent; };
+    for (const e of this.map.life) if (e.kind === 'Npc' && this.lifeInView(e)) put(e.fh ? e.fh.layer : 7, e.fh ? e.fh.zMass : 0, 5, 0, e);
     for (const rp of this.others.values()) {
       rp.z = this.zFrom(rp.fhId, rp.z);
-      if (!inShop(rp) && this.inView(rp.x, rp.y, 350, 450, 200)) put(rp.z, 2, () => { this.drawChar(ctx, cam, rp, rp.look, false); this.drawDiseases(ctx, cam, rp, rp.diseases); this.drawHearts(ctx, cam, rp, this.frameDt); onBack(rp.id); });
+      if (!inShop(rp) && this.inView(rp.x, rp.y, 350, 450, 200)) put(rp.z.page, rp.z.zMass, 2, 1, rp);
     }
     for (const pet of this.pets.values()) {
       pet.z = pet.mine ? (pet.fh ? { page: pet.fh.layer, zMass: pet.fh.zMass } : pet.z || { page: 7, zMass: 0 }) : this.zFrom(pet.fhId, pet.z);
-      if (!pet.onBack && this.inView(pet.x, pet.y, 200, 250, 120)) put(pet.z, pet.mine ? 8 : 3, () => pet.draw(ctx, cam));
+      if (!pet.onBack && this.inView(pet.x, pet.y, 200, 250, 120)) put(pet.z.page, pet.z.zMass, pet.mine ? 8 : 3, 2, pet);
     }
     this.playerZ = p.ladder ? { page: Number(p.ladder.page) || 0, zMass: 0 }
       : p.fh ? { page: p.fh.layer, zMass: p.fh.zMass } : this.playerZ || { page: 7, zMass: 0 };
-    if (!inShop(p)) put(this.playerZ, 7, () => { this.drawChar(ctx, cam, p, this.look, true); this.drawDiseases(ctx, cam); this.drawHearts(ctx, cam, p, this.frameDt); this.questAlert?.draw(ctx, cam); onBack(p.id); });
+    if (!inShop(p)) put(this.playerZ.page, this.playerZ.zMass, 7, 3, p);
+    list.length = n;
     return list.sort((a, b) => a.k - b.k);
+  }
+  /** One of drawOrder's (0 an NPC, 1 another player, 2 a pet, 3 you), with what is drawn along with it. */
+  drawOrdered(ctx, cam, o) {
+    const e = o.ent;
+    if (o.kind === 0) { e.draw(ctx, cam, this.assets); return; }
+    if (o.kind === 2) { e.draw(ctx, cam); return; }
+    if (o.kind === 1) { this.drawChar(ctx, cam, e, e.look, false); this.drawDiseases(ctx, cam, e, e.diseases); this.drawHearts(ctx, cam, e, this.frameDt); }
+    else { this.drawChar(ctx, cam, e, this.look, true); this.drawDiseases(ctx, cam); this.drawHearts(ctx, cam, e, this.frameDt); this.questAlert?.draw(ctx, cam); }
+    for (const pet of this.pets.values()) if (pet.onBack && pet.owner === e.id) pet.draw(ctx, cam);   // a pet up a ladder on their back
   }
 
   /**
@@ -10534,7 +10570,15 @@ export class Game {
     const seeThrough = local ? this.hidden() || this.gmHidden : ent.hidden;   // Dark Sight / Wind Walk / GM hide: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     const mirror = drawnRight(ent);
-    drawParts(ctx, this.assets, parts, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead);
+    // a frame whose image isn't made yet (its art still loading, or this frame's time for making them used up) doesn't
+    // go up half-drawn: the last frame of theirs that was whole stays until it is
+    let whole = parts;
+    if (parts.still) {
+      const made = makeSprite(parts, this.assets);
+      if (made === 'made' || made === 'no') ent.wholeParts = parts;
+      else if (ent.wholeParts?.sprite) whole = ent.wholeParts;
+    }
+    drawParts(ctx, this.assets, whole, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead);
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);

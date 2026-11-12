@@ -1589,19 +1589,35 @@ export function artTag(ctx, assets, N, text, x, y, font = TAG_FONT) {
   const w = assets.image(N.w), c = assets.image(N.c), e = assets.image(N.e);
   if (!w || !c || !e) return 0;
   x = snapPx(x); y = snapPx(y);
-  ctx.font = font;
-  const tw = Math.ceil(ctx.measureText(text).width), mid = Math.max(1, Math.ceil(tw / c.width)) * c.width;
-  const ox = (n, d) => n.origin?.[0] ?? d, oy = (n) => n.origin?.[1] ?? 0, wo = ox(N.w, w.width);
-  const cy = Math.max(oy(N.w), oy(N.c), oy(N.e));
-  const h = cy + Math.max(w.height - oy(N.w), c.height - oy(N.c), e.height - oy(N.e));
-  const left = x - Math.floor((wo + mid + e.width - ox(N.e, 0)) / 2);
-  ctx.drawImage(w, left, y + cy - oy(N.w));
-  for (let k = 0; k < mid; k += c.width) ctx.drawImage(c, left + wo + k, y + cy - oy(N.c));
-  ctx.drawImage(e, left + wo + mid - ox(N.e, 0), y + cy - oy(N.e));
-  ctx.fillStyle = argb(N.clr);
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText(text, left + wo + Math.floor((mid - tw) / 2), y + cy - 2 + 11);
-  return h;
+  // drawn once into a canvas of its own at the canvas's density and copied, as a plain name tag is (tagSprite)
+  const S = PIXEL_SCALE, key = `${S}|${(N._tid ??= ++artIds)}|${font}|${text}`;
+  let t = artSprites.get(key);
+  if (!t) {
+    tagMeasure ??= document.createElement('canvas').getContext('2d');
+    tagMeasure.font = font;
+    const tw = Math.ceil(tagMeasure.measureText(text).width), mid = Math.max(1, Math.ceil(tw / c.width)) * c.width;
+    const ox = (n, d) => n.origin?.[0] ?? d, oy = (n) => n.origin?.[1] ?? 0, wo = ox(N.w, w.width);
+    const cy = Math.max(oy(N.w), oy(N.c), oy(N.e));
+    const h = cy + Math.max(w.height - oy(N.w), c.height - oy(N.c), e.height - oy(N.e));
+    const span = wo + mid + e.width - ox(N.e, 0), W = Math.max(w.width, span);   // span: what is centred on x
+    const cv = document.createElement('canvas');
+    cv.width = W * S; cv.height = h * S;
+    const o = cv.getContext('2d');
+    o.scale(S, S); o.imageSmoothingEnabled = false;   // as the game's canvas draws
+    o.drawImage(w, 0, cy - oy(N.w));
+    for (let k = 0; k < mid; k += c.width) o.drawImage(c, wo + k, cy - oy(N.c));
+    o.drawImage(e, wo + mid - ox(N.e, 0), cy - oy(N.e));
+    o.font = font; o.fillStyle = argb(N.clr);
+    o.textAlign = 'left'; o.textBaseline = 'alphabetic';
+    o.fillText(text, wo + Math.floor((mid - tw) / 2), cy - 2 + 11);
+    t = { c: cv, W, h, span };
+    if (artSprites.size >= 600) artSprites.delete(artSprites.keys().next().value);
+    artSprites.set(key, t);
+  }
+  ctx.drawImage(t.c, x - Math.floor(t.span / 2), y, t.W, t.h);
+  return t.h;
 }
+const artSprites = new Map();
+let artIds = 0;
 
 export { PHYS };
