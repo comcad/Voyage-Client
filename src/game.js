@@ -92,6 +92,7 @@ import { FredrickWin } from './ui/fredrick.js';
 import { WitchTowerScore, GuildBossField } from './guildboss.js';
 import { FramePace } from './framepace.js';
 import { snapToPixels } from './snapdraw.js';
+import { BUILD } from './build.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -6048,6 +6049,18 @@ export class Game {
     }
   }
   start() {
+    // the server has a newer build than this page is running (it keeps the one it loaded until it is reloaded): said
+    // once in the chat, looked for every minute and when the tab comes back
+    const newer = async () => {
+      if (this.newBuild || BUILD === 'dev' || document.hidden || !this.hud?.message) return;
+      try {
+        const got = await fetch('/build.json', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null));
+        if (!got?.id || got.id === BUILD || this.newBuild) return;
+        this.newBuild = got.id;
+        this.hud.message('Voyage has been updated. Reload the page to get the new version.', CHAT_COLORS.notice);
+      } catch { /* offline, or a server without it: nothing to say */ }
+    };
+    if (!this.buildWatch) { this.buildWatch = setInterval(newer, 60000); document.addEventListener('visibilitychange', newer); }
     let last = performance.now();
     let next = 0;
     const pace = new FramePace();   // the game moves by whole refreshes, not the browser's wobbly frame times
