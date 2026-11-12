@@ -9,6 +9,7 @@ import * as esbuild from 'esbuild';
 import pkg from 'javascript-obfuscator';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { ConfigMgr, confDir } from './configmgr.mjs';
 import { ServerConfigs } from './serverconfigs.mjs';
@@ -18,8 +19,22 @@ const JavaScriptObfuscator = pkg.default || pkg;
 
 export const BUNDLE_PATH = path.join(__dirname, 'public', 'Voyage.js');
 
+/**
+ * What a bundle is called: the commit it was built from (when this is a git checkout) and when, to the minute (UTC):
+ * "578fb85-202611120403". The bundle carries it (src/build.js), the page asks for the script by it so a reload never
+ * gets an older one from the browser's cache, and /fps copy prints it.
+ */
+function buildId() {
+  let commit = '';
+  try { commit = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim(); } catch { /* not a checkout */ }
+  const at = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+  return commit ? `${commit}-${at}` : at;
+}
+
+/** Builds the bundle; returns its id. */
 export async function build(obfuscate = false) {
   console.log(`Building client bundle (Build.Obfuscate = ${obfuscate})...`);
+  const id = buildId();
 
   await esbuild.build({
     entryPoints: [path.join(__dirname, 'src/main.js')],
@@ -27,6 +42,7 @@ export async function build(obfuscate = false) {
     minify: obfuscate,
     sourcemap: false,
     outfile: BUNDLE_PATH,
+    define: { __VOYAGE_BUILD__: JSON.stringify(id) },
   });
 
   const bundledCode = fs.readFileSync(BUNDLE_PATH, 'utf8');
@@ -48,6 +64,8 @@ export async function build(obfuscate = false) {
   } else {
     console.log('Obfuscation skipped (Build.Obfuscate is false).');
   }
+  console.log(`Build ${id}.`);
+  return id;
 }
 
 // Auto-run when invoked directly (node build.mjs) — fails the process on error.

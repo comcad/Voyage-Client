@@ -1,6 +1,7 @@
 import { VIEW_W, PIXEL_SCALE } from './view.js';
 import { settings } from './settings.js';
 import { spriteStats } from './character.js';
+import { BUILD } from './build.js';
 
 /**
  * The /fps meter (a Voyage tool, not part of the original client), over the last two seconds:
@@ -177,7 +178,7 @@ export class PerfMeter {
     } catch { /* ignore */ }
     let px = 0, n = 0;
     for (const e of a?.imgCache?.values() || []) if (e.ready && e.img) { n++; px += (e.img.naturalWidth || 0) * (e.img.naturalHeight || 0); }
-    out.push(`Voyage /fps report ${new Date().toISOString()}`);
+    out.push(`Voyage /fps report ${new Date().toISOString()}  build ${BUILD}${game.newBuild ? ` (the server has ${game.newBuild}: reload the page)` : ''}`);
     out.push(`browser: ${navigator.userAgent}`);
     out.push(`gpu: ${gpu}`);
     out.push(`window ${c.clientWidth}x${c.clientHeight} @${window.devicePixelRatio || 1}x  canvas ${c.width}x${c.height} (${PIXEL_SCALE}x)  view ${game.cam.w}x${game.cam.h}  display ${Math.round(s.refresh)} Hz`);

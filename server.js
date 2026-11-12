@@ -24,8 +24,9 @@ if (ConfigMgr.created) console.log(`Created ${ConfigMgr.files[0]} from ${ConfigM
 for (const f of ConfigMgr.files) console.log(`Loaded config file ${f}`);
 
 // Build the client bundle on boot (respects Build.Obfuscate). Fail-fast on error.
+let BUILD_ID = '';
 try {
-  await buildClient(ServerConfigs.OBFUSCATE);
+  BUILD_ID = await buildClient(ServerConfigs.OBFUSCATE);
 } catch (err) {
   console.error('CRITICAL BUILD ERROR:', err);
 }
@@ -41,7 +42,20 @@ const app = express();
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false, dotfiles: 'allow' }));
 app.get('/servers.json', (req, res) => res.json(Object.keys(SERVERS)));
 app.get('/config.json', (req, res) => res.json(CLIENT_CONFIG));
-app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html' }));
+// Which build the server has now: a page still running an older one tells its player to reload.
+app.get('/build.json', (req, res) => res.set('Cache-Control', 'no-store').json({ id: BUILD_ID }));
+// The page is never kept by the browser and asks for the script and the stylesheet by the build's id, so a reload
+// always gets the current build (Safari is slow to let go of a module script it has).
+const INDEX = path.join(__dirname, 'public', 'index.html');
+app.get(['/', '/index.html'], (req, res) => {
+  let html;
+  try { html = fs.readFileSync(INDEX, 'utf8'); } catch { res.status(404).end(); return; }
+  const v = encodeURIComponent(BUILD_ID);
+  if (v) html = html.replace('src="/Voyage.js"', `src="/Voyage.js?v=${v}"`).replace('href="/style.css"', `href="/style.css?v=${v}"`);
+  res.set('Cache-Control', 'no-store').type('html').send(html);
+});
+// (asked for by build id, a file never changes: the browser may keep it)
+app.use(express.static(path.join(__dirname, 'public'), { index: false, setHeaders: (res) => { if (res.req.query?.v) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); } }));
 
 const server = http.createServer(app);
 
