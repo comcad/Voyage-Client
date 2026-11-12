@@ -90,6 +90,7 @@ import { EnergyBarWin } from './ui/energybar.js';
 import { GuildBBSWin } from './ui/guildbbs.js';
 import { FredrickWin } from './ui/fredrick.js';
 import { WitchTowerScore, GuildBossField } from './guildboss.js';
+import { FramePace } from './framepace.js';
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
@@ -6022,9 +6023,11 @@ export class Game {
   start() {
     let last = performance.now();
     let next = 0;
+    const pace = new FramePace();   // the game moves by whole refreshes, not the browser's wobbly frame times
     const loop = (t) => {
       // the next frame is booked first: an error in one frame must never stop the game for good
       requestAnimationFrame(loop);
+      pace.offer(t);
       const meter = settings.fpsMeter ? (this.perf ??= new PerfMeter()) : null;
       meter?.offer(t);
       // System Option FRAME RATE: every screen refresh (VSync), or held to 60 / 30 a second on the refresh's beat
@@ -6035,7 +6038,7 @@ export class Game {
         if (t < next - cap * 0.4) return;
         next += cap;
       }
-      const gap = (t - last) / 1000, dt = Math.min(gap, 0.05);
+      const gap = (t - last) / 1000, dt = Math.min(pace.step(t - last) / 1000, 0.05);
       last = t;
       if (this.map && !this.loading) {
         try {

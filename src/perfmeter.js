@@ -13,7 +13,10 @@ import { settings } from './settings.js';
  * - the game's own update and draw times. These are JavaScript only: the graphics card's share of a frame doesn't
  *   show here, it shows as late frames and a low FPS while these stay small;
  * - the canvas, its scale and the view; how many background buffers a frame draws, and their size;
- * - a graph of the last 180 frame times, with the 60 and 30 fps lines.
+ * - a graph of the last 180 frame times, with the 60 and 30 fps lines: yellow a frame that missed a refresh (more
+ *   than 1.5 refreshes after the one before, as a late frame above), red one that missed two or more. A frame a few
+ *   ms off the refresh stays green: it still reached the screen on the refresh, and the game moves by whole
+ *   refreshes (framepace.js).
  * The numbers are worked out four times a second; the graph moves every frame.
  *
  * `/fps copy` copies a report of the hitches: for each, what happened between the two frames (images that finished
@@ -119,9 +122,10 @@ export class PerfMeter {
     const gx = x + PAD, gy = y + PAD + lines.length * 13 + 2, gw = W - PAD * 2, scale = gh / 50;
     ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(gx, gy, gw, gh);
     const f = this.frames, n = Math.min(BARS, f.length - 1), bw = gw / BARS;
+    const want = Math.max(settings.fps === 60 || settings.fps === 30 ? 1000 / settings.fps : 0, this.refreshMs || 16.7);
     for (let i = 0; i < n; i++) {
       const g = f[f.length - n + i].t - f[f.length - n + i - 1].t;
-      ctx.fillStyle = g > 34 ? '#ff6060' : g > 18 ? '#ffcc66' : '#66dd66';
+      ctx.fillStyle = g > want * 2.5 ? '#ff6060' : g > want * 1.5 ? '#ffcc66' : '#66dd66';
       const bh = Math.min(gh, g * scale);
       ctx.fillRect(gx + (BARS - n + i) * bw, gy + gh - bh, Math.max(1, bw - 0.2), bh);
     }
