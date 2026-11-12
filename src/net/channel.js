@@ -799,10 +799,10 @@ export class ChannelSession {
     on(S.NOTIFY_MARRIAGE, (r) => { const type = r.ubyte(); this.emit('notifyMarriage', { type, name: r.string() }); });
     // Hired Merchants on the map (spawnHiredMerchantBox / updateHiredMerchantBox / removeHiredMerchantBox)
     on(S.SPAWN_HIRED_MERCHANT, (r) => {
-      const owner = r.int(), itemId = r.int(), x = r.short(), y = r.short(); r.short();
+      const owner = r.int(), itemId = r.int(), x = r.short(), y = r.short(), fh = r.short();   // fh: the floor it stands on (0 from a server that doesn't say)
       const name = r.string(); r.ubyte();
       const oid = r.int(), title = r.string(), permit = r.ubyte(), players = r.ubyte(), max = r.ubyte();
-      this.emit('merchantSpawn', { owner, itemId, x, y, name, oid, title, permit, players, max });
+      this.emit('merchantSpawn', { owner, itemId, x, y, fh, name, oid, title, permit, players, max });
     });
     on(S.UPDATE_HIRED_MERCHANT, (r) => {
       const owner = r.int(); r.ubyte();
