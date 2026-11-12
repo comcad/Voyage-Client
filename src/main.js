@@ -28,6 +28,9 @@ addEventListener('keydown', (e) => {
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+// ?b=: the address the game comes back by after a disconnect, so the browser has to ask the server for the page
+// (Game.leave). It has done its work once the page is here: taken off the address again.
+if (params.has('b')) { params.delete('b'); history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : '') + location.hash); }
 
 function loadingHooks() {
   const overlay = $('loading-overlay');

@@ -392,7 +392,7 @@ export function mountCanvases(mount) {
  * whole: snap to the canvas's pixel grid (crisp: whole game pixels at scale 1, finer above it); false lets slow drifts
  * like a ghost's circle move freely.
  */
-export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true) {
+export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whole = true, held = null) {
   ctx.save();
   ctx.translate(whole ? snapPx(x) : x, whole ? snapPx(y) : y);
   if (facingRight) ctx.scale(-1, 1);
@@ -400,7 +400,8 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
   if (parts.flip) ctx.scale(-1, 1);
   if (parts.rotate) ctx.rotate((parts.rotate * Math.PI) / 180);
   if (alpha !== 1) ctx.globalAlpha = alpha;
-  const sprite = charSprites && parts.still ? partsSprite(parts, assets) : null;
+  // held: the frame's own image, kept by whoever is drawn (it may have gone from the kept ones since)
+  const sprite = held || (charSprites && parts.still ? partsSprite(parts, assets) : null);
   if (sprite) ctx.drawImage(sprite.c, sprite.x, sprite.y);
   else {
     for (const p of parts) {
@@ -420,34 +421,37 @@ export function drawParts(ctx, assets, parts, x, y, facingRight, alpha = 1, whol
  * whose frame isn't made yet keeps its last one up meanwhile (Game.drawChar).
  */
 export let charSprites = true;
-const SPRITE_PX = 24e6, SPRITE_MS = 3;
+const SPRITE_PX = 24e6, SPRITE_MS = 3, ARRIVAL_MS = 4;
 const sprites = new Map();   // parts -> sprite, the longest unused first
-let spritePx = 0, spent = 0;   // spent: ms gone on making frame images this frame
+let spritePx = 0, spent = 0, arriving = 0;   // ms gone this frame on making frame images: for frames drawn, for arrivals
 /** /fps sprites: drawn from one image a frame (on) or part by part. */
 export function setCharSprites(on) {
   charSprites = !!on;
   if (!charSprites) { for (const k of sprites.keys()) delete k.sprite; sprites.clear(); spritePx = 0; }
 }
 /** A new frame on the screen: frame images may be made again. */
-export function spriteFrame() { spent = 0; }
+export function spriteFrame() { spent = 0; arriving = 0; }
 /** For /fps copy: how many frame images are kept, and their pixels. */
 export function spriteStats() { return { on: charSprites, n: sprites.size, px: spritePx }; }
 /**
- * Makes a kept frame's image if it can be made now. 'made': it is there. 'wait': this frame's time for making them
- * (SPRITE_MS: the first draw of each part costs, so they are rationed by time, not number) is used up; `force` makes
- * it anyway, as while a map loads and nothing is on screen. 'missing': some of its art hasn't loaded. 'no': not a
- * frame that is kept (an expression, a rider), too big, or /fps sprites is off.
+ * Makes a kept frame's image if it can be made now. 'made': it is there. 'missing': some of its art hasn't loaded
+ * (every part is asked for, so what is wanted on screen now loads first). 'wait': this frame's time for making them
+ * is used up (the first draw of each part costs, so they are rationed by time, not number): SPRITE_MS for frames as
+ * they are drawn, and ARRIVAL_MS of its own for mode 'arrival' (someone waiting to be added: they don't queue behind
+ * what is drawn); mode 'force' makes it anyway, as while a map loads and nothing is on screen. 'no': not a frame that
+ * is kept (an expression, a rider), too big, or /fps sprites is off.
  */
-export function makeSprite(parts, assets, force = false) {
+export function makeSprite(parts, assets, mode = '') {
   if (!charSprites || !parts?.still) return 'no';
   if (parts.sprite) return 'made';
-  if (!force && spent >= SPRITE_MS) return 'wait';
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, missing = false;
   for (const p of parts) {
     const img = assets.image(p.node);
-    if (!img) return 'missing';
+    if (!img) { missing = true; continue; }
     x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x + img.width); y1 = Math.max(y1, p.y + img.height);
   }
+  if (missing) return 'missing';
+  if (mode !== 'force' && (mode === 'arrival' ? arriving >= ARRIVAL_MS : spent >= SPRITE_MS)) return 'wait';
   const w = Math.ceil(x1 - x0), h = Math.ceil(y1 - y0);
   if (!(w > 0 && h > 0) || w * h > 1e6) return 'no';
   const t0 = performance.now();
@@ -461,7 +465,7 @@ export function makeSprite(parts, assets, force = false) {
     const [k, v] = sprites.entries().next().value;
     sprites.delete(k); delete k.sprite; spritePx -= v.px;
   }
-  spent += performance.now() - t0;
+  if (mode === 'arrival') arriving += performance.now() - t0; else spent += performance.now() - t0;
   return 'made';
 }
 function partsSprite(parts, assets) {

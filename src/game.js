@@ -1039,8 +1039,22 @@ export class Game {
     if (this.fieldBgm) music.play(this.fieldBgm, { fadeOut: 1000, fadeIn: 1000, force: true });
     else music.play(this.map?.info?.bgm);
   }
-  /** Back to the login screen, without the leave-page warning. */
-  leave() { this.leaving = true; location.reload(); }
+  /**
+   * Back to the login screen, without the leave-page warning. After the server was restarted with a new build, a plain
+   * reload could come back with the page and script the browser had kept (Safari, three builds running), so: wait
+   * until the server answers again (up to 30s), then go to the page by an address the browser has never had (?b=),
+   * which it has to ask the server for.
+   */
+  async leave() {
+    if (this.leaving === 'now') return;
+    this.leaving = 'now';
+    for (let i = 0; i < 60; i++) {
+      try { await fetch('/build.json', { cache: 'no-store' }); break; } catch { await new Promise((res) => setTimeout(res, 500)); }   // (any answer: it is up)
+    }
+    const to = new URL(location.href);
+    to.searchParams.set('b', Date.now().toString(36));
+    location.replace(to);
+  }
   enterCashShop() { if (this.net && !this.inCashShop) this.net.enterCashShop(); }
   /**
    * The status bar's MTS button: ENTER_MTS, one request at a time (500ms apart, none waiting for its answer), and not
@@ -4542,6 +4556,8 @@ export class Game {
     if (rp.chair) this.chairArt(rp.chair);
     if (d.itemEffect) this.setItemEffect(rp, d.itemEffect);
     if (d.hearts) this.setHearts(rp, d.hearts);
+    const arrived = look.compose(first[first.length - 1], 0);
+    if (arrived.sprite) { rp.wholeParts = arrived; rp.wholeSprite = arrived.sprite; }   // what is up until any other frame is ready
     this.others.set(d.id, rp);
     this.warmLook(rp);
     if (d.berserk) this.setBerserk(rp, true);   // already berserk when they appear
@@ -4550,11 +4566,11 @@ export class Game {
 
   /**
    * Waits until a frame's image is made (character.js makeSprite): at once while a map loads (nothing is on screen),
-   * otherwise in its turn of each frame's time for it. One whose art failed to load, or that isn't kept, doesn't wait.
+   * otherwise within each frame's time for arrivals. One whose art failed to load, or that isn't kept, doesn't wait.
    */
   async spriteMade(parts) {
     for (let i = 0; i < 120; i++) {
-      if (makeSprite(parts, this.assets, this.loading) !== 'wait') return;
+      if (makeSprite(parts, this.assets, this.loading ? 'force' : 'arrival') !== 'wait') return;
       await new Promise((res) => requestAnimationFrame(res));
     }
   }
@@ -10585,13 +10601,15 @@ export class Game {
     const mirror = drawnRight(ent);
     // a frame whose image isn't made yet (its art still loading, or this frame's time for making them used up) doesn't
     // go up half-drawn: the last frame of theirs that was whole stays until it is
-    let whole = parts;
+    // (they keep that frame's image themselves: it may be let go from the kept ones meanwhile, and nobody is ever to
+    // go unseen because their next frame isn't ready)
+    let whole = parts, held = null;
     if (parts.still) {
       const made = makeSprite(parts, this.assets);
-      if (made === 'made' || made === 'no') ent.wholeParts = parts;
-      else if (ent.wholeParts?.sprite) whole = ent.wholeParts;
+      if (made === 'made') { ent.wholeParts = parts; ent.wholeSprite = parts.sprite; }
+      else if (made !== 'no' && ent.wholeSprite) { whole = ent.wholeParts; held = ent.wholeSprite; }
     }
-    drawParts(ctx, this.assets, whole, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead);
+    drawParts(ctx, this.assets, whole, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead, held);
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
