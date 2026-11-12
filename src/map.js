@@ -1538,21 +1538,45 @@ const argb = (clr) => `#${((Number(clr) >>> 0) & 0xffffff).toString(16).padStart
  */
 export function nameTag(ctx, text, x, y, color = '#fff', { icon = 0, white = false } = {}) {
   x = snapPx(x); y = snapPx(y);   // on the canvas's grid, as the character it hangs under
-  ctx.font = white ? `bold ${TAG_FONT}` : TAG_FONT;
-  const w = Math.ceil(ctx.measureText(text).width) + 5, h = 16, left = x - Math.floor((w + icon) / 2), bx = left + icon;
+  const t = tagSprite(String(text), color, white), left = x - Math.floor((t.w + icon) / 2), bx = left + icon;
+  ctx.drawImage(t.c, bx, y, t.w, t.h);
+  return { left, h: t.h };
+}
+/**
+ * A name tag drawn once into a canvas of its own at the canvas's density, then copied: a crowd's names drawn afresh
+ * each frame (the font, a measure, the box and the text for every one) were most of the text the game drew. The
+ * oldest go once 1500 are kept.
+ */
+const tagSprites = new Map();
+let tagMeasure = null;
+function tagSprite(text, color, white) {
+  const S = PIXEL_SCALE, key = `${S}|${white ? 1 : 0}|${color}|${text}`;
+  let t = tagSprites.get(key);
+  if (t) return t;
+  const font = white ? `bold ${TAG_FONT}` : TAG_FONT;
+  tagMeasure ??= document.createElement('canvas').getContext('2d');
+  tagMeasure.font = font;
+  const w = Math.ceil(tagMeasure.measureText(text).width) + 5, h = 16;
+  const c = document.createElement('canvas');
+  c.width = w * S; c.height = h * S;
+  const o = c.getContext('2d');
+  o.scale(S, S);
   if (white) {
-    ctx.fillStyle = '#2c80ad';
-    ctx.fillRect(bx, y, w, 1); ctx.fillRect(bx, y + h - 1, w, 1); ctx.fillRect(bx, y + 1, 1, h - 2); ctx.fillRect(bx + w - 1, y + 1, 1, h - 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.698)';
-    ctx.fillRect(bx + 1, y + 1, w - 2, h - 2);
+    o.fillStyle = '#2c80ad';
+    o.fillRect(0, 0, w, 1); o.fillRect(0, h - 1, w, 1); o.fillRect(0, 1, 1, h - 2); o.fillRect(w - 1, 1, 1, h - 2);
+    o.fillStyle = 'rgba(255,255,255,0.698)';
+    o.fillRect(1, 1, w - 2, h - 2);
   } else {
-    ctx.fillStyle = 'rgba(0,0,0,0.627)';
-    ctx.fillRect(bx + 1, y, w - 2, 1); ctx.fillRect(bx, y + 1, w, h - 2); ctx.fillRect(bx + 1, y + h - 1, w - 2, 1);
+    o.fillStyle = 'rgba(0,0,0,0.627)';
+    o.fillRect(1, 0, w - 2, 1); o.fillRect(0, 1, w, h - 2); o.fillRect(1, h - 1, w - 2, 1);
   }
-  ctx.fillStyle = white ? '#000' : color;
-  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
-  ctx.fillText(text, bx + 2, y + 11);
-  return { left, h };
+  o.font = font; o.fillStyle = white ? '#000' : color;
+  o.textAlign = 'left'; o.textBaseline = 'alphabetic';
+  o.fillText(text, 2, 11);
+  t = { c, w, h };
+  if (tagSprites.size >= 1500) tagSprites.delete(tagSprites.keys().next().value);
+  tagSprites.set(key, t);
+  return t;
 }
 
 /**

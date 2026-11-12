@@ -5,7 +5,7 @@ import { uiText, timeLeft, overlayText } from './ui/wzui.js';
 import { richText } from './ui/richtext.js';
 import { textRef } from './ui/dialogs.js';
 import { settings } from './settings.js';
-import { UI_W, VIEW_W, VIEW_H, snapPx } from './view.js';
+import { UI_W, VIEW_W, VIEW_H, snapPx, PIXEL_SCALE } from './view.js';
 import { config } from './config.js';
 
 /**
@@ -44,6 +44,10 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
 const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook/cardGet', 0x0f: 'ItemLevelUp' };
 
 /** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
+/** Room round a kept balloon's text box for its corners, edges and arrow (see WorldFx.drawBalloon). */
+const BALLOON_PAD = 32;
+let balloonIds = 0;
+
 function balloonLines(ctx, text, max) {
   const out = [];
   for (const para of String(text).split('\n')) {
@@ -289,11 +293,33 @@ export class WorldFx {
     if (!node && String(style).startsWith('pet/') && !this.CB?.pet?.[style.slice(4)]) style = 'pet/0';
     const B = node || String(style).split('/').reduce((n, k) => n?.[k], this.CB), im = (n) => this.assets.image(n);
     if (B && !B._loaded) { B._loaded = true; this.assets.preload(canvases(B)); }
-    const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
-    const tail = arrowDx !== null && B?.slArrow ? im(B.slArrow) : null;   // a hint's tail: slArrow, pointing down-left
-    if (Object.values(p).some((v) => !v)) return style !== '0' && style !== 'npc' ? this.drawBalloon(ctx, cam, ent, text) : false;   // a quote ring's, until its art is in
-    ctx.save();
-    ctx.font = '12px Arial, sans-serif';
+    // drawn once into a canvas of its own at the canvas's density and copied from then on: a crowd's balloons wrapped
+    // and drawn piece by piece every frame were much of the text the game drew. A rich one's text can name things
+    // still loading, so it is drawn afresh each time. The oldest go once 64 are kept.
+    const S = PIXEL_SCALE, key = !rich && B ? `${S}|${(B._bid ??= ++balloonIds)}|${wrap}|${width}|${arrowDx}|${text}` : null;
+    let sprite = key && this.balloons?.get(key);
+    if (!sprite) {
+      const p = Object.fromEntries(['nw', 'n', 'ne', 'w', 'c', 'e', 'sw', 's', 'se', 'arrow'].map((k) => [k, im(B?.[k])]));
+      const tail = arrowDx !== null && B?.slArrow ? im(B.slArrow) : null;   // a hint's tail: slArrow, pointing down-left
+      if (Object.values(p).some((v) => !v)) return style !== '0' && style !== 'npc' ? this.drawBalloon(ctx, cam, ent, text) : false;   // a quote ring's, until its art is in
+      sprite = this.balloonSprite(B, p, tail, text, { wrap, width, arrowDx, rich });
+      if (key) {
+        this.balloons ??= new Map();
+        if (this.balloons.size >= 64) this.balloons.delete(this.balloons.keys().next().value);
+        this.balloons.set(key, sprite);
+      }
+    }
+    const cx = snapPx(ent.x - cam.x), y0 = snapPx(ent.y - cam.y - 86 - sprite.H - 6);
+    ctx.drawImage(sprite.c, cx - sprite.cx, y0 - BALLOON_PAD, sprite.c.width / S, sprite.c.height / S);
+    return true;
+  }
+  /**
+   * A balloon drawn into a canvas of its own (drawBalloon keeps and copies it): its text box BALLOON_PAD in from the
+   * top-left, cx its centre, H its text's height.
+   */
+  balloonSprite(B, p, tail, text, { wrap, width, arrowDx, rich }) {
+    const m = (this.balloonMeasure ??= document.createElement('canvas').getContext('2d'));
+    m.font = '12px Arial, sans-serif';
     // centred 14px lines wrapped at 89px (a word too long for a line is broken up), in the balloon's clr; the arrow
     // laid over the bottom edge at the centre so the tail grows out of it
     // width: a fixed outer width (the server's hint width), the text wrapped inside the 9px sides
@@ -303,28 +329,22 @@ export class WorldFx {
     let lines, W, H;
     const lh = 14;
     if (rich) {
-      lines = richText(ctx, text, inner || wrap, textRef(this.game.windows), { base: color, size: 12, lineH: lh }).lines;
-      for (const l of lines) l.w = Math.max(0, ...l.runs.map((r) => { ctx.font = `${r.bold ? 'bold ' : ''}12px Arial, sans-serif`; return r.x + (r.t ? ctx.measureText(r.t).width : 0); }));
-      ctx.font = '12px Arial, sans-serif';
+      lines = richText(m, text, inner || wrap, textRef(this.game.windows), { base: color, size: 12, lineH: lh }).lines;
+      for (const l of lines) l.w = Math.max(0, ...l.runs.map((r) => { m.font = `${r.bold ? 'bold ' : ''}12px Arial, sans-serif`; return r.x + (r.t ? m.measureText(r.t).width : 0); }));
+      m.font = '12px Arial, sans-serif';
       W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => l.w))) - 2); H = lines.length * lh;
     } else {
-      lines = balloonLines(ctx, text, inner || wrap);
-      W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => ctx.measureText(l).width))) - 2); H = lines.length * lh;
+      lines = balloonLines(m, text, inner || wrap);
+      W = inner || Math.max(30, Math.ceil(Math.max(...lines.map((l) => m.measureText(l).width))) - 2); H = lines.length * lh;
     }
-    const cx = snapPx(ent.x - cam.x), x0 = cx - Math.round(W / 2), y0 = snapPx(ent.y - cam.y - 86 - H - 6);
+    const P = BALLOON_PAD, S = PIXEL_SCALE, x0 = P, y0 = P, cx = P + Math.round(W / 2);
+    const c = document.createElement('canvas');
+    c.width = (W + 2 * P) * S; c.height = (H + 2 * P) * S;
+    const ctx = c.getContext('2d');
+    ctx.scale(S, S); ctx.imageSmoothingEnabled = false;   // as the game's canvas draws
+    ctx.font = '12px Arial, sans-serif';
     // each piece sits by its origin round the text box (x0, y0, W, H): corners at its corners, edges stretched along it
     const o = (k) => B[k]?.origin || [0, 0];
-    // a hint's balloon is see-through: its pieces are put together on their own canvas, the arrow replacing what is
-    // under it (not blended over it, which would show a brighter square), then the whole is drawn at once
-    const screen = ctx;
-    let off = null;
-    if (arrowDx !== null) {
-      off = (this.balloonCanvas ??= document.createElement('canvas'));
-      off.width = W + 60; off.height = H + 60;
-      ctx = off.getContext('2d');
-      ctx.font = '12px Arial, sans-serif';
-      ctx.translate(30 - x0, 30 - y0);
-    }
     ctx.drawImage(p.c, x0, y0, W, H);
     ctx.drawImage(p.n, x0, y0 - o('n')[1], W, p.n.height); ctx.drawImage(p.s, x0, y0 + H - o('s')[1], W, p.s.height);
     ctx.drawImage(p.w, x0 - o('w')[0], y0, p.w.width, H); ctx.drawImage(p.e, x0 + W - o('e')[0], y0, p.e.width, H);
@@ -334,16 +354,15 @@ export class WorldFx {
     // the arrow is laid over the bottom edge (it covers the border there and grows the tail below it): at the centre,
     // or arrowDx right of it (a hint's)
     const ax = cx + (arrowDx ?? 1 - ao[0]), ay = y0 + H - ao[1];
-    if (off && tail) {
-      // laid over the bottom band (its row 8 is the border, open where the tail joins), replacing what is there
+    if (tail) {
+      // a hint's is see-through: its tail, laid over the bottom band (its row 8 is the border, open where the tail
+      // joins), replaces what is there rather than blending over it, which would show a brighter square
       ctx.clearRect(ax, ay, tail.width, tail.height);
       ctx.drawImage(tail, ax, ay);
     } else ctx.drawImage(p.arrow, ax, ay);
-    if (off) { screen.drawImage(off, x0 - 30, y0 - 30); ctx = screen; }
     if (rich) lines.forEach((l, i) => { const lx = cx - Math.round(l.w / 2); for (const r of l.runs) if (r.t) uiText(ctx, r.t, lx + r.x, y0 + i * lh, { color: r.color, bold: r.bold, size: 12 }); });
     else lines.forEach((l, i) => uiText(ctx, l, cx, y0 + i * lh, { color, size: 12, align: 'center' }));
-    ctx.restore();
-    return true;
+    return { c, cx, H };
   }
 
   // ---------------------------------------------------------------- screen-space
