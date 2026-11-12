@@ -497,11 +497,11 @@ export class GameMap {
       if (alpha < 1) ctx.restore();
     }
     for (const t of layer.tiles) {
-      const img = this.assets.image(t.node);
-      if (!img) continue;
+      const s = this.assets.slice(t.node);   // (its place in its tile set's sheet, or its own image)
+      if (!s) continue;
       const x = t.x - (t.node.origin?.[0] ?? 0) - cam.x, y = t.y - (t.node.origin?.[1] ?? 0) - cam.y;
-      if (off(x, y, img)) continue;
-      ctx.drawImage(img, snap(x), snap(y));   // tiles on whole game pixels: no seams
+      if (x > vw || y > vh || x + s.w < -2 || y + s.h < -2) continue;
+      ctx.drawImage(s.img, s.x, s.y, s.w, s.h, snap(x), snap(y), s.w, s.h);   // tiles on whole game pixels: no seams
     }
   }
 
@@ -1463,9 +1463,11 @@ export class Life {
     }
     if (this.appearing) return;
     const doomArt = this.doomArt, doom = doomArt?.[this.state === 'move' ? 'move' : 'stand']?.node;
-    const node = doom && assets.image(doom) ? doom : this.node;
-    const img = assets.image(node);
-    if (!img) return;
+    const node = doom && assets.ready(doom) ? doom : this.node;
+    // (drawn straight from its file's sheet when it is packed in one; taken down at once, the next call gives another)
+    const s = assets.slice(node);
+    if (!s) return;
+    const img = s.img, cx = s.x, cy = s.y, cw = s.w, ch = s.h;
     const o = node.origin || [0, 0];
     const sx = snapPx(this.x - cam.x), sy = snapPx(this.y - cam.y);
     ctx.save();
@@ -1477,7 +1479,7 @@ export class Life {
     // info/noFlip art (e.g. a tutorial monster carrying a key sign) is never mirrored
     if (this.facesRight) ctx.scale(-1, 1);
     if (this.frozen) ctx.filter = 'sepia(1) hue-rotate(170deg) saturate(2.5) brightness(1.05)';   // iced over
-    ctx.drawImage(img, -o[0], -o[1]);
+    ctx.drawImage(img, cx, cy, cw, ch, -o[0], -o[1], cw, ch);
     ctx.restore();
     this.drawStatus(ctx, cam, assets, node);
     // a Maple TV's two screens, their top-left corners at info/MapleTVmsg and MapleTVad from its feet

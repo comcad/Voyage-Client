@@ -1,7 +1,7 @@
 /**
  * The QUALITY OF LIFE settings of conf/client.conf: server.js serves them as /config.json, loaded before the game
- * starts. Keys and defaults match conf/client.conf.dist. (characterSheets is the one that isn't a setting of the
- * game: server.js says by it whether it packs character files into sheets, see Assets.json.)
+ * starts. Keys and defaults match conf/client.conf.dist. (sheets is the one that isn't a setting of the game:
+ * server.js says by it whether it packs files into sheets, see Assets.json.)
  */
 export function clientConfigs(c) {
   const skipBirthday = c.getBoolean('Account.SkipBirthdayCode', false), code = c.getInt('Account.BirthdayCode', 20050511);
@@ -23,7 +23,7 @@ export function clientConfigs(c) {
     // ----------------------------SKILLS------------------------------
     skillCooldownTime: c.getBoolean('Skills.ShowCooldownTime', false),
     // ----------------------------SERVER------------------------------
-    characterSheets: c.getBoolean('Server.CharacterSheets', true),
+    sheets: true,
   };
 }
 

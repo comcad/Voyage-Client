@@ -16,9 +16,13 @@ export const ServerConfigs = {
     return 3000;
   },
   get ASSETS_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.AssetsDir', 'assets')); },
-  /** Where the server keeps what it makes from the assets (the character sheets). */
+  /** Where the server keeps what it makes from the assets (the sheets). */
   get CACHE_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.CacheDir', 'cache')); },
-  get CHARACTER_SHEETS() { return ConfigMgr.getBoolean('Server.CharacterSheets', true); },
+  /** Server.Sheets (a client.conf that still has only the name it had first, Server.CharacterSheets, goes by that). */
+  get SHEETS() {
+    const old = !ConfigMgr.values.has('Server.Sheets') && ConfigMgr.values.has('Server.CharacterSheets');
+    return ConfigMgr.getBoolean(old ? 'Server.CharacterSheets' : 'Server.Sheets', true);
+  },
 
   // ----------------------------RELAY------------------------------
   /** name -> host, the first the default; a bare host is named after itself. */
