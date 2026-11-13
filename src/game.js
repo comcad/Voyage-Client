@@ -6344,6 +6344,8 @@ export class Game {
     const inY = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
     let action;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
+    // what the air step goes by: the group of the floor you stand on (its walls are the ones that stop you)
+    if (p.fh) p.zMass = p.fh.zMass;
     if (p.fh || p.ladder) this.fjUsed = false;   // Flash Jump comes back once you land
     if (this.portalCooldown > 0) this.portalCooldown -= dt;
 
@@ -6660,6 +6662,7 @@ export class Game {
     const p = this.player;
     this.moveEvent = { kind: 'grab', fh: p.fh?.id || 0, stance: this.currentStance() };   // how you were before it
     p.ladder = l; p.fh = null; p.x = l.x; p.vx = 0; p.vy = 0;
+    p.zMass = 0;   // (on a ladder or a rope you are of no floor's group)
   }
   // ------------------------------------------------------------------ death
   /**
@@ -6718,6 +6721,7 @@ export class Game {
     const p = this.player;
     p.ladder = null; p.seat = null; p.attack = null;
     if (p.ignoreT > 0 && (p.ignoreT -= dt) <= 0) p.ignoreFh = null;
+    if (p.fh) p.zMass = p.fh.zMass;
     this.coast(dt);
   }
   /** No input: on a floor you slide to a stop, in the air you fall (and stop on landing). */

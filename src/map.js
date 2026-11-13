@@ -594,6 +594,7 @@ export class Life {
     this.kind = kind; this.spawn = spawn; this.src = src; this.name = name;
     this.footholds = footholds;
     this.x = spawn.x; this.y = fh ? Footholds.yAt(fh, spawn.x) : spawn.cy; this.fh = fh;
+    this.zMass = fh?.zMass;   // the group of the floor it last stood on: its walls stop it in the air (Footholds.meets)
     this.facingRight = !!spawn.f;   // f=1 mirrors the art, for NPCs and monsters alike
     this.maxHp = src.info?.maxHP || 1; this.hp = this.maxHp;
     const info = src.info || {};

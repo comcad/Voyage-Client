@@ -260,7 +260,7 @@ export class Pet {
         const d = this.inX;
         if (d * this.vx < WALK * 0.8) this.vx += d * WALK * 0.8;
         if (d && d * this.vx > WALK) this.vx = d * WALK;
-        this.fh = null; this.vy = -JUMP * (swim ? 0.7 : 1);
+        this.zMass = this.fh.zMass; this.fh = null; this.vy = -JUMP * (swim ? 0.7 : 1);
       } else {
         const v0 = this.vx, k = swim ? PHYS.swimDec : 1;   // walking in water: 0.9 of the push and of the speed
         this.vx = this.inX ? accelerate(v0, this.inX * PHYS.walkAccel * k, WALK * k, dt) : approach(v0, 0, PHYS.walkBrake * dt);
