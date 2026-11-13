@@ -2,6 +2,10 @@
  * Foothold physics. Map footholds are line segments chained with prev/next ids.
  * Floors run left-to-right (x1 < x2); walls are vertical (x1 == x2); segments with
  * x1 > x2 are ceilings/undersides and are never landed on.
+ *
+ * A foothold has a front and a back: the front of a floor is above it, of a wall going up the left of it, of a
+ * wall going down the right of it, of an underside below it. Things in the air are stopped coming at one from the
+ * front and pass through it from the back (which is how you jump up through a floor).
  */
 export const PHYS = {
   walk: 125, jump: 555, gravity: 2000, maxFall: 670, climb: 100,
@@ -39,6 +43,17 @@ export function accelerate(v, accel, limit, dt) {
 /** Brake toward a target without overshooting it. */
 export function approach(v, target, amount) { return v > target ? Math.max(target, v - amount) : Math.min(target, v + amount); }
 
+/** Which side of a foothold's line a point is on: below 0 in front of it, above 0 behind it, 0 on it. */
+const sideOf = (f, x, y) => (f.x2 - f.x1) * (y - f.y1) - (f.y2 - f.y1) * (x - f.x1);
+/**
+ * A path that goes exactly through the corner where `a` ends and `b` begins has met them when where it ends up is
+ * behind them: behind either one where they bend away from their front, behind both where they bend toward it.
+ */
+function cornered(a, b, x, y) {
+  const turn = (b.y2 - a.y1) * (a.x2 - a.x1) - (a.y2 - a.y1) * (b.x2 - a.x1);
+  return turn < 1 ? sideOf(a, x, y) > 0 || sideOf(b, x, y) > 0 : sideOf(a, x, y) > 0 && sideOf(b, x, y) > 0;
+}
+
 export class Footholds {
   constructor(mapFoothold) {
     this.byId = new Map();
@@ -50,6 +65,10 @@ export class Footholds {
       }
     }
     this.all = [...this.byId.values()];
+    // each one's length and the direction it runs in
+    for (const f of this.all) { f.len = Math.hypot(f.x2 - f.x1, f.y2 - f.y1) || 1; f.ux = (f.x2 - f.x1) / f.len; f.uy = (f.y2 - f.y1) / f.len; }
+    // the map's first group: its walls and undersides stop everything in the air (see meets)
+    this.baseZ = this.all.reduce((m, f) => Math.min(m, f.zMass), Infinity);
     this.floors = this.all.filter((f) => f.x1 < f.x2);
     // the map's foothold groups (its platforms), each with its floors and how far it reaches left and right
     this.groups = new Map();
@@ -85,6 +104,7 @@ export class Footholds {
   }
 
   get(id) { return this.byId.get(id); }
+
   /** Whether x,y is in water (the map sets this). */
   swimming() { return false; }
   static yAt(f, x) { return f.x1 === f.x2 ? f.y1 : f.y1 + ((f.y2 - f.y1) * (x - f.x1)) / (f.x2 - f.x1); }
@@ -111,6 +131,7 @@ export class Footholds {
   walk(ent, dx) {
     let f = ent.fh;
     let x = ent.x + dx;
+    ent.zMass = f.zMass;
     for (let guard = 0; guard < 32; guard++) {
       if (x > f.x2) {
         const n = this.get(f.next);
@@ -132,67 +153,97 @@ export class Footholds {
         f = p;
       } else break;
     }
-    ent.fh = f; ent.x = x; ent.y = Footholds.yAt(f, x);
+    ent.fh = f; ent.x = x; ent.y = Footholds.yAt(f, x); ent.zMass = f.zMass;
     return 'ok';
   }
 
   /**
-   * The wall that stops sideways movement for something at height y over floor f, as the client
-   * does it: only the walls joined to that floor count (its neighbour, or the one after), each
-   * blocking if it spans y-50..y-1; otherwise the map's side. So a floating platform's own sides
-   * never block a jump from the ground beside it.
+   * What a step through the air from (ax, ay) to (bx, by) meets first: { f, x, y }, the foothold and where on it;
+   * null when the way is clear. Positions count in whole pixels, as the footholds do.
+   *
+   * A foothold is met by a path that comes at it from its front and crosses it, its ends included. Floors are met
+   * by everything. A wall or an underside is met only by what last stood on a floor of its own group, and those of
+   * the map's first group by everything: so a platform's own sides don't stop a jump from the ground beside it, and
+   * the ground's own walls stop everyone. A path through the very corner where two footholds join has met them only
+   * if it ends up behind them (cornered); through a free end, it hasn't.
+   *
+   * Of two met at the same moment (a corner), it comes to rest against the one it is moving along, by its speed
+   * (vx, vy) along each. `ignore` is a floor being dropped through: when that is what is met first, nothing is.
    */
-  wallFor(f, left, y) {
-    const blocks = (w) => w && w.x1 === w.x2 && Math.max(w.y1, w.y2) >= y - 50 && Math.min(w.y1, w.y2) <= y - 1;
-    if (left) {
-      const p = this.get(f.prev);
-      if (blocks(p)) return f.x1;
-      const pp = p && this.get(p.prev);
-      if (blocks(pp)) return p.x1;
-      return this.wallL;
+  meets(ax, ay, bx, by, vx, vy, zMass, ignore = null) {
+    const x0 = Math.floor(ax), y0 = Math.floor(ay), x1 = Math.floor(bx), y1 = Math.floor(by), dx = x1 - x0, dy = y1 - y0;
+    if (!dx && !dy) return null;
+    const lx = Math.min(x0, x1), hx = Math.max(x0, x1), ly = Math.min(y0, y1), hy = Math.max(y0, y1);
+    let num = 2, den = 1, first = null, second = null, hitX = 0, hitY = 0;
+    for (const f of this.all) {
+      if ((f.x1 < lx && f.x2 < lx) || (f.x1 > hx && f.x2 > hx) || (f.y1 < ly && f.y2 < ly) || (f.y1 > hy && f.y2 > hy)) continue;
+      const fdx = f.x2 - f.x1, fdy = f.y2 - f.y1;
+      if (fdx <= 0 && f.zMass !== this.baseZ && f.zMass !== zMass) continue;
+      // from in front of it (or on it) to behind it (or on it), and not along it
+      let s0 = fdx * (y0 - f.y1) - fdy * (x0 - f.x1);
+      const s1 = fdx * (y1 - f.y1) - fdy * (x1 - f.x1);
+      // (whole pixels can put the start behind a steep foothold it is really in front of, a hop up a steep slope:
+      // then it starts on it, rather than going through)
+      if (s0 > 0 && fdx * (ay - f.y1) - fdy * (ax - f.x1) <= 0) s0 = 0;
+      if (s0 > 0 || s1 < 0 || (s0 === 0 && s1 === 0)) continue;
+      // and between its two ends (one on either side of the path, or on it)
+      const c0 = (f.y1 - y0) * dx - (f.x1 - x0) * dy, c1 = (f.y2 - y0) * dx - (f.x2 - x0) * dy;
+      if ((c0 < 0 && c1 < 0) || (c0 > 0 && c1 > 0)) continue;
+      let a = f, b = f;   // the later and the earlier of the two at a corner
+      if (c0 === 0) { const p = this.get(f.prev); if (!p || !cornered(p, f, x1, y1)) continue; b = p; }
+      else if (c1 === 0) { const n = this.get(f.next); if (!n || !cornered(f, n, x1, y1)) continue; a = n; }
+      // how far along the path: |s0| of the way, out of |f x d|; the nearest wins
+      const n = Math.abs(s0), d = Math.abs(fdy * dx - fdx * dy);
+      if (d * num > n * den) {
+        num = n; den = d; first = a; second = b;
+        hitX = Math.trunc(((f.x2 * f.y1 - f.y2 * f.x1) * dx + (y1 * x0 - x1 * y0) * fdx) / (fdx * dy - fdy * dx));
+        hitY = dx === 0 ? ((hitX - f.x1) * fdy) / fdx + f.y1 : ((hitX - x0) * dy) / dx + y0;
+      } else if (first && d * num === n * den) {
+        // as near as the nearest: the one in front of the other
+        if ((first.x2 - first.x1) * (a.y1 - first.y1) - (a.x1 - first.x1) * (first.y2 - first.y1) < 0) first = a;
+        if ((second.x2 - second.x1) * (b.y2 - second.y1) - (b.x2 - second.x1) * (second.y2 - second.y1) < 0) second = b;
+      }
     }
-    const n = this.get(f.next);
-    if (blocks(n)) return f.x2;
-    const nn = n && this.get(n.next);
-    if (blocks(nn)) return n.x2;
-    return this.wallR;
+    if (!first) return null;
+    let f = first;
+    if (first !== second) {
+      const va = first.ux * vx + first.uy * vy, vb = second.ux * vx + second.uy * vy;
+      if (!(va > 0.001 && vb > 0.001)) f = (va >= -0.001 || vb >= -0.001) && first.x1 < first.x2 ? first : second;
+    }
+    if (f === ignore) return null;
+    // where on it: by height on a steep one, across otherwise; never past its ends
+    const at = Math.min(f.len, Math.max(0, Math.abs(f.ux) <= 0.5 ? (hitY - f.y1) / f.uy : (hitX - f.x1) / f.ux));
+    return { f, x: f.x1 + f.ux * at, y: f.y1 + f.uy * at };
   }
 
   /**
    * Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh.
    * old: the speeds before this step's push (steering, swimming); without it, the speeds as they are now.
+   * ent.zMass is the group of the floor it last stood on (walk and landing keep it), for meets.
    */
   fall(ent, dt, ignore = null, swimming = false, old = null) {
     // moved by the average of the speed before and after the step's push and gravity, on both axes, so a jump peaks
     // at v²/2g whatever the frame time
     const vx0 = old ? old.vx : ent.vx, vy0 = old ? old.vy : ent.vy;
     if (!swimming) ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
-    const nx = ent.x + ((vx0 + ent.vx) / 2) * dt;
-    const ny = ent.y + ((vy0 + ent.vy) / 2) * dt;
-
-    // walls: those of the floor we are over
-    const under = nx !== ent.x ? this.below(ent.x, ent.y, Infinity, ignore) : null;
-    let walled = false;
-    if (under) {
-      const w = this.wallFor(under, nx < ent.x, ent.y);
-      if ((nx < ent.x && ent.x >= w && nx < w) || (nx > ent.x && ent.x <= w && nx > w)) { ent.x = w; ent.vx = 0; walled = true; }
+    let x0 = ent.x, y0 = ent.y, nx = ent.x + ((vx0 + ent.vx) / 2) * dt, ny = ent.y + ((vy0 + ent.vy) / 2) * dt;
+    // the map's sides are walls for what is inside them
+    if (x0 >= this.wallL && nx < this.wallL) { nx = this.wallL; ent.vx = 0; }
+    else if (x0 <= this.wallR && nx > this.wallR) { nx = this.wallR; ent.vx = 0; }
+    // a floor is landed on where the path meets it. A wall or an underside stops the path there and leaves only the
+    // speed along it; the rest of the step then goes on along it (down a wall's face, across under an underside),
+    // where it may meet something else: the floor at the wall's foot, the wall at the underside's end.
+    for (let pass = 0; pass < 3; pass++) {
+      const hit = this.meets(x0, y0, nx, ny, (vx0 + ent.vx) / 2, (vy0 + ent.vy) / 2, ent.zMass, ignore);
+      if (!hit) break;
+      const f = hit.f;
+      if (f.x1 < f.x2) { ent.x = hit.x; ent.y = hit.y; ent.vy = 0; ent.fh = f; ent.zMass = f.zMass; return; }
+      const along = f.ux * ent.vx + f.uy * ent.vy;
+      ent.vx = f.ux * along; ent.vy = f.uy * along;
+      x0 = hit.x; y0 = hit.y;
+      if (f.x1 === f.x2) nx = hit.x; else { ny = hit.y; if (Math.abs(f.uy) > 0.001) nx = hit.x; }
     }
-    const x = walled ? ent.x : nx;
-
-    // land on the first floor the step's path crosses from above (rising or falling: a slope can rise faster than
-    // you do), wherever along the floor that is
-    const x0 = ent.x, y0 = ent.y;
-    let land = null, first = Infinity;
-    for (const f of this.floors) {
-      if (f === ignore || Math.max(x0, x) < f.x1 || Math.min(x0, x) > f.x2) continue;
-      const d0 = y0 - Footholds.yAt(f, x0), d1 = ny - Footholds.yAt(f, x);   // height above (-) or below (+) its line
-      if (d0 > 1 || d1 < 0 || (d0 >= 0 && d1 <= d0)) continue;
-      const t = d0 >= 0 ? 0 : d0 / (d0 - d1), cx = x0 + (x - x0) * t;
-      if (cx < f.x1 || cx > f.x2 || t >= first) continue;
-      first = t; land = { f, x: cx };
-    }
-    if (land) { ent.x = land.x; ent.y = Footholds.yAt(land.f, land.x); ent.vy = 0; ent.fh = land.f; return; }
-    ent.x = x; ent.y = ny;
+    ent.x = nx; ent.y = ny;
     if (ent.y < this.ceiling) { ent.y = this.ceiling; ent.vy = 0; }
   }
 }
