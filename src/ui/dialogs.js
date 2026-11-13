@@ -93,9 +93,9 @@ export class NpcDialog extends Win {
     if (d.type === 0) {
       if (d.prev) this.btn(U.BtPrev, W - 10 - 122 - shift, mid, () => this.reply(0));
       if (d.next) this.primary = this.btn(U.BtNext, W - 10 - 68 - shift, mid, () => this.reply(1));
-      // a say page answers 1 for NEXT, 0 for PREV and -1 (0xFF) for anything else, OK included;
-      // a local dialog answers 2 for OK instead, so its caller can tell it from End Chat's -1
-      else this.primary = this.btn(U.BtOK, W - 54, low, () => this.reply(d.local ? 2 : -1));
+      // a say page answers 1 for NEXT and for OK, 0 for PREV and -1 (0xFF) for END CHAT. OK is "go on", as NEXT is:
+      // a script whose last page before the reward ends in OK (sendOk, sendPrev) hands it out on that answer
+      else this.primary = this.btn(U.BtOK, W - 54, low, () => this.reply(1));
     } else if (d.type === 1) { this.btn(U.BtYes, W - 108, low, () => this.reply(1)); this.btn(U.BtNo, W - 54, low, () => this.reply(0)); }
     else if (d.type === 12) { this.btn(U.BtQYes, W - 130, low, () => this.reply(1)); this.btn(U.BtQNo, W - 65, low, () => this.reply(0)); }
     else if (input) this.primary = this.btn(U.BtOK, W - 54, low, () => this.submit());
@@ -373,9 +373,8 @@ export class SlideMenu extends Win {
  */
 export async function localTalk(mgr, npcId, text, buttons) {
   const has = (b) => buttons.includes(b);
-  const d = { npc: npcId, text, local: 1, type: has('Accept') ? 12 : has('Yes') ? 1 : 0, prev: has('Prev'), next: has('Next') };
+  const d = { npc: npcId, text, type: has('Accept') ? 12 : has('Yes') ? 1 : 0, prev: has('Prev'), next: has('Next') };
   const r = await npcTalk(mgr, d);
-  if (r.action === 2) return 'OK';   // the local OK button: not End Chat, whatever the server dialect says
   if (r.action === -1) return 'End Chat';
   if (d.type === 12) return r.action === 1 ? 'Accept' : 'Decline';
   if (d.type === 1) return r.action === 1 ? 'Yes' : 'No';
