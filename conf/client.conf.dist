@@ -108,14 +108,14 @@ Server.CustomDir = "custom"
 #        Default:     0 - off.
 #                     3001 (or any other free port) - on, at http://<this machine>:3001
 
-Admin.Port = 0
+Admin.Port = 3001
 
 #
 #     Admin.Host
 #        Description: The address the admin page listens on.
-#        Default:     "" - the same as Server.Host.
+#        Default:     "0.0.0.0"
 
-Admin.Host = ""
+Admin.Host = "0.0.0.0"
 
 #
 #     Admin.Password
@@ -126,7 +126,7 @@ Admin.Host = ""
 #        Default:     "" - no password: the page then answers only the machine the server runs
 #                     on (from elsewhere, reach it through an SSH tunnel).
 
-Admin.Password = ""
+Admin.Password = "changeme"
 
 #
 ###################################################################################################
