@@ -10546,6 +10546,16 @@ export class Game {
     return last || { page: 7, zMass: 0 };
   }
   /**
+   * The floor another player's movement names: a foothold, or -id of the ladder / rope they are on. One in the
+   * climbing pose that names a foothold all the same (a server's own bots name the platform nearest them) is on the
+   * ladder or rope it is at: in that platform's page it went behind the ladder near its top.
+   */
+  floorOf(rp) {
+    if (rp.fhId < 0 || (rp.state !== 'ladder' && rp.state !== 'rope')) return rp.fhId;
+    const l = this.map.ladderIn(rp.x, rp.y, rp.x, rp.y);
+    return l ? -l.id : rp.fhId;
+  }
+  /**
    * Characters, pets, NPCs, Hired Merchants and tombstones, each drawn in its own page (the one its floor is in; a
    * Hired Merchant's is merchantZ, a tombstone's its ghost's): a lower zMass in front, then other players, their
    * pets, NPCs and Hired Merchants (a merchant has an NPC's depth), you and your pets, in that order; a tombstone
@@ -10568,7 +10578,7 @@ export class Game {
       put(z.page, z.zMass, 5, 4, m);
     }
     for (const rp of this.others.values()) {
-      rp.z = this.zFrom(rp.fhId, rp.z);
+      rp.z = this.zFrom(this.floorOf(rp), rp.z);
       if (!this.inView(rp.x, rp.y, 350, 450, 200)) continue;
       if (inShop(rp)) put(rp.z.page, 0, SHOP_FIRST, 1, rp); else put(rp.z.page, rp.z.zMass, 2, 1, rp);
     }
