@@ -8,6 +8,7 @@ import { wsTransport } from './net/connection.js';
 import { modal } from './ui/dom.js';
 import { setupTouchDevice } from './touchdevice.js';
 import { loadConfig } from './config.js';
+import { startReports } from './report.js';
 
 setupTouchDevice();
 
@@ -70,6 +71,7 @@ async function online(assets) {
   addEventListener('beforeunload', (e) => { if (!game.leaving) { e.preventDefault(); e.returnValue = ''; } });
   assets.preload(lookCanvases(look, look.actionList())); // every body action, for skills
   window.game = game;
+  startReports(game);
 }
 
 async function offline(assets) {
@@ -92,6 +94,7 @@ async function offline(assets) {
     $('map-input').blur();
   });
   window.game = game;
+  startReports(game);
 }
 
 async function main() {

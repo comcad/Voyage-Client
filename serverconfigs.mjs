@@ -24,6 +24,22 @@ export const ServerConfigs = {
     return ConfigMgr.getBoolean(old ? 'Server.CharacterSheets' : 'Server.Sheets', true);
   },
 
+  /** Where what you make with the admin page is kept (maps). */
+  get CUSTOM_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.CustomDir', 'custom')); },
+
+  // ----------------------------ADMIN------------------------------
+  /** The admin page's port; 0 leaves it off. */
+  get ADMIN_PORT() {
+    const port = ConfigMgr.getInt('Admin.Port', 0);
+    if (port === 0 || (port >= 1 && port <= 65535 && port !== this.PORT)) return port;
+    console.warn(`Config key Admin.Port = ${port} isn't a port of its own (1-65535, not Server.Port); the admin page is left off`);
+    return 0;
+  },
+  /** The address it listens on; the game's own (Server.Host) when it isn't given. */
+  get ADMIN_HOST() { return ConfigMgr.getString('Admin.Host', '') || this.HOST; },
+  /** The password to sign in with; without one only the machine itself is let in. */
+  get ADMIN_PASSWORD() { return ConfigMgr.getString('Admin.Password', ''); },
+
   // ----------------------------RELAY------------------------------
   /** name -> host, the first the default; a bare host is named after itself. */
   get SERVERS() {

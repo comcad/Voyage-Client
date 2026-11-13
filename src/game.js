@@ -92,6 +92,7 @@ import { GuildBBSWin } from './ui/guildbbs.js';
 import { FredrickWin } from './ui/fredrick.js';
 import { WitchTowerScore, GuildBossField } from './guildboss.js';
 import { FramePace } from './framepace.js';
+import { reportError, sendFpsReport } from './report.js';
 import { snapToPixels } from './snapdraw.js';
 import { BUILD } from './build.js';
 
@@ -5786,6 +5787,7 @@ export class Game {
       }
       const report = this.perf.report(this);
       console.log(report);
+      sendFpsReport(report);   // (to the server's admin page as well, when it has one)
       const fallback = () => {
         const ta = document.createElement('textarea');
         ta.value = report; ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
@@ -6122,7 +6124,7 @@ export class Game {
           if (meter) { meter.frame(t, u1 - u0, performance.now() - u1, this); meter.draw(this.ctx, this); }
         } catch (e) {
           const key = String(e?.message);
-          if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
+          if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); reportError(e, 'a frame'); }
           for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open
         }
       } else if (this.map && this.loading) this.dimWhileLoading();
