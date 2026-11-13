@@ -18,6 +18,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const JavaScriptObfuscator = pkg.default || pkg;
 
 export const BUNDLE_PATH = path.join(__dirname, 'public', 'Voyage.js');
+/** The admin page's own bundle (src/admin), served on Admin.Port only; made when the admin page is on. */
+export const ADMIN_BUNDLE = path.join(__dirname, 'admin', 'Admin.js');
 
 /**
  * What a bundle is called: the commit it was built from (when this is a git checkout) and when, to the minute (UTC):
@@ -66,6 +68,19 @@ export async function build(obfuscate = false) {
   }
   console.log(`Build ${id}.`);
   return id;
+}
+
+/** Builds the admin page's bundle (the same build id as the client's). */
+export async function buildAdmin(id) {
+  await esbuild.build({
+    entryPoints: [path.join(__dirname, 'src/admin/main.js')],
+    bundle: true,
+    minify: true,
+    sourcemap: false,
+    outfile: ADMIN_BUNDLE,
+    define: { __VOYAGE_BUILD__: JSON.stringify(id) },
+  });
+  console.log(`Admin page built (${(fs.statSync(ADMIN_BUNDLE).size / 1024).toFixed(2)} KB).`);
 }
 
 // Auto-run when invoked directly (node build.mjs) — fails the process on error.

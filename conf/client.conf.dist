@@ -12,6 +12,7 @@
 #
 #  CLIENT SYSTEM SETTINGS
 #    SERVER
+#    ADMIN
 #    RELAY
 #    BUILD
 #
@@ -79,6 +80,53 @@ Server.Sheets = true
 #        Default:     "cache"
 
 Server.CacheDir = "cache"
+
+#
+#     Server.CustomDir
+#        Description: The folder for what you make yourself with the admin page, relative to the
+#                     folder server.js is in: maps, NPCs, equips, items and quests, each in a
+#                     folder of its own (maps/, npcs/, equips/, items/, quests/) with the pictures
+#                     you brought in for it. What you publish there is served to players in place
+#                     of what the assets have; the assets folder is never written to.
+#        Default:     "custom"
+
+Server.CustomDir = "custom"
+
+#
+###################################################################################################
+
+###################################################################################################
+# ADMIN
+#
+#     Admin.Port
+#        Description: The port of the admin page: the server's console, who is connected, how
+#                     the game runs in players' browsers, and editors for maps, items, equips,
+#                     NPCs and quests of your own, each with an export of the files the Cosmic
+#                     server reads. It is a web server of its own; nothing of it is served on
+#                     Server.Port. With it on, players' browsers report their frame rate, hitches
+#                     and errors to this server for the page to show.
+#        Default:     0 - off.
+#                     3001 (or any other free port) - on, at http://<this machine>:3001
+
+Admin.Port = 0
+
+#
+#     Admin.Host
+#        Description: The address the admin page listens on.
+#        Default:     "" - the same as Server.Host.
+
+Admin.Host = ""
+
+#
+#     Admin.Password
+#        Description: The password to sign in to the admin page with. Anyone who can reach
+#                     Admin.Port and knows it can close players' connections and change what
+#                     players get, so make it long, and keep the port off the internet (the sign-in is not
+#                     encrypted unless you put the page behind HTTPS).
+#        Default:     "" - no password: the page then answers only the machine the server runs
+#                     on (from elsewhere, reach it through an SSH tunnel).
+
+Admin.Password = ""
 
 #
 ###################################################################################################

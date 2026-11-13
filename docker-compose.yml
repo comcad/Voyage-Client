@@ -21,6 +21,8 @@ services:
       # What the server makes from the assets (sheets), kept between restarts.
       # Safe to delete: it is made again on the next start. Must be writable by uid 1000.
       - ./cache:/app/cache
+      # What you make with the admin page (maps), kept between restarts. Must be writable by uid 1000.
+      - ./custom:/app/custom
     # Restart unless killed
     restart: unless-stopped
     # The client is a long-running server; no healthcheck needed, but a

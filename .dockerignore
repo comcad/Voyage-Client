@@ -4,6 +4,8 @@ cache/
 .git/
 node_modules/
 public/Voyage.js
+admin/Admin.js
+custom/
 conf/*.conf
 *.log
 .DS_Store

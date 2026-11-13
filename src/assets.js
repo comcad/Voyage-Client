@@ -78,10 +78,12 @@ export class Assets {
         const t0 = performance.now();
         try { return JSON.parse(text); } finally { spent('files', t0); }
       });
-      const own = () => get(`${this.base}/${path}.json`);
+      // (a file published from the admin page is asked for by its version, so a copy the browser kept isn't used)
+      const ver = config.custom?.[path];
+      const own = () => get(`${this.base}/${path}.json${ver ? `?v=${ver}` : ''}`);
       // a file the server packs into sheets is asked for with its images' places in them (one it has no sheets for
       // comes back as it is); if that can't be had, the file as it is
-      const p = (config.sheets && PACKED.test(path) ? get(`${this.base}/_sheets/${path}.json`).then((tree) => tree || own(), own) : own())
+      const p = (config.sheets && PACKED.test(path) ? get(`${this.base}/_sheets/${path}.json${ver ? `?v=${ver}` : ''}`).then((tree) => tree || own(), own) : own())
         .then((tree) => { if (!tree) return null; const t0 = performance.now(); try { return prepare(tree, wz); } finally { spent('files', t0, 0); } })
         .catch(() => { this.jsonCache.delete(path); return null; });   // a dropped connection: asked again next time
       this.jsonCache.set(path, p);
@@ -215,7 +217,7 @@ export class Assets {
  * a link, four times at most). Every map, character, monster and window is read through here, so it is kept light:
  * nothing is copied or remembered for a node that has no link in it.
  */
-function prepare(tree, wz) {
+export function prepare(tree, wz) {
   if (!tree || typeof tree !== 'object') return tree;
   const sheets = new Map(), links = [], above = [];
   (function walk(node) {
