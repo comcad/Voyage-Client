@@ -208,6 +208,7 @@ The assets folder itself is only ever read. Delete a file from `customs` and the
 <summary><b>Click to expand the directory tree</b></summary>
 
 ```
+voyage-assets/            # Extracted assets json and image files
 Voyage-Client/
 ├── cache/                # sheets the server makes from your assets on start: gitignored
 ├── public/
