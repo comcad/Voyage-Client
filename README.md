@@ -2,14 +2,13 @@
 
 <img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="120" height="120" alt="Voyage MapleStory web client logo" />
 
-# Voyage Client: MapleStory Web Client
+# Voyage Client: Version 83 Web Client
 
-**An open-source MapleStory v83 (GMS) web client that runs in your browser.**
+**An open-source Version 83 web client that runs in your browser.**
 Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor
 
 <br />
 
-![MapleStory v83](https://img.shields.io/badge/MapleStory-v83%20GMS-orange?style=for-the-badge)
 ![Status](https://img.shields.io/badge/status-alpha-yellow?style=for-the-badge)
 ![License](https://img.shields.io/github/license/comcad/Voyage-Client?style=for-the-badge)
 
@@ -26,7 +25,7 @@ Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor
 
 <br />
 
-**Voyage Client** is an open-source **MapleStory web client** for **v83 (GMS)**. It brings the classic MapleStory client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop MapleStory client. It plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), a v83 server based on Cosmic.
+**Voyage Client** is an open-source **Version 83 web client**. It brings the classic Version 83 client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop Version 83 Client. It plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), a v83 server based on Cosmic.
 
 The repository contains the browser game, the small Node.js server that serves it and relays players to the game server, and a Dockerfile for running it.
 
@@ -84,11 +83,11 @@ The browser talks to `server.js` over WebSocket. The server relays that traffic 
 
 ## 📋 Requirements
 
-- A folder of MapleStory v83 GMS `*.wz` files (your own)
+- A folder of Version 83 `*.wz` files (your own)
 - [Voyage-Server](https://github.com/comcad/Voyage-Server) to log in and play against
 - **Either** Node.js ≥ 18 **or** Docker
 
-## 🚀 Quick Start: Run the MapleStory Web Client
+## 🚀 Quick Start: Run the Voyage-Client
 
 ### 1. Clone the repo
 
@@ -102,7 +101,7 @@ cd Voyage-Client
 The WZ extractor lives in its own repo: **[Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero dependencies).
 
 > [!NOTE]
-> Use your own MapleStory v83 GMS `.wz` files.
+> Use your own Version 83 `.wz` files.
 
 ```sh
 git clone https://github.com/comcad/Voyage-Wz-Extractor
@@ -249,32 +248,22 @@ Voyage-Client/
 ## ❓ FAQ
 
 <details>
-<summary><b>What is a MapleStory web client?</b></summary>
+<summary><b>What is a Voyage web client?</b></summary>
 
 <br />
 
-A MapleStory web client is a version of the MapleStory game client that runs inside a web browser instead of as a downloaded desktop program. Voyage Client is a MapleStory v83 web client written in pure JavaScript.
+A Voyage web client is a version 83 game client that runs inside a web browser instead of as a downloaded desktop program. Voyage Client is a version 83 web client written in pure JavaScript.
 
 </details>
 
 <details>
-<summary><b>Can I play MapleStory in my browser?</b></summary>
+<summary><b>Can I play Voyage-Client in my browser?</b></summary>
 
 <br />
 
 Yes, with Voyage Client. It renders maps, characters, monsters, and the v83 UI in the browser and connects to a compatible server: [Voyage-Server](https://github.com/comcad/Voyage-Server), which reads the same assets.
 
 </details>
-
-<details>
-<summary><b>Which MapleStory version and server does this client support?</b></summary>
-
-<br />
-
-Voyage Client targets **MapleStory v83 (GMS)** and plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), a fork of [Cosmic](https://github.com/P0nk/Cosmic). Other Cosmic-based v83 servers speak the same protocol, but they don't read the assets' `customs` folder, so what you publish with the editor would reach players and not the server.
-
-</details>
-
 
 <details>
 <summary><b>Does it work on phones and tablets?</b></summary>
@@ -290,7 +279,7 @@ Yes. It includes drag-arrangeable touch controls for phones and touch screens, p
 
 <br />
 
-You supply your own MapleStory v83 GMS `.wz` files. The [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) converts them to JSON and PNG, into the assets folder the client, the server and the editor share.
+You supply your own version 83 `.wz` files. The [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) converts them to JSON and PNG, into the assets folder the client, the server and the editor share.
 
 </details>
 
@@ -320,26 +309,15 @@ Questions, feedback, or want to help test? Come hang out on Discord.
 
 ## ⚠️ Disclaimer
 
-**Voyage Client is an unofficial, fan-made, non-commercial project. It is not affiliated with, endorsed by, sponsored by, or connected to Nexon Korea Corporation, Nexon America Inc., or any of their subsidiaries or affiliates ("Nexon").**
-
-### Trademarks & Copyright
-MapleStory, its name, logos, characters, artwork, music, sound effects, text, game data, and all related assets are the property of Nexon and its licensors. All trademarks and copyrights belong to their respective owners. The name "MapleStory" is used in this repository for identification and compatibility description only and does not imply any association with Nexon.
-
 ### No Game Assets Included
 This repository contains **no** copyrighted Nexon assets. That includes `.wz` files, extracted images, audio, maps, and any other game data. It contains only original source code written by the contributors.
 
 To use this software, you must supply your own legally obtained copy of the game files. You are solely responsible for ensuring you have the legal right to possess and use them. The contributors do not provide, host, link to, or distribute these files and will not assist in obtaining them.
 
-### No Nexon Code
-This is an independent implementation. It does not contain and was not derived from Nexon's proprietary client source code or binaries. It was written from observed network protocol behavior for interoperability purposes.
-
 ### Intended Use
 This software is provided for educational, research, and interoperability purposes, and for use with self-hosted servers on a private, non-commercial basis. It is not intended to circumvent any technological protection measure, to replace or compete with any official Nexon product or service, or to be used for commercial gain.
 
 The contributors do not sell this software, charge for access, or accept payment for in-game items or advantages. Anyone who does so with this software acts on their own account and at their own risk.
-
-### Official Servers
-Use of this software with Nexon's official servers is **not supported** and may violate Nexon's Terms of Service, potentially resulting in account action. Do not use it for that purpose.
 
 ### License Scope
 The MIT license in this repository applies **only** to the original source code written by the contributors. It grants no rights to any Nexon trademarks, assets, or other intellectual property.
@@ -350,12 +328,9 @@ THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPL
 ### Your Responsibility
 You are responsible for complying with all applicable laws and with any license or terms of service that apply to the game files and servers you use.
 
-### Takedown Requests
-If you are a rights holder and believe this repository infringes your rights, please contact **[xcomcadx@gmail.com]** or open an issue. Your request will be reviewed and addressed promptly.
-
 
 <div align="right">
 
-[⬆ Back to top](#voyage-client-maplestory-web-client)
+[⬆ Back to top](#voyage-client)
 
 </div>
