@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="120" height="120" alt="Voyage MapleStory web client logo" />
+<img src="https://github.com/user-attachments/assets/f3327f7f-5a19-403d-b881-d540287cdf14" width="120" height="120" alt="Voyage Voyage-Client web client logo" />
 
 # Voyage Client: Version 83 Web Client
 
@@ -19,7 +19,7 @@ Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor
 [![Forks](https://img.shields.io/github/forks/comcad/Voyage-Client?style=flat-square&logo=github)](https://github.com/comcad/Voyage-Client/forks)
 [![Last commit](https://img.shields.io/github/last-commit/comcad/Voyage-Client?style=flat-square)](https://github.com/comcad/Voyage-Client/commits/main)
 
-<img width="1440" height="809" alt="MapleStory web client screenshot: Voyage Client running MapleStory v83 in a browser" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
+<img width="1440" height="809" alt="Voyage-Client web client screenshot: Voyage Client running Voyage-Client v83 in a browser" src="https://github.com/user-attachments/assets/cd54cd23-7aa3-4436-8568-8e955ca61fab" />
 
 </div>
 
@@ -50,7 +50,7 @@ voyage-assets/                 # made by the extractor from your own .wz files
 Voyage-Client/  Voyage-Server/  Voyage-Editor/    # each pointed at ../voyage-assets
 ```
 
-## ✨ Features of the MapleStory Web Client
+## ✨ Features of the Voyage-Client Web Client
 
 | | Area | What's included |
 |---|---|---|
@@ -65,7 +65,7 @@ Voyage-Client/  Voyage-Server/  Voyage-Editor/    # each pointed at ../voyage-as
 | 📱 | **Touch & gamepad** | Play on phones and touch screens with drag-arrangeable touch controls, plus gamepad support |
 | 🎛️ | **Settings** | Server and quality-of-life options in `conf/client.conf` (see [Settings](#%EF%B8%8F-settings)) |
 
-## 🧩 How the MapleStory Client Works in a Browser
+## 🧩 How the Voyage-Client Client Works in a Browser
 
 ```
 ┌──────────────────┐   WebSocket   ┌──────────────────┐     TCP     ┌──────────────────┐
