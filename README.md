@@ -314,7 +314,7 @@ Questions, feedback, or want to help test? Come hang out on Discord.
 ### No Game Assets Included
 This repository contains **no** copyrighted game assets: no `.wz` files, extracted images, audio, maps or any other game data. It contains only source code.
 
-To use this software, you must supply your own legally obtained copy of the game files. You are solely responsible for making sure you have the legal right to possess and use them. The contributors do not provide, host, link to or distribute these files, and will not help anyone obtain them.
+To use this software, you must supply your own legally obtained asset files. You are solely responsible for making sure you have the legal right to possess and use them. The contributors do not provide, host, link to or distribute these files, and will not help anyone obtain them.
 
 ### Intended Use
 This software is provided for educational, research and interoperability purposes, and for use with self-hosted servers on a private, non-commercial basis. It is not intended to circumvent any technological protection measure, to replace or compete with any official product or service, or to be used for commercial gain.
