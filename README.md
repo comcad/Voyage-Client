@@ -104,13 +104,15 @@ The WZ extractor lives in its own repo: **[Voyage-Wz-Extractor](https://github.c
 > Use your own Version 83 `.wz` files.
 
 ```sh
+cd ..                                # beside Voyage-Client, not inside it
 git clone https://github.com/comcad/Voyage-Wz-Extractor
 cd Voyage-Wz-Extractor
 node wz-extract.mjs <path-to-wz-folder> ../voyage-assets
+cd ../Voyage-Client
 ```
 
 The assets folder is shared: Voyage-Client, [Voyage-Server](https://github.com/comcad/Voyage-Server) and
-[Voyage-Editor](https://github.com/comcad/Voyage-Editor) all point at the same one (here `../voyage-assets`, beside
+[Voyage-Editor](https://github.com/comcad/Voyage-Editor) all point at the same one (here `voyage-assets`, beside
 the three repos; `Server.AssetsDir` in `conf/client.conf`). Its `customs` folder is where the editor publishes: see
 [Customs](#-customs).
 
