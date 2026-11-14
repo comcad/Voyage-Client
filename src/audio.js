@@ -3,6 +3,17 @@
  * Maps name their track in info/bgm, e.g. "Bgm00/FloralLife"; the login uses "BgmUI/Title".
  * Browsers block audio until the first user gesture, so a pending track starts on the first click/key.
  */
+import { config } from './config.js';
+
+/**
+ * A track's address ("Bgm00", "FloralLife"). It is asked for by its version when the customs folder has its music set
+ * (a track brought in again under the same name is then not an old copy a browser kept), else by which assets these are.
+ */
+function trackUrl(img, name) {
+  const v = config.custom?.[`Sound/${img}.img`] || config.assets;
+  return `/assets/Sound/${img}.img/${name}.mp3${v ? `?v=${encodeURIComponent(v)}` : ''}`;
+}
+
 /**
  * A volume slider (0-1) as the client hears it (Sound_DX8, openms docs/ingame-audiovisual.md): the slider is a
  * backend level 0-128, attenuated by 625 - 1280000/(15*level + 128) hundredths of a decibel, so each step sounds
@@ -87,7 +98,7 @@ class Music {
     if (!bgm || (bgm === this.current && !force)) return;
     this.current = bgm;
     const [img, ...name] = bgm.split('/');
-    const url = `/assets/Sound/${img}.img/${name.join('/')}.mp3`;
+    const url = trackUrl(img, name.join('/'));
     // Sound.wz may not be extracted: check first so a missing file doesn't spam errors
     const ok = await fetch(url, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
     if (this.current !== bgm) return;
@@ -226,6 +237,6 @@ export function songLength(bgm) {
     el.preload = 'metadata';
     el.onloadedmetadata = () => done(Number.isFinite(el.duration) ? Math.round(el.duration * 1000) : 0);
     el.onerror = () => done(0);
-    el.src = `/assets/Sound/${img}.img/${name.join('/')}.mp3`;
+    el.src = trackUrl(img, name.join('/'));
   });
 }
