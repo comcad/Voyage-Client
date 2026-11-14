@@ -5,7 +5,7 @@
 # Voyage Client: Version 83 Web Client
 
 **An open-source Version 83 web client that runs in your browser.**
-Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor
+Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor (Compatible with cosmic)
 
 <br />
 
