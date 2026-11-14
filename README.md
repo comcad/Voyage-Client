@@ -25,7 +25,7 @@ Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor
 
 <br />
 
-**Voyage Client** is an open-source **Version 83 web client**. It brings the classic Version 83 client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop Version 83 Client. It plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), a v83 server based on Cosmic.
+**Voyage Client** is an open-source **Version 83 web client**. It brings the classic Version 83 client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop Version 83 Client. It plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), its v83 game server.
 
 The repository contains the browser game, the small Node.js server that serves it and relays players to the game server, and a Dockerfile for running it.
 
@@ -39,7 +39,7 @@ Voyage is four projects that work together, all reading one assets folder made f
 | Project | What it does |
 |---|---|
 | **Voyage-Client** (this one) | The web client: serves the game to browsers and relays them to the game server |
-| [Voyage-Server](https://github.com/comcad/Voyage-Server) | The game server: a fork of [Cosmic](https://github.com/P0nk/Cosmic) that reads the same assets, with an admin page |
+| [Voyage-Server](https://github.com/comcad/Voyage-Server) | The game server: reads the same assets, with an admin page |
 | [Voyage-Editor](https://github.com/comcad/Voyage-Editor) | The map, item, NPC and quest editor: publishes what you make into the assets' `customs` folder |
 | [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) | Turns your own `.wz` files into the assets folder the other three read |
 
@@ -104,13 +104,15 @@ The WZ extractor lives in its own repo: **[Voyage-Wz-Extractor](https://github.c
 > Use your own Version 83 `.wz` files.
 
 ```sh
+cd ..                                # beside Voyage-Client, not inside it
 git clone https://github.com/comcad/Voyage-Wz-Extractor
 cd Voyage-Wz-Extractor
 node wz-extract.mjs <path-to-wz-folder> ../voyage-assets
+cd ../Voyage-Client
 ```
 
 The assets folder is shared: Voyage-Client, [Voyage-Server](https://github.com/comcad/Voyage-Server) and
-[Voyage-Editor](https://github.com/comcad/Voyage-Editor) all point at the same one (here `../voyage-assets`, beside
+[Voyage-Editor](https://github.com/comcad/Voyage-Editor) all point at the same one (here `voyage-assets`, beside
 the three repos; `Server.AssetsDir` in `conf/client.conf`). Its `customs` folder is where the editor publishes: see
 [Customs](#-customs).
 
@@ -300,7 +302,7 @@ Questions, feedback, or want to help test? Come hang out on Discord.
 
 ## 🙏 Credits
 
-- **Server:** [Voyage-Server](https://github.com/comcad/Voyage-Server), a fork of [Cosmic](https://github.com/P0nk/Cosmic)
+- **Server:** [Voyage-Server](https://github.com/comcad/Voyage-Server)
 
 ## 📄 License
 
