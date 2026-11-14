@@ -49,7 +49,7 @@ export const CHAT_BAR = {
 };
 // these kinds wrap flush; the rest indent their continuation lines by five spaces
 const FLUSH = new Set([CHAT_COLOR.grey, CHAT_COLOR.yellow, CHAT_COLOR.result, CHAT_COLOR.notice, CHAT_COLOR.error, CHAT_BAR.gm.color]);
-// the notice box (base/box, 42x19) right of the chat line, its pencil (base/iconMemo) in the right cell:
+// the notice box (base/box, 42x19) right of the chat line: Report (BtClaim) in the left cell, the pencil (base/iconMemo) in the right:
 // invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
 const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
 export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
@@ -106,9 +106,9 @@ export class StatusBar {
     // "-" minimizes the log to one line, "+" opens it
     this.chatMinBtn = this.btn(this.B.BtMin, 536, () => y() + 12, () => this.setChatState(1));
     this.chatMaxBtn = this.btn(this.B.BtMax, 536, () => y() + 12, () => this.setChatState(3));
-    // Report: the chat log goes with it (the client's own report flow). Its place was lost: the gap between the chat
-    // line's end (514) and the log's -/+ (536) on the white strip (unverified)
-    this.claimBtn = this.btn(S.BtClaim, 514, () => y() + 8, () => g.openReport());
+    // Report: the chat log goes with it (the client's own report flow). In the notice box's left cell, which is its
+    // size (20x19, its own frame drawn over the cell's); the pencil keeps the right one
+    this.claimBtn = this.btn(S.BtClaim, NOTICE_BOX.x, () => y() + NOTICE_BOX.y, () => g.openReport());
 
     this.chat = new TextField(this.layer, CHAT.x, 0, CHAT.w, CHAT.h, { max: 70, color: '#000' });
     this.chat.el.classList.add('chatinput');
