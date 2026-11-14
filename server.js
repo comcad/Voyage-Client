@@ -76,6 +76,8 @@ const serveSheets = (web, guard = (req, res, next) => next()) => {
   });
 };
 serveSheets(app);
+// what the customs folder holds for the game server alone (monsters' drops, NPC scripts) is never handed out
+app.use(['/assets/server', '/assets/scripts'], (req, res) => res.status(404).end());
 app.use('/assets', express.static(customs.dir, { maxAge: '1d', dotfiles: 'allow' }));   // the customs first
 app.use('/assets', express.static(ASSETS_DIR, { maxAge: '1d', fallthrough: false, dotfiles: 'allow' }), (err, req, res, next) => {
   if (err.status !== 404) { next(err); return; }

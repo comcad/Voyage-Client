@@ -40,7 +40,7 @@ Voyage is made up of four projects that work together, all reading one assets fo
 |---|---|
 | **Voyage-Client** (this one) | The web client: serves the game to browsers and relays them to the game server |
 | [Voyage-Server](https://github.com/comcad/Voyage-Server) | The game server: reads the same assets, with an admin page |
-| [Voyage-Editor](https://github.com/comcad/Voyage-Editor) | The map, item, NPC and quest editor: publishes what you make into the assets' `customs` folder |
+| [Voyage-Editor](https://github.com/comcad/Voyage-Editor) | The map, item, NPC, monster and quest editor: publishes what you make into the assets' `customs` folder |
 | [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) | Turns your own `.wz` files into the assets folder the other three read |
 
 ```
@@ -79,7 +79,7 @@ Voyage-Client/  Voyage-Server/  Voyage-Editor/    # each pointed at ../voyage-as
                                    └────────────────────────────────────────────┘
 ```
 
-The browser talks to `server.js` over WebSocket. The server relays that traffic over TCP to the game server and serves the assets, with the `customs` folder's files in place of the assets' own. Voyage-Server reads the same folder, so players and the game server see the same game.
+The browser talks to `server.js` over WebSocket. The server relays that traffic over TCP to the game server and serves the assets, with the `customs` folder's files in place of the assets' own (all but what is there for the game server alone, `customs/server` and `customs/scripts`, which it never hands out). Voyage-Server reads the same folder, so players and the game server see the same game.
 
 ## 📋 Requirements
 
