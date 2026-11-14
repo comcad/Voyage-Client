@@ -3352,7 +3352,12 @@ export class Game {
       }),
       weather: later((type, id, text) => { if (id) this.weather.start(id, text); else this.weather.stop(); }),
       // 4: a sound from Sound/Field.img; 6: the map's music changes until the next map
-      police: (text) => this.windows.notice(text),
+      // the notice the server sends before it cuts you off (kicked, banned): if the cut comes while it is up, its OK
+      // goes back to the login screen; if it was closed already, it comes up again in place of the update box
+      police: (text) => {
+        const note = this.cutOffNote = { text, open: true };
+        this.windows.notice(text).then(() => { note.open = false; if (this.leaving === true) this.leave(); });
+      },
       fieldEffect: later((type, str) => {
         if (type === 3 && str) this.vfx.screen(str);   // 3: Map/Effect.img/<str> on the screen
         if (type === 4 && str) sfx.play(`Field/${str}`);
@@ -3746,7 +3751,12 @@ export class Game {
         }
       },
       // the game's small box with its OK; back to the login screen once it is clicked (no leave-page warning now)
-      disconnected: () => { this.leaving = true; this.windows.okCancel('There was an update to the client. Press ok to reload.', 'ok').then(() => this.leave()); },
+      disconnected: () => {
+        this.leaving = true;
+        const note = this.cutOffNote;
+        if (note?.open) return;
+        this.windows.okCancel(note ? note.text : 'There was an update to the client. Press ok to reload.', 'ok').then(() => this.leave());
+      },
     });
     const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
     this.net.flush(); // buffered spawns queue up behind the map load
