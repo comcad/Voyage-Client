@@ -117,7 +117,7 @@ export class LoginScene {
     this.frame = new WzSprite(this.L.Common.frame, W / 2, H / 2); // origin (400, 300)
     await a.preload(this.frame.frames());
     this.blockReasons = await a.json('Etc/BlockReason.img');
-    this.servers = await fetch('/servers.json').then((r) => r.json()).catch(() => ['cosmic']);
+    this.servers = await fetch('/servers.json').then((r) => r.json()).catch(() => ['gameserver']);
     this.bindInput();
     const loop = (t) => {
       const dt = Math.min(0.05, (t - (this.lastT || t)) / 1000); this.lastT = t;
@@ -695,7 +695,7 @@ export class LoginScene {
           this.button(T.BtLoginIDLost, sx + 184, sy + 93, () => this.notice('Please contact the server administrator to recover your ID.', 'info')),
           this.button(T.BtPasswdLost, sx + 283, sy + 93, () => this.notice('Please contact the server administrator to reset your password.', 'info')),
           this.button(T.BtNew, sx + 70, sy + 137, () => this.notice('New IDs are registered automatically: just log in with the ID and password you want.', 'info')),
-          this.button(T.BtHomePage, sx + 171, sy + 137, () => window.open('https://github.com/P0nk/Cosmic', '_blank', 'noopener')),
+          this.button(T.BtHomePage, sx + 171, sy + 137, () => window.open('https://github.com/comcad/Voyage-Client', '_blank', 'noopener')),
           this.button(T.BtQuit, sx + 271, sy + 137, () => this.notice('You can simply close this browser tab to quit.', 'info')),
         ],
         sprites: [],

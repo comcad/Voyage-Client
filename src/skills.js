@@ -172,7 +172,7 @@ export class SkillBook {
     if (MELEE_SKILLS.has(id)) return 'melee';
     if (MAGIC_SKILLS.has(id)) return 'magic';
     if (NO_AMMO_SHOTS.has(id) || id === SNIPE) return 'ranged';
-    // Three Snails looks like a throw but Cosmic only processes it as a close-range attack
+    // Three Snails looks like a throw but the game server only processes it as a close-range attack
     if (id % 10000000 === 1000) return 'melee';
     // the Dojo's Bamboo Rain and the Pyramid's Rage of Pharaoh (every beginner job's) are close-range attacks
     if (ARENA_ATTACKS.has(id)) return 'melee';
@@ -226,7 +226,7 @@ export class SkillBook {
 
 /**
  * Max damage per line, mirroring the server checks in AbstractDealDamageHandler.parseDamage
- * (client-side numbers must stay below calcDmgMax * 1.5 or Cosmic flags the character).
+ * (client-side numbers must stay below calcDmgMax * 1.5 or the game server flags the character).
  */
 /**
  * Your critical chance and extra damage (percentage points on top of the skill's own damage%), v83 style:

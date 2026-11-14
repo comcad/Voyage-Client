@@ -17,7 +17,7 @@ import { UI_W } from '../view.js';
  * Items come in by dragging them from the inventory; the coin button offers mesos.
  */
 const COLS = [[6, 45, 84], [170, 208, 248]], ROWS = [128, 166, 204];
-// Cosmic sends 1 (not 7) to whoever received mesos, alongside its own "Transaction completed" popup
+// The game server sends 1 (not 7) to whoever received mesos, alongside its own "Transaction completed" popup
 const RESULTS = { 1: 'The trade was successful.', 2: 'The trade has been cancelled.', 7: 'The trade was successful.', 8: 'The trade was unsuccessful.',
   9: 'The trade was unsuccessful: you can only hold one of a unique item.', 12: 'The trade was cancelled: you moved to another map.',
   13: 'The trade was unsuccessful.' };

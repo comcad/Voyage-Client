@@ -58,7 +58,7 @@ export class MonsterBookWin extends Win {
   }
   get book() { return this.g.monsterBook || { cover: 0, cards: {} }; }
   count(id) { return this.book.cards[id] || 0; }
-  /** Cosmic's MonsterBook.calculateLevel: each level needs 10 x level more distinct cards than the last. */
+  /** The game server's MonsterBook.calculateLevel: each level needs 10 x level more distinct cards than the last. */
   level() {
     const have = Object.keys(this.book.cards).length;
     let level = 0, next = 1;

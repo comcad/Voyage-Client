@@ -12,7 +12,6 @@
 #
 #  CLIENT SYSTEM SETTINGS
 #    SERVER
-#    ADMIN
 #    RELAY
 #    BUILD
 #
@@ -51,11 +50,14 @@ Server.Port = 3000
 
 #
 #     Server.AssetsDir
-#        Description: The folder holding the extracted WZ files (JSON + PNG), relative to the
-#                     folder server.js is in.
-#        Default:     "assets"
+#        Description: The assets folder the Voyage extractor made (JSON + PNG), relative to the
+#                     folder server.js is in. Voyage-Server and Voyage-Editor point at the same one.
+#                     A file in its customs folder (assets/customs, laid out like the assets) is
+#                     served in place of the one of the same name, and one only it has is served
+#                     as well: that is where Voyage-Editor publishes to.
+#        Default:     "../voyage-assets"
 
-Server.AssetsDir = "assets"
+Server.AssetsDir = "../voyage-assets"
 
 #
 #     Server.Sheets
@@ -82,67 +84,20 @@ Server.Sheets = true
 Server.CacheDir = "cache"
 
 #
-#     Server.CustomDir
-#        Description: The folder for what you make yourself with the admin page, relative to the
-#                     folder server.js is in: maps, NPCs, equips, items and quests, each in a
-#                     folder of its own (maps/, npcs/, equips/, items/, quests/) with the pictures
-#                     you brought in for it. What you publish there is served to players in place
-#                     of what the assets have; the assets folder is never written to.
-#        Default:     "custom"
-
-Server.CustomDir = "custom"
-
-#
-###################################################################################################
-
-###################################################################################################
-# ADMIN
-#
-#     Admin.Port
-#        Description: The port of the admin page: the server's console, who is connected, how
-#                     the game runs in players' browsers, and editors for maps, items, equips,
-#                     NPCs and quests of your own, each with an export of the files the Cosmic
-#                     server reads. It is a web server of its own; nothing of it is served on
-#                     Server.Port. With it on, players' browsers report their frame rate, hitches
-#                     and errors to this server for the page to show.
-#        Default:     0 - off.
-#                     3001 (or any other free port) - on, at http://<this machine>:3001
-
-Admin.Port = 3001
-
-#
-#     Admin.Host
-#        Description: The address the admin page listens on.
-#        Default:     "0.0.0.0"
-
-Admin.Host = "0.0.0.0"
-
-#
-#     Admin.Password
-#        Description: The password to sign in to the admin page with. Anyone who can reach
-#                     Admin.Port and knows it can close players' connections and change what
-#                     players get, so make it long, and keep the port off the internet (the sign-in is not
-#                     encrypted unless you put the page behind HTTPS).
-#        Default:     "" - no password: the page then answers only the machine the server runs
-#                     on (from elsewhere, reach it through an SSH tunnel).
-
-Admin.Password = "changeme"
-
-#
 ###################################################################################################
 
 ###################################################################################################
 # RELAY
 #
 #     Relay.Servers
-#        Description: The Cosmic servers the relay connects players to, as name=host pairs
-#                     separated by commas, e.g. "cosmic=192.168.2.2,test=10.0.0.5". With more than
+#        Description: The game servers the relay connects players to, as name=host pairs
+#                     separated by commas, e.g. "gameserver=127.0.0.1,test=10.0.0.5". With more than
 #                     one, the login screen lets players pick; the first is the default. A host
 #                     on its own ("10.0.0.5") is named after itself. Only the login port (8484) and
 #                     the channel ports (7575-7699) are relayed.
-#        Default:     "cosmic=192.168.2.2"
+#        Default:     "gameserver=127.0.0.1"
 
-Relay.Servers = "cosmic=192.168.2.2"
+Relay.Servers = "gameserver=127.0.0.1"
 
 #
 ###################################################################################################
@@ -181,7 +136,7 @@ Account.SkipBirthdayCode = false
 
 #
 #     Account.BirthdayCode
-#        Description: The code sent when Account.SkipBirthdayCode is on, as YYYYMMDD. Cosmic
+#        Description: The code sent when Account.SkipBirthdayCode is on, as YYYYMMDD. The game server
 #                     gives every account it creates the birthday 2005-05-11; change this if your
 #                     accounts have another. With the skip on, every player's browser is sent this
 #                     code, so don't use a birthday that should stay private.

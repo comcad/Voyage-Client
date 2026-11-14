@@ -3,7 +3,7 @@ import { fileURLToPath } from 'url';
 import { ConfigMgr } from './configmgr.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const SERVERS = 'cosmic=192.168.2.2';
+const SERVERS = 'gameserver=127.0.0.1';
 
 /** server.js's settings from conf/client.conf. Keys and defaults match conf/client.conf.dist. */
 export const ServerConfigs = {
@@ -15,7 +15,8 @@ export const ServerConfigs = {
     console.warn(`Config key Server.Port = ${port} isn't a port (1-65535); defaulting to 3000`);
     return 3000;
   },
-  get ASSETS_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.AssetsDir', 'assets')); },
+  /** The assets folder the Voyage extractor made, shared with Voyage-Server and Voyage-Editor. */
+  get ASSETS_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.AssetsDir', '../voyage-assets')); },
   /** Where the server keeps what it makes from the assets (the sheets). */
   get CACHE_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.CacheDir', 'cache')); },
   /** Server.Sheets (a client.conf that still has only the name it had first, Server.CharacterSheets, goes by that). */
@@ -24,21 +25,6 @@ export const ServerConfigs = {
     return ConfigMgr.getBoolean(old ? 'Server.CharacterSheets' : 'Server.Sheets', true);
   },
 
-  /** Where what you make with the admin page is kept (maps). */
-  get CUSTOM_DIR() { return path.resolve(ROOT, ConfigMgr.getString('Server.CustomDir', 'custom')); },
-
-  // ----------------------------ADMIN------------------------------
-  /** The admin page's port; 0 leaves it off. */
-  get ADMIN_PORT() {
-    const port = ConfigMgr.getInt('Admin.Port', 0);
-    if (port === 0 || (port >= 1 && port <= 65535 && port !== this.PORT)) return port;
-    console.warn(`Config key Admin.Port = ${port} isn't a port of its own (1-65535, not Server.Port); the admin page is left off`);
-    return 0;
-  },
-  /** The address it listens on; the game's own (Server.Host) when it isn't given. */
-  get ADMIN_HOST() { return ConfigMgr.getString('Admin.Host', '') || this.HOST; },
-  /** The password to sign in with; without one only the machine itself is let in. */
-  get ADMIN_PASSWORD() { return ConfigMgr.getString('Admin.Password', ''); },
 
   // ----------------------------RELAY------------------------------
   /** name -> host, the first the default; a bare host is named after itself. */

@@ -1,5 +1,5 @@
 /**
- * MapleStory v83 transport crypto, ported from Cosmic's net/encryption:
+ * MapleStory v83 transport crypto, ported from the game server's net/encryption:
  *   - AES-256 in OFB-like mode keyed with the fixed Maple key, IV = 4-byte seed repeated 4x
  *   - IV shuffle after every packet (MapleAESOFB.getNewIv)
  *   - "Shanda" byte cipher (MapleCustomEncryption) applied before AES on send, after AES on receive

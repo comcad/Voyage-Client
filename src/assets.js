@@ -54,6 +54,13 @@ const PACKED = /^(?:Character|Npc|Mob)\/|^Map\/Tile\//;
 /** A load that hasn't finished in this long gives its slot up (it still counts once it comes in). */
 const SLOT_TIMEOUT_MS = 20000;
 
+/** What a picture is asked for by: its own version or its .img's when the customs folder changes it, else the assets'. */
+function pictureVersion(canvas) {
+  const own = config.custom?.[canvas], at = canvas.indexOf('.img/'), img = at > 0 ? config.custom?.[canvas.slice(0, at + 4)] : null;
+  const v = own || img || config.assets;
+  return v ? `?v=${v}` : '';
+}
+
 export class Assets {
   constructor(base = '/assets') {
     this.base = base;
@@ -69,6 +76,9 @@ export class Assets {
     this._slice = { img: null, x: 0, y: 0, w: 0, h: 0 };
   }
 
+  /** Drops a file the page holds (null: every one), so the next ask fetches it again. */
+  forget(path) { if (path === null) this.jsonCache.clear(); else this.jsonCache.delete(path); }
+
   json(path) {
     if (!this.jsonCache.has(path)) {
       const wz = path.split('/')[0];
@@ -78,8 +88,9 @@ export class Assets {
         const t0 = performance.now();
         try { return JSON.parse(text); } finally { spent('files', t0); }
       });
-      // (a file published from the admin page is asked for by its version, so a copy the browser kept isn't used)
-      const ver = config.custom?.[path];
+      // (a file the customs folder changes is asked for by its version, the rest by which assets these are: either
+      // way a copy the browser kept of an older one isn't used)
+      const ver = config.custom?.[path] || config.assets;
       const own = () => get(`${this.base}/${path}.json${ver ? `?v=${ver}` : ''}`);
       // a file the server packs into sheets is asked for with its images' places in them (one it has no sheets for
       // comes back as it is); if that can't be had, the file as it is
@@ -96,7 +107,7 @@ export class Assets {
     // one that failed to load (a dropped connection) is tried again 5s later, three tries in all
     const retry = e?.err && e.tries < 3 && performance.now() - e.failedAt > 5000;
     if (!e || retry) {
-      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };
+      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}${node._canvas.startsWith('_sheets/') ? '' : pictureVersion(node._canvas)}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };
       e.promise = new Promise((res) => { e.settle = res; });
       this.imgCache.set(node._canvas, e);
     }

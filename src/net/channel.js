@@ -811,7 +811,7 @@ export class ChannelSession {
     });
     on(S.DESTROY_HIRED_MERCHANT, (r) => this.emit('merchantRemove', r.int()));
     // UPDATE_CHAR_BOX: a character's shop / game sign changed (type 0 = taken down)
-    // ---- Family (Cosmic PacketCreator getFamilyInfo / showPedigree / loadFamily / sendFamily*)
+    // ---- Family (the game server's PacketCreator getFamilyInfo / showPedigree / loadFamily / sendFamily*)
     // FAMILY_PRIVILEGE_LIST (at login): per privilege its type, reputation cost, uses allowed, name and description
     on(S.FAMILY_PRIVILEGE_LIST, (r) => this.emit('family', { op: 'privileges', list: Array.from({ length: r.int() }, () => ({ type: r.ubyte(), cost: r.int(), limit: r.int(), name: r.string(), desc: r.string() })) }));
     // FAMILY_INFO_RESULT: your reputation (now, all-time, today), juniors (have / allowed), the leader, family name and precepts, uses per privilege
@@ -941,7 +941,7 @@ export class ChannelSession {
       else if (op === 0x0A) { r.ubyte(); this.emit('tradeEnd', r.available ? r.ubyte() : 2); }
       else if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('tradeChat', r.string(), slot); }
     });
-    // CHAR_INFO (Cosmic PacketCreator.charInfo): id, level, job, fame, married, guild, alliance, medal-info byte,
+    // CHAR_INFO (the game server's PacketCreator.charInfo): id, level, job, fame, married, guild, alliance, medal-info byte,
     // pets (each led by a non-zero byte, 0 ends), mount, wish list SNs, Monster Book, medal, medal quests
     on(S.CHAR_INFO, (r) => {
       const i = { id: r.int(), level: r.ubyte(), job: r.short(), fame: r.short(), married: r.bool(), guild: r.string(), alliance: r.string() };
@@ -1112,7 +1112,7 @@ export class ChannelSession {
       const targets = [];
       for (let i = 0; i < (nd >> 4); i++) {
         const oid = r.int(); r.ubyte();
-        // Cosmic sets a critical hit's top bit before passing it on (damage - 2^31)
+        // The game server sets a critical hit's top bit before passing it on (damage - 2^31)
         const dmg = [], crit = [], n = skill === 4211006 ? r.ubyte() : nd & 0xf;   // Meso Explosion: each its own count
         for (let j = 0; j < n; j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
         targets.push({ oid, dmg, crit });
@@ -1124,7 +1124,7 @@ export class ChannelSession {
     on(S.MAGIC_ATTACK, readAttack('magic'));
     // a blow from someone's full Energy Charge: read as a melee attack; they play no action for it
     on(S.ENERGY_ATTACK, readAttack('energy'));
-    // a monster's line: its speak entry and the line in it (Cosmic's SHOW_MAGNET)
+    // a monster's line: its speak entry and the line in it (the game server's SHOW_MAGNET)
     on(S.MOB_SPEAKING, (r) => { const oid = r.int(), s = r.int(); this.emit('mobSpeak', oid, s, r.int()); });
     // the family privilege in use: its type (0: none), the privilege's index, two more values, then its time left
     // WITCH_TOWER_SCORE: the keys you hold; GUILD_BOSS_HEALER_MOVE: the healer's new y; GUILD_BOSS_PULLEY_STATE: the pulley's state
@@ -1228,7 +1228,7 @@ export class ChannelSession {
       if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MATK | MDEF | AVOID | HANDS | BOOSTER))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
-        const at = (bit) => popcount(mask & (bit - 1n));   // Cosmic lists the plain stats (WATK..JUMP) first
+        const at = (bit) => popcount(mask & (bit - 1n));   // the game server lists the plain stats (WATK..JUMP) first
         if (mask & SPEED) b.speed = values[at(SPEED)];
         if (mask & JUMP) b.jump = values[at(JUMP)];
         if (mask & WATK) b.watk = values[at(WATK)];
@@ -1293,7 +1293,7 @@ export class ChannelSession {
     on(S.MONSTER_BOOK_SET_COVER, (r) => this.emit('bookCover', r.int()));
     // MACRO_SYS_DATA_INIT: the saved skill macros, in order: name, shout, three skill ids
     on(S.MACRO_SYS_DATA_INIT, (r) => this.emit('macros', Array.from({ length: r.ubyte() }, () => ({ name: r.string(), shout: r.bool(), skills: [r.int(), r.int(), r.int()] }))));
-    // ---- summons (Cosmic PacketCreator.spawnSummon / removeSummon / moveSummon / summonAttack / damageSummon / summonSkill)
+    // ---- summons (the game server's PacketCreator.spawnSummon / removeSummon / moveSummon / summonAttack / damageSummon / summonSkill)
     on(S.SPAWN_SPECIAL_MAPOBJECT, (r) => {
       const d = { owner: r.int(), oid: r.int(), skill: r.int() };
       r.ubyte(); d.level = r.ubyte();
@@ -1544,7 +1544,7 @@ export class ChannelSession {
       this.emit('imitatedNpcs', list);
     });
 
-    // Cosmic sends f != 1 in the direction byte; the client mirrors the art only when it is 0
+    // The game server sends f != 1 in the direction byte; the client mirrors the art only when it is 0
     const readNpc = (r) => ({ oid: r.int(), id: r.int(), x: r.short(), y: r.short(), facingRight: !r.bool(), fh: r.short(), rx0: r.short(), rx1: r.short() });
     on(S.SPAWN_NPC, (r) => this.emit('spawnNpc', readNpc(r)));
     on(S.SPAWN_NPC_REQUEST_CONTROLLER, (r) => {
@@ -1728,7 +1728,7 @@ export class ChannelSession {
   }
 
   // ------------------------------------------------------------------ senders
-  /** Tells Cosmic the field finished loading; it ignores portals until this arrives. */
+  /** Tells the game server the field finished loading; it ignores portals until this arrives. */
   mapLoaded() { this.send(new PacketWriter(C.PLAYER_MAP_TRANSFER)); }
 
   move(start, moves) {
@@ -1771,7 +1771,7 @@ export class ChannelSession {
       return;
     }
     if (kind === 'ranged') {
-      // Cosmic passes the 4th byte on in the action's high byte for Hurricane-type skills, so it carries the facing too
+      // The game server passes the 4th byte on in the action's high byte for Hurricane-type skills, so it carries the facing too
       w.byte(0).byte(speed).byte(0).byte(((stance >> 8) & 0x7f) | (facingLeft ? 0x80 : 0)).zero(7);
       if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.int(charge); // Hurricane / Rapid Fire, Piercing's charge (ms)
     } else {
@@ -1825,7 +1825,7 @@ export class ChannelSession {
     const w = new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level);
     if (pos) w.pos(pos).byte(0);
     if (star) w.int(star);   // Shadow Stars: the star it takes
-    // the client ends every SPECIAL_MOVE with a short; Cosmic reads it only for Monster Rider (and would take it for a
+    // the client ends every SPECIAL_MOVE with a short; the game server reads it only for Monster Rider (and would take it for a
     // position on the others), so it goes on that one alone
     if (skillId % 10000000 === 1004) w.short(0);
     this.send(w);
@@ -1980,7 +1980,7 @@ export class ChannelSession {
   }
   /** PARTY_OPERATION 2, leave: the client sends a 0 byte after it. */
   partyLeave() { this.send(new PacketWriter(C.PARTY_OPERATION).byte(2).byte(0)); }
-  /** Player shop room ops (Cosmic PlayerShop / PacketCreator.getPlayerShop*). Returns whether it was one. */
+  /** Player shop room ops (the game server's PlayerShop / PacketCreator.getPlayerShop*). Returns whether it was one. */
   shopOp(op, r) {
     if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
     if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0, r.available ? r.ubyte() : null); return true; }   // REAL_CLOSE_MERCHANT: closed, and what came back

@@ -11,8 +11,8 @@ import { UI_W } from '../view.js';
  *   party4 the job boxes (287x187: two small boxes on the left, two tall ones, three below).
  *   START sends the search (PARTY_SEARCH_START: min, max, members, job bits); PAUSE / STOP end it
  *   (PARTY_SEARCH_UPDATE). The server then invites matching players near you, and they see "PS: <you>".
- *   Find Party: Party/party0..3. Cosmic takes no registration - anyone without a party can be invited.
- * Job bits follow Cosmic's PartySearchCoordinator table.
+ *   Find Party: Party/party0..3. The game server takes no registration - anyone without a party can be invited.
+ * Job bits follow the game server's PartySearchCoordinator table.
  */
 const GROUPS = [
   // [box x, box y, width, title, [[job bit, name]...]] inside party4

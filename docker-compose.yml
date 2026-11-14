@@ -9,26 +9,30 @@ services:
     container_name: voyage-client
     # uid 1000, so conf/client.conf is yours, not root's; ./conf must be writable by it
     user: "1000:1000"
-    # host networking so the container reaches the Cosmic server on the LAN
-    # (192.168.2.2:8484 login, :7575-7699 channels) and binds :3000 directly
+    # host networking so the container reaches the game server on the LAN
+    # (8484 login, 7575-7699 channels) and binds Server.Port directly
     network_mode: host
     volumes:
-      # The extracted WZ assets (JSON + PNG). 5.6G, kept out of the image.
-      - ./assets:/app/assets:ro
-      # Settings: conf/client.conf (port, Cosmic servers, obfuscation, quality of life),
+      # The assets folder the extractor made (JSON + PNG), shared with Voyage-Server and Voyage-Editor; its customs
+      # folder is served in front of it. 5.6G, kept out of the image.
+      - ${VOYAGE_ASSETS:-../voyage-assets}:/voyage-assets:ro
+      # Settings: conf/client.conf (port, game servers, obfuscation, quality of life),
       # made from conf/client.conf.dist on the first start. Restart after a change.
       - ./conf:/conf
       # What the server makes from the assets (sheets), kept between restarts.
       # Safe to delete: it is made again on the next start. Must be writable by uid 1000.
       - ./cache:/app/cache
-      # What you make with the admin page (maps), kept between restarts. Must be writable by uid 1000.
-      - ./custom:/app/custom
     # Restart unless killed
     restart: unless-stopped
     # The client is a long-running server; no healthcheck needed, but a
     # liveness probe on the HTTP port is cheap insurance.
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # (on the port client.conf gives, Server.Port)
+      test:
+        - CMD-SHELL
+        - >-
+          node -e "const m = require('fs').readFileSync('/conf/client.conf', 'utf8').match(/^Server\.Port\s*=\s*(\d+)/m);
+          fetch('http://127.0.0.1:' + (m ? m[1] : 3000) + '/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 30s
       timeout: 5s
       retries: 3

@@ -1,5 +1,5 @@
 /**
- * Decoders for Cosmic's composite structures (tools/PacketCreator.java).
+ * Decoders for the game server's composite structures (tools/PacketCreator.java).
  * Each function mirrors the writer of the same name on the server.
  */
 
@@ -200,7 +200,7 @@ export function readCharacterInfo(r) {
   const book = { cover: r.int(), cards: {} };
   r.ubyte();
   for (let n = r.short(); n > 0; n--) { const id = 2380000 + r.short(); book.cards[id] = r.ubyte(); }
-  // new-year cards (Cosmic's encodeNewYearCard), then each quest's ex record (quest id, then its "key=value;..."
+  // new-year cards (the game server's encodeNewYearCard), then each quest's ex record (quest id, then its "key=value;..."
   // string), which #j in quest text reads
   const questEx = {}, cards = [];
   try {

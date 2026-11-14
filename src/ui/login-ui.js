@@ -25,7 +25,7 @@ export class LoginFlow {
   }
 
   async run() {
-    const servers = await fetch('/servers.json').then((r) => r.json()).catch(() => ['cosmic']);
+    const servers = await fetch('/servers.json').then((r) => r.json()).catch(() => ['gameserver']);
     for (;;) {
       const creds = await this.titleScreen(servers);
       try {

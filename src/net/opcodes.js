@@ -1,4 +1,4 @@
-/** Opcodes from Cosmic net/opcodes (v83). Only the ones this client uses. */
+/** Opcodes from the game server's net/opcodes (v83). Only the ones this client uses. */
 
 // client -> server
 export const C = {
