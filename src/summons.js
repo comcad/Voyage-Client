@@ -5,13 +5,13 @@ import { snapPx } from './view.js';
  * Summons (Puppet, Silver Hawk, Summon Dragon, Beholder, Octopus...): Skill/<job>.img/skill/<id>/summon holds
  * summoned / stand (or fly) / move / attack1 (+ info: range lt/rb, attackAfter) / hit / skill1-6 / die.
  * The server spawns, moves (for others) and removes them; the owner's client moves them and decides their
- * attacks, as Cosmic expects (MOVE_SUMMON, SUMMON_ATTACK). Movement types as Cosmic sends them:
+ * attacks, as the game server expects (MOVE_SUMMON, SUMMON_ATTACK). Movement types as the game server sends them:
  * 0 stays where it was cast, 1 follows behind you, 3 circles above your shoulder (the birds).
  */
 const STAY = 0, FOLLOW = 1;
 /** Ranger / Sniper / Wind Archer Puppet: monsters near it go after it instead of you. */
 export const PUPPETS = new Set([3111002, 3211002, 13111004]);
-export const PUPPET_RANGE = 421;     // Cosmic hands you the monsters within this of your puppet (distanceSq < 177777)
+export const PUPPET_RANGE = 421;     // the game server hands you the monsters within this of your puppet (distanceSq < 177777)
 const ATTACK_EVERY = 1.6;     // seconds between a summon's attacks (at least its attack animation)
 const SYNC_EVERY = 0.4;
 /** Octopus, Wrath of the Octopi and Gaviota: the summons that still attack while you are on a ladder or rope. */

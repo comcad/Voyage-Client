@@ -11,7 +11,7 @@ export const LOGIN_ERRORS = {
   21: 'Please verify your account through email.', 23: 'License agreement not accepted.',
 };
 
-/** Fake but well-formed machine identifiers (Cosmic validates the format, not the value). */
+/** Fake but well-formed machine identifiers (the game server validates the format, not the value). */
 function machineIds() {
   let id = null;
   try { id = localStorage.getItem('maple.hwid'); } catch { /* storage unavailable */ }

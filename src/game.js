@@ -83,7 +83,7 @@ import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings, saveSettings } from './settings.js';
 import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale, PIXEL_SCALE } from './view.js';
-import { config } from './config.js';
+import { config, refreshPublished } from './config.js';
 import { frameMaker } from './framemaker.js';
 import { DirectionScene } from './direction.js';
 import { readSets, wornSet } from './seteff.js';
@@ -92,7 +92,6 @@ import { GuildBBSWin } from './ui/guildbbs.js';
 import { FredrickWin } from './ui/fredrick.js';
 import { WitchTowerScore, GuildBossField } from './guildboss.js';
 import { FramePace } from './framepace.js';
-import { reportError, sendFpsReport } from './report.js';
 import { snapToPixels } from './snapdraw.js';
 import { BUILD } from './build.js';
 
@@ -1063,7 +1062,7 @@ export class Game {
   enterCashShop() { if (this.net && !this.inCashShop) this.net.enterCashShop(); }
   /**
    * The status bar's MTS button: ENTER_MTS, one request at a time (500ms apart, none waiting for its answer), and not
-   * where the map forbids it (fieldLimit 0x10). Cosmic with the MTS off answers with enableActions.
+   * where the map forbids it (fieldLimit 0x10). The game server with the MTS off answers with enableActions.
    */
   enterMTS() {
     if (!this.net || this.inCashShop || !this.canExclusive(500, true)) return;
@@ -4266,6 +4265,9 @@ export class Game {
     let status = `Loading map ${id}...`, slow = false;
     const slowTimer = setTimeout(() => { if (current()) { slow = true; this.hooks.onLoading?.(true, status); } }, 1500);
     try {
+      // a map published to the customs folder (or taken out of it) since the page loaded: the new one
+      await refreshPublished((path) => this.assets.forget(path));
+      if (!current()) return;
       const map = new GameMap(this.assets, id);
       await Promise.all([
         map.load((s) => { status = s; if (slow && current()) this.hooks.onLoading?.(true, s); }, { life: !this.net }),
@@ -5301,7 +5303,7 @@ export class Game {
   }
 
   /**
-   * The most a summon may hit for, as Cosmic's SummonDamageHandler caps it (it flags anything above):
+   * The most a summon may hit for, as the game server's SummonDamageHandler caps it (it flags anything above):
    * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
    * damage (5.4% from 438 up). Rolled at most 95% of that.
    */
@@ -5787,7 +5789,6 @@ export class Game {
       }
       const report = this.perf.report(this);
       console.log(report);
-      sendFpsReport(report);   // (to the server's admin page as well, when it has one)
       const fallback = () => {
         const ta = document.createElement('textarea');
         ta.value = report; ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
@@ -6124,7 +6125,7 @@ export class Game {
           if (meter) { meter.frame(t, u1 - u0, performance.now() - u1, this); meter.draw(this.ctx, this); }
         } catch (e) {
           const key = String(e?.message);
-          if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); reportError(e, 'a frame'); }
+          if (this._lastLoopError !== key) { this._lastLoopError = key; console.error('frame failed', e); }
           for (let i = 0; i < 32; i++) this.ctx.restore();   // close whatever the failed frame left open
         }
       } else if (this.map && this.loading) this.dimWhileLoading();
@@ -6212,7 +6213,7 @@ export class Game {
   }
 
   /**
-   * Natural regeneration is client-driven in v83 (HEAL_OVER_TIME). Cosmic rejects heals faster than
+   * Natural regeneration is client-driven in v83 (HEAL_OVER_TIME). The game server rejects heals faster than
    * 1.5s apart and autobans HP heals above 77 * map recovery * 1.5, so stay at the classic +10 HP / 10s.
    */
   /**
@@ -6859,7 +6860,7 @@ export class Game {
 
   /**
    * Basic attack (skillId 0) or skill. kind: melee | ranged | magic | special.
-   * Damage, MP cost and ammo are validated by Cosmic; the client picks targets and rolls damage.
+   * Damage, MP cost and ammo are validated by the game server; the client picks targets and rolls damage.
    * opts.held: a shot of a skill whose key is held (Hurricane, Rapid Fire, Piercing Arrow), fired from the pose it holds
    * (opts.quiet: without the skill's Use; opts.stance: the action sent for it);
    * opts.charge: how long Piercing Arrow was charged (ms).
@@ -6950,7 +6951,7 @@ export class Game {
     } else { if (!opts.quiet) sfx.play(`Skill/${pad(skillId, 7)}/Use`); if (swingSound) this.playWeaponSound(p); }
 
     const mobCount = ld?.mobCount || 1;
-    // fixdamage skills must deal exactly that much per monster (Cosmic autobans anything else)
+    // fixdamage skills must deal exactly that much per monster (the game server autobans anything else)
     // Shadow Partner throws as many again: its lines follow yours, at y% of them (x% for a plain throw)
     const sp = kind === 'ranged' && !NO_PARTNER.has(skillId) ? this.partner() : null;
     const base = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
@@ -7932,7 +7933,7 @@ export class Game {
   // ------------------------------------------------------------------ Mystic Door
   /**
    * A Mystic Door's end on this map (Skill/231.img/skill/2311002): out in the field the pulsing mDoor, in town the
-   * opening cDoor (openms's pairing). One just opened can't be used for 3s (Cosmic's deployment).
+   * opening cDoor (openms's pairing). One just opened can't be used for 3s (the game server's deployment).
    */
   async addDoor(key, x, y, town, launched, to = 0) {
     this.doors ??= new Map();
@@ -10589,7 +10590,7 @@ export class Game {
   }
   /**
    * A Hired Merchant's place in the draw order: the page and zMass of the foothold its spawn names. From a server
-   * that names none (0, as Cosmic sends) it is on page 7, over every layer of the map, as anything placed without a
+   * that names none (0, as the game server sends) it is on page 7, over every layer of the map, as anything placed without a
    * foothold is.
    */
   merchantZ(m) {

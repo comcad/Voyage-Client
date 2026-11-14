@@ -1,4 +1,4 @@
-/** Little-endian packet reader/writer matching Cosmic's InPacket/OutPacket. Strings are u16-length latin1. */
+/** Little-endian packet reader/writer matching the game server's InPacket/OutPacket. Strings are u16-length latin1. */
 
 export class PacketReader {
   constructor(bytes) {

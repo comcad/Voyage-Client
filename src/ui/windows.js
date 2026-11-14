@@ -456,7 +456,7 @@ class InventoryWin extends Win {
     this.g.csPreselect = SLOT_ITEM_SN[this.tab] || 0;
     this.g.enterCashShop();
   }
-  /** The coin button: drop 10 ~ 50,000 mesos on the ground (Cosmic's MesoDropHandler range). */
+  /** The coin button: drop 10 ~ 50,000 mesos on the ground (the game server's MesoDropHandler range). */
   async dropMesos() {
     if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
     const max = Math.min(50000, this.g.meso || 0);

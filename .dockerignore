@@ -1,11 +1,10 @@
 # Don't ship these into the build context (they're mounted at runtime or not needed)
 assets/
+.env
 cache/
 .git/
 node_modules/
 public/Voyage.js
-admin/Admin.js
-custom/
 conf/*.conf
 *.log
 .DS_Store

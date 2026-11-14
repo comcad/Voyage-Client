@@ -5,9 +5,6 @@ assets/
 test/
 notes/
 public/Voyage.js
-admin/Admin.js
-# what you make with the admin page (maps)
-/custom/
 # local settings: server.js makes conf/client.conf from the tracked conf/client.conf.dist
 conf/*.conf
 **/node_modules/
@@ -31,3 +28,5 @@ __pycache__/
 nohup.out
 *.bak-loading
 *.bak-heartbeat
+# This machine's settings for docker compose (where the assets are)
+.env

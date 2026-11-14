@@ -5,7 +5,7 @@
 # Voyage Client: MapleStory Web Client
 
 **An open-source MapleStory v83 (GMS) web client that runs in your browser.**
-Pure JavaScript · Fully compatible with [Cosmic](https://github.com/P0nk/Cosmic)
+Pure JavaScript · Part of Voyage, with Voyage-Server and Voyage-Editor
 
 <br />
 
@@ -15,7 +15,7 @@ Pure JavaScript · Fully compatible with [Cosmic](https://github.com/P0nk/Cosmic
 
 ![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A5%2018-339933?style=flat-square&logo=nodedotjs&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)
-![Cosmic v83](https://img.shields.io/badge/Server-Cosmic%20v83-blue?style=flat-square)
+[![Voyage-Server](https://img.shields.io/badge/Server-Voyage--Server-blue?style=flat-square)](https://github.com/comcad/Voyage-Server)
 [![Stars](https://img.shields.io/github/stars/comcad/Voyage-Client?style=flat-square&logo=github)](https://github.com/comcad/Voyage-Client/stargazers)
 [![Forks](https://img.shields.io/github/forks/comcad/Voyage-Client?style=flat-square&logo=github)](https://github.com/comcad/Voyage-Client/forks)
 [![Last commit](https://img.shields.io/github/last-commit/comcad/Voyage-Client?style=flat-square)](https://github.com/comcad/Voyage-Client/commits/main)
@@ -26,12 +26,30 @@ Pure JavaScript · Fully compatible with [Cosmic](https://github.com/P0nk/Cosmic
 
 <br />
 
-**Voyage Client** is an open-source **MapleStory web client** for **v83 (GMS)**. It brings the classic MapleStory client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop MapleStory client. It is designed to work with the **Cosmic** v83 server.
+**Voyage Client** is an open-source **MapleStory web client** for **v83 (GMS)**. It brings the classic MapleStory client to modern web browsers using pure JavaScript, so players can open a URL and play without installing a desktop MapleStory client. It plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), a v83 server based on Cosmic.
 
-The repository contains the Node.js build tools, the local web services used by the browser runtime, and Docker entrypoints for running the whole stack.
+The repository contains the browser game, the small Node.js server that serves it and relays players to the game server, and a Dockerfile for running it.
 
 > [!WARNING]
 > Voyage Client is in **alpha**. Expect rough edges, and some classes and skills are still being worked on.
+
+## 🧭 The Voyage Projects
+
+Voyage is four projects that work together, all reading one assets folder made from your own game files:
+
+| Project | What it does |
+|---|---|
+| **Voyage-Client** (this one) | The web client: serves the game to browsers and relays them to the game server |
+| [Voyage-Server](https://github.com/comcad/Voyage-Server) | The game server: a fork of [Cosmic](https://github.com/P0nk/Cosmic) that reads the same assets, with an admin page |
+| [Voyage-Editor](https://github.com/comcad/Voyage-Editor) | The map, item, NPC and quest editor: publishes what you make into the assets' `customs` folder |
+| [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) | Turns your own `.wz` files into the assets folder the other three read |
+
+```
+voyage-assets/                 # made by the extractor from your own .wz files
+├── Map/ Npc/ String/ ...
+└── customs/                   # what Voyage-Editor publishes: files that stand in for the assets' own
+Voyage-Client/  Voyage-Server/  Voyage-Editor/    # each pointed at ../voyage-assets
+```
 
 ## ✨ Features of the MapleStory Web Client
 
@@ -52,22 +70,22 @@ The repository contains the Node.js build tools, the local web services used by 
 
 ```
 ┌──────────────────┐   WebSocket   ┌──────────────────┐     TCP     ┌──────────────────┐
-│     Browser      │ ◄───────────► │    server.js     │ ◄─────────► │   Cosmic v83     │
+│     Browser      │ ◄───────────► │    server.js     │ ◄─────────► │  Voyage-Server   │
 │   (Voyage.js)    │               │  Express + relay │             │   game server    │
-└──────────────────┘               └────────▲─────────┘             └──────────────────┘
-                                            │
-                                   ┌────────┴─────────┐
-                                   │     assets/      │
-                                   │  (extracted WZ)  │
-                                   └──────────────────┘
+└──────────────────┘               └────────▲─────────┘             └────────▲─────────┘
+                                            │ reads                    reads │
+                                   ┌────────┴────────────────────────────────┴──┐
+                                   │  voyage-assets/  (extracted WZ: JSON, PNG) │
+                                   │  └── customs/  ◄── Voyage-Editor publishes │
+                                   └────────────────────────────────────────────┘
 ```
 
-The browser talks to `server.js` over WebSocket. The server relays that traffic over TCP to your Cosmic server and serves the extracted WZ assets.
+The browser talks to `server.js` over WebSocket. The server relays that traffic over TCP to the game server and serves the assets, with the `customs` folder's files in place of the assets' own. Voyage-Server reads the same folder, so players and the game server see the same game.
 
 ## 📋 Requirements
 
-- A folder of MapleStory v83 GMS `*.wz` files (use the Cosmic-provided WZ for full compatibility)
-- A **Cosmic v83** server to log in and play against
+- A folder of MapleStory v83 GMS `*.wz` files (your own)
+- [Voyage-Server](https://github.com/comcad/Voyage-Server) to log in and play against
 - **Either** Node.js ≥ 18 **or** Docker
 
 ## 🚀 Quick Start: Run the MapleStory Web Client
@@ -84,23 +102,27 @@ cd Voyage-Client
 The WZ extractor lives in its own repo: **[Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor)** (pure Node, zero dependencies).
 
 > [!NOTE]
-> Use the `.wz` files provided by Cosmic for full compatibility.
+> Use your own MapleStory v83 GMS `.wz` files.
 
 ```sh
 git clone https://github.com/comcad/Voyage-Wz-Extractor
 cd Voyage-Wz-Extractor
-node wz-extract.mjs <path-to-wz-folder> ./assets
-# then copy the ./assets folder into the root of Voyage-Client
+node wz-extract.mjs <path-to-wz-folder> ../voyage-assets
 ```
+
+The assets folder is shared: Voyage-Client, [Voyage-Server](https://github.com/comcad/Voyage-Server) and
+[Voyage-Editor](https://github.com/comcad/Voyage-Editor) all point at the same one (here `../voyage-assets`, beside
+the three repos; `Server.AssetsDir` in `conf/client.conf`). Its `customs` folder is where the editor publishes: see
+[Customs](#-customs).
 
 ### 3. Run it
 
 <details>
-<summary><b>🐳 Option A: Docker (recommended)</b></summary>
+<summary><b>🐳 Option A: Docker</b></summary>
 
 <br />
 
-Builds the image (installs dependencies and bundles the client), then runs it with the assets folder mounted in. It uses **host networking** so it can reach the Cosmic server on your LAN and bind `:3000` directly.
+Builds the image (installs dependencies and bundles the client), then runs it with the assets folder mounted in. It uses **host networking** so it reaches the game server on your machine or LAN and binds `Server.Port` directly.
 
 ```sh
 cd Voyage-Client
@@ -108,21 +130,7 @@ docker compose up --build -d
 # → http://<your-host-ip>:3000
 ```
 
-Manage it with:
-
-```sh
-docker compose logs -f      # tail logs
-docker compose restart      # restart
-docker compose down         # stop
-```
-
-Settings live in `conf/client.conf`, which is mounted into the container (see [Settings](#%EF%B8%8F-settings)).
-
-> [!TIP]
-> The assets folder is **not** baked into the image. It's mounted read-only from `./assets` at the repo root, so the image stays small and you can swap WZ files freely.
-
-> [!NOTE]
-> On the first start the server packs your character, NPC, monster and tile-set files into sheets (it says so in the log, and takes from under a minute to a few minutes). They are kept in `./cache`, which must be writable by uid 1000 like `./conf`; if it isn't, the server says so and sends every image on its own.
+Manage it with `docker compose logs -f`, `docker compose restart` and `docker compose down`. Settings live in `conf/client.conf`, mounted into the container (see [Settings](#%EF%B8%8F-settings)); the assets folder is `../voyage-assets` unless `VOYAGE_ASSETS` says otherwise (a `.env` file beside `docker-compose.yml` will do).
 
 </details>
 
@@ -138,9 +146,9 @@ node server.js
 # → http://localhost:3000
 ```
 
-The server bundles the client (`src/main.js` → `public/Voyage.js`) on boot via `build.mjs`. Point it at your Cosmic server with `Relay.Servers` in `conf/client.conf` (see [Settings](#%EF%B8%8F-settings)). Run `node build.mjs` to rebuild the bundle on its own.
+The server bundles the client (`src/main.js` → `public/Voyage.js`) on boot via `build.mjs`. Point it at the game server with `Relay.Servers` in `conf/client.conf` (see [Settings](#%EF%B8%8F-settings)). Run `node build.mjs` to rebuild the bundle on its own.
 
-On start the server also packs your character, NPC, monster and tile-set files into sheets, so crowds and towns load in far fewer requests. The first start takes a little longer; the sheets are kept in `cache/` (delete it any time, it is made again) and your assets folder is never written to. Turn it off with `Server.CharacterSheets = false`.
+On start the server also packs your character, NPC, monster and tile-set files into sheets, so crowds and towns load in far fewer requests. The first start takes a little longer; the sheets are kept in `cache/` (delete it any time, it is made again) and your assets folder is never written to. Turn it off with `Server.Sheets = false`.
 
 </details>
 
@@ -158,14 +166,10 @@ Other `conf/*.conf` files are read too (each key in only one file), and `node se
 |---|---|---|
 | `Server.Host` | `"0.0.0.0"` | Address the client listens on |
 | `Server.Port` | `3000` | Port the client listens on |
-| `Server.AssetsDir` | `"assets"` | The extracted WZ folder, relative to `server.js` |
+| `Server.AssetsDir` | `"../voyage-assets"` | The assets folder the extractor made, shared with Voyage-Server and Voyage-Editor, relative to `server.js`; its `customs` folder is served in front of it |
 | `Server.Sheets` | `true` | Pack each character file's, NPC's, monster's and tile set's images into a few sheets (made from your assets on start) |
 | `Server.CacheDir` | `"cache"` | Where the server keeps the sheets it makes, relative to `server.js` |
-| `Server.CustomDir` | `"custom"` | Where what you make with the admin page is kept (maps, NPCs, equips, items, quests, pictures) |
-| `Admin.Port` | `0` | The admin page's port; `0` leaves it off |
-| `Admin.Host` | `""` | Address the admin page listens on (`""`: the same as `Server.Host`) |
-| `Admin.Password` | `""` | The password to sign in with; without one the page answers only the machine the server runs on |
-| `Relay.Servers` | `"cosmic=192.168.2.2"` | `name=host` pairs, comma-separated. First is default |
+| `Relay.Servers` | `"gameserver=127.0.0.1"` | `name=host` pairs, comma-separated. First is default |
 | `Build.Obfuscate` | `false` | Minify + obfuscate the bundle |
 | `Account.SkipBirthdayCode` | `false` | Send `Account.BirthdayCode` instead of asking for the birthday code |
 | `Account.BirthdayCode` | `20050511` | The code sent when the prompt is skipped (`YYYYMMDD`) |
@@ -176,37 +180,27 @@ Other `conf/*.conf` files are read too (each key in only one file), and `node se
 | `Monsters.BossHpPercent` | `false` | Show the boss's HP % on the boss HP bar |
 | `Skills.ShowCooldownTime` | `false` | Show time left on quick slot skill cooldowns |
 
-## 🛠️ Admin Page
+## 🗂️ Customs
 
-Set `Admin.Port` (and `Admin.Password`) in `conf/client.conf` and restart: the server then runs a second web page on that port, for whoever runs it. Nothing of it is served on the game's own port, and it is off by default.
-
-| Tab | What it is for |
-|---|---|
-| **Console & analytics** | The server's console as it is written, with the errors players' browsers report; players online, relay traffic, requests, players' frame rate and hitches, CPU and memory over the last hour |
-| **Players** | Who is connected through the relay (and a button to close a connection), how the game runs in each browser, and the `/fps copy` reports players sent in |
-| **Maps** | A map editor drawn by the game's own renderer: move, add and remove NPCs, monsters, portals, footholds, ropes, seats, reactors, tiles, objects and backgrounds; wire a portal to another map; start a map of your own, empty or from a copy |
-| **Items** | An item's or an equip's name, description, stats and icon; one of your own from a copy |
-| **NPCs** | An NPC's name and pictures; one of your own from a copy or from a picture |
-| **Quests** | A quest's text, the NPC that gives it and the one that takes it back, what it needs, what it gives, what is said |
-| **Import** | Pictures of your own for all of the above (kept as PNG); the ones for maps are the object set and the background set named `custom` in the map editor |
-| **Server** | Build, uptime, folders, what was sent, the settings as read, and an export of everything published |
-
-**Save** keeps a draft only the admin page sees. **Publish** gives it to players in place of what the assets have, from the next time they load the page. **Export for Cosmic** downloads a zip of the files the game server reads, in their places under its `wz` folder: the game server decides what a map's ground is and what an item does, so it needs them too (copy them over and restart it).
-
-Everything you make is kept in `custom/` (`Server.CustomDir`), a folder for each kind:
+The assets folder's `customs` folder holds changes and additions to the game's data, laid out like the assets folder
+itself:
 
 ```
-custom/
-├── maps/     100000100.json   published/   pictures/
-├── npcs/     9999001.json     published/   pictures/
-├── equips/   01302999.json    published/   pictures/
-├── items/    02000999.json    published/   pictures/
-└── quests/   29990.json       published/
+voyage-assets/
+├── Map/ Npc/ String/ ...          # the game's own, as the extractor made them
+└── customs/
+    ├── Map/Map/Map1/100000000.img.json      # served in place of the assets' own Henesys
+    ├── Map/Map/Map9/990000001.img.json      # a map of your own: only customs has it
+    ├── String/Map.img.json                  # the names, with yours in them
+    └── Npc/_custom/npcs/guide.png           # a picture of your own
 ```
 
-The assets folder is only ever read. Delete a file from `custom/` (or the whole folder) and the game is as the assets have it again.
-
-> The sign-in is a password over plain HTTP. Keep `Admin.Port` off the internet (or behind HTTPS), and without a password reach it through an SSH tunnel: `ssh -L 3001:127.0.0.1:3001 you@server`, then open `http://localhost:3001`.
+A file in `customs` is served in place of the assets' file of the same name, and one only `customs` has is served as
+well. [Voyage-Editor](https://github.com/comcad/Voyage-Editor) writes them when you publish, and
+[Voyage-Server](https://github.com/comcad/Voyage-Server) reads the same files, so players and the game server see the
+same game. The client looks at `customs` again whenever a page asks for its settings (a couple of seconds apart at
+most), and players get a changed file the next time they change maps; restarting the client does no harm either.
+The assets folder itself is only ever read. Delete a file from `customs` and the game is as the assets have it again.
 
 ## 📁 Project Layout
 
@@ -215,12 +209,7 @@ The assets folder is only ever read. Delete a file from `custom/` (or the whole 
 
 ```
 Voyage-Client/
-├── assets/               # extracted WZ (JSON + PNG): gitignored, generated by the extractor
 ├── cache/                # sheets the server makes from your assets on start: gitignored
-├── custom/               # what you make with the admin page (maps, NPCs, equips, items, quests, pictures): gitignored
-├── admin/
-│   ├── index.html, admin.css
-│   └── Admin.js          # the admin page's bundle: gitignored, built on start when Admin.Port is set
 ├── public/
 │   ├── index.html
 │   ├── style.css
@@ -235,27 +224,21 @@ Voyage-Client/
 │   ├── audio.js          # Sound.wz BGM
 │   ├── effects.js        # chat balloons, boss gage, quest icons
 │   ├── skills.js, quests.js, pets.js, physics.js, reactors.js, ...
-│   ├── report.js         # what a browser tells the server's admin page (frame rate, hitches, errors)
 │   ├── net/              # crypto, packet framing, opcodes, login, channel
-│   ├── ui/               # v83 login scene, shop, minimap, status bar, dialogs, HUD
-│   └── admin/            # the admin page: its tabs, the map editor (draws with map.js), the item, NPC and quest editors
+│   └── ui/               # v83 login scene, shop, minimap, status bar, dialogs, HUD
 ├── conf/
 │   ├── client.conf.dist  # settings template; server.js creates client.conf from it
 │   └── client.conf       # your local config (gitignored)
-├── server.js             # Express server + WS↔TCP relay to the Cosmic v83 server
+├── server.js             # Express server + WS↔TCP relay to the game server
 ├── build.mjs             # bundles src/ → public/Voyage.js (esbuild, optional obfuscation)
 ├── configmgr.mjs         # reads conf/*.conf (TOML)
 ├── serverconfigs.mjs     # server.js's settings
 ├── sheets.mjs            # packs character, NPC, monster and tile-set images into sheets (made on start, kept in cache/)
 ├── png.mjs               # the small PNG reader/writer sheets.mjs uses
-├── admin.mjs             # the admin page's server (Admin.Port): console, connections, samples, players' reports
-├── custom.mjs            # what you make with the admin page: kept in custom/, served in front of the assets
-├── mapexport.mjs         # writes a file as the Cosmic server reads it (wz XML), and the export's zip
+├── customs.mjs           # the assets' customs folder: what it changes, served in front of the assets
 ├── package.json          # Node dependencies
+├── Dockerfile, docker-compose.yml, .dockerignore
 ├── LICENSE.txt
-├── Dockerfile
-├── docker-compose.yml
-├── .dockerignore
 ├── .gitignore            # assets/, test/, node_modules/ are excluded
 └── README.md
 ```
@@ -278,7 +261,7 @@ A MapleStory web client is a version of the MapleStory game client that runs ins
 
 <br />
 
-Yes, with Voyage Client. It renders maps, characters, monsters, and the v83 UI in the browser and connects to a compatible server. You need a Cosmic v83 server to log in and play.
+Yes, with Voyage Client. It renders maps, characters, monsters, and the v83 UI in the browser and connects to a compatible server: [Voyage-Server](https://github.com/comcad/Voyage-Server), which reads the same assets.
 
 </details>
 
@@ -287,7 +270,7 @@ Yes, with Voyage Client. It renders maps, characters, monsters, and the v83 UI i
 
 <br />
 
-Voyage Client targets **MapleStory v83 (GMS)** and is fully compatible with the **Cosmic** v83 server.
+Voyage Client targets **MapleStory v83 (GMS)** and plays on [Voyage-Server](https://github.com/comcad/Voyage-Server), a fork of [Cosmic](https://github.com/P0nk/Cosmic). Other Cosmic-based v83 servers speak the same protocol, but they don't read the assets' `customs` folder, so what you publish with the editor would reach players and not the server.
 
 </details>
 
@@ -306,7 +289,16 @@ Yes. It includes drag-arrangeable touch controls for phones and touch screens, p
 
 <br />
 
-You supply your own MapleStory v83 GMS `.wz` files (the Cosmic-provided WZ files are recommended). The [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) converts them to JSON and PNG for the web client.
+You supply your own MapleStory v83 GMS `.wz` files. The [Voyage-Wz-Extractor](https://github.com/comcad/Voyage-Wz-Extractor) converts them to JSON and PNG, into the assets folder the client, the server and the editor share.
+
+</details>
+
+<details>
+<summary><b>How do I change maps, items, NPCs or quests?</b></summary>
+
+<br />
+
+With [Voyage-Editor](https://github.com/comcad/Voyage-Editor). Publishing writes the changed files into the assets' `customs` folder: players get them the next time they change maps, and Voyage-Server reads them when it restarts. Delete a file from `customs` and the game is as the assets have it again.
 
 </details>
 
@@ -318,7 +310,7 @@ Questions, feedback, or want to help test? Come hang out on Discord.
 
 ## 🙏 Credits
 
-- **Server:** [Cosmic v83](https://github.com/P0nk/Cosmic)
+- **Server:** [Voyage-Server](https://github.com/comcad/Voyage-Server), a fork of [Cosmic](https://github.com/P0nk/Cosmic)
 
 ## 📄 License
 

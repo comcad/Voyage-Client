@@ -301,7 +301,7 @@ export class CashShopWin extends Win {
   /** Gifts waiting for us: the server already moved them into the Cash Inventory. */
   /**
    * Gifts waiting for you (0x4D): each opens its thank-you note in turn; OK answers the sender (NOTE_ACTION 0) and
-   * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (Cosmic sends one
+   * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (the game server sends one
    * only after a reply, so an unanswered gift would stay hidden until you came back).
    */
   async receivedGifts(gifts) {
