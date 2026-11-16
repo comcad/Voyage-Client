@@ -143,7 +143,50 @@ export class UserListWin extends Win {
   im(n) { return this.mgr.image(n); }
 
   // ---------------------------------------------------------------- list models: rows in list coordinates
-  model() { return [this.buddyModel, this.partyModel, this.guildModel, this.allianceModel, this.blackModel][this.tab].call(this); }
+  /** The rows for the current tab, memoized: the builder runs once and again only after invalidate() (each
+   * window-side change a builder reads calls it) or a change in what modelSig() hashes — the game-side data
+   * itself has no hook here. */
+  model() {
+    const sig = this.modelSig();
+    if (this._model?.tab !== this.tab || this._model.sig !== sig)
+      this._model = { tab: this.tab, sig, list: [this.buddyModel, this.partyModel, this.guildModel, this.allianceModel, this.blackModel][this.tab].call(this) };
+    return this._model.list;
+  }
+  /** Drops the memo; the folds, pages, sorts, the online-only switch and the Blacklist edits call this. */
+  invalidate() { this._model = null; }
+  /** A 32-bit mix of the game-side fields the current tab's builder reads, so an in-place edit (a buddy's
+   * channel, a member's level or online flag, the player's map) rebuilds the memo without a game.js hook. */
+  modelSig() {
+    const mix = (h, v) => Math.imul(h ^ (v ?? 0), 0x9E3779B1) | 0;
+    const word = (h, s) => { s = String(s ?? ''); for (let i = 0; i < s.length; i++) h = mix(h, s.charCodeAt(i)); return h; };
+    const g = this.g;
+    if (this.tab === 0) {
+      let s = 0;
+      for (const b of g.buddies || []) { s = word(s, b.name); s = mix(s, b.id); s = mix(s, b.channel); s = word(s, b.group); s = mix(s, b.pending ? 1 : 0); }
+      return s;
+    }
+    if (this.tab === 1) {
+      let s = mix(mix(0, g.channel), g.map?.id);
+      for (const m of this.party?.members || []) { s = word(s, m.name); s = mix(s, m.id); s = mix(s, m.job); s = mix(s, m.level); s = mix(s, m.channel); s = mix(s, m.map); }
+      return s;
+    }
+    if (this.tab === 2) {
+      let s = this.guild ? 5 : 0;
+      for (const m of this.guild?.members || []) { s = word(s, m.name); s = mix(s, m.id); s = mix(s, m.job); s = mix(s, m.level); s = mix(s, m.rank); s = mix(s, m.online ? 1 : 0); }
+      return s;
+    }
+    if (this.tab === 3) {
+      if (!this.guild || !g.alliance) return 0;
+      let s = 5;
+      for (const gr of [this.guild, ...(g.allianceGuilds || [])]) {
+        s = word(mix(s, gr.id), gr.name);
+        for (const m of gr.members || []) { s = word(s, m.name); s = mix(s, m.id); s = mix(s, m.job); s = mix(s, m.level); s = mix(s, m.online ? 1 : 0); s = mix(s, m.allianceRank); }
+      }
+      return s;
+    }
+    // tab 4: the Blacklist is window-side and invalidated on its edits; the character-keyed swap of mine is not
+    return word(0, g.player?.name);
+  }
   /** Buddies by group: groups sorted by name, Default Group last (always there); each group's buddies by name. */
   buddyGroups() {
     const map = new Map([[DEFAULT_GROUP, []]]);
@@ -278,9 +321,9 @@ export class UserListWin extends Win {
   guildBarClick(s, pages, x, y) {
     const sec = this.gsec[s], row = this.model().rows.find((r) => r.kind === 'gbar' && r.s === s), bt = this.barButtons(row);
     const inside = (b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
-    if (inside(bt.fold)) { sec.open = !sec.open; sfx.play('UI/BtMouseClick'); return true; }
-    if (inside(bt.left) && sec.page > 0) { sec.page--; sfx.play('UI/BtMouseClick'); return true; }
-    if (inside(bt.right) && sec.page < pages - 1) { sec.page++; sfx.play('UI/BtMouseClick'); return true; }
+    if (inside(bt.fold)) { sec.open = !sec.open; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
+    if (inside(bt.left) && sec.page > 0) { sec.page--; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
+    if (inside(bt.right) && sec.page < pages - 1) { sec.page++; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
     return true;
   }
   drawGuildHead(ctx, r) {
@@ -293,6 +336,7 @@ export class UserListWin extends Win {
     const c = GUILD_COLS.findIndex(([x0, x1]) => x >= x0 && x < x1), sec = this.gsec[s];
     if (c < 0) return true;
     if (sec.sort === c) sec.desc = !sec.desc; else { sec.sort = c; sec.desc = false; }
+    this.invalidate();
     sfx.play('UI/BtMouseClick');
     return true;
   }
@@ -355,9 +399,9 @@ export class UserListWin extends Win {
   }
   allyBarClick(r, x, y) {
     const sec = r.sec, bt = this.allyBarButtons(r), inside = (b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
-    if (inside(bt.fold)) { sec.open = !sec.open; sfx.play('UI/BtMouseClick'); }
-    else if (inside(bt.left) && sec.page > 0) { sec.page--; sfx.play('UI/BtMouseClick'); }
-    else if (inside(bt.right) && sec.page < r.pages - 1) { sec.page++; sfx.play('UI/BtMouseClick'); }
+    if (inside(bt.fold)) { sec.open = !sec.open; this.invalidate(); sfx.play('UI/BtMouseClick'); }
+    else if (inside(bt.left) && sec.page > 0) { sec.page--; this.invalidate(); sfx.play('UI/BtMouseClick'); }
+    else if (inside(bt.right) && sec.page < r.pages - 1) { sec.page++; this.invalidate(); sfx.play('UI/BtMouseClick'); }
     return true;
   }
   drawAllyHead(ctx, r) {
@@ -370,6 +414,7 @@ export class UserListWin extends Win {
     const c = GUILD_COLS.findIndex(([x0, x1]) => x >= x0 && x < x1);
     if (c < 0) return true;
     if (sec.sort === c) sec.desc = !sec.desc; else { sec.sort = c; sec.desc = false; }
+    this.invalidate();
     sfx.play('UI/BtMouseClick');
     return true;
   }
@@ -436,8 +481,8 @@ export class UserListWin extends Win {
   error(text) { this.g.hud?.message(text, CHAT_COLOR.error); }
 
   // ---------------------------------------------------------------- buddy
-  setShowOnline(on) { this.showOnline = on; this.save(); }
-  toggleGroup(name) { if (this.closedGroups.has(name)) this.closedGroups.delete(name); else this.closedGroups.add(name); this.save(); }
+  setShowOnline(on) { this.showOnline = on; this.invalidate(); this.save(); }
+  toggleGroup(name) { if (this.closedGroups.has(name)) this.closedGroups.delete(name); else this.closedGroups.add(name); this.invalidate(); this.save(); }
   selGroup() { const r = this.selected(); return r?.kind === 'group' ? r.item : r?.kind === 'buddy' ? { name: r.item.group || DEFAULT_GROUP } : null; }
   /**
    * Add Buddy: the name (12 long) and a group from the box's drop-down, which lists your buddies' groups with the
@@ -703,6 +748,7 @@ export class UserListWin extends Win {
     if (this.blacklisted(name)) { this.mgr.notice('This name has already been registered\r\nPlease check again'); return; }
     list.push(name);
     list.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+    this.invalidate();
     this.saveMine();
   }
   deleteBlack() {
@@ -710,6 +756,7 @@ export class UserListWin extends Win {
     if (r?.kind !== 'black') return;
     this.mine.black.splice(this.mine.black.indexOf(r.item), 1);
     this.sel = null;
+    this.invalidate();
     this.saveMine();
   }
 
