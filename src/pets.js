@@ -323,11 +323,14 @@ export class Pet {
     if (!this.g.net) return;
     const prev = this.movePos || { x: this.x, y: this.y }, dt = TICK / 1000;
     this.movePos = { x: this.x, y: this.y };
-    const el = { cmd: 0, x: Math.round(this.x), y: Math.round(this.y), vx: Math.round((this.x - prev.x) / dt), vy: Math.round((this.y - prev.y) / dt),
+    // the raw velocity decides whether two ticks merge: rounding to whole units first turned a slow drift into
+    // zero and split a continuous move into a new element every tick
+    const rvx = (this.x - prev.x) / dt, rvy = (this.y - prev.y) / dt;
+    const el = { cmd: 0, x: Math.round(this.x), y: Math.round(this.y), vx: Math.round(rvx), vy: Math.round(rvy), rvx, rvy,
       fh: this.fh?.id || 0, stance: this.stance(), duration: TICK };
     const last = this.moveBuf[this.moveBuf.length - 1];
-    if (last && last.cmd === 0 && last.fh === el.fh && last.stance === el.stance && Math.sign(last.vx) === Math.sign(el.vx) && Math.sign(last.vy) === Math.sign(el.vy)) {
-      Object.assign(last, { x: el.x, y: el.y, vx: el.vx, vy: el.vy }); last.duration += TICK;
+    if (last && last.cmd === 0 && last.fh === el.fh && last.stance === el.stance && Math.sign(last.rvx) === Math.sign(el.rvx) && Math.sign(last.rvy) === Math.sign(el.rvy)) {
+      Object.assign(last, { x: el.x, y: el.y, vx: el.vx, vy: el.vy, rvx: el.rvx, rvy: el.rvy }); last.duration += TICK;
     } else this.moveBuf.push(el);
     this.moveTotal += TICK;
     if (this.moveTotal < MOVE_FLUSH) return;
