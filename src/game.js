@@ -8767,7 +8767,7 @@ export class Game {
     if ((skillId === 5211004 || skillId === 5211005) && Math.floor(ammoId / 1000) !== (skillId === 5211004 ? 2331 : 2332)) d *= 0.5;
     if (over) d = ((100 - over) * d) / 100;
     const elem = skillId && this.skills.node(skillId)?.elemAttr;
-    const vs = elem && new RegExp(`${elem.toUpperCase()}(\\d)`).exec(info.elemAttr || '')?.[1];
+    const vs = this.elemAttrVs(elem && elem.toUpperCase(), info.elemAttr);
     if (vs) {
       const p = PART_ELEMENT.has(skillId) ? (ld?.x || 0) / 100 : 1;
       d = vs === '1' ? d * (1 - p) : vs === '2' ? d * (1 - p * 0.5) : vs === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
@@ -8776,7 +8776,7 @@ export class Game {
     const held = this.activeCharge();
     if (held) {
       d = (d * (held.ld.damage || 100)) / 100;
-      const cv = new RegExp(`${held.elem}(\\d)`).exec(info.elemAttr || '')?.[1], p = (held.ld.z || 0) / 100;
+      const cv = this.elemAttrVs(held.elem, info.elemAttr), p = (held.ld.z || 0) / 100;
       d = cv === '1' ? d * (1 - p) : cv === '2' ? d * (1 - p * 0.5) : cv === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
     }
     const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
@@ -8825,6 +8825,11 @@ export class Game {
   partnerHit(src, pct) {
     return Math.max(1, Math.trunc((src * pct) / 100));
   }
+  /**
+   * The attribute a blow's element is weak/resistant/immune to, as the digit after it in a mob's elemAttr
+   * ("F1", "I2"): 1 weak, 2 resistant, 3 immune. Built per call was one RegExp object per damage line.
+   */
+  elemAttrVs(elem, elemAttr) { return elem ? new RegExp(`${elem}(\\d)`).exec(elemAttr || '')?.[1] : undefined; }
   /** Your Shadow Partner buff's level data, if it is on. */
   partner() {
     const now = Date.now(), b = this.buffs?.find((x) => SHADOW_PARTNERS.includes(x.source) && x.until > now);
@@ -8841,7 +8846,7 @@ export class Game {
     if (c) d = (d * ((ld?.x || 0) + 100)) / 100;
     if (over) d = ((100 - over) * d) / 100;
     const elem = this.skills.node(SHADOW_MESO)?.elemAttr;
-    const vs = elem && new RegExp(`${elem.toUpperCase()}(\\d)`).exec(info.elemAttr || '')?.[1];
+    const vs = this.elemAttrVs(elem && elem.toUpperCase(), info.elemAttr);
     if (vs) d = vs === '1' ? 0 : vs === '2' ? d * 0.5 : vs === '3' ? Math.min(199999, d * 1.5) : d;
     return { d: Math.max(1, Math.trunc(d)), c };
   }
