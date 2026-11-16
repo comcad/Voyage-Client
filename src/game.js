@@ -100,7 +100,9 @@ const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
 // and how long it takes to glide to a new focus height (s)
-const CAM_LIFT = 50, CAM_DEADBAND = 28, CAM_DAMPING = 100;   // the original camera filter (see updateCamera)
+const CAM_LIFT = 50, CAM_DEADBAND = 28, CAM_DAMPING = 100;   // the original camera filter
+/** How long after arriving on a map the Balrog ship counts as already at its station (ms). */
+const SHIP_ALREADY_THERE = 1500;
 /**
  * Pet equipment, by pet: accessory, Label Ring, Quote Ring and the ability items (Item Pouch, Meso Magnet, Wing Boots,
  * Binocular, Magic Scales, Item Ignore Pendant); the Auto HP / MP Potion Pouches are shared by all three.
@@ -6507,11 +6509,14 @@ export class Game {
       if (this.commands.run()) return;
       // a macro's next skill, once the last one's animation is over
       if (this.macroQueue?.length && !p.attack) {
-        const id = this.macroQueue.shift();
+        // peek, and take the id only once its cast went through: a refused step stays in the queue and is retried
+        // next frame rather than being silently dropped from the macro
+        const id = this.macroQueue[0];
         this.skillKeyPressed = true;
         const used = this.useSkill(id);
         this.skillKeyPressed = false;
-        if (used) return;
+        if (used) { this.macroQueue.shift(); return; }
+        if (this.macroQueue[0] === id && !this.skills?.level(id)) this.macroQueue.shift();   // unlearned: drop, don't spin
       }
       const skill = this.pressedSkill();
       if (skill && this.skills) { if (this.useSkill(skill)) return; }
@@ -7949,7 +7954,9 @@ export class Game {
     const now = performance.now();
     if (s.kind === 1) {
       if (move !== 'enemyIn' && move !== 'enemyOut') return;
-      const here = move === 'enemyIn', entering = now - (this.mapEnteredAt || 0) < 1500, at = this.shipX();
+      // inside this window after map entry the ship is already where it is going (the map placed it there); past
+      // it, an enemyIn enemy sails in from the mooring
+      const here = move === 'enemyIn', entering = now - (this.mapEnteredAt || 0) < SHIP_ALREADY_THERE, at = this.shipX();
       s.state = here ? 'in' : 'gone';
       s.from = entering ? (here ? s.x : s.x0) : at; s.to = here ? s.x : s.x0; s.t0 = entering ? now - s.tMove : now;
       if (here) music.play('Bgm04/ArabPirate', { fadeOut: 0, fadeIn: 0 });
@@ -7968,7 +7975,9 @@ export class Game {
     return s.from + (s.to - s.from) * e;
   }
   drawShip(ctx, cam) {
-    const s = this.ship, img = s?.node && this.assets.image(s.node);
+    const s = this.ship;
+    if (!s) return;
+    const img = s.node && this.assets.image(s.node);
     if (!img || (s.state === 'gone' && performance.now() - s.t0 >= s.tMove)) return;
     const o = s.node.origin || [0, 0], x = snapPx(this.shipX() - cam.x), y = snapPx(s.y - cam.y);
     if (!s.flip) { ctx.drawImage(img, x - o[0], y - o[1]); return; }
