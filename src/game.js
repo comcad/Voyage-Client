@@ -1339,10 +1339,11 @@ export class Game {
    * Chat+ when it goes down.
    */
   handleHotkeys() {
-    for (const e of this.input.events) {
+    for (const e of this.frameKeyEvents || []) {
       const k = !e.down && this.bindingOf(e.k);
       if (k?.type === 4 && CHAT_KEYS[k.action] && CHAT_KEYS[k.action] !== 'toggle') this.toggleMenu(k.action);
     }
+    this.frameKeyEvents = null;
     for (const code of this.input.pressed) {
       const k = this.bindingOf(code);
       if (!k) continue;
@@ -1463,7 +1464,8 @@ export class Game {
     if (!text) return false;
     if (await this.cursed(text)) { this.windows.notice('Cursing is not allowed.'); return false; }
     if ((this.stats?.level || 0) <= 10) { this.windows.notice('This megaphone is only available for \r\ncharacters that are over Level 10.'); return false; }
-    if (text.length > 80) return false;
+    // one band: the 80-character silent refusal was unreachable from the 60-char prompt and swallowed the Art
+    // Megaphone's long wrapped lines without a word; anything over 60 is refused out loud
     if (text.length > 60) { this.windows.notice('Use the megaphone to text up to 60 characters.'); return false; }
     return true;
   }
@@ -6400,7 +6402,10 @@ export class Game {
     if (this.dojoMod && performance.now() > this.dojoMod.t + 50) { const k = this.dojoMod.k; this.dojoMod = null; inp.inject(k, true); }
     // key commands see every press and release; one that takes a press keeps it from doing anything else
     this.commands ??= new KeyCommands(this);
-    for (const e of inp.events.splice(0)) {
+    // the whole frame's key events, kept for handleHotkeys too: this drain emptied the array before its release
+    // loop could read it (updatePlayer runs before handleHotkeys each frame)
+    this.frameKeyEvents = inp.events.splice(0);
+    for (const e of this.frameKeyEvents) {
       const sc = COMMAND_SC[e.k] ?? CODE_TO_SC[e.k];
       if (sc !== undefined && this.commands.key(sc, e.down) && e.down) inp.pressed.delete(e.k);
     }
