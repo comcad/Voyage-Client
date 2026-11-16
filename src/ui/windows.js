@@ -2022,7 +2022,7 @@ class KeyConfigWin extends Win {
     const W = mgr.W.KeyConfig;
     super(mgr, W.backgrnd, (UI_W >> 1) - 314, (UI_H >> 1) - 186);
     this.buttons = [];
-    this.W = W; this.draft = {}; this.picked = null; this.bindsKeys = true;
+    this.W = W; this.draft = {}; this.picked = null;
     // Keyboard / Controller / Touch tabs on the button strip; the controller and touch layouts stay in this browser
     this.tab = 'keyboard'; this.tabs = new ControlTabs(this); this.ctlDraft = cloneControls(mgr.game.controls);
     this.button(W.BtClose, 606, 7, () => mgr.close(this));
