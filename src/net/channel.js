@@ -226,7 +226,13 @@ export class ChannelSession {
     this.h = handler;
     this.mobMoveIds = new Map();
     this.unhandled = {};
-    this.conn.onUnhandled = (op) => { const n = S_NAMES[op] || `0x${op.toString(16)}`; this.unhandled[n] = (this.unhandled[n] || 0) + 1; };
+    // counted per opcode for the ?debug handle (main.js), and said once per distinct one on the console: a packet
+    // nobody handles is otherwise silent, and a repeat every time it arrives would bury the first sighting
+    this.conn.onUnhandled = (op) => {
+      const n = S_NAMES[op] || `0x${op.toString(16)}`;
+      this.unhandled[n] = (this.unhandled[n] || 0) + 1;
+      if (globalThis.maple && !(this.unhandledLogged ??= new Set()).has(n)) { this.unhandledLogged.add(n); console.warn('unhandled opcode', n); }
+    };
     this.conn.onClose = () => this.h.disconnected?.();
     this._register();
   }
