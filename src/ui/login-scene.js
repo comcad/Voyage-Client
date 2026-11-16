@@ -77,6 +77,10 @@ const VERSION_TEXT = 'Ver. 0.83';
 const CHAR_FACING_RIGHT = true;
 // the selected character walks on the spot, the rest stand (walk1/2 and stand1/2 by weapon)
 const charAct = (look, selected) => (selected ? look.walkAction() : look.standAction());
+// the client's double-click window: a re-click on the same channel / character / race inside 400 ms enters
+const DOUBLE_CLICK_MS = 400;
+/** Milliseconds since the click last recorded in owner[key], and records this one there. */
+const clickGap = (owner, key) => { const t = performance.now(), gap = t - (owner[key] || 0); owner[key] = t; return gap; };
 
 /** Thrown to drop the session and go back to the title without the can't-connect notice. */
 class BackToTitle extends Error {}
@@ -889,9 +893,10 @@ export class LoginScene {
         chButtons = Array.from({ length: 20 }, (_, i) => {
           const node = WS.channel[i] || WS.channel[0], c = w.channels[i];
           const b = new WzButton({ normal: node.normal, disabled: node.disabled }, win.x + 35 + (i % 4) * 94, win.y + 57 + Math.floor(i / 4) * 32, () => {
-            if (channel === i && performance.now() - (b.lastClick || 0) < 400) go(); // double-click enters
+            const gap = clickGap(b, 'lastClick');
+            if (channel === i && gap < DOUBLE_CLICK_MS) go(); // double-click enters
             if (channel !== i) select.anim.reset();
-            channel = i; b.lastClick = performance.now();
+            channel = i;
           });
           b.enabled = !!c; b.users = c?.load || 0; b.downSound = 'UI/WorldSelect';
           return b;
@@ -1293,8 +1298,8 @@ export class LoginScene {
           for (let i = 0; i < perPage; i++) {
             const idx = page * perPage + i;
             if (idx >= list.chars.length || !hitChar(idx, mx, my)) continue;
-            if (sel === idx && performance.now() - (this.lastCharClick || 0) < 400) start();   // double-click enters
-            choose(idx); this.lastCharClick = performance.now();
+            if (sel === idx && clickGap(this, 'lastCharClick') < DOUBLE_CLICK_MS) start();   // double-click enters
+            choose(idx);
             return;
           }
         },
@@ -1456,8 +1461,8 @@ export class LoginScene {
           if (f !== null) { scrollTo(f); return; }
           for (let i = 0; i < chars.length; i++) {
             if (!hit(i, mx, my)) continue;
-            if (sel === i && performance.now() - (this.lastVacClick || 0) < 400) enter();   // double-click enters
-            choose(i); this.lastVacClick = performance.now();
+            if (sel === i && clickGap(this, 'lastVacClick') < DOUBLE_CLICK_MS) enter();   // double-click enters
+            choose(i);
             return;
           }
         },
@@ -1561,8 +1566,9 @@ export class LoginScene {
       const text = Object.fromEntries(keys.map((k) => [k, new WzSprite(R[k].text, 118, 291)]));
       // the buttons keep their normal art (label included); the chosen race's coloured figures draw over it
       const buttons = keys.map((k) => this.button(btn[k], spots[k].x, spots[k].y, () => {
-        if (pick === k) { if (performance.now() - (this.lastRaceClick || 0) < 400) resolve(pick); this.lastRaceClick = performance.now(); return; }
-        fade = { from: pick, t: 0 }; pick = k; this.lastRaceClick = performance.now();
+        const gap = clickGap(this, 'lastRaceClick');
+        if (pick === k) { if (gap < DOUBLE_CLICK_MS) resolve(pick); return; }
+        fade = { from: pick, t: 0 }; pick = k;
       }));
       for (const b of buttons) b.alsoSound = 'UI/RaceSelect';
       const select = this.button(R.BtSelect, 566, 416, () => resolve(pick));
