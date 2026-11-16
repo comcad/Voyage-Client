@@ -7476,11 +7476,22 @@ export class Game {
   }
   /** Run fn after ms of game time (timers pause with the game, unlike setTimeout). */
   after(ms, fn) { if (ms <= 0) fn(); else (this.timers ??= []).push({ t: ms / 1000, fn }); }
+  /**
+   * Advance every pending timer and run those that came due. The array is compacted in place (no new array while
+   * nothing is due), and its length is set BEFORE the callbacks run: a callback is free to call after(), which pushes
+   * onto this same array.
+   */
   runTimers(dt) {
-    if (!this.timers?.length) return;
-    const due = [];
-    this.timers = this.timers.filter((x) => ((x.t -= dt) > 0 ? true : (due.push(x.fn), false)));
-    for (const fn of due) fn();
+    const ts = this.timers;
+    if (!ts?.length) return;
+    let w = 0, due = null;
+    for (let r = 0; r < ts.length; r++) {
+      const x = ts[r];
+      if ((x.t -= dt) > 0) ts[w++] = x;
+      else (due ??= []).push(x.fn);
+    }
+    ts.length = w;
+    if (due) for (const fn of due) fn();
   }
 
   defaultAttackAction(kind) {
