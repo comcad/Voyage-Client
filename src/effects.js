@@ -160,7 +160,9 @@ export class WorldFx {
     this.assets.preload([node]);
     (this.flashes ??= []).push({ node, x, y, t: 0, hold, fade });
   }
-  mapChanged() { this.flashes = []; this.screens = []; this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
+  // quest icons and item icons go on a map change: the item-icon cache is bounded by the maps played in a
+  // session rather than every item ever drawn in a buff row
+  mapChanged() { this.flashes = []; this.screens = []; this.nums.length = 0; this.anims.length = 0; this.tombs.length = 0; this.boss = null; this.questIcons.clear(); this.icons?.clear(); this.hints = []; this.questT = 0; }   // NPC quest icons right away on a new map
 
   /** Where an NPC's quest icon is (world coordinates); clicking it opens the NPC. */
   questIconRect(e) {
