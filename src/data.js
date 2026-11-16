@@ -62,7 +62,7 @@ export const invType = (id) => Math.floor(id / 1000000);
 /** The key type an item dragged from inventory tab `tab` binds as: 2 a Use item (or cash pet food), 3 a facial expression (516), 7 an effect (501, 429). */
 export function itemKeyType(tab, id) {
   const cat = Math.floor(id / 10000);
-  if (tab === 2) return [200, 201, 202, 205, 221, 236, 238, 245, 212, 226, 227].includes(cat) || Math.floor(id / 1000) === 2109 || id === 2100067 ? 2 : null;
+  if (tab === 2) return KEY_CATS.has(cat) || Math.floor(id / 1000) === 2109 || id === 2100067 ? 2 : null;
   if (tab === 3) return cat === 301 ? 2 : null;   // a chair
   if (tab === 5 && (cat === 524 || cat === 530)) return 2;   // cash pet food and morphs go on a key like a Use item
   if (tab === 5 && cat === 516) return 3;
@@ -168,9 +168,13 @@ export function weaponMultiplier(weaponId, pose = null) {
   const both = POSE_MULT[cat];
   if (both && /^swing/.test(pose)) return both[0];
   if (both && /^stab/.test(pose)) return both[1];
-  const t = [4.0, 4.4, 4.4, 4.0, 0, 0, 0, 3.6, 3.6, 0, 4.6, 4.8, 4.8, 5.0, 5.0, 3.4, 3.6, 3.6, 4.8, 3.6];
-  return cat >= 30 && cat <= 49 ? t[cat - 30] || 0 : 0;
+  return cat >= 30 && cat <= 49 ? WEAPON_MULT[cat - 30] || 0 : 0;
 }
+
+// the per-category weapon speed multiplier for an ordinary swing (index is category - 30)
+const WEAPON_MULT = Object.freeze([4.0, 4.4, 4.4, 4.0, 0, 0, 0, 3.6, 3.6, 0, 4.6, 4.8, 4.8, 5.0, 5.0, 3.4, 3.6, 3.6, 4.8, 3.6]);
+// key categories a use-tab item can be bound to (set once rather than rebuilt per call)
+const KEY_CATS = new Set([200, 201, 202, 205, 221, 236, 238, 245, 212, 226, 227]);
 
 /** Equipment scrolls (204xxxx, incl. Clean Slate / Chaos 2049xxx): used by dropping them on an equip. */
 export const isScroll = (id) => Math.floor(id / 10000) === 204;
