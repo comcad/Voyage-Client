@@ -44,7 +44,8 @@ function overlayField(mgr, w, opts) {
 }
 function placeField(mgr, f, x, y) {
   f.rect.x = x; f.rect.y = y;
-  f.layout({ left: 0, top: 0 }, mgr.game.canvas.clientWidth / UI_W);
+  const c = mgr.game.canvas;
+  f.layout({ left: 0, top: 0 }, c.clientWidth / UI_W, c.clientHeight / UI_H);
 }
 
 // ==================================================================== NPC chat
