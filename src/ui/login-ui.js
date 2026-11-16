@@ -90,9 +90,9 @@ export class LoginFlow {
         const b = await promptText('Register PIN', 'Enter the PIN again.', { password: true, pattern: /^\d{4}$/ });
         if (b === null) return false;
         if (a !== b) { toast('PINs did not match'); continue; }
-        await this.s.pinRegister(a);
-        return true;
+        return (await this.s.pinRegister(a)) === 0;   // 0 = registered
       }
+      if (mode === 3) { await modal({ title: 'PIN', body: 'The PIN service failed. Please log in again.', buttons: ['OK'] }); return false; }
       const p = await promptText('Enter PIN', mode === 2 ? 'Wrong PIN. Try again.' : 'Enter your 4-digit PIN.', { password: true, pattern: /^\d{4}$/ });
       if (p === null) return false;
       mode = await this.s.pinCheck(p);
@@ -120,13 +120,20 @@ export class LoginFlow {
       const list = await this.s.chars(world.id, channel.id);
       if (list.full || list.status) { await modal({ title: world.name, body: 'This world is full or the channel is unavailable.', buttons: ['OK'] }); return null; }
       const action = await new Promise((resolve) => {
-        const cards = list.chars.map((c) => {
-          const canvas = el('canvas', { width: 120, height: 110 });
-          this.preview(canvas, c.look);
-          return el('div', { class: 'char-card', onclick: () => resolve({ select: c }) }, canvas,
-            el('div', { class: 'char-name' }, c.stats.name),
-            el('div', { class: 'hint' }, `Lv. ${c.stats.level} ${jobName(c.stats.job)}`));
-        });
+        const key = list.chars.map((c) => c.stats.id).join(',');
+        if (this.cardKey !== key) {
+          // cache the expensive part (look load + preload); canvases redraw in place on reuse
+          this.cardCanvases = new Map(list.chars.map((c) => {
+            const canvas = el('canvas', { width: 120, height: 110 });
+            this.preview(canvas, c.look);
+            return [c.stats.id, canvas];
+          }));
+          this.cardKey = key;
+        }
+        const cards = list.chars.map((c) => el('div', { class: 'char-card', onclick: () => resolve({ select: c }) },
+          this.cardCanvases.get(c.stats.id),
+          el('div', { class: 'char-name' }, c.stats.name),
+          el('div', { class: 'hint' }, `Lv. ${c.stats.level} ${jobName(c.stats.job)}`)));
         const canCreate = list.chars.length < list.slots;
         this.screen(el('div', { class: 'panel chars' },
           el('h2', {}, `${world.name} - Channel ${channel.id + 1}`),
