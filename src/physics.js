@@ -77,14 +77,14 @@ export class Footholds {
       g.floors.push(f); g.x1 = Math.min(g.x1, f.x1); g.x2 = Math.max(g.x2, f.x2);
       this.groups.set(f.group, g);
     }
-    this.walls = this.all.filter((f) => f.x1 === f.x2);
     const xs = this.all.flatMap((f) => [f.x1, f.x2]);
     const ys = this.all.flatMap((f) => [f.y1, f.y2]);
     this.left = Math.min(...xs); this.right = Math.max(...xs);
     this.top = Math.min(...ys); this.bottom = Math.max(...ys);
     this.ceiling = Number.isFinite(this.top) ? this.top - 300 : -Infinity;   // nothing in the air goes higher
     // the side walls: the outermost foothold ends, 30px in (a map with info/VRLimit narrows them, see Map)
-    this.wallL = this.left + 30; this.wallR = this.right - 30;
+    this.wallL = Number.isFinite(this.left) ? this.left + 30 : -Infinity;
+    this.wallR = Number.isFinite(this.right) ? this.right - 30 : Infinity;
     this.ground = Number.isFinite(this.bottom) ? this.bottom + 10 : Infinity;   // nothing in the air goes lower
   }
   /**
