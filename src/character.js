@@ -13,7 +13,7 @@ import { frameMaker } from './framemaker.js';
 
 const EQUIP_DIRS = {
   100: 'Cap', 101: 'Accessory', 102: 'Accessory', 103: 'Accessory', 104: 'Coat', 105: 'Longcoat',
-  106: 'Pants', 107: 'Shoes', 108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring',
+  106: 'Pants', 107: 'Shoes', 108: 'Glove', 109: 'Shield', 110: 'Cape', 111: 'Ring', 114: 'Accessory',
 };
 
 export function equipPath(id) {
@@ -26,6 +26,28 @@ let ZINDEX = null;
 export async function loadZmap(assets) {
   const z = await assets.json('Base/zmap.img');
   ZINDEX = new Map(Object.keys(z || {}).map((k, i) => [k, i]));
+}
+
+/** The avatar's frame delay when a body frame carries none (mounts and assets' frameAt tick at their own 100ms). */
+const FRAME_DELAY_MS = 150;
+
+/** z tokens the zmap doesn't know (or any part, before it has loaded), said once each. */
+const UNKNOWN_Z = new Set();
+/** (action, anchors) of the part drops already reported, said once each. */
+const DROPPED = new Set();
+/**
+ * A part's draw order: its zmap index, higher drawn first. A z token the zmap doesn't know - or a part asked for before
+ * the zmap has loaded - draws at 60, which mis-layers the avatar silently, so it is said once.
+ */
+function zIndexOf(node) {
+  const z = ZINDEX?.get(node.z);
+  if (z !== undefined) return z;
+  const token = ZINDEX ? String(node.z) : '';
+  if (!UNKNOWN_Z.has(token)) {
+    UNKNOWN_Z.add(token);
+    console.warn(ZINDEX ? `character: z '${token}' is not in Base/zmap.img: drawing it at 60` : 'character: the zmap has not loaded: every part draws at 60');
+  }
+  return 60;
 }
 
 const BACK_ACTIONS = new Set(['ladder', 'rope']);
@@ -46,7 +68,7 @@ const ATTACK_POSES = {
   6: ['swingO2'],
   7: ['stabO1', 'stabO2'],
   8: ['stabO1', 'stabO2'],
-  9: ['swingT1', 'swingT2', 'swingT2'],
+  9: ['swingT1', 'swingT2'],
 };
 const SHOOT_POSES = { 3: ['shoot1'], 4: ['shoot2'], 7: ['swingO1', 'swingO2', 'swingO3'], 9: ['shot'] };
 
@@ -79,10 +101,10 @@ export class CharacterLook {
     // poses, which every skin has, so another skin takes them from there and draws them in its own colour
     if (base && this.body) this.body = { ...base, ...this.body };
     const load = (id) => equipPath(id) && a.json(equipPath(id));
-    const ids = [...this.equipIds], medal = ids.find((id) => Math.floor(id / 10000) === 114) || 0;
-    const [eq, medalInfo] = await Promise.all([Promise.all(ids.map(load)), medal && a.json(`Character/Accessory/${pad(medal, 8)}.img`)]);
-    // the medal worn, and its tag art (UI/NameTag.img/medal/<medalTag>)
-    this.medal = medal; this.medalTag = Number(medalInfo?.info?.medalTag) || 0;
+    const ids = [...this.equipIds], mi = ids.findIndex((id) => Math.floor(id / 10000) === 114), medal = mi < 0 ? 0 : ids[mi];
+    const eq = await Promise.all(ids.map(load));
+    // the medal worn (its art has no poses, so it is never drawn on the avatar), and its tag art (UI/NameTag.img/medal/<medalTag>)
+    this.medal = medal; this.medalTag = Number(eq[mi]?.info?.medalTag) || 0;
     // the top and pants shown: an overall over pants hides them, unless the overall is a normal one and the pants
     // are cash - then the pants show with the undershirt; nothing on top / bottom shows the Blue-Striped Undershirt /
     // Boxers (when the gender is known)
@@ -96,12 +118,12 @@ export class CharacterLook {
       ti = ids.findIndex((id) => k(id) === 104 || k(id) === 105); bi = ids.findIndex((id) => k(id) === 106);
     }
     const g = this.gender, add = [];
+    // an unknown gender (null) draws bare rather than guessing: the client knows every character's gender
     if (g === 0 || g === 1) {
       if (needTop) add.push(g ? 1041046 : 1040036);
       if (bi < 0 && !(ti >= 0 && k(ids[ti]) === 105)) add.push(g ? 1061039 : 1060026);
     }
     ids.push(...add); eq.push(...(await Promise.all(add.map(load))));
-    this.shownIds = ids;
     const cat = (i) => Math.floor(ids[i] / 10000);
     const wi = eq.findIndex((n, i) => n && cat(i) >= 130 && cat(i) < 170), ci = eq.findIndex((n, i) => n && cat(i) === 170);
     this.weapon = eq[wi];
@@ -166,8 +188,8 @@ export class CharacterLook {
     let t = 0; for (let i = 0; i < fr.length - 1; i++) t += this.delay(action, i);
     return t;
   }
-  /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms. */
-  delay(action, frame) { const d = this.bodyFrames(action)?.[frame]?.delay; return d === undefined ? 150 : Math.abs(d); }
+  /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms (an explicit 0 stays 0). */
+  delay(action, frame) { const d = this.bodyFrames(action)?.[frame]?.delay; return d === undefined ? FRAME_DELAY_MS : Math.abs(d); }
   /**
    * The frame after `frame`. The client plays stand1, stand2 and alert forward and back (0,1,2,1,0...), so standing
    * breathes smoothly; every other action loops. `back` is which way a back-and-forth one is going; `wrapped`
@@ -183,7 +205,7 @@ export class CharacterLook {
 
   /** Attack animation for the equipped weapon (weapon.img/info/attack -> body action). */
   attackAction() {
-    const poses = ATTACK_POSES[this.weapon?.info?.attack] || ['swingO1', 'swingO2', 'swingO3', 'stabO1'];
+    const poses = ATTACK_POSES[this.weapon?.info?.attack] || ATTACK_POSES[1];
     const options = poses.filter((a) => this.has(a) && (!this.weapon || this.weapon[a]));
     return options[Math.floor(Math.random() * options.length)] || poses.find((a) => this.has(a)) || 'stand1';
   }
@@ -281,7 +303,11 @@ export class CharacterLook {
         if (!anchors.has(k)) anchors.set(k, [pos[0] + v[0], pos[1] + v[1]]);
       }
     };
-    const body = parts.find((p) => p.z === 'body' || p.z === 'backBody') || parts[0];
+    // the body is the root every other part re-anchors to. No shipped frame reaches here without one: the only
+    // bodyless frames are pose-references (eburster/4, eblast/4) that build() rewrites before this point, and
+    // mesoranger carries a body - the [] is a pure guard, same as a missing frame.
+    const body = parts.find((p) => p.z === 'body' || p.z === 'backBody');
+    if (!body) return [];
     place(body, [0, 0]);
     let progress = true;
     while (progress) {
@@ -297,11 +323,17 @@ export class CharacterLook {
         progress = true;
       }
     }
+    // a part whose anchors nothing placed would vanish silently: say which, once per pose
+    if (placed.size < parts.length) {
+      const gone = parts.filter((p) => !placed.has(p)).map((p) => Object.keys(p.map || {}).join('/') || 'no anchors');
+      const k = `${action}|${gone.join(',')}`;
+      if (!DROPPED.has(k)) { DROPPED.add(k); console.warn(`character: ${action} drops ${gone.length} part(s) nothing anchors: ${gone.join(', ')}`); }
+    }
 
     const out = [];
     for (const [node, pos] of placed) {
       const o = node.origin || [0, 0];
-      out.push({ node, x: pos[0] - o[0], y: pos[1] - o[1], z: ZINDEX?.get(node.z) ?? 60 });
+      out.push({ node, x: pos[0] - o[0], y: pos[1] - o[1], z: zIndexOf(node) });
     }
     // zmap lists front-most first, so draw highest index first
     out.sort((a, b) => b.z - a.z);
@@ -346,9 +378,17 @@ export function mountPose(mountId, action, tired) {
  */
 export function composeMounted(look, mount, mountId, action, expr, ms, tired = false, gear = []) {
   const pose = mountPose(mountId, action, tired);
-  const rider = look.compose(action === 'ladder' || action === 'rope' ? 'rope' : 'sit', 0, expr, true);
+  // the rider's own pose animates too (rope / ladder are 2 frames, 250ms each): its frame follows ms by its delays,
+  // like the mount's, so rider and mount stay together
+  const riderAction = action === 'ladder' || action === 'rope' ? 'rope' : 'sit';
+  const rc = look.frameCount(riderAction);
+  const riderTotal = Array.from({ length: rc }, (_, i) => look.delay(riderAction, i)).reduce((t, d) => t + Math.max(d, 1), 0);
+  let rt = riderTotal ? ms % riderTotal : 0, riderFrame = 0;   // wraps like the mount's own loop below
+  for (let i = 0; i < rc; i++) { const d = look.delay(riderAction, i); if (rt < d || d <= 0) { riderFrame = i; break; } rt -= d; }
+  const rider = look.compose(riderAction, riderFrame, expr, true);
   const anim = frames(mount[pose] || mount.stand1);
   if (!anim.length) return rider;
+  // mounts tick at the reference client's 100ms without a delay (BodyDrawinfo), while the avatar's poses take 150
   const total = anim.reduce((t, f) => t + (Number(f.delay) || 100), 0);
   let t = ms % total, index = 0;
   for (let i = 0; i < anim.length; i++) { const d = Number(anim[i].delay) || 100; if (t < d) { index = i; break; } t -= d; }
@@ -365,7 +405,7 @@ export function composeMounted(look, mount, mountId, action, expr, ms, tired = f
   for (const c of canvases) {
     const o = c.origin || [0, 0], n = c.map?.navel;
     const [px, py] = n ? [navel[0] - n[0], navel[1] - n[1]] : [0, 0];   // each part's navel on the same point
-    out.push({ node: c, x: px - o[0], y: py - o[1], z: ZINDEX?.get(c.z) ?? 60 });
+    out.push({ node: c, x: px - o[0], y: py - o[1], z: zIndexOf(c) });
   }
   const rn = rider.navel || [0, 0], dx = navel[0] - rn[0], dy = navel[1] - rn[1];
   for (const p of rider) out.push({ ...p, x: p.x + dx, y: p.y + dy });
