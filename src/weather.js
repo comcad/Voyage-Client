@@ -138,7 +138,7 @@ export class Weather {
 export function drawFloatNotice(ctx, a, N, text) {
   const l = a.image(N?.[0]), m = a.image(N?.[1]), r = a.image(N?.[2]);
   if (!l || !m || !r || !text) return;
-  ctx.save(); ctx.font = '12px Arial, sans-serif';
+  ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';   // uiText's own font (ui/wzui.js), so the measure matches the draw
   const tw = Math.ceil(ctx.measureText(text).width), n = Math.max(1, Math.ceil(tw / m.width));
   const w = l.width + n * m.width + r.width, x = Math.floor((UI_W - w) / 2), y = 160;
   ctx.globalAlpha = 0xc0 / 255;
