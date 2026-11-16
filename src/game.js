@@ -9402,13 +9402,17 @@ export class Game {
     const d = Math.hypot(x - this.player.x, y - this.player.y);
     return (d < 250 ? 100 : d <= 1000 ? 120 - 0.08 * d : 40) / 100;
   }
-
   /**
-   * The third argument is unused (the weapon's swing plays with the attack's trail).
+   * A skill's own art and sound. The third parameter is dead - it was the weapon's swing, which plays with the
+   * attack's trail now - but 24 call sites pass `false` into that slot, so it stays; the name says not to read it.
    * branch: 'effect' when cast, 'affected' on whoever a party buff reached (no sound: the caster's played).
+   *
+   * The Use sound plays only when each of three hold, and the parenthesised `(ent === this.player || id ===
+   * BATTLESHIP)` is an OR that is easy to read as AND: the branch is its own `effect` art (not keydownend, prepare
+   * or a held layer); the caster is you - or the Battleship, whose boarding sound is heard by the map - and
+   * a Monster Magnet never plays one however it is cast.
    */
   async playSkillEffect(id, ent, _unused = false, branch = 'effect', rate = 1) {
-    // others' casts are silent, apart from boarding the Battleship
     if (branch === 'effect' && (ent === this.player || id === BATTLESHIP) && !MONSTER_MAGNETS.has(id)) {
       const use = id === GRENADE ? 'Use2' : id === BLAST ? BLAST_USE[this.activeCharge()?.id] || 'Use' : 'Use';
       sfx.play(`Skill/${pad(id, 7)}/${use}`);
@@ -9450,7 +9454,14 @@ export class Game {
   }
   /**
    * The first-job attacks' effect and hit art changes with the caster's level: CharLevel/10, 15, 20 and 25 each
-   * take over from that level up.
+   * take over from that level up. A tier is spread over the base node, so it overrides every field it defines and
+   * leaves the rest from the base - a tier with only `hit` keeps the base effect. The highest qualifying tier is
+   * taken (Math.max over keys <= level), and `n ?` is what separates "no tier" from "tier 0": the clamp makes an
+   * empty match 0, which reads as none.
+   *
+   * The level comes from this.stats for you (the stat block the server sends) and from ent.level for anyone else,
+   * so a remote entity with no level field gets the un-merged node - the same owner-versus-peer split as
+   * attackWatk (doc 184 finding 9).
    */
   byCharLevel(node, ent) {
     const tiers = node?.CharLevel, level = ent === this.player ? this.stats?.level : ent?.level;
@@ -9459,12 +9470,16 @@ export class Game {
     return n ? { ...node, ...tiers[n] } : node;
   }
   /**
-   * One effect layer on `ent`, following it (or, `stay`, left where it was when cast), at `rate` (an attack's speed
-   * scale); a `fixed` one never flips. `muzzle`: placed on the gun's barrel end ('follow' keeps it there).
+   * One effect layer on `ent`, following it (or, `stay`, left where it was when cast), at `rate` (an attack's
+   * speed scale); a `fixed` one never flips. `muzzle` is a three-way mode, not a flag: 'follow' hangs on the
+   * gun's barrel end and keeps up with it (the fx record carries it as a boolean `muzzle`, which is what draws
+   * it from muzzlePoint each frame); 'stay' fires from the barrel but stays where it was fired (so it also
+   * settles `stay` below); null plays on the character. The barrel point itself can be null - a pose without
+   * a muzzle part - and the character's own position is then used, by the || in the body.
    */
   async pushEffect(node, ent, rate = 1, stay = false, muzzle = null) {
     const from = (muzzle && this.muzzlePoint(ent)) || ent;
-    const anim = new Anim(node, false), at = stay ? { x: from.x, y: from.y, flip: !node.fixed && !!ent.facingRight } : null;
+    const anim = new Anim(node, false), at = muzzle === 'stay' || stay ? { x: from.x, y: from.y, flip: !node.fixed && !!ent.facingRight } : null;
     await this.assets.preload(anim.frames);
     // art with z below 0 goes behind the character it plays on
     const under = Number(node.z ?? frames(node)[0]?.z ?? 0) < 0;
