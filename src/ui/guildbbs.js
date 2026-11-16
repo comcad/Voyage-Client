@@ -99,7 +99,7 @@ export class GuildBBSWin extends Win {
   reset() {
     this.notice = null; this.threads = []; this.total = 0; this.page = 0;
     this.thread = null; this.shownId = 0; this.showing = false; this.writing = null;
-    this.replyFirst = 0; this.bodyFirst = 0;
+    this.replyFirst = 0; this.bodyFirst = 0; this.bodyCache = null; this.widths = new Map();
     this.emoSel = 0; this.emoIcon = 0; this.owned = [];
     for (const f of this.fields) f.value = '';
   }
@@ -113,13 +113,18 @@ export class GuildBBSWin extends Win {
   get rank() { return this.g.guild?.members?.find((m) => m.id === this.g.player?.id)?.rank ?? 6; }
   memberName(id) { return this.g.guild?.members?.find((m) => m.id === id)?.name || ''; }
   emoticon(icon) { const E = this.A?.Emoticon; return icon < 3 ? E?.Basic?.[icon] : E?.Cash?.[icon - 100]; }
-  width(ctx, s, bold = false) { ctx.save(); ctx.font = `${bold ? 'bold ' : ''}${FONT}`; const w = ctx.measureText(s).width; ctx.restore(); return Math.round(w); }
+  /** A string's width, kept until the next list/thread packet: the strings do not change between packets. */
+  width(ctx, s, bold = false) {
+    const m = this.widths, k = `${bold}\x00${s}`;
+    if (!m.has(k)) { ctx.save(); ctx.font = `${bold ? 'bold ' : ''}${FONT}`; m.set(k, ctx.measureText(s).width); ctx.restore(); }
+    return Math.round(m.get(k));
+  }
 
   // ---------------------------------------------------------------- server events
   onPacket(d) {
-    if (d.op === 'list') { this.notice = d.notice; this.threads = d.threads.slice(0, PER_PAGE); this.total = d.total; return; }
+    if (d.op === 'list') { this.widths.clear(); this.notice = d.notice; this.threads = d.threads.slice(0, PER_PAGE); this.total = d.total; return; }
     if (d.op === 'thread') {
-      this.thread = d.thread; this.shownId = d.thread.id;
+      this.widths.clear(); this.thread = d.thread; this.shownId = d.thread.id;
       this.replyFirst = Math.max(0, d.thread.replies.length - REPLY_ROWS);
       this.rebuild(); this.showing = true;
       return;
@@ -195,10 +200,12 @@ export class GuildBBSWin extends Win {
     return labels.map((i, k) => { const r = { i, x, w: widths[k] }; x += widths[k] + PAGE_GAP; return r; });
   }
   bodyLines(ctx) {
-    if (!this.thread) return [];
+    const t = this.thread;
+    if (!t) return [];
+    if (this.bodyCache?.id === t.id && this.bodyCache.body === t.body) return this.bodyCache.lines;   // like login-scene's recWrap
     ctx.save(); ctx.font = FONT;
     const out = [];
-    for (const line of wrapText(ctx, this.thread.body.replace(/\r\n/g, '\n'), BODY.w)) {
+    for (const line of wrapText(ctx, t.body.replace(/\r\n/g, '\n'), BODY.w)) {
       let s = line;
       while (ctx.measureText(s).width > BODY.w && s.length > 1) {   // a word wider than the box breaks by letters
         let k = s.length - 1;
@@ -208,6 +215,7 @@ export class GuildBBSWin extends Win {
       out.push(s);
     }
     ctx.restore();
+    this.bodyCache = { id: t.id, body: t.body, lines: out };
     return out;
   }
   down(lx, ly) {
@@ -298,9 +306,9 @@ export class GuildBBSWin extends Win {
   }
   drawBody(ctx) {
     const lines = this.bodyLines(ctx);
-    this.bodyFirst = Math.min(this.bodyFirst, Math.max(0, lines.length - BODY.rows));
-    lines.slice(this.bodyFirst, this.bodyFirst + BODY.rows).forEach((s, i) => this.text(ctx, s, BODY.x, BODY.y + i * BODY.line, F1));
-    if (lines.length > BODY.rows) this.scrollbar(ctx, BODY.bar.x, BODY.bar.y, BODY.bar.h, this.bodyFirst, lines.length, BODY.rows, this.mgr.B.VScr4);
+    const first = Math.min(this.bodyFirst, Math.max(0, lines.length - BODY.rows));   // clamped here only: a draw never moves the scroll
+    lines.slice(first, first + BODY.rows).forEach((s, i) => this.text(ctx, s, BODY.x, BODY.y + i * BODY.line, F1));
+    if (lines.length > BODY.rows) this.scrollbar(ctx, BODY.bar.x, BODY.bar.y, BODY.bar.h, first, lines.length, BODY.rows, this.mgr.B.VScr4);
   }
   drawEmoticons(put) {
     const E = this.A.Emoticon;

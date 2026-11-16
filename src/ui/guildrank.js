@@ -1,3 +1,4 @@
+import { frameAt } from '../assets.js';
 import { Win, allCanvases } from './windows.js';
 import { drawEmblem } from './social.js';
 import { UI_W, UI_H } from '../view.js';
@@ -10,7 +11,10 @@ import { UI_W, UI_H } from '../view.js';
  * (217, 297) turn the page; BtOK (148, 297) closes it. The emblem sits centred in the art's 60-85 cell of its 25px
  * row.
  */
-const ROW0 = 137, ROW_H = 25, PER_PAGE = 6, EFF_DELAY = 100;
+const ROW0 = 137, ROW_H = 25;
+// page 1 follows the lone top guild (drawn separately): its rows are ranks 2-7, then 8-13, and so on
+const FIRST_RANK = 2, PER_PAGE = 6;
+const rankAt = (page, k) => FIRST_RANK + (page - 1) * PER_PAGE + k;
 
 export class GuildRankWin extends Win {
   constructor(mgr, list) {
@@ -18,6 +22,8 @@ export class GuildRankWin extends Win {
     super(mgr, R.backgrnd, (UI_W - 330) >> 1, (UI_H - 350) >> 1);
     this.buttons = []; this.closeBtn = null;
     this.R = R; this.list = list; this.page = 1; this.modal = true; this.t0 = performance.now();
+    // the IconEff frames are fixed for the window's life: walk the keys once, not every frame
+    this.effFrames = Object.keys(R.IconEff || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => R.IconEff[k]);
     this.left = this.button(R.BtLeft, 86, 297, () => { this.page -= 1; });
     this.right = this.button(R.BtRight, 217, 297, () => { this.page += 1; });
     this.button(R.BtOK, 148, 297, () => this.mgr.close(this));
@@ -33,14 +39,11 @@ export class GuildRankWin extends Win {
     const im = (n) => this.mgr.image(n);
     const crown = im(this.R.icon0);
     if (crown) ctx.drawImage(crown, 155, 43);
-    const eff = Object.keys(this.R.IconEff || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b);
-    if (eff.length) {
-      const node = this.R.IconEff[eff[Math.floor((performance.now() - this.t0) / EFF_DELAY) % eff.length]], f = im(node), o = node?.origin || [0, 0];
-      if (f) ctx.drawImage(f, 127 - o[0], 23 - o[1]);
-    }
+    const node = frameAt(this.effFrames, performance.now() - this.t0), f = im(node), o = node?.origin || [0, 0];
+    if (f) ctx.drawImage(f, 127 - o[0], 23 - o[1]);
     if (this.list.length) this.entry(ctx, 1, 80, 1);
     for (let k = 0, y = ROW0; y < ROW0 + PER_PAGE * ROW_H; k++, y += ROW_H) {
-      const rank = this.page * PER_PAGE - 4 + k;
+      const rank = rankAt(this.page, k);
       if (rank > this.list.length) break;
       this.entry(ctx, rank, y, rank > 3 ? 120 / 255 : 180 / 255);
     }
