@@ -282,7 +282,7 @@ export class UserListWin extends Win {
       const sec = this.gsec[s], list = this.sortGuild(g.members.filter((m) => !!m.online === online), sec);
       const pages = Math.max(1, Math.ceil(list.length / GUILD_PAGE));
       if (sec.page >= pages) sec.page = pages - 1;
-      rows.push({ y, h: 27, kind: 'gbar', s, online, node: online ? GI.guildinfo0 : GI.guildinfo1, count: `[${list.length}/${g.members.length}]`,
+      rows.push({ y, h: 27, kind: 'gbar', s, key: `gb:${s}`, online, node: online ? GI.guildinfo0 : GI.guildinfo1, count: `[${list.length}/${g.members.length}]`,
         page: `[${sec.page + 1}/${pages}]`, pages, draw: this.drawGuildBar, click: (x, ly) => this.guildBarClick(s, pages, x, ly) });
       y += 27 + (sec.open ? 4 : 0);
       if (sec.open) {
@@ -324,7 +324,7 @@ export class UserListWin extends Win {
     if (inside(bt.fold)) { sec.open = !sec.open; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
     if (inside(bt.left) && sec.page > 0) { sec.page--; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
     if (inside(bt.right) && sec.page < pages - 1) { sec.page++; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
-    return true;
+    return false;   // a click on the bar's blank part falls through to selection, as a buddy group's does
   }
   drawGuildHead(ctx, r) {
     const GI = this.U.Guild.GuildInfo, sec = this.gsec[r.s];
@@ -334,7 +334,7 @@ export class UserListWin extends Win {
   }
   sortClick(s, x) {
     const c = GUILD_COLS.findIndex(([x0, x1]) => x >= x0 && x < x1), sec = this.gsec[s];
-    if (c < 0) return true;
+    if (c < 0) return false;
     if (sec.sort === c) sec.desc = !sec.desc; else { sec.sort = c; sec.desc = false; }
     this.invalidate();
     sfx.play('UI/BtMouseClick');
@@ -359,7 +359,7 @@ export class UserListWin extends Win {
       const pages = list.length < 2 ? 1 : Math.floor((list.length - 1) / ALLY_PAGE) + 1;
       if (sec.page >= pages) sec.page = pages - 1;
       const online = guild.members.filter((m) => m.online).length;
-      const bar = { y, h: 27, kind: 'abar', guild, sec, pages, count: `[${online}/${guild.members.length}]`, page: `[${sec.page + 1}/${pages}]`, draw: this.drawAllyBar };
+      const bar = { y, h: 27, kind: 'abar', key: `ab:${guild.id}`, guild, sec, pages, count: `[${online}/${guild.members.length}]`, page: `[${sec.page + 1}/${pages}]`, draw: this.drawAllyBar };
       bar.click = (x, ly) => this.allyBarClick(bar, x, ly);
       rows.push(bar);
       y += 27;
@@ -399,10 +399,10 @@ export class UserListWin extends Win {
   }
   allyBarClick(r, x, y) {
     const sec = r.sec, bt = this.allyBarButtons(r), inside = (b) => x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h;
-    if (inside(bt.fold)) { sec.open = !sec.open; this.invalidate(); sfx.play('UI/BtMouseClick'); }
-    else if (inside(bt.left) && sec.page > 0) { sec.page--; this.invalidate(); sfx.play('UI/BtMouseClick'); }
-    else if (inside(bt.right) && sec.page < r.pages - 1) { sec.page++; this.invalidate(); sfx.play('UI/BtMouseClick'); }
-    return true;
+    if (inside(bt.fold)) { sec.open = !sec.open; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
+    else if (inside(bt.left) && sec.page > 0) { sec.page--; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
+    else if (inside(bt.right) && sec.page < r.pages - 1) { sec.page++; this.invalidate(); sfx.play('UI/BtMouseClick'); return true; }
+    return false;   // a click on the bar's blank part falls through to selection, as a buddy group's does
   }
   drawAllyHead(ctx, r) {
     const GU = this.U.GuildUnion;
@@ -412,7 +412,7 @@ export class UserListWin extends Win {
   }
   allySort(sec, x) {
     const c = GUILD_COLS.findIndex(([x0, x1]) => x >= x0 && x < x1);
-    if (c < 0) return true;
+    if (c < 0) return false;
     if (sec.sort === c) sec.desc = !sec.desc; else { sec.sort = c; sec.desc = false; }
     this.invalidate();
     sfx.play('UI/BtMouseClick');
@@ -450,11 +450,9 @@ export class UserListWin extends Win {
   }
   /** The selected row's model entry, or null. */
   selected() { return this.sel ? this.model().rows.find((r) => r.key === this.sel) || null : null; }
-  /** The selected character other than you: a buddy, party or guild member. */
-  other() {
-    const r = this.selected();
-    return r && (r.kind === 'buddy' || r.kind === 'member') && r.item.id !== this.me ? r.item : null;
-  }
+  /** The selected character other than you, from the selected row: a buddy, party or guild member. */
+  otherOf(r) { return r && (r.kind === 'buddy' || r.kind === 'member') && r.item.id !== this.me ? r.item : null; }
+  other() { return this.otherOf(this.selected()); }
   isOnline(c) {
     if (!c) return false;
     if (this.tab === 2 || this.tab === 3) return !!c.online;
@@ -762,7 +760,7 @@ export class UserListWin extends Win {
 
   // ---------------------------------------------------------------- frame
   updateButtons() {
-    const t = this.tab, r = this.selected(), c = this.other(), on = this.isOnline(c);
+    const t = this.tab, r = this.selected(), c = this.otherOf(r), on = this.isOnline(c);
     for (const [i, set] of [[0, this.bb], [1, this.pb], [2, this.gb], [3, this.ab], [4, this.lb]]) for (const b of Object.values(set)) b.visible = t === i;
     // buddy: nothing selected leaves only ADD BUDDY / ADD GROUP / SHOW lit
     const B = this.bb, grp = r?.kind === 'group', bud = r?.kind === 'buddy', blocked = bud && this.isBlocked(r.item);
@@ -841,11 +839,18 @@ export class UserListWin extends Win {
     else if (this.tab === 3) this.allianceHead(ctx);
     this.drawList(ctx);
   }
+  /** Each tab's [x, width] as painted: the label art's width, falling back to the static table. */
+  tabRects() {
+    return [0, 1, 2, 3, 4].map((i) => {
+      const label = this.im(this.U.Tab[i === this.tab ? 'enabled' : 'disabled'][i]);
+      return { x: TAB_X[i], w: label?.width ?? TAB_W[i] };
+    });
+  }
   /** Tab2 boxes sized to their labels: each label 4px after the last box's end, from x 8. */
   drawTabs(ctx) {
-    const T = this.mgr.B.Tab2;
+    const T = this.mgr.B.Tab2, rects = this.tabRects();
     for (let i = 0; i < 5; i++) {
-      const on = i === this.tab, label = this.im(this.U.Tab[on ? 'enabled' : 'disabled'][i]), lw = label?.width ?? TAB_W[i];
+      const on = i === this.tab, lw = rects[i].w;
       const fx = TAB_X[i] + 2, fw = lw - 4, fill = this.im(T[on ? 'fill1' : 'fill0']);
       if (fill) ctx.drawImage(fill, fx, 23, fw, fill.height);
       if (i === 0) { const cap = this.im(T[on ? 'left1' : 'left0']); if (cap) ctx.drawImage(cap, fx - 4, 23); }
@@ -856,7 +861,8 @@ export class UserListWin extends Win {
   }
   tabAt(lx, ly) {
     if (ly < 23 || ly >= 42) return -1;
-    for (let i = 0; i < 5; i++) if (lx >= TAB_X[i] - 2 && lx < TAB_X[i] + TAB_W[i] + 2) return i;
+    const rects = this.tabRects();
+    for (let i = 0; i < 5; i++) if (lx >= rects[i].x - 2 && lx < rects[i].x + rects[i].w + 2) return i;
     return -1;
   }
   buddyHead(ctx) {
@@ -930,8 +936,8 @@ export class UserListWin extends Win {
     const thumb = on && this.im(S.thumb0);
     if (thumb) ctx.drawImage(thumb, SCR_X, v.y + ah + Math.round((v.h - 2 * ah - thumb.height) * this.scroll[this.tab] / max));
   }
-  /** Scroll positions: none when it all fits, else one per 33px of overflow plus one. */
-  maxScroll(h) { const v = VIEW[this.tab]; return h > v.h ? Math.floor((h - v.h) / STEP) + 1 : 0; }
+  /** Scroll positions: none when it all fits, else one per 33px step of overflow (ceil: the last partial step counts). */
+  maxScroll(h) { const v = VIEW[this.tab]; return h > v.h ? Math.ceil((h - v.h) / STEP) : 0; }
   scrollHit(lx, ly) {
     const v = VIEW[this.tab];
     if (lx < SCR_X || lx >= SCR_X + 15 || ly < v.y || ly >= v.y + v.h) return false;
@@ -949,7 +955,10 @@ export class UserListWin extends Win {
   rowAt(lx, ly) {
     const p = this.listPoint(lx, ly);
     if (!p) return null;
-    const r = this.model().rows.find((q) => p.y >= q.y && p.y < q.y + q.h && p.x >= (q.x || 0) && p.x < (q.x || 0) + (q.w ?? LIST_W));
+    // the two-column buddy and blacklist rows paint 128px but accept the list's full width, so the right gutter
+    // selects the row beside it instead of clearing the selection
+    const hw = (q) => q.kind === 'buddy' || q.kind === 'black' ? LIST_W - (q.x || 0) : (q.w ?? LIST_W);
+    const r = this.model().rows.find((q) => p.y >= q.y && p.y < q.y + q.h && p.x >= (q.x || 0) && p.x < (q.x || 0) + hw(q));
     return r ? { r, x: p.x - (r.x || 0), y: p.y - r.y } : null;
   }
 
@@ -1018,8 +1027,8 @@ export class UserListWin extends Win {
       return null;
     }
     if (this.tab === 3) {
-      // the count's box runs from 70 to 110 + its width, 3-25 down the bar
-      if (r.kind === 'abar') return x >= 70 && x < 110 + textW(r.count) && hit.y >= 3 && hit.y < 25 ? tip('Online Guild Members / Total Registered Guild Members') : null;
+      // the count's box covers the drawn text: from ALLY_COUNT_X across its width, 3-25 down the bar
+      if (r.kind === 'abar') return x >= ALLY_COUNT_X && x < ALLY_COUNT_X + textW(r.count) && hit.y >= 3 && hit.y < 25 ? tip('Online Guild Members / Total Registered Guild Members') : null;
       if (r.kind === 'ahead') { const c = GUILD_COLS.find(([x0, x1]) => x >= x0 && x < x1); return c ? tip(`Sort thru ${c[2]}`) : null; }
       if (r.kind !== 'member') return null;
       const m = r.item;
