@@ -4453,6 +4453,7 @@ export class Game {
     }
     this.lifeByOid.set(d.oid, e);
     map.life.push(e);
+    this._tmCache = null;   // a new monster on the map is a new target
     if (kind === 'Npc' && this.vfx) this.vfx.questT = 0;   // its quest icon at once
     if (kind === 'Npc') this.imitate(e);
     // a monster others can hurt (info/damagedByMob: the Watch Hog, Moon Bunny, Tylus...) is the field's friendly one
@@ -4573,6 +4574,7 @@ export class Game {
   linesLanded(e, last) { e.linesUntil = Math.max(e.linesUntil || 0, performance.now() + last); }
   finishKill(e, anim = e.queuedKill?.anim) {
     e.killTimer = false;   // the monster is done: its fallback timer, if still pending, has nothing to do
+    this._tmCache = null;  // it is no longer a target, and a blow later in this tick must not see it as one
     e.queuedKill = null;
     this.dying?.delete(e.oid);
     this.releaseDrops(e);
@@ -6187,6 +6189,7 @@ export class Game {
 
   update(dt) {
     this.frameDt = dt;
+    this._tmStamp = (this._tmStamp || 0) + 1;   // targetMobs' memo: one scan of the map's monsters per tick
     // with /fps on, what the update goes on, part by part (perfmeter.js): each lap adds the time since the last one
     const P = (this.updateParts = settings.fpsMeter && this.perf ? { map: 0, ui: 0, quests: 0, mobs: 0, you: 0, others: 0, fx: 0, timers: 0, rest: 0 } : null);
     let tm = P ? performance.now() : 0;
@@ -8740,8 +8743,18 @@ export class Game {
     const lt = this.afterimage?.[this.afterimageLevel()]?.[action]?.lt;
     return Math.max(0, Math.min(CLOSE_REACH, lt ? -lt[0] : CLOSE_REACH));
   }
-  /** The monsters your attacks can reach: the live ones, never a Hypnotized one, nor one only monsters hurt (info/damagedByMob). */
-  targetMobs() { return this.liveMobs().filter((m) => !hypnotized(m) && !Number(m.src?.info?.damagedByMob)); }
+  /**
+   * The monsters your attacks can reach: the live ones, never a Hypnotized one, nor one only monsters hurt
+   * (info/damagedByMob). Kept for the tick: an attack asks once per target and once per chain hop, and the map's
+   * monsters do not change between them. A kill or a spawn drops the memo at once, so a blow later in the same tick
+   * never strikes a monster already dead.
+   */
+  targetMobs() {
+    if (this._tmCache?.stamp === this._tmStamp) return this._tmCache.list;
+    const list = this.liveMobs().filter((m) => !hypnotized(m) && !Number(m.src?.info?.damagedByMob));
+    this._tmCache = { stamp: this._tmStamp, list };
+    return list;
+  }
   /**
    * How far a shot flies: the skill's range, else 300px for a bow or crossbow plus The Eye of Amazon's, 200px for a
    * claw plus Keen Eyes', 200px for a gun.
