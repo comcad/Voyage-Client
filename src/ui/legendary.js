@@ -18,7 +18,11 @@ import { UI_W, UI_H } from '../view.js';
  * Unverified places (lost in the client): BtClose (160, 6), BtCancel2 (125, 179), the check box control (14, 152)
  * with its box at (16, 153), the box's label (32, 154), the instructions (50, 27).
  */
-const EFFECT_MS = 120, ICON = [74, 126], TIP = [75, 100, 102, 127], CHECK = [14, 152, 150, 15];
+// EFFECT_MS stays 120 (the 100 ms default is the other folklore): a deliberate divergence, noted here so the
+// next reader does not "fix" it into disagreeing with game.js's 3120 ms window.
+const EFFECT_MS = 120, ICON = [74, 126];
+// the tip box is drawn from the icon: deriving it keeps the two from drifting apart
+const TIP = [ICON[0] + 1, ICON[1] - 26, ICON[0] + 28, ICON[1] + 1], CHECK = [14, 152, 150, 15];
 const WHITE = 2340000;
 
 export class LegendaryWin extends Win {
@@ -57,6 +61,7 @@ export class LegendaryWin extends Win {
   }
   down(lx, ly) {
     const [x, y, w, h] = CHECK;
+    this.boxEnabled = this.hasWhite();   // a White Scroll picked up while this is open becomes selectable
     if (this.boxEnabled && lx >= x && lx < x + w && ly >= y && ly < y + h) this.checked = !this.checked;
   }
   /** SHOW_SCROLL_EFFECT for your own Legendary Spirit scroll. */

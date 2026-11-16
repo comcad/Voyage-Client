@@ -46,8 +46,8 @@ export class MapleTVWin extends Win {
       if (!(await this.mgr.confirm(`This message will be sent to \r\nMaple TV in ${g.tvWait || 0} seconds. \r\n Do you want to proceed?`))) return;
       if (this.kind === 2 && !to) { this.mgr.notice("You didn't enter the recipient's name."); return; }
       if (lines.join('\n') && (await Promise.all(lines.map((l) => g.cursed(l)))).some(Boolean)) { this.mgr.notice('Cursing is not allowed.'); return; }
-      this.close();
-      g.cashSend(() => g.net?.useMapleTV(this.slot, this.itemId, { kind: this.kind, mega: this.mega, ear: this.ear, to, lines }));
+      // send first, close only if it went out: a refused gate must leave the fields up
+      if (g.cashSend(() => g.net?.useMapleTV(this.slot, this.itemId, { kind: this.kind, mega: this.mega, ear: this.ear, to, lines }))) this.close();
     } finally { this.sending = false; }
   }
   close() { for (const f of this.fields) f.remove(); this.mgr.close(this); }
