@@ -49,7 +49,8 @@ export function familyResult(code, mesos, severed = '') {
 const plain = (t) => (t || '').replace(/\\n/g, '\n').replace(/#[a-z]/g, '').replace(/#/g, '');
 // RightIcon per privilege (the game server's FamilyEntitlement order): 2 EXP, 3 DROP, 4 the family ones (reunion, summon, bonding)
 const ICONS = [4, 4, 3, 2, 4, 3, 2, 3, 2, 3, 2];
-
+// RightIcon from the privilege's own name: 3 Drop, 2 EXP, else 4 (Reunion / Summon / Bonding)
+const iconOf = (p) => (/Drop/i.test(p.name) ? 3 : /EXP/i.test(p.name) ? 2 : 4);
 export class FamilyWin extends Win {
   constructor(mgr) {
     const F = mgr.W.Family;
@@ -80,7 +81,7 @@ export class FamilyWin extends Win {
     if (!f.name) { this.mgr.notice('You are not in a family yet.'); return; }
     if ((f.used[this.page] || 0) >= p.limit) { this.mgr.notice('You have already used this today.'); return; }
     if (f.rep < p.cost) { this.mgr.notice('You do not have enough reputation.'); return; }
-    if (this.page === 4) { this.mgr.notice('Family Bonding is not available in this world.'); return; }
+    if (/^Family Bonding/.test(p.name)) { this.mgr.notice('Family Bonding is not available in this world.'); return; }
     let name;
     if (this.page <= 1) {
       name = (await this.mgr.askText(this.page === 0 ? 'Which family member do you want to go to?' : 'Which family member do you want to summon?'))?.trim();
@@ -109,15 +110,26 @@ export class FamilyWin extends Win {
     uiText(ctx, p.name, 112, 178, { color: '#000', bold: true, size: 11, align: 'center' });
     this.text(ctx, p.cost.toLocaleString('en-US'), 120, 196, { align: 'right' });
     this.text(ctx, `${f.used[this.page] || 0} / ${p.limit}`, 190, 196, { align: 'center' });
-    const ic = this.mgr.image(this.F.RightIcon[ICONS[this.page] || 4]);
+    const ic = this.mgr.image(this.F.RightIcon[iconOf(p)]);
     if (ic) ctx.drawImage(ic, 176, 216);
-    ctx.save(); ctx.font = '11px Arial, sans-serif';
-    const lines = plain(p.desc).split('\n').flatMap((l) => wrapText(ctx, l, l.startsWith('[') ? 160 : 196, 11));
-    ctx.restore();
+    const lines = this.descLines(ctx);
     lines.slice(0, 8).forEach((l, i) => this.text(ctx, l, 12, 218 + i * 15));
     this.text(ctx, `${this.page + 1} / ${this.privileges.length}`, 112, 343, { align: 'center', color: '#555' });
   }
+  /** The current page's wrapped description, memoized: the text never changes while the app runs. */
+  descLines(ctx) {
+    if (this.desc?.page !== this.page + 1 || !this.desc.list) {
+      const p = this.privileges[this.page];
+      if (!p) return [];
+      ctx.save(); ctx.font = '11px Arial, sans-serif';
+      const raw = plain(p.desc).split('\n').flatMap((l) => wrapText(ctx, l, l.startsWith('[') ? 160 : 196, 11));
+      ctx.restore();
+      this.desc = { page: this.page + 1, list: raw };
+    }
+    return this.desc.list;
+  }
 }
+
 
 /**
  * The pedigree (UIWindow.img/FamilyTree, backgrnd 578x386; plates are 133x34 slots already in the art):
@@ -153,6 +165,10 @@ export class FamilyTreeWin extends Win {
       sibling: senior ? kids(senior).find((x) => x.id !== self?.id) : null, j0, j1 };
     [place.s00, place.s01] = kids(j0); [place.s10, place.s11] = kids(j1);
     this.place = place;
+    // the plates only change with the chart: build the hit list once, not per frame
+    this.hits = Object.entries(SLOT)
+      .map(([slot, [x, y]]) => { const m = place[slot]; return m ? [x, y, m] : null; })
+      .filter(Boolean);
     if (!this.sel) this.sel = self?.id ?? null;
   }
   get mine() { return this.chart?.self === this.g.player.id; }
@@ -200,7 +216,6 @@ export class FamilyTreeWin extends Win {
     const c = this.chart, im = (n) => this.mgr.image(n);
     if (!c) { uiText(ctx, 'Loading...', 289, 190, { color: '#fff', size: 12, align: 'center' }); return; }
     this.text(ctx, String(c.counts[-1] ?? c.members.length), 67, 40, { align: 'center' });
-    this.hits = [];
     for (const [slot, [x, y]] of Object.entries(SLOT)) {
       const m = this.place[slot];
       if (!m) continue;
@@ -209,7 +224,6 @@ export class FamilyTreeWin extends Win {
       if (m.id === this.sel && slot !== 'leader') { const s = im(this.T.selected); if (s) ctx.drawImage(s, x - 3, y - 2); }
       uiText(ctx, m.name, x + 66, y + 4, { color: '#fff', bold: true, size: 11, align: 'center' });
       uiText(ctx, `Lv. ${m.level}  ${jobName(m.job)}`, x + 66, y + 19, { color: m.online ? '#e8ffd0' : '#bbb', size: 10, align: 'center' });
-      this.hits.push([x, y, m]);
     }
   }
   down(lx, ly) {

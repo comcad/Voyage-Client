@@ -13,7 +13,10 @@ import { UI_W } from '../view.js';
  *   (PARTY_SEARCH_UPDATE). The server then invites matching players near you, and they see "PS: <you>".
  *   Find Party: Party/party0..3. The game server takes no registration - anyone without a party can be invited.
  * Job bits follow the game server's PartySearchCoordinator table.
- */
+ *   START sends the search (PARTY_SEARCH_START: min, max, members, job bits); STOP ends it
+ *   (PARTY_SEARCH_UPDATE). The server has no pause or resume, so the window offers only STOP.
+ *   Find Party: Party/party0..3. Cosmic takes no registration - anyone without a party can be invited.
+ * Job bits follow Cosmic's PartySearchCoordinator table. */
 const GROUPS = [
   // [box x, box y, width, title, [[job bit, name]...]] inside party4
   [0, 0, 80, 'Beginner', [[1, 'Beginner']]],
@@ -26,6 +29,8 @@ const GROUPS = [
 ];
 const ALL_BITS = GROUPS.flatMap((g) => g[4].map(([b]) => b));
 const JOBS = { x: 9, y: 170 }, ROW = 15;
+// each job label's 11px width, measured once per canvas (the text never changes)
+const LABEL_WIDTH = new Map();
 
 export class PartySearchWin extends Win {
   constructor(mgr) {
@@ -34,7 +39,6 @@ export class PartySearchWin extends Win {
     this.P = P; this.tab = 1; this.state = 'idle'; this.bits = new Set(ALL_BITS);
     const by = 384;
     this.startBtn = this.button(P.BtStart, 100, by, () => this.start());
-    this.pauseBtn = this.button(P.BtPause, 100, by, () => this.stop('paused'));
     this.stopBtn = this.button(P.BtStop, 168, by, () => this.stop('idle'));
     const field = (x, max) => {
       const f = new TextField(mgr.game.statusBar.layer, x, 0, 24, 14, { max, color: '#000' });
@@ -59,6 +63,7 @@ export class PartySearchWin extends Win {
   onClose() { this.showFields(false); }
   showFields(v) { for (const f of Object.values(this.fields)) { f.show(v); if (!v) f.el.blur(); } }
 
+
   // ---------------------------------------------------------------- searching
   start() {
     if (!this.leader) { this.mgr.notice(this.g.party ? 'Only the party leader can search for members.' : 'Create a party first, then search for members to fill it.'); return; }
@@ -72,7 +77,7 @@ export class PartySearchWin extends Win {
     let jobs = 0;
     for (const b of this.bits) jobs |= 1 << b;
     this.g.net?.partySearchStart(min, max, members, jobs);
-    this.state = 'searching'; this.startedAt = performance.now();
+    this.state = 'searching';
     this.g.hud?.message('Party Search started. Players who match will receive an invitation to your party.', '#fff');
   }
   stop(state) {
@@ -83,16 +88,21 @@ export class PartySearchWin extends Win {
   partyChanged() { if (this.state !== 'idle' && !this.leader) this.state = 'idle'; }
 
   // ---------------------------------------------------------------- frame
+  /** Re-place the level/member boxes over the canvas, only when the window or the canvas' width moved. */
+  layoutFields() {
+    const scale = this.g.canvas.clientWidth / UI_W;
+    if (this.laidX === this.x && this.laidY === this.y && this.laidScale === scale) return;
+    this.laidX = this.x; this.laidY = this.y; this.laidScale = scale;
+    for (const f of Object.values(this.fields)) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + 130; f.layout({ left: 0, top: 0 }, scale); }
+  }
   draw(ctx) {
     const mine = this.tab === 1;
     this.startBtn.visible = mine && this.state !== 'searching';
-    this.pauseBtn.visible = mine && this.state === 'searching';
     this.stopBtn.visible = mine;
     this.stopBtn.enabled = this.state !== 'idle';
     this.startBtn.enabled = this.leader;
     super.draw(ctx);
-    const scale = this.g.canvas.clientWidth / UI_W;
-    for (const f of Object.values(this.fields)) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + 130; f.layout({ left: 0, top: 0 }, scale); }
+    this.layoutFields();
   }
   body(ctx) {
     const im = (n) => this.mgr.image(n), P = this.P;
@@ -119,17 +129,17 @@ export class PartySearchWin extends Win {
       jobs.forEach(([b, name], i) => {
         const ry = y + 21 + i * ROW;
         this.check(ctx, x + 4, ry, this.bits.has(b));
-        // the narrow boxes take a long name a size smaller
-        ctx.font = '11px Arial, sans-serif';
-        const size = ctx.measureText(name).width > bw - 22 ? 10 : 11;
+        // the narrow boxes take a long name a size smaller; the widths are measured once, not per frame
+        if (!LABEL_WIDTH.has(name)) { ctx.font = '11px Arial, sans-serif'; LABEL_WIDTH.set(name, ctx.measureText(name).width); }
+        const size = LABEL_WIDTH.get(name) > bw - 22 ? 10 : 11;
         uiText(ctx, name, x + 19, ry + (11 - size), { color: '#000', size });
       });
     }
     // the search's state over the button band: the magnifier animates while it runs
     const t = performance.now();
-    const icon = this.state === 'searching' ? P.icon0[Math.floor(t / 150) % 6] : this.state === 'paused' ? P.icon1 : null;
+    const icon = this.state === 'searching' ? P.icon0[Math.floor(t / 150) % 6] : null;
     if (icon) put(icon, 14, 360);
-    const msg = { searching: 'Searching for party members...', paused: 'The search is paused.', idle: '' }[this.state];
+    const msg = { searching: 'Searching for party members...', idle: '' }[this.state];
     if (msg) uiText(ctx, msg, 50, 368, { color: '#000', size: 11 });
   }
   note(ctx, lines, y, color = '#000') { lines.forEach((l, i) => uiText(ctx, l, 18, y + i * 14, { color, size: 11 })); }
