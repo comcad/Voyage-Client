@@ -59,8 +59,12 @@ export class StorageWin extends Win {
   }
   setMeso(meso) { this.meso = meso; }
   fix() {
-    this.sel[0] = Math.min(this.sel[0], this.items.length - 1);
-    this.first[0] = Math.max(0, Math.min(this.first[0], this.items.length - LEFT.rows));
+    // both panes: the right one shrinks as you withdraw, so it needs the same clamp
+    const n = [this.items.length, this.mine().length], rows = [LEFT.rows, RIGHT.rows];
+    for (const s of [0, 1]) {
+      this.sel[s] = Math.min(this.sel[s], n[s] - 1);
+      this.first[s] = Math.max(0, Math.min(this.first[s], n[s] - rows[s]));
+    }
   }
   error(code) { this.mgr.notice(ERRORS[code] || 'Due to an error, the trade did not happen.'); }
 
