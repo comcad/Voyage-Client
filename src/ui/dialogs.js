@@ -5,7 +5,7 @@ import { sfx } from '../audio.js';
 import { TextField, uiText, wrapText } from './wzui.js';
 import { Win, allCanvases, drawTabStrip } from './windows.js';
 import { Anim } from '../map.js';
-import { richText, drawRich, optionAt, LIGHT_COLORS, QUEST_STATES } from './richtext.js';
+import { richText, drawRich, optionAt, LIGHT_COLORS, NPC_COLORS, QUEST_STATES } from './richtext.js';
 import { UI_W, UI_H } from '../view.js';
 
 /**
@@ -60,7 +60,7 @@ function placeField(mgr, f, x, y) {
  * END CHAT. The dialog opens where the last one was left (centred on 400, 300 at first).
  * d: { npc, type, speaker, text, prev, next, def, min, max, styles } as sent in NPC_TALK.
  */
-const NPC_COLORS = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c' };
+// the NPC text codes: the client's pure colours, shared with the guide balloon (richtext.js's NPC_COLORS)
 const NPC_TEXT = { size: 12, lineH: 18, bullet: 18, colors: NPC_COLORS, imgPad: 2, boldE: false };
 const DLG = { w: 529, wrap: 341, margin: 8, minBody: 120, maxBody: 240, typeMs: 30, admin: 9010000 };
 const dlgCentre = { x: null, y: null };

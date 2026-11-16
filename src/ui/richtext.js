@@ -25,6 +25,12 @@ const LINE_H = 15, ICON_H = 34;
 /** Lighter versions for white text on the blue Notice / yes-no boxes, where the dark ones disappear. */
 export const LIGHT_COLORS = { b: '#9fd6ff', r: '#ff9a9a', g: '#a6f08a', d: '#e2b6ff' };
 
+/**
+ * The NPC dialog's and the guide balloon's codes (the client's pure colours, not COLORS' muted ones, which the quest
+ * book and the medal / maplelife pages use). Both callers pass this same table, so a code changed here changes both.
+ */
+export const NPC_COLORS = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c' };
+
 export function richText(ctx, text, width, ref, { base = '#000', size = 11, colors = null, lineH = LINE_H, bullet = 0, imgPad = null, boldE = true } = {}) {
   const palette = { ...COLORS, ...colors };
   const tokens = String(text).replace(/\\r\\n|\\n/g, '\n').replace(/\\r/g, '').replace(/\r\n|\r/g, '\n')
