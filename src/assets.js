@@ -52,13 +52,17 @@ export async function nodeAt(assets, path) {
 /**
  * How many images load at once. The rest wait their turn by priority: 0 what is drawn now (a map, a window, someone
  * arriving, an NPC), 1 poses someone may take next, 2 face expressions. Started all at once, a crowd arriving was
- * thousands of loads in flight and the browser locked up.
+ * thousands of loads in flight and the browser locked up. The bands fill only where something asks for them: the
+ * draws themselves at 0, and elsewhere the explicit preload() calls - a look's movement poses and its every action
+ * at 1 (game.js), its face expressions at 2 (character.js); there is no background warming pass any more.
  */
 const IMAGE_SLOTS = 12;
 /** The files the server packs into sheets, when it does (sheets.mjs): asked for with their images' places. */
 const PACKED = /^(?:Character|Npc|Mob)\/|^Map\/Tile\//;
 /** A load that hasn't finished in this long gives its slot up (it still counts once it comes in). */
 const SLOT_TIMEOUT_MS = 20000;
+/** A failed load is tried again after this long, this many tries in all (a dropped connection). */
+const RETRY_ATTEMPTS = 3, RETRY_AFTER_MS = 5000;
 
 /** What a picture is asked for by: its own version or its .img's when the customs folder changes it, else the assets'. */
 function pictureVersion(canvas) {
@@ -110,8 +114,7 @@ export class Assets {
 
   _entry(node, pri = 0) {
     let e = this.imgCache.get(node._canvas);
-    // one that failed to load (a dropped connection) is tried again 5s later, three tries in all
-    const retry = e?.err && e.tries < 3 && performance.now() - e.failedAt > 5000;
+    const retry = e?.err && e.tries < RETRY_ATTEMPTS && performance.now() - e.failedAt > RETRY_AFTER_MS;
     if (!e || retry) {
       e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}${node._canvas.startsWith('_sheets/') ? '' : pictureVersion(node._canvas)}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };
       e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: e?.pri ?? this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };      e.promise = new Promise((res) => { e.settle = res; });
