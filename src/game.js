@@ -619,6 +619,8 @@ const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 const MOVE_FLUSH = 500;
 /** A locked exclusive request the server never answers is abandoned this long after it was sent. */
 const EXCLUSIVE_TIMEOUT_MS = 10000;
+/** The least gap between two cash-item requests (ms), and how long one with no server answer stays busy. */
+const CASH_COOLDOWN_MS = 500, CASH_BUSY_MS = 5000;
 const NEED_TARGET = new Set([5121007, 15111004, 5111004, 15111001]);
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 /** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
@@ -1873,7 +1875,7 @@ export class Game {
       || (type === 553 ? this.useCashBare : null)
       || (Math.floor(id / 1000) === 5281 ? this.useEffectCash : null);
     if (!run) return false;
-    if (this.cashFree()) run.call(this, Number(slot), id);
+    if (this.cashGate()) run.call(this, Number(slot), id);   // refused: says why, rather than doing nothing
     return true;
   }
   /**
@@ -2590,12 +2592,12 @@ export class Game {
 
   // ------------------------------------------------------------------ cash items
   /**
-   * Cash items wait for the server to answer the last request (or 5s, should no answer come), and 500ms between
-   * requests.
+   * Cash items wait for the server to answer the last request (or CASH_BUSY_MS, should no answer come), and
+   * CASH_COOLDOWN_MS between requests.
    */
   cashFree() {
     const since = performance.now() - (this.cashAt || -1e9);
-    return !(this.cashBusy && since < 5000) && since >= 500 && (this.stats?.hp ?? 1) > 0;
+    return !(this.cashBusy && since < CASH_BUSY_MS) && since >= CASH_COOLDOWN_MS && (this.stats?.hp ?? 1) > 0;
   }
   /** cashFree, saying so when it isn't. */
   cashGate() {
@@ -5061,7 +5063,7 @@ export class Game {
   useInventoryItem(tab, slot, it) {
     if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
     if (tab === 5 && it.id === 5170000) { this.useNameTag(slot, it.id); return; }                  // Pet Name Tag
-    if (tab === 5 && it.id === 5180000) { if (this.cashFree()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
+    if (tab === 5 && it.id === 5180000) { if (this.cashGate()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
     if (tab === 5 && Math.floor(it.id / 10000) === 524) { this.useCashPetFood(slot, it.id); return; }
     if (tab === 5 && this.useCashTabItem(slot, it.id)) return;
     if (tab === 5 && it.id === 5060002) {
