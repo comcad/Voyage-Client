@@ -3340,11 +3340,16 @@ export class Game {
       // an auto-join one (Party Search) joins straight away
       partyInvite: (p) => {
         const from = p.name.startsWith('PS: ') ? p.name.slice(4) : p.name;
-        // a Party Search one is ignored with party or Party Search invitations off, or from someone on the Blacklist
-        if (p.autoJoin) { if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net.partyOp(3, p.id); return; }
-        if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
+        // a Party Search one is joined with party and Party Search invitations on, from no one on the Blacklist;
+        // anything else is answered no, so the invitation does not stay pending against us
+        if (p.autoJoin) {
+          if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net?.partyOp(3, p.id);
+          else this.net?.partyDeny(p.name);
+          return;
+        }
+        if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net?.partyDeny(p.name); return; }
         (from !== p.name ? notify(this.windows, 'partySearch', from) : notify(this.windows, 'party', p.name))
-          .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
+          .then((ok) => (ok ? this.net?.partyOp(3, p.id) : this.net?.partyDeny(p.name)));
       },
       partyMessage: (code, text) => {
         const t = code === 0x24 ? text || PARTY_ERROR : PARTY_MESSAGES[code] ?? PARTY_ERROR;
