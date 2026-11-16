@@ -18,6 +18,7 @@ export function setPixelScale(k) { PIXEL_SCALE = k; }
 /** A world position on the canvas's own pixel grid: whole game pixels at scale 1, finer above it. */
 export const snapPx = (v) => Math.round(v * PIXEL_SCALE) / PIXEL_SCALE;
 
+/** The label the menu shows, not the stored format: settings.resolution keeps `${w}x${h}` without the spaces. */
 export const resolutionName = ([w, h]) => `${w} x ${h}`;
 export function resolutionIndex() {
   const i = RESOLUTIONS.findIndex(([w, h]) => `${w}x${h}` === settings.resolution);
