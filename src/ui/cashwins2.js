@@ -70,7 +70,7 @@ export class KarmaWin extends Win {
     if (!p) return;
     if (!this.g.canExclusive(500)) { this.mgr.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
     this.g.net?.useCashItem(this.slot, this.itemId, (w) => w.int(p.tab).int(p.slot));
-    this.g.lockExclusive(); sfx.play('Game/UseShopItem');
+    sfx.play('Game/UseShopItem');   // no KARMA result packet exists: a lock here would never be released (doc 106)
     this.g.hud.message('You have used the Scissors of Karma, so 1 time of trading has been enabled.', CHAT_COLOR.error);
     this.mgr.close(this);
   }
@@ -177,7 +177,7 @@ export class VegaWin extends Win {
   }
   frames() { return [...super.frames(), this.V.GaugeBar.gauge, this.V.EffectArrow?.[0], ...Object.values(this.V.Count || {})].filter(Boolean); }
   onOpen() { preloadAll(this.mgr, [this.V.EffectSpelling, this.V.EffectTwinkling, this.V.EffectArrow]); if (!this.list.length) this.mgr.notice('No Vega List'); }
-  onClose() { Promise.resolve(this.loop).then((stop) => stop?.()); }
+  onClose() { Promise.resolve(this.loop).then((stop) => stop?.()); this.g.releaseExclusive(); }   // Escape mid-spell reaches here, never done() (doc 106)
   key(e) { if (e.key === 'Escape') this.mgr.close(this); }
   async drop(lx, ly, c) {
     if (c?.kind !== 'item' || typeof c.tab !== 'number') return;
@@ -214,7 +214,7 @@ export class VegaWin extends Win {
       this.fx.add(this.V.EffectSpelling, 85, 114, 2500); this.fx.add(this.V.EffectTwinkling, 85, 114, 2500);
       this.loop = sfx.loop('UI/VegaTwinkling');
     } else if (v === 0x41 || v === 0x43) this.second = v;
-    else { this.mgr.notice('This item cannot be used.'); this.mgr.close(this); }
+    else { this.mgr.notice('This item cannot be used.'); this.g.releaseExclusive(); this.mgr.close(this); }   // the lock was taken at go(): this branch never reaches done()
   }
   async done() {
     Promise.resolve(this.loop).then((stop) => stop?.());
