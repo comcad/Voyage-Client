@@ -43,14 +43,15 @@ export function feeFor(m) {
   const perMille = m >= 100000000 ? 60 : m >= 25000000 ? 50 : m >= 10000000 ? 40 : m >= 5000000 ? 30 : m >= 1000000 ? 18 : m >= 100000 ? 8 : 0;
   return Math.floor((m * perMille) / 1000);
 }
-/** The most mesos the dialog takes from what you hold (an older fee table's inverse), at most 100,000,000. */
-function mesoCap(base) {
-  let max = base;
-  for (const [r, lo, hi] of [[1 / 1.04, 1e7, Infinity], [1 / 1.03, 5e6, 1e7], [1 / 1.02, 1e6, 5e6], [1 / 1.01, 1e5, 1e6], [1 / 1.005, 5e4, 1e5]]) {
-    const v = base * r;
-    if (v >= lo && v < hi) { max = Math.trunc(v); break; }
+/** The most mesos the dialog takes from what you hold, at most 100,000,000: the largest amount whose fee (plus `extra`,
+ * the non-quick 5,000) still leaves you able to pay it. v + feeFor(v) only grows with v, so a search finds it. */
+function mesoCap(held, extra = 0) {
+  let lo = 0, hi = Math.min(held, 100000000);
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (mid + feeFor(mid) + extra <= held) lo = mid; else hi = mid - 1;
   }
-  return Math.min(max, 100000000);
+  return lo;
 }
 
 export class DueyWin extends Win {
@@ -107,22 +108,23 @@ export class DueyWin extends Win {
   setBusy(b) { this.busy = b; if (!b) this.msg.value = ''; }
 
   // ---------------------------------------------------------------- server events
-  setList(list) { this.list = list.slice(0, 10); this.sel = -1; this.first = 0; }
   /** 0x17: claimed or deleted. */
   gone(id, result) {
     this.list = this.list.filter((p) => p.id !== id); this.sel = -1; this.first = Math.min(this.first, Math.max(0, this.list.length - 3));
-    this.mgr.notice(result === 3 ? 'Successfully deleted.' : 'Successfully claimed.');
+    // the server sends 3 for a delete and 4 for a claim; anything else is not announced as a success
+    const t = result === 3 ? 'Successfully deleted.' : result === 4 ? 'Successfully claimed.' : null;
+    if (t) this.mgr.notice(t);
     this.setBusy(false);
   }
   /** 0x18: a parcel arrived while Duey is open (ten at most). */
   added(p) {
-    if (this.list.length < 10) { this.list.push(p); this.sel = -1; }
+    if (this.list.length >= 10) return;   // full: say nothing about a parcel it cannot show until reopened
+    this.list.push(p); this.sel = -1;
     this.mgr.notice('\tA new package has been sent.');
   }
   /** A result code: its notice, then the window is free again; a sent package resets the forms (or closes a quick-only window). */
   result(code) {
-    const t = RESULTS[code];
-    if (t) this.mgr.notice(t);
+    this.mgr.notice(RESULTS[code] ?? RESULTS[0x13]);   // 0x13 stands in for a code the table does not name
     this.setBusy(false);
     if (code !== 0x12) return;
     if (this.mode === 0) { this.forms = { 1: { ...this.blank(), table: this.forms[1].table }, 2: { ...this.blank(), ticket: 0, typed: false, table: this.forms[2].table } }; this.to.value = ''; this.msg.value = ''; }
@@ -131,7 +133,6 @@ export class DueyWin extends Win {
 
   // ---------------------------------------------------------------- your actions
   take() {
-    if (!this.list.length) return;
     const p = this.list[this.sel];
     if (!p || this.sel > 9) { this.mgr.notice("Please select the package you'll receive."); return; }
     if (daysLeft(p.sent) >= 30) { this.mgr.notice('Package is still being sent.\r\nPlease try again later.'); return; }
@@ -148,7 +149,7 @@ export class DueyWin extends Win {
   async askMesos() {
     const quick = this.tab === 2, m = this.g.meso || 0;
     if (!quick && m < 5001) { this.mgr.notice('You do not have enough mesos.'); return; }
-    const max = mesoCap(quick ? m : m - 5000);
+    const max = mesoCap(m, quick ? 0 : 5000);
     const v = await this.mgr.askNumber('How much money will you put up?', 0, 0, max);
     if (v == null) return;
     const f = this.form;
@@ -162,6 +163,12 @@ export class DueyWin extends Win {
     if (quick && !f.ticket) {
       f.ticket = Number(Object.entries(this.g.inventory?.[5] || {}).sort((a, b) => a[0] - b[0]).find(([, it]) => it.id === 5330000)?.[0]) || 0;
       if (!f.ticket) { this.mgr.notice('You do not have the Quick Delivery Coupon.'); return; }
+    }
+    // the slot was captured earlier: it may have moved or been used up since
+    if (quick && this.g.inventory?.[5]?.[f.ticket]?.id !== 5330000) {
+      f.ticket = 0;
+      this.mgr.notice('You do not have the Quick Delivery Coupon.');
+      return;
     }
     if (!f.item && !f.mesos) { this.mgr.notice('You must select either Mesos or items to send.'); return; }
     const to = this.to.value;
@@ -180,17 +187,17 @@ export class DueyWin extends Win {
   key(e) {
     if (this.busy) return;
     if (e.key === 'Escape') this.close();
-    else if (e.key === 'Enter') { if (this.tab === 0) this.take(); else if (this.tab === 1) this.send(); }
+    else if (e.key === 'Enter') { if (this.tab === 0) this.take(); else this.send(); }
   }
   /** An item from your inventory dropped on the send or quick form. */
   async drop(lx, ly, c) {
     if (c.kind !== 'item' || typeof c.tab !== 'number' || this.busy) return;
     const it = this.g.inventory?.[c.tab]?.[c.slot];
     if (!it) return;
+    if (this.tab !== 1 && this.tab !== 2) return;   // no form to drop it on: ignore it before saying anything about it
     if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }
     const info = (await itemInfo(this.g.assets, it.id)) || {}, n = (k) => Number(info[k]) || 0;
     if (n('cash') || it.cashId || n('pquest') || n('quest') || n('tradeBlock') || n('accountSharable')) { this.mgr.notice('\t\tThis item cannot be sent.'); return; }
-    if (this.tab !== 1 && this.tab !== 2) return;
     let qty = 1;
     if (invType(it.id) !== 1 && !isRechargeable(it.id)) {
       qty = await this.mgr.askNumber('How many do you wish to send?', 1, 1, it.quantity || 1);
@@ -205,10 +212,13 @@ export class DueyWin extends Win {
       if (tab !== this.tab) { this.tab = tab; if (tab === 2 || tab === 0) this.msg.value = ''; }
       return;
     }
+    if (this.busy) return;   // the window's own contract: nothing but the tab strip reacts while a request is out
     if (this.tab === 0) {
       const sb = this.scrollClick(lx, ly, 267, 210, 85, this.first, this.list.length, 3, this.mgr.B.VScr4);
       if (sb !== null) { this.first = sb; return; }
-      this.sel = lx > 9 && lx < 257 && ly > 232 && ly < 288 && Math.floor((ly - 230) / 18) + this.first < this.list.length ? Math.floor((ly - 230) / 18) + this.first : -1;
+      // three 18px rows from y 229 (line2 closes them at 283): the band must not reach past them or miss row 0's top
+      const k = ly >= 229 && ly < 283 && lx > 9 && lx < 257 ? Math.floor((ly - 229) / 18) : -1;
+      this.sel = k >= 0 && k + this.first < this.list.length ? k + this.first : -1;
       return;
     }
     const f = this.form;
