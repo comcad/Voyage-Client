@@ -1552,7 +1552,8 @@ export class ChannelSession {
     on(S.REMOVE_NPC, (r) => this.emit('removeNpc', r.int()));
     // the map dresses you in its own clothes (what in, the map's type decides)
     on(S.FORCED_MAP_EQUIP, () => this.emit('forcedMapEquip'));
-    // stats the map holds you to (0 = your own); a reset puts yours back
+    // stats the map holds you to, by name, and the value it holds each at (a held 0 is a value, not "your own");
+    // a reset puts yours back
     on(S.FORCED_STAT_SET, (r) => {
       const mask = r.uint(), f = {};
       FORCED_STATS.forEach((k, i) => { if (mask & (1 << i)) f[k] = i < 10 ? r.ushort() : r.ubyte(); });
