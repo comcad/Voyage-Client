@@ -5927,6 +5927,7 @@ export class Game {
       const say = (m) => this.hud?.message?.(m, CHAT_COLORS.notice);
       if (!settings.fpsMeter || !this.perf) {
         settings.fpsMeter = true; saveSettings();
+        this.perf ??= new PerfMeter();   // so this copy can report without waiting for the next frame
         say('The performance meter is on now. Play until it hitches, then type /fps copy again.');
         return;
       }
@@ -5972,7 +5973,7 @@ export class Game {
       this.net.groupChat(0, text, ids);
     } else this.net.groupChat(mode, text);
     // the server only echoes group chat to the others, so show your own line here
-    this.hud.message(`${this.player.name} : ${text}`, CHAT_COLORS[GROUP_KEYS[mode]]);
+    this.hud.message(`${this.player.name} : ${text}`, CHAT_COLORS[GROUP_KEYS[mode]] || '#fff');
   }
   /**
    * GUILD_OPERATION results: this.guild = { id, name, ranks[5], members[{ id, name, job, level, rank, online }],
