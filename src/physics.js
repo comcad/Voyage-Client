@@ -10,10 +10,10 @@
 export const PHYS = {
   walk: 125, jump: 555, gravity: 2000, maxFall: 670, climb: 100,
   // Map.wz/Physics.img over the avatar's mass of 100 (openms, docs/physics-evidence.md): on the ground a held
-  // direction pushes at walkForce/100 and letting go brakes at walkDrag/100; in the air a held direction
-  // pushes at 2*floatDrag2/100 but only up to walkSpeed/walkForce*floatDrag2 (~9px/s), and letting go drags
-  // at floatDrag2*floatCoefficient/100 - so a jump keeps the speed it left the ground with
-  walkAccel: 1400, walkBrake: 800, airAccel: 200, airLimit: (125 / 140000) * 10000, airDrag: 1,
+  // direction pushes at walkForce/100 and letting go brakes at walkDrag/100; in the air a held direction pushes
+  // at 2*floatDrag2/100 but only up to walkSpeed/walkForce*floatDrag2 (125*100/1400 ≈ 8.93 px/s), and letting go
+  // drags at floatDrag2*floatCoefficient/100 - so a jump keeps the speed it left the ground with
+  walkAccel: 1400, walkBrake: 800, airAccel: 200, airLimit: (125 * 100) / 1400, airDrag: 1,
   // in water (Physics.img swimForce / swimSpeed / floatDrag1 over the mass of 100, swimSpeedDec)
   swimAccel: 1200, swimSpeed: 140, swimDrag: 1000, swimDec: 0.9,
 };
@@ -219,6 +219,10 @@ export class Footholds {
   /**
    * Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh.
    * old: the speeds before this step's push (steering, swimming); without it, the speeds as they are now.
+   *
+   * The landing test scans every floor of the map per airborne entity per step, O(N×E) all told - ~5ns a floor, so
+   * even 1000 floors and 100 airborne bodies reject their way through it in well under a millisecond. If it ever
+   * shows up in the PerfMeter's update slice, an x-bucketed floor index in the constructor is the fix.
    * ent.zMass is the group of the floor it last stood on (walk and landing keep it), for meets.
    */
   fall(ent, dt, ignore = null, swimming = false, old = null) {
