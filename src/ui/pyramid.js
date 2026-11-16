@@ -67,15 +67,17 @@ export class PyramidWindow {
   }
 
   async load() {
-    if (this.art || this.loading) return;
+    if (this.art || this.loading || performance.now() < (this.retryAt || 0)) return;
     this.loading = true;
-    const [W, O] = await Promise.all([this.game.assets.json('UI/UIWindow.img'), this.game.assets.json('Map/Obj/etc.img')]);
-    const K = W?.MonsterKilling, T = O?.killing;
-    if (!K || !T) { this.loading = false; return; }
-    this.danger = { back: new Anim(K.Gauge.backgrdD), text: new Anim(K.Gauge.textD), icon: new Anim(K.Gauge.iconD), bar: new Anim(K.Gauge.danger) };
-    const all = (n) => (n && typeof n === 'object' ? (n._w ? [n] : Object.values(n).flatMap(all)) : []);
-    await this.game.assets.preload([...all(K), ...all(T)]);
-    this.art = K; this.time = T;
+    try {
+      const [W, O] = await Promise.all([this.game.assets.json('UI/UIWindow.img'), this.game.assets.json('Map/Obj/etc.img')]);
+      const K = W?.MonsterKilling, T = O?.killing;
+      if (!K || !T) { this.retryAt = performance.now() + 1000; return; }
+      this.danger = { back: new Anim(K.Gauge.backgrdD), text: new Anim(K.Gauge.textD), icon: new Anim(K.Gauge.iconD), bar: new Anim(K.Gauge.danger) };
+      const all = (n) => (n && typeof n === 'object' ? (n._w ? [n] : Object.values(n).flatMap(all)) : []);
+      await this.game.assets.preload([...all(K), ...all(T)]);
+      this.art = K; this.time = T;
+    } finally { this.loading = false; }
   }
 
   /** CLOCK (type 2) on a stage: the stage timer. */

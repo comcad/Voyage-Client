@@ -30,19 +30,21 @@ export class DojoWindow {
   active() { return Number(this.game.map?.info?.fieldType) === 14; }
 
   async load() {
-    if (this.art || this.loading) return;
+    if (this.art || this.loading || performance.now() < (this.retryAt || 0)) return;
     this.loading = true;
-    const W = await this.game.assets.json('UI/UIWindow.img');
-    const R = W?.muruengRaid;
-    if (!R) { this.loading = false; return; }
-    this.full = new Anim(R.energy.full);
-    const nodes = [R.player[0], R.monster[0], R.clock[0], R.energy.empty[0], R.energy.empty.Gage[0], R.player.Gage[0],
-      R.monster.Gage[0], R.number.bar, ...Array.from({ length: 10 }, (_, i) => R.number[i]), ...this.full.frames];
-    await this.game.assets.preload(nodes);
-    this.art = R;
+    try {
+      const W = await this.game.assets.json('UI/UIWindow.img');
+      const R = W?.muruengRaid;
+      if (!R) { this.retryAt = performance.now() + 1000; return; }
+      this.full = new Anim(R.energy.full);
+      const nodes = [R.player[0], R.monster[0], R.clock[0], R.energy.empty[0], R.energy.empty.Gage[0], R.player.Gage[0],
+        R.monster.Gage[0], R.number.bar, ...Array.from({ length: 10 }, (_, i) => R.number[i]), ...this.full.frames];
+      await this.game.assets.preload(nodes);
+      this.art = R;
+    } finally { this.loading = false; }
   }
 
-  mapChanged() { this.clockEnd = 0; this.secs = null; }
+  mapChanged() { this.clockEnd = 0; this.secs = null; this._bossKey = null; }
 
   /** CLOCK (type 2) on a Dojo floor: the seconds left. */
   clock(secs) {
@@ -66,13 +68,16 @@ export class DojoWindow {
     }
   }
 
-  /** The stage boss: the first boss monster on the map. */
+  /** The stage boss: the first boss monster on the map, cached until the map or its life list changes. */
   boss() {
-    for (const e of this.game.map?.life || []) {
+    const life = this.game.map?.life, key = `${this.game.map?.id ?? ''}:${life?.length ?? 0}`;
+    if (this._bossKey === key) return this._boss;
+    this._bossKey = key;
+    for (const e of life || []) {
       if (e.kind !== 'Mob' || !e.alive || NOT_BOSSES.has(Number(e.spawn?.id))) continue;
-      if (Number(e.src?.info?.boss)) return e;
+      if (Number(e.src?.info?.boss)) return (this._boss = e);
     }
-    return null;
+    return (this._boss = null);
   }
 
   draw(ctx) {
@@ -116,7 +121,7 @@ export class DojoWindow {
     if (this.secs !== null) {
       const digit = (x, n) => { const i = im(R.number[n]); if (i) ctx.drawImage(i, CLOCK_X + x, CLOCK_Y); };
       const two = (x, n) => { digit(x, Math.trunc(n / 10) % 10); digit(x + 23, n % 10); };
-      two(0, Math.trunc(this.secs / 60));
+      two(0, Math.min(99, Math.trunc(this.secs / 60)));
       const colon = im(R.number.bar);
       if (colon) ctx.drawImage(colon, CLOCK_X + 51, CLOCK_Y + 4);
       two(68, this.secs % 60);
