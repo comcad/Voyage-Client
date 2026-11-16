@@ -4,7 +4,11 @@ import { UI_W, UI_H } from '../view.js';
 
 const centred = (bg) => [Math.round((UI_W - (bg?._w || 0)) / 2), Math.round((UI_H - (bg?._h || 0)) / 2)];
 
-/** A window answered once (done(value)) and closed; its text boxes follow it on screen. */
+/**
+ * A window answered once (done(value)) and closed; its text boxes follow it on screen.
+ * A window answers at most once, and `null` always means "dismissed": `settle` is the only way an answer or a
+ * dismissal is delivered, so the flag it guards cannot be set without the callback (and the reverse) running.
+ */
 class StepWin extends Win {
   constructor(mgr, bg, done) {
     super(mgr, bg, ...centred(bg));
@@ -17,9 +21,13 @@ class StepWin extends Win {
     this.fields.push(f); this.at.push([x, y]);
     return f;
   }
-  onOpen() { setTimeout(() => this.fields[0]?.focus(), 0); }
-  finish(v) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done?.(v); }
-  onClose() { for (const f of this.fields) f.remove(); if (!this.answered) { this.answered = true; this.done?.(null); } }
+  /** Focus the first text box after the frame (a subclass passes the one it wants instead). */
+  focusFirst(f = this.fields[0]) { setTimeout(() => f?.focus(), 0); }
+  onOpen() { this.focusFirst(); }
+  /** Answer once: flag, close, then the callback (in that order, so a caller never observes the window still open). */
+  settle(v) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done?.(v); }
+  finish(v) { this.settle(v); }
+  onClose() { for (const f of this.fields) f.remove(); this.settle(null); }
   key(e) { if (e.key === 'Escape') this.finish(null); else if (e.key === 'Enter') this.ok(); }
   ok() {}
   draw(ctx) {
@@ -49,8 +57,8 @@ export class KiteInputWin extends StepWin {
 
 /**
  * A kite's message on a double-click (MultiLine/backgrnd, centred, MultiLine/BtClose at (385, 10)): the owner at
- * (30, 13) in orange, the item's msg after it in khaki, and the message's first, middle and last lines in white at
- * (22, 47), (22, 67), (22, 87).
+ * (30, 13) in orange, the item's msg after it in khaki, and the message's first, second and last lines in white at
+ * (22, 47), (22, 67), (22, 87). A longer message shows its last line in the third row, so lines 3..n-1 are dropped.
  */
 export class KiteMessageWin extends Win {
   constructor(mgr, kite, msg) {
@@ -72,9 +80,10 @@ export class KiteMessageWin extends Win {
 }
 
 /**
- * The Memo send window (Memo/backgrnd3, centred): To (12 characters) at (38, 67), the note (200) at (13, 114),
- * BtOK2 at (193, 141), BtCancel2 at (242, 141) and the close box at (277, 6). OK trims both and checks them in
- * order, a notice keeping the window open: a name of 4-12 characters, not yours, no curses, not empty, 200 at most.
+ * The Memo send window (Memo/backgrnd3, centred): To (12 characters) at (38, 67), the note (200, the box's own
+ * maxLength) at (13, 114), BtOK2 at (193, 141), BtCancel2 at (242, 141) and the close box at (277, 6). OK trims both
+ * and checks them in order, a notice keeping the window open: a name of 4-12 characters, not yours, no curses, not
+ * empty.
  */
 export class MemoSendWin extends StepWin {
   constructor(mgr, to, done) {
@@ -86,14 +95,16 @@ export class MemoSendWin extends StepWin {
     this.button(mgr.B.BtOK2, 193, 141, () => this.ok());
     this.button(mgr.B.BtCancel2, 242, 141, () => this.finish(null));
   }
-  onOpen() { setTimeout(() => (this.to.value ? this.note : this.to).focus(), 0); }
+  onOpen() { this.focusFirst(this.to.value ? this.note : this.to); }   // a prefilled recipient leaves the note first
+  /** One refusal at a time, in this order (a notice keeps the window open, so the typed text survives):
+   *  name length 4-12 -> your own name -> curses -> empty note. The note's 200-character cap is the box's own
+   *  maxLength (see `this.field(13, 114, 271, 13, 200)` above), so it cannot be exceeded by typing or pasting. */
   async ok() {
     const to = this.to.value.trim(), text = this.note.value.trim(), say = (t) => this.mgr.notice(t);
     if (to.length < 4 || to.length > 12) { say('Please enter the name\r\n of the receiving character.'); return; }
     if (to.toLowerCase() === String(this.g.player?.name || '').toLowerCase()) { say("You can't send the note to yourself."); return; }
     if (await this.g.cursed(text)) { say('Cursing is not allowed.'); return; }
     if (!text) { say('Please enter the content.'); return; }
-    if (text.length > 200) { say('The notes can be sent in 100 characters.'); return; }
     this.finish({ to, text });
   }
 }
@@ -103,9 +114,12 @@ export class MemoSendWin extends StepWin {
  * (20, y) and BtNo at (148, y) with y 120 for mode 0, 101 otherwise. Esc is No.
  */
 const CANCEL_KINDS = ['AskContinueCancel', 'CancelNameChange', 'CancelCharacterTransfer'];
+/** The art for a kind. CancelResultWin's kind is a wire value, so an unexpected one falls back to the mode-0 set
+ *  (AskContinueCancel) rather than throwing on `undefined.backgrnd`; the caller's own kind is always 1 or 2. */
+const cancelArt = (mgr, kind) => mgr.W.CancelRequests[CANCEL_KINDS[kind]] ?? mgr.W.CancelRequests[CANCEL_KINDS[0]];
 export class CancelRequestWin extends StepWin {
   constructor(mgr, mode, done) {
-    const C = mgr.W.CancelRequests[CANCEL_KINDS[mode]];
+    const C = cancelArt(mgr, mode);
     super(mgr, C.backgrnd, done);
     const y = mode === 0 ? 120 : 101;
     this.button(C.BtYes, 20, y, () => this.finish(true));
@@ -116,7 +130,7 @@ export class CancelRequestWin extends StepWin {
 /** A cancel request's answer: CancelRequests/<kind>/suc or fail, centred, BtOK2 at (110, 87) (suc) or (110, 103) (fail). */
 export class CancelResultWin extends StepWin {
   constructor(mgr, kind, ok, done) {
-    const C = mgr.W.CancelRequests[CANCEL_KINDS[kind]];
+    const C = cancelArt(mgr, kind);
     super(mgr, ok ? C.suc : C.fail, done);
     this.button(mgr.B.BtOK2, 110, ok ? 87 : 103, () => this.finish(true));
   }
