@@ -428,6 +428,7 @@ const BOX_LINE_SHOTS = new Set([5201001, 5211004, 5211005, 5221008]), TORPEDO = 
 /** Battleship Cannon and Torpedo fire from 30px in front, and only from the Battleship. */
 const SHIP_SHOTS = new Set([CANNON, TORPEDO]), SHIP_SHOT_FROM = 30;
 /** When a shot leaves (ms into the attack), whatever the attack speed: Double Shot, Burst Fire, Cannon, Torpedo, Shark Wave. */
+/** Launch-to-hit ms for the skills whose shot leaves before the animation would; an instant launch can't be said here (`||` treats 0 as absent). */
 const SHOT_LAUNCH = { 5001003: 90, 5210000: 90, 5221007: 180, 5221008: 600, 15111007: 449 };
 /**
  * Energy Orb: only with a full Energy Charge. Its orb goes from 25px in front to the middle of the first monster on its
@@ -6991,7 +6992,9 @@ export class Game {
     // Shadow Partner throws as many again: its lines follow yours, at y% of them (x% for a plain throw)
     const sp = kind === 'ranged' && !NO_PARTNER.has(skillId) ? this.partner() : null;
     const base = ld?.fixdamage || opts.stage2 ? 1 : ld?.attackCount || ld?.bulletCount || 1;
-    const lines = sp ? Math.min(15, base * 2) : base, half = Math.floor(lines / 2);
+    // the 15-line cap cuts into Shadow Partner's share, not yours: an 8-line skill is your 8 plus the partner's 7
+    // (floor(lines/2) gave you 7 and made the partner's 8th line copy its own first)
+    const lines = sp ? Math.min(15, base * 2) : base, half = base;
     const ammo = kind === 'ranged' ? this.ammoItem((ld?.bulletConsume || ld?.bulletCount || 1) * (sp ? 2 : 1), skillId) : 0;
     const cash = kind === 'ranged' ? this.cashBullet() : 0;
     const plan = kind === 'ranged' && !BOX_SHOTS.has(skillId) ? this.shotPlan(p, skillId, lv, ld, this.shotRange(skillId, lv, wcat), from) : null;
@@ -7006,7 +7009,7 @@ export class Game {
     let clip = null;
     if (lineShot && plan.targets.length) {
       const h = plan.targets[0], c = this.shotBlocked(plan.sx, plan.sy, h.hx ?? h.x, h.hy ?? h.y);
-      if (c) { plan.targets = []; plan.orb = null; plan.blast = null; targets = []; plan.ex = c.x; plan.ey = c.y; }
+      if (c) { plan.targets = []; plan.orb = null; plan.blast = null; plan.arrows = false; targets = []; plan.ex = c.x; plan.ey = c.y; }   // nothing to watch: no volley either
     } else if (kind === 'ranged' && mobCount === 1 && !plan && targets.length === 1) {
       const b = targets[0].hitBox();
       clip = this.shotBlocked(p.x, p.y - 28, (b.left + b.right) / 2, (b.top + b.bottom) / 2);
@@ -7108,7 +7111,7 @@ export class Game {
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
       // when each lands goes to the server too (it holds the monster's drops until then)
-      if (plan) { t.delay = hitDelay + plan.targets[i].delay; this.after(t.delay, land); }
+      if (plan) { t.delay = hitDelay + plan.targets[i].delay; this.after(t.delay, land); }   // per target: the flight it measured
       else if (projectile) { t.delay = hitDelay; this.after(hitDelay, () => this.shoot(skillId, p, t.mob, kind === 'ranged' ? ammo : 0, land)); }
       else { t.delay = hitDelay + hitWave(i, kind, skillId); this.after(t.delay, land); }
       if (skillId === CHAIN_LIGHTNING) this.boltAt(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : p, t.mob, skillId);
@@ -7119,7 +7122,7 @@ export class Game {
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0,
-      mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
+      mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });   // delay: Meso Explosion's packet start
     // the guild boss field's pulley turns when a close-range swing reaches it
     if (this.net && kind === 'melee' && this.guildBoss) this.after(hitDelay, () => this.guildBoss?.swing(this.attackBox(kind, skillId, lv, pose)));
     // Assaulter: straight to the floor 200px ahead, leaving its trail where you stood
