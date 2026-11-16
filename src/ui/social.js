@@ -57,7 +57,7 @@ export function drawPartyHp(ctx, game, cam) {
 export class PlayerMenu extends Win {
   constructor(mgr, target, x, y) {
     super(mgr, null, 0, 0);
-    this.buttons = [];
+    this.closeBtn.visible = false;   // a context menu has no close box
     this.M = mgr.W.ContextMenu; this.target = target; this.transient = true;
     const g = this.g, M = this.M, name = target.name;
     const guildRank = g.guild?.members?.find((m) => m.id === g.player.id)?.rank;
@@ -66,7 +66,7 @@ export class PlayerMenu extends Win {
       [M.BtSave, () => { navigator.clipboard?.writeText(name).catch(() => {}); g.statusBar.focusChat(); }],
       [M.BtTrade, () => g.requestTrade(target)],
       [M.BtWhisper, () => g.statusBar.focusChat(`/w ${name} `)],
-      (!g.party || g.party.leader === g.player.id) && [M.BtParty, () => { if (!g.party) g.net?.partyOp(1); g.net?.partyOp(4, name); }],
+      (!g.party || g.party.leader === g.player.id) && [M.BtParty, () => g.net?.partyOp(4, name)],
       g.guild && (guildRank === 1 || guildRank === 2) && [M.BtGuild, () => g.net?.guildOp(5, name)],
       [M.BtClaim, () => g.openReport(name)],
       g.family && g.family.juniors < g.family.maxJuniors && [M.BtFamily, () => g.net?.familyAdd(name)],
@@ -168,7 +168,6 @@ export class CharInfoWin extends Win {
       await mgr.assets.preload([...body, ...acc.filter((f) => f?._canvas)]);
       if (body.length) this.petArt[k] = { body, acc };
     }));
-    this.petItems = (info.pets || []).map((p, k) => this.petEquips(p, k));
     if (info.wish?.length) mgr.assets.json('Etc/Commodity.img').then((c) => { this.commodity = new Map(Object.values(c || {}).map((x) => [x.SN, x])); });
     this.layout();
   }
@@ -291,8 +290,32 @@ export class CharInfoWin extends Win {
     const look = g.others.get(this.info.id)?.lookData;
     return { shown: (i) => look?.equips?.[i], hidden: (i) => look?.masked?.[i], cashWeapon: look?.cashWeapon };
   }
-  wishItems() { return (this.info.wish || []).map((sn) => this.commodity?.get(sn)).filter(Boolean); }
-  sideRows() { return this.side === 'item' ? this.equipped().map((id) => ({ id })) : this.side === 'wish' ? this.wishItems().map((c) => ({ id: c.ItemId, count: c.Count })) : []; }
+  /** What the memos below key on: a hash of your equipped slots (they change in place), or the other's lookData
+   * (replaced wholesale on a look change). */
+  lookSig() {
+    if (this.info.id !== this.g.player.id) return this.g.others.get(this.info.id)?.lookData;
+    const mix = (h, v) => Math.imul(h ^ (v ?? 0), 0x9E3779B1) | 0;
+    let s = 0;
+    for (const [k, it] of Object.entries(this.g.inventory?.equipped || {})) s = mix(mix(s, Number(k)), it?.id);
+    return s;
+  }
+  /** The wish list's commodities, memoized: the catalogue loads after the window opens, the wish itself never changes. */
+  wishItems() {
+    if (this._wish?.c !== this.commodity) this._wish = { c: this.commodity, list: (this.info.wish || []).map((sn) => this.commodity?.get(sn)).filter(Boolean) };
+    return this._wish.list;
+  }
+  /** The side list's rows, memoized: rebuilt only when the side or what it reads changes (draw and the hit-test
+   * paths call this every frame and every pointer event). */
+  sideRows() {
+    if (this.side === 'item') {
+      const sig = this.lookSig();
+      if (this._rows?.side !== 'item' || this._rows.sig !== sig) this._rows = { side: 'item', sig, rows: this.equipped().map((id) => ({ id })) };
+    } else if (this.side === 'wish') {
+      const list = this.wishItems();
+      if (this._rows?.side !== 'wish' || this._rows.list !== list) this._rows = { side: 'wish', list, rows: list.map((c) => ({ id: c.ItemId, count: c.Count })) };
+    } else return [];
+    return this._rows.rows;
+  }
   /** The side list's scrollbar: the wish list's at (218, 33), 112 tall. */
   sideBar() { return this.side === 'wish' ? { x: SIDE_X + 218, y: 33, h: 112 } : { x: SIDE_X + 220, y: 27, h: 122 }; }
 
@@ -374,6 +397,12 @@ export class CharInfoWin extends Win {
       if (id === 1812002 || id === 1812003 || lookSlotPet(i) === k) out.push(id);
     }
     return out;
+  }
+  /** The pets' worn items, memoized on lookSig() so a change while the window is open shows at once. */
+  get petItems() {
+    const sig = this.lookSig();
+    if (this._petItems?.sig !== sig) this._petItems = { sig, rows: (this.info.pets || []).map((p, k) => this.petEquips(p, k)) };
+    return this._petItems.rows;
   }
   /** The pet's stand0 frame (and its accessory's) for now. */
   petFrame(art) {
