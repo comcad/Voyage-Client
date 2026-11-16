@@ -264,6 +264,9 @@ export class MedalWin extends Win {
       ctx.beginPath(); ctx.rect(LIST.x, LIST.y, LIST.w, 291); ctx.clip();
     }
     const worn = this.g.inventory?.equipped?.[-49]?.id;
+    // the worn medal's animation frames and their total, once per paint rather than once per row
+    const wf = this.tab === 0 && worn ? Object.keys(T.icon2 || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => T.icon2[k]) : null;
+    const wTotal = wf ? wf.reduce((s, f) => s + (Number(f.delay) || 100), 0) : 0;
     for (const { r, y } of this.layout(rows)) {
       if (r.kind === 'head') {
         ctx.fillStyle = '#9fb5ce'; ctx.fillRect(LIST.x, y, LIST.w, 18);
@@ -276,10 +279,8 @@ export class MedalWin extends Win {
       if (bg4) ctx.drawImage(bg4, 7, y);
       if (r.item) m.drawIcon(ctx, m.icon(r.item), 15, y + 7, r.item);
       if (this.tab === 0 && worn && worn === r.item) {
-        const fr = Object.keys(T.icon2 || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => T.icon2[k]);
-        const total = fr.reduce((s, f) => s + (Number(f.delay) || 100), 0);
-        let e = total ? performance.now() % total : 0, f = fr[0];
-        for (const k of fr) { f = k; if ((e -= Number(k.delay) || 100) < 0) break; }
+        let e = wTotal ? performance.now() % wTotal : 0, f = wf[0];
+        for (const k of wf) { f = k; if ((e -= Number(k.delay) || 100) < 0) break; }
         const ic = f && im(f);
         if (ic) ctx.drawImage(ic, 13, y + 5);
       }
