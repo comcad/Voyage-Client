@@ -143,13 +143,13 @@ function readMobMask(r) {
 }
 // the order the statuses are read in
 const MOB_STAT_ORDER = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18, 19, 16, 17, 21, 22, 24, 25, 26, 28, 29, 30, 32, 33, 34];
-/** Each status's value, source skill and duration, then the extras of bits 27, 29-31; as { first, second, source, value }. */
+/** Each status's value, source skill and duration (ms), then the extras of bits 27, 29-31; as { first, second, source, value, duration }. */
 function readMobStats(r, has) {
   const out = [];
   for (const b of MOB_STAT_ORDER) {
     if (!has(b)) continue;
-    const value = r.short(), source = r.int(); r.short();
-    out.push({ first: b >= 32 ? 2 ** (b - 32) : 0, second: b < 32 ? (2 ** b) >>> 0 : 0, source, value });
+    const value = r.short(), source = r.int(), duration = r.short();
+    out.push({ first: b >= 32 ? 2 ** (b - 32) : 0, second: b < 32 ? (2 ** b) >>> 0 : 0, source, value, duration });
   }
   if (has(27)) for (let n = r.int(); n > 0; n--) r.skip(12);
   if (has(29)) r.int();
@@ -224,7 +224,7 @@ export class ChannelSession {
   constructor(transport, handler = {}) {
     this.conn = new Connection(transport);
     this.h = handler;
-    this.moveId = 1;
+    this.mobMoveIds = new Map();
     this.unhandled = {};
     this.conn.onUnhandled = (op) => { const n = S_NAMES[op] || `0x${op.toString(16)}`; this.unhandled[n] = (this.unhandled[n] || 0) + 1; };
     this.conn.onClose = () => this.h.disconnected?.();
@@ -698,15 +698,14 @@ export class ChannelSession {
       else this.emit('fame', { mode });
     });
     // ---- buddy list (CWvsContext::OnFriendResult)
-    const fixed = (r, n) => { const b = r.bytes(n); let s = ''; for (const c of b) { if (!c) break; s += String.fromCharCode(c); } return s; };
     on(S.BUDDYLIST, (r) => {
       const op = r.ubyte();
       if (op === 7 || op === 10 || op === 0x12) {
         // flag 1: a request still waiting for an answer
         const list = [];
         for (let n = r.ubyte(); n > 0 && r.available >= 39; n--) {
-          const id = r.int(), name = fixed(r, 13), pending = r.ubyte() === 1;
-          const channel = r.int(), group = fixed(r, 17);
+          const id = r.int(), name = r.paddedString(13), pending = r.ubyte() === 1;
+          const channel = r.int(), group = r.paddedString(17);
           list.push({ id, name, channel, group, pending });
         }
         this.emit('buddies', list);
@@ -715,7 +714,7 @@ export class ChannelSession {
         const id = r.int(), name = r.string();
         let entry = null;
         if (r.available >= 40) {
-          entry = { id: r.int(), name: fixed(r, 13), pending: r.ubyte() === 1, channel: r.int(), group: fixed(r, 17) };
+          entry = { id: r.int(), name: r.paddedString(13), pending: r.ubyte() === 1, channel: r.int(), group: r.paddedString(17) };
           r.ubyte();
         }
         this.emit('buddyRequest', { id, name, entry });
@@ -727,7 +726,7 @@ export class ChannelSession {
     });
     // ---- party (CWvsContext::OnPartyResult)
     const partyStatus = (r) => {
-      const ids = Array.from({ length: 6 }, () => r.int()), names = ids.map(() => fixed(r, 13));
+      const ids = Array.from({ length: 6 }, () => r.int()), names = ids.map(() => r.paddedString(13));
       const jobs = ids.map(() => r.int()), levels = ids.map(() => r.int()), channels = ids.map(() => r.int());
       const leader = r.int(), maps = ids.map(() => r.int());
       // each slot's Mystic Door: its town, the field it was opened in, and where (16 bytes a slot)
@@ -1162,6 +1161,7 @@ export class ChannelSession {
     const SHARP_EYES = [3121002, 3221002];
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
     const WATK = 0x100000000n, WDEF = 0x200000000n, MATK = 0x400000000n, MDEF = 0x800000000n, HANDS = 0x4000000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
+    const COMBO_SKILLS = new Set([1111002, 11111001]);   // Crusader.COMBO / DawnWarrior.COMBO — the only sources that ever send a COMBO stat
     const RIDING = 0x20000000000000n;   // BuffStat.MONSTER_RIDING, in the first mask
     const HOMING = 0x80000000000000n;   // Homing Beacon, in the first mask
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
@@ -1254,19 +1254,17 @@ export class ChannelSession {
       }
       // Maple Warrior: its one stat is the % added to STR, DEX, INT and LUK
       if (pick === normal && n === 1 && mask === MAPLE_WARRIOR) { r.pos = start; b.mapleWarrior = r.short(); }
-      // a morph (second mask 0x2): the last stat (the one before last with GHOST_MORPH 0x20000), and its source
+      // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent. SUMMON
+      // shares this second-mask bit (BuffStat.java: COMBO and SUMMON are both 0x20000000000000) but always carries
+      // a summon skill id and value 1 — only the two combo skills ever send a real orb count here (doc 002).
+      if (pick === normal && n === 1 && mask === COMBO && COMBO_SKILLS.has(normal.source)) { r.pos = start; b.combo = r.short(); }
+      // a morph (second mask 0x2): its own stat's value is the morph id, and the int after it its source. The index
+      // is the stats before it, as the Ghost read below counts its own (the two used to be written from different ones)
       if (pick === normal && mask & 0x2n) {
         r.pos = start;
-        const groups = Array.from({ length: n }, () => ({ v: r.short(), src: r.int(), t: r.int() })), g = groups[n - 1 - (mask & 0x20000n ? 1 : 0)];
+        const groups = Array.from({ length: n }, () => ({ v: r.short(), src: r.int(), t: r.int() }));
+        const g = groups[popcount(mask >> 32n) + popcount(mask & 0x1n)];
         if (g) { b.morph = g.v; b.morphSource = g.src; }
-      }
-      // Combo Attack: its one stat is 1 + the orbs you hold, sent again each time one is gained or spent
-      if (pick === normal && n === 1 && mask === COMBO) { r.pos = start; b.combo = r.short(); }
-      // a morph: its value is the morph's id (values run in stat order: the second mask's high half first)
-      if (pick === normal && mask & 0x2n) {
-        r.pos = start;
-        const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
-        b.morph = values[popcount(mask >> 32n) + popcount(mask & 0x1n)];
       }
       // Ghost (second mask 0x20000): read right after a morph; its value is 1 for a ghost, 2 for the spaceship
       if (pick === normal && mask & 0x20000n) {
@@ -1484,7 +1482,7 @@ export class ChannelSession {
     // answer to an older move than the last one sent doesn't change whether it is after you
     on(S.MOVE_MONSTER_RESPONSE, (r) => {
       const oid = r.int(), moveId = r.short(), aggro = r.bool(), mp = r.ushort(), skill = r.ubyte(), level = r.ubyte();
-      const last = this.mobMoveIds?.get(oid), stale = last !== undefined && ((moveId - last) << 16 >> 16) < 0;
+      const last = this.mobMoveIds.get(oid), stale = last !== undefined && ((moveId - last) << 16 >> 16) < 0;
       this.emit('mobMoveResponse', oid, { aggro, mp, stale });
       this.emit('mobSkillOffer', oid, skill, level);
     });
@@ -1746,7 +1744,7 @@ export class ChannelSession {
    */
   moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null) {
     // each monster counts its own moves
-    const id = (((this.mobMoveIds ??= new Map()).get(oid) ?? 0) + 1) & 0x7fff;
+    const id = ((this.mobMoveIds.get(oid) ?? 0) + 1) & 0x7fff;
     this.mobMoveIds.set(oid, id);
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
       .byte(0).byte(activity).byte(skill).byte(level).short(0).byte(0).int(0).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
