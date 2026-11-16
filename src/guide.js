@@ -1,6 +1,6 @@
 import { frames } from './assets.js';
 import { Anim } from './map.js';
-import { richText, drawRich } from './ui/richtext.js';
+import { richText, drawRich, NPC_COLORS } from './ui/richtext.js';
 import { textRef } from './ui/dialogs.js';
 import { snapPx } from './view.js';
 
@@ -17,7 +17,8 @@ import { snapPx } from './view.js';
  * the server gives), or a UI/tutorial.img picture. Double-clicking it sends CLICK_GUIDE.
  */
 const STEP_MS = 30, SPEED = 7, KEEP_X = 70;
-const BALLOON = { b: '#0000ff', r: '#ff0000', g: '#00ff00', d: '#51378c', k: '#000' };
+// the tutorial balloon's codes: the same table the NPC dialog draws with, plus the plain black the dialog's base gives it
+const BALLOON = { ...NPC_COLORS, k: '#000' };
 
 export class Guide {
   /** prev: the guide of the last map, whose loaded art is kept. */
