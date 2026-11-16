@@ -120,8 +120,7 @@ function readMerchantRoom(r, selfName) {
   }
   const title = r.string(); r.ubyte();
   const mesos = r.int();            // the owner: what the merchant has earned; a visitor: their own
-  const n = r.ubyte();
-  const items = n ? Array.from({ length: n }, () => ({ bundles: r.short(), perBundle: r.short(), price: r.int(), item: readItem(r, false) })) : (r.ubyte(), []);
+  const n = r.ubyte(), items = n ? readShopItems(r) : (r.ubyte(), []);   // an empty stock still carries its 0 byte
   return { merchant: true, itemId, ownerName: owner, slot: mine ? 0 : slot, firstTime, elapsed, received, mesos, sold, people, title, items, notes };
 }
 /** ROOM type 4 (getPlayerShop): max visitors, your slot (0 owner), sales so far, owner and visitors, title, stock. */
