@@ -8958,13 +8958,13 @@ export class Game {
     return wcat === 149 ? 200 : 0;
   }
   /**
-   * The first monster a shot meets along its line (y), from `from` px in front out to `range`: checked in 20px steps,
-   * each reaching a quarter of its distance from you up and down.
-   */
-  /**
-   * The first monster a line from `ent` meets: the slab 20px out, then the next, and within the first slab that holds
-   * one, the nearest by x. A monster straddling a slab edge is met by the slab it overlaps first, so this is the first
-   * *slab* with a monster rather than a global nearest; the slabs are the client's own strike granularity.
+   * The first monster a line from `ent` meets, from `from` px in front out to `range`, at `y`: the slab 20px out,
+   * then the next, and within the first slab that holds one, the nearest by x. A monster straddling a slab edge is
+   * met by the slab it overlaps first, so this is the first *slab* with a monster rather than a global nearest; the
+   * slabs are the client's own strike granularity.
+   *
+   * The same wedge geometry is spelled out again with its own numbers at spellTargets (50..300 out, 28 up); when
+   * the step, the quarter-spread or the slab-first rule changes here, that description changes with it.
    */
   firstOnLine(ent, from, range, y) {
     const dir = ent.facingRight ? 1 : -1, mobs = this.targetMobs();
@@ -9831,7 +9831,12 @@ export class Game {
    * Mu Lung Dojo (fieldType 14) with full energy (10000): Ctrl and Alt pressed one after the other casts a Dojo skill
    * by the arrow held: Up Bamboo Rain (1009), Left Invincibility (1010), Right Power Explosion (1011), for your job.
    * The first of the two is held back until the next key, or 50ms; anything else lets it through.
-   * True when the press is held back or taken.
+   *
+   * The boolean is "swallow this key", which is all its one caller (the input filter) wants: true comes back both
+   * when the press was held back (it may yet be injected by a later press's `prev` replay below) and when the
+   * chorded skill took it - the filter does not distinguish the two, and nothing else calls this. The two outcomes
+   * are visible in the body: `return this.dojoSkill()` is the taken one; `this.dojoMod = {...}, return true` the
+   * held-back one.
    */
   dojoKey(k, down) {
     const sc = CODE_TO_SC[k], mod = sc === 0x1d || sc === 0x38, prev = this.dojoMod;
@@ -10308,12 +10313,13 @@ export class Game {
     const team = local ? this.carnivalTeam : ent.team;
     return team === 0 ? 'Maple Red' : team === 1 ? 'Maple Blue' : null;
   }
-  /** A monster on your Monster Carnival team: your attacks pass it by. */
+  /** A monster on your Monster Carnival team: your attacks pass it by (what liveMobs leaves out - the Hypnotized are still targets). */
   carnivalAlly(m) {
     const type = Number(this.map?.info?.fieldType);
     return (type === 10 || type === 15) && this.carnivalTeam !== undefined && m.team === this.carnivalTeam;
   }
-  /** A Hypnotized monster, or in a Monster Carnival one on your team: it doesn't hurt you. */
+  /** A Hypnotized monster, or in a Monster Carnival one on your team: it doesn't hurt you. "On your team" here is what
+   * the intake check asks (carnivalAlly is the same team test for the other direction - your attacks passing it by). */
   friendlyToYou(m) {
     if (hypnotized(m)) return true;
     const type = Number(this.map?.info?.fieldType);
