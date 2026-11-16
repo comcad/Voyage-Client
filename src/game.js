@@ -2515,7 +2515,8 @@ export class Game {
   // ------------------------------------------------------------------ pets
   /** A pet comes out at its index: one there already is replaced, or pushed along with those after it. */
   addPet(d) {
-    if (!this.petDialog) this.petDialog = this.assets.json('String/PetDialog.img').then((s) => { this.petDialog = s; return s; });
+    // the promise lives apart from the value: the readers below test typeof petDialog, and a promise is an object
+    this.petDialogLoad ??= this.assets.json('String/PetDialog.img').then((s) => (this.petDialog = s));
     this.petEff ??= this.assets.json('Effect/PetEff.img').then(async (n) => { this.petEff = n; if (n?.Basic) await this.assets.preload(allCanvases(n.Basic)); return n; });
     this.nameTagArt();
     const pet = new Pet(this, d), list = this.petsOf(d.owner);
@@ -2544,6 +2545,7 @@ export class Game {
     // their places in the line: one pet stays on you; of two, the lead stays and the other runs ahead; of three, one ahead, one behind
     const mine = this.petsOf(owner).filter(Boolean), places = mine.length === 1 ? [0] : mine.length === 2 ? [1, 2] : [5, 3, 4];
     mine.forEach((p, i) => { p.formation = places[i] ?? 0; });
+    // the flags read the equipment at this pet's slot's positions, so a slot change re-slots the equipment under it
     this.petFlagCache = null;
   }
   myPets() { return this.petsOf(this.player.id).filter(Boolean); }
@@ -2555,7 +2557,7 @@ export class Game {
   petFlags(pet) {
     if (!pet.mine) return {};
     const c = (this.petFlagCache ??= new Map());
-    if (c.has(pet.slot)) return c.get(pet.slot);
+    if (c.has(pet.uid)) return c.get(pet.uid);
     const f = {}, eq = this.inventory?.equipped || {}, s = PET_SLOTS[pet.slot];
     if (pet.mine && s) {
       let pending = false;
@@ -2568,7 +2570,7 @@ export class Game {
       }
       if (pending) return f;
     }
-    c.set(pet.slot, f);
+    c.set(pet.uid, f);
     return f;
   }
   petEquipInfo(id) {
