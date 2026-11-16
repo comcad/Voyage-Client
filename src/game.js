@@ -5495,11 +5495,6 @@ export class Game {
   }
 
   /**
-   * SHOW_SCROLL_EFFECT. Yours says how it went in the chat log; with Legendary Spirit the client shows it in its
-   * window instead (the Enchant sound, the line once its art is done) and nothing plays on you. Anyone else's (and
-   * your own otherwise): Enchant Success / Failure on them with its sound.
-   */
-  /**
    * SHOW_SCROLL_EFFECT. Your own Legendary Spirit result goes to its window. Otherwise: your own line, then the
    * success / failure sound and art on whoever scrolled; someone else's Legendary Spirit result plays the _Delay sound
    * and shows its art 3120ms later, when their window's animation ends.
