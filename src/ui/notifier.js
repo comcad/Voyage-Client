@@ -1,7 +1,6 @@
 import { sfx } from '../audio.js';
 import { uiText } from './wzui.js';
 import { Win, cutText } from './windows.js';
-import { UI_W, UI_H } from '../view.js';
 import { BAR_TOP_FALLBACK } from './hud.js';
 
 /**
@@ -28,7 +27,6 @@ const KINDS = {
   family: { ...WIDE, icon: 8, lines: (n) => [[`from '${n}'`, 27, 7], ["It's a Family Invitation.", 27, 20]] },
   // shown as balloons here too, though they are other windows in v83
   partySearch: { ...WIDE, icon: 1, lines: (n) => [['Party Search invitation', 25, 5], [`from '${n}'`, 25, 18]] },
-  guildFound: { ...WIDE, icon: 8, lines: (n) => [['Guild founding', 25, 5], [`from '${n}'`, 25, 18]] },
   familySummon: { ...WIDE, icon: 9, lines: (n) => [['Family summons', 25, 5], [`from '${n}'`, 25, 18]] },
 };
 let balloonSeq = 0;
@@ -61,20 +59,23 @@ class Balloon extends Win {
     if (this.closing && now - this.closing >= FADE && !this.gone) { this.gone = true; setTimeout(() => this.remove()); }   // not mid-draw
   }
   get alpha() {
-    const now = performance.now();
+    const now = this.at ?? performance.now();   // draw stamps `at`; a reader outside draw pays one read
     if (this.closing) return Math.max(0, 1 - (now - this.closing) / FADE);
     return this.shownAt === null ? 0 : Math.min(1, (now - this.shownAt) / FADE);
   }
-  /** Gone: the balloons after it drop 5px. */
+  /** Gone: the balloons after it drop 5px. One that is still open is settled as unanswered, so a caller's Promise never hangs. */
   remove() {
     const list = this.balloons;
     if (!list.includes(this)) return;
     for (const b of list) if (b.seq > this.seq) b.n--;   // by when they came, not by window order (clicks raise them)
+    // a replaced or dropped balloon settles here: update already settled one that reached its deadline or was clicked
+    if (!this.closing) { this.closing = performance.now(); this.done?.(false); }
     this.mgr.close(this);
   }
   draw(ctx) {
     const now = performance.now();
     this.update(now);
+    this.at = now;   // one clock read a frame: alpha below reuses it
     const bar = this.g.statusBar?.y ?? BAR_TOP_FALLBACK;
     this.x = (this.g.statusBar?.ox ?? 0) + TAIL_X + TAIL_IN - this.w;
     this.y = bar - this.h - (this.lift || 0) - 5 * (this.n - 1);   // resting on the bar, its tail just over the pencil
@@ -90,8 +91,13 @@ class Balloon extends Win {
 
 /** An invitation; resolves true for O, false for X or after 3 minutes unanswered. */
 class Invite extends Balloon {
+  /** What an unmapped kind is drawn as: a plain "An invitation", never another kind's words. */
+  static UNKNOWN = { ...WIDE, icon: 0, lines: (n) => [['An invitation', 25, 5], [`from '${n}'`, 25, 18]] };
+  static warned = new Set();
   constructor(mgr, kind, name, done) {
-    const k = KINDS[kind] || KINDS.trade;
+    // a kind the table does not know is shown as itself, not dressed up as a trade request
+    if (!KINDS[kind] && !Invite.warned.has(kind)) { Invite.warned.add(kind); console.warn(`notifier: unknown invitation kind '${kind}'`); }
+    const k = KINDS[kind] || Invite.UNKNOWN;
     super(mgr, kind, k.art, done, INVITE_HOLD);
     this.k = k; this.name = name;
     this.button(this.F.BtOK, ...k.ok, () => this.press(true));
@@ -178,7 +184,9 @@ export class QuestNotice extends Balloon {
     this.icon(ctx, this.F.icon7);
     uiText(ctx, this.title, 27, 7, { color: '#fff', size: 12 });
     ctx.font = '12px Arial, sans-serif';
-    uiText(ctx, cutText(ctx, this.name || '', NAME_W), 27, 20, { color: '#fff', size: 12 });
+    // the name never changes, so it is measured and cut once for the balloon's whole life, not every frame
+    this.cutName ??= cutText(ctx, this.name || '', NAME_W);
+    uiText(ctx, this.cutName, 27, 20, { color: '#fff', size: 12 });
   }
 }
 
@@ -199,7 +207,8 @@ class PartyQuestNotice extends Balloon {
     if (i) ctx.drawImage(i, 4, 4);
     uiText(ctx, 'Party Quest', 47, 9, { color: '#fff', size: 12 });
     ctx.font = '12px Arial, sans-serif';
-    uiText(ctx, cutText(ctx, this.name || '', 80), 47, 26, { color: '#fff', size: 12 });
+    this.cutName ??= cutText(ctx, this.name || '', 80);   // cut once, as QuestNotice does
+    uiText(ctx, this.cutName, 47, 26, { color: '#fff', size: 12 });
   }
 }
 /** A party-quest invitation; several stack. open(qid) is called on O. */
@@ -231,8 +240,9 @@ export function notifyLogin(mgr, name, sameChannel = false) { add(mgr, new Login
 export function questNotice(mgr, qid, title, name, open) {
   add(mgr, new QuestNotice(mgr, qid, title, name, open), (w) => w.qid === qid);
 }
-/** The server took the quest: its notice goes. */
+/** The server took the quest: its notice goes. With no `qid` every quest notice goes. */
 export function dropQuestNotice(mgr, qid) {
   for (const w of balloonsOf(mgr).filter((o) => o instanceof QuestNotice && (qid === undefined || o.qid === qid))) w.remove();
 }
-export const hasQuestNotice = (mgr) => mgr.order.some((o) => o instanceof QuestNotice);
+/** A quest notice still standing (one already fading out no longer counts, as notifyNote's own check). */
+export const hasQuestNotice = (mgr) => mgr.order.some((o) => o instanceof QuestNotice && !o.closing);
