@@ -62,7 +62,8 @@ export class EnergyBarWin extends Win {
       ctx.globalAlpha = 1;
       const n = Math.trunc((this.value / FULL) * GAUGE), g = E.Gage?.[1];
       for (let x = 2; x <= n + 1; x++) {
-        const edge = x === 2 || x === W - 3;
+        // the last filled column is the right edge: W - 3 (79) is only reachable at FULL, which plays the effect instead
+        const edge = x === 2 || (x === n + 1 && n >= GAUGE - 1);
         put(g?.[edge ? 0 : 1], x, edge ? 3 : 2);
       }
     }
