@@ -50,7 +50,7 @@ export class ShopBoards {
     if (ei) { const o = emp.origin || [ei.width / 2, ei.height]; ctx.drawImage(ei, x - o[0], y - 38 - o[1]); }
     layer(a.skin?.shop);
     layer(a.skin?.signboard);
-    this.boardText(ctx, m.title, sx + 22, sy + 21, 108);
+    this.boardText(ctx, m, sx + 22, sy + 21, 108);
     this.pill(ctx, m, sx + 63, sy + 52);
     nameTag(ctx, `${m.name}'s Hired Merchant`, x, y + 2, '#fff');
     m.hit = { x: sx + 10 + cam.x, y: sy + cam.y, w: 146, h: 160 };
@@ -72,12 +72,12 @@ export class ShopBoards {
     if (booth) {
       x = Math.round(sx - 78); y = Math.round(sy - 154);
       ctx.drawImage(bi, x, y);
-      this.boardText(ctx, b.title, x + 31, y + 38, 98);
+      this.boardText(ctx, b, x + 31, y + 38, 98);
       this.pill(ctx, b, x + 75, y + 68);
     } else {
       x = Math.round(sx - 56); y = Math.round(sy - 140);
       ctx.drawImage(bi, x, y);
-      this.boardText(ctx, b.title, x + 7, y + 6, 96);
+      this.boardText(ctx, b, x + 7, y + 6, 96);
       this.pill(ctx, b, x + 61, y + 40);   // PSSkin/0's own pill
     }
     ent.signRect = { x: x + cam.x, y: y + cam.y, w: bi.width, h: bi.height };
@@ -116,13 +116,24 @@ export class ShopBoards {
     ent.signRect = { x: x + cam.x, y: y + cam.y, w: bg.width, h: bg.height };
   }
 
-  boardText(ctx, text, x, y, width) {
-    ctx.save();
-    ctx.font = '12px Arial, sans-serif';
-    const lines = wrapText(ctx, text || '', width, 12).slice(0, 2);
-    ctx.restore();
+  /**
+   * The board's title as at most two wrapped lines, centred in `width` px. The wrap is measured once per owner: it
+   * changes only when an update packet replaces the title (or the board switches between booth and balloon width).
+   */
+  boardText(ctx, owner, x, y, width) {
+    const text = owner.title, key = `${width}|${text || ''}`;
+    let lines;
+    if (owner.textFor === key) lines = owner.textLines;
+    else {
+      ctx.save();
+      ctx.font = '12px Arial, sans-serif';
+      lines = wrapText(ctx, text || '', width, 12).slice(0, 2);
+      ctx.restore();
+      owner.textFor = key; owner.textLines = lines;
+    }
     lines.forEach((l, i) => uiText(ctx, l, x, y + i * 14, { color: '#000', size: 12 }));
   }
+
   /**
    * The boards' pill art already shows O (room for visitors); a full shop gets Disable over it. Note the server's
    * spawn packet writes the visitor count into `max` and a literal 1 into `players` (its update packet doesn't),
