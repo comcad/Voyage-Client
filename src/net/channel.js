@@ -250,8 +250,15 @@ export class ChannelSession {
     this.buffering = true; this.buffer = [];
     const p = this.conn.expect(S.SET_FIELD, 20000);
     this.send(new PacketWriter(C.PLAYER_LOGGEDIN).int(charId).zero(2));
-    const r = await p;
-    return this._setField(r, true);
+    try {
+      const r = await p;
+      return this._setField(r, true);
+    } catch (e) {
+      // the field never came (timeout, close): stop buffering and drop what was queued, or every later event is
+      // stored forever and a late flush() would replay these on whatever handler is attached by then
+      this.buffering = false; this.buffer = [];
+      throw e;
+    }
   }
 
   _setField(r, first = false) {
@@ -262,6 +269,7 @@ export class ChannelSession {
       r.short(); r.int(); r.int(); r.int();
       const info = readCharacterInfo(r);
       this.job = info.stats.job;
+      this.selfName = info.stats.name;   // readMerchantRoom tells owner from visitor by it; game.js's own copy lands later
       const out = { channel, charData: true, info, mapId: info.stats.mapId, portal: info.stats.spawnPoint, hp: info.stats.hp };
       out.serverTime = tailTime(r);   // the server's clock (a FILETIME), the packet's last 8 bytes
       if (!first) this.emit('setField', out);
@@ -374,7 +382,7 @@ export class ChannelSession {
       else if (op === 0x62) this.emit('csSlots', 'storage', r.short());
       else if (op === 0x64) this.emit('csSlots', 'character', r.short());
       else if (op === 0x9E || op === 0xA0) this.emit('csTransferBought', op === 0x9E ? 'name' : 'world', readCashItem(r));
-      else if (op === 0x9B) r.ubyte();
+      else if (op === 0x9B) this.emit('csReply', op, r.available ? r.ubyte() : 0);   // an answer with one field, no handler of its own
       else if (op === 0x9A) { const sn = r.int(); this.emit('csAccountLimit', sn, r.ubyte()); }   // a one-per-account answer
       // a cash item deleted from the locker (0x85: with the Maple Points it was worth)
       else if (op === 0x6C) this.emit('csDeleted', r.long(), null);
@@ -937,8 +945,12 @@ export class ChannelSession {
         this.emit('tradeItem', side, slot, readItem(r, false));
       } else if (op === 0x10) this.emit('tradeMeso', r.ubyte(), r.int());
       else if (op === 0x11) this.emit('tradeConfirm');
-      else if (op === 0x0A) { r.ubyte(); this.emit('tradeEnd', r.available ? r.ubyte() : 2); }
-      else if (op === 6 && r.ubyte() === 8) { const slot = r.ubyte(); this.emit('tradeChat', r.string(), slot); }
+      else if (op === 0x0A) { r.ubyte(); this.roomType = 0; this.emit('tradeEnd', r.available ? r.ubyte() : 2); }
+      else if (op === 6) {
+        const sub = r.ubyte();   // 8 is a chat line; anything else used to be consumed and dropped without trace
+        if (sub === 8) { const slot = r.ubyte(); this.emit('tradeChat', r.string(), slot); }
+        else console.debug('PLAYER_INTERACTION 6: unknown sub', sub);
+      }
     });
     // CHAR_INFO (the game server's PacketCreator.charInfo): id, level, job, fame, married, guild, alliance, medal-info byte,
     // pets (each led by a non-zero byte, 0 ends), mount, wish list SNs, Monster Book, medal, medal quests
@@ -2169,7 +2181,7 @@ export class ChannelSession {
   tradeMeso(v) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x10).int(v)); }
   tradeConfirm() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x11)); }
   tradeChat(text) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(6).string(text)); }
-  tradeExit() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
+  tradeExit() { this.roomType = 0; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
   charInfo(cid) { this.send(new PacketWriter(C.CHAR_INFO_REQUEST).int(Date.now() | 0).int(cid)); }
   /** GIVE_FAME: target char id + direction (0 drop, 1 raise). */
   giveFame(cid, mode) { this.send(new PacketWriter(C.GIVE_FAME).int(cid).byte(mode)); }
