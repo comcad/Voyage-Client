@@ -5199,8 +5199,8 @@ export class Game {
       ent.equipFx = want.map((w) => ent.equipFx?.find((f) => f.id === w.id)
         || new EquipEffect(w.id, w.effect, String(w.effect.path).split('/').slice(2).reduce((n, k) => n?.[k], this.charEff)));
     }
-    const moving = ent.equipFxX !== undefined && Math.abs(ent.x - ent.equipFxX) > 0.5;
-    ent.equipFxX = ent.x;
+    const moving = ent.equipFxX !== undefined && (Math.abs(ent.x - ent.equipFxX) > 0.5 || Math.abs(ent.y - ent.equipFxY) > 0.5);
+    ent.equipFxX = ent.x; ent.equipFxY = ent.y;   // climbing a ladder or rope moves you too, not only along the ground
     const right = drawnRight(ent);
     for (const f of ent.equipFx) f.update(dt, f.head ? ent.browAt || { x: ent.x, y: ent.y - 55 } : ent, right, moving);
   }
