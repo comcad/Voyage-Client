@@ -55,5 +55,5 @@ export async function loadConfig() {
   try {
     const got = await fetch('/config.json').then((r) => r.json());
     for (const k of Object.keys(config)) if (typeof got[k] === typeof config[k]) config[k] = got[k];
-  } catch { /* the defaults */ }
+  } catch (e) { console.warn('config: /config.json could not be read, so every setting is at its default', e); }
 }
