@@ -44,7 +44,7 @@ export class NewYearCardWin extends Win {
     const q = this.to.value, has = (n) => String(n || '').includes(q);
     const names = (this.g.buddies || []).filter((b) => !b.pending && has(b.name)).map((b) => b.name);
     for (const m of this.g.guild?.members || []) if (has(m.name)) names.push(m.name);
-    this.list = names; this.first = 0;
+    this.list = names; this.first = 0; this.hoverRow = -1;
   }
   rowAt(lx, ly) {
     if (!this.list || lx < 368 || lx >= 0x1e8) return -1;
@@ -59,6 +59,7 @@ export class NewYearCardWin extends Win {
   wheel(s) { if (this.list) this.first = Math.max(0, Math.min(Math.max(0, this.list.length - 5), this.first + s)); }
   async ok() {
     const to = this.to.value, text = this.msg.value;
+    if (!to.trim()) { this.mgr.notice('Please enter a character name.'); return; }
     this.mgr.close(this);
     if (!text && !(await this.mgr.confirm('Are you sure to send an\r\nempty new year card ?'))) return;
     this.g.net?.sendNewYearCard(this.slot, this.itemId, to, text);
@@ -99,7 +100,12 @@ export class NewYearCardViewWin extends Win {
     ctx.save(); ctx.font = '12px Arial';
     const lines = wrapText(ctx, String(c.message || ''), 150, 12);
     ctx.restore();
-    lines.forEach((l, i) => { const y = 61 + 13 * i; if (y < 139) uiText(ctx, l, 61, y, { color: '#000', size: 12 }); });
+    ctx.save(); ctx.beginPath(); ctx.rect(13, 55, 330, 90); ctx.clip();
+    lines.forEach((l, i) => {
+      const y = 61 + 13 * i;
+      if (y < 139) uiText(ctx, i === 5 && lines.length > 6 ? `${l}…` : l, 61, y, { color: '#000', size: 12 });
+    });
+    ctx.restore();
     uiText(ctx, `From. ${c.sender}`, 110, 142, { color: '#000', size: 12 });
   }
 }

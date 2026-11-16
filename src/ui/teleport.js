@@ -60,10 +60,14 @@ export class TeleportWin extends Win {
       if (id === this.g.map?.id) { this.mgr.notice("It's the map you're currently on."); return; }
       if (!(await this.mgr.confirm(`Will you teleport to this map?\r\n[${this.mapName(id)}]`))) return;
     }
-    if (Math.floor(this.itemId / 10000) === 232) { this.close(); this.g.useTeleportRock(this.slot, this.itemId, id); return; }
+    if (Math.floor(this.itemId / 10000) === 232) {
+      if (!this.g.canExclusive(200)) { this.mgr.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
+      this.g.useTeleportRock(this.slot, this.itemId, id);
+      this.close();
+      return;
+    }
     this.g.rockTarget = name;
-    this.g.cashSend(() => this.g.net?.useRock(this.slot, this.itemId, name ? { name } : { mapId: id }));
-    this.close();
+    if (this.g.cashSend(() => this.g.net?.useRock(this.slot, this.itemId, name ? { name } : { mapId: id }))) this.close();
   }
   close() { this.mgr.close(this); }
   onClose() { this.field.remove(); }
@@ -94,6 +98,8 @@ export class TeleportWin extends Win {
   }
   down(lx, ly) {
     if (ly >= 191 && ly < 280 && this.sel >= 0) { this.sel = -1; if (this.vip) this.field.focus(); return; }
+    const s = this.vip ? this.scrollClick(lx, ly, 155, 80, 98, this.first, this.maps.length, ROWS) : null;
+    if (s !== null) { this.first = s; return; }
     if (lx < 9 || lx >= 159 || ly < ROW_Y || ly >= ROW_Y + ROWS * ROW_H) return;
     const idx = this.first + Math.floor((ly - ROW_Y) / ROW_H);
     if (idx < this.maps.length) { this.sel = idx; sfx.play('UI/BtMouseClick'); }
