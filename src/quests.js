@@ -9,8 +9,8 @@
 
 const list = (node) => (node ? Object.keys(node).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => node[k]) : []);
 const FT_EPOCH = 11644473600000n;
-/** A completion FILETIME as epoch ms (null when unknown). */
-const ftMs = (ft) => { try { return ft === undefined || ft === true ? null : Number(BigInt(ft) / 10000n - FT_EPOCH); } catch { return null; } };
+/** A completion FILETIME as epoch ms (null when unknown: absent, or the null a completion without a time stores). */
+const ftMs = (ft) => { try { return ft == null ? null : Number(BigInt(ft) / 10000n - FT_EPOCH); } catch { return null; } };
 /** A quest's YYYYMMDDHH date as wall-clock ms (UTC fields), like the server's clock and FILETIMEs. */
 const wzDate = (s) => (/^\d{10}$/.test(String(s)) ? Date.UTC(+String(s).slice(0, 4), +String(s).slice(4, 6) - 1, +String(s).slice(6, 8), +String(s).slice(8, 10)) : null);
 const DAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
@@ -86,14 +86,19 @@ export class QuestBook {
   constructor(assets) {
     this.assets = assets;
     this.started = {};   // id -> progress string
-    this.completed = {}; // id -> filetime
+    this.completed = {}; // id -> completion FILETIME (a BigInt from the wire), or null when the server sent none
     this.ex = {};        // id -> record-ex value (SHOW_STATUS_INFO mode 0x0A)
     this.timeOverride = new Map();   // id -> { start, end } (ms) from SET_QUEST_TIME
     this.now = null;     // the server's wall clock (Game.serverNow), set once in game
+    this.recent = undefined;   // the last quest started here, for the quest log's auto-select
   }
   /** Dates, repeat intervals and dayByDay go by the server's clock; with none, this computer's wall clock. */
   clock() { return this.now ? this.now() : Date.now() - new Date().getTimezoneOffset() * 60000; }
-  /** SET_QUEST_TIME: start / end FILETIMEs that replace those quests' Check.img dates; null (SET_QUEST_CLEAR) drops them all. */
+  /**
+   * SET_QUEST_TIME: start / end FILETIMEs that replace those quests' Check.img dates; null (SET_QUEST_CLEAR) drops
+   * them all. A list is a merge: quests it doesn't name keep the override they had, so only SET_QUEST_CLEAR clears
+   * one the server stops sending.
+   */
   setTimes(list) {
     if (!list) { this.timeOverride.clear(); return; }
     for (const t of list) this.timeOverride.set(t.id, { start: ftMs(t.start), end: ftMs(t.end) });
@@ -129,15 +134,13 @@ export class QuestBook {
     // map object tags a quest shows while it is in progress (QuestInfo showLayerTag)
     this.layerTags = new Map();
     for (const id of this.infoOrder) { const t = String(this.info[id].showLayerTag ?? '').trim(); if (t) this.layerTags.set(t, id); }
-    // parts by order, swapping only when a later one is strictly lower, so equal orders keep the files' order
+    // parts by order: a stable sort, so equal orders keep the files' own order; a part with no order stays put
     const ord = (id) => (this.info[id].order === undefined ? null : Number(this.info[id].order));
     for (const ids of this.chains.values()) {
-      for (let i = 0; i < ids.length - 1; i++) {
-        for (let j = i + 1; j < ids.length; j++) {
-          const a = ord(ids[i]), c = ord(ids[j]);
-          if (a !== null && c !== null && c < a) [ids[i], ids[j]] = [ids[j], ids[i]];
-        }
-      }
+      const slots = [];
+      for (let i = 0; i < ids.length; i++) if (ord(ids[i]) !== null) slots.push(i);
+      const sorted = slots.map((i) => ids[i]).sort((a, b) => ord(a) - ord(b));
+      slots.forEach((i, k) => { ids[i] = sorted[k]; });
     }
     // what makes an auto-start quest come up: items carried, equips worn, maps entered; and the always-checked ones
     this.byStartItem = new Map(); this.byEquip = new Map(); this.byField = new Map(); this.normalAutoStart = []; this.autoComplete = [];
@@ -146,22 +149,20 @@ export class QuestBook {
       const c0 = this.check[id]?.['0'];
       if (Number(this.info[id]?.autoComplete)) this.autoComplete.push(id);
       if (!c0) continue;
-      for (const it of list(c0.item)) add(this.byStartItem, it.id, id);
+      for (const it of list(c0.item)) add(this.byStartItem, Number(it.id), id);
       if (Number(c0.normalAutoStart)) { this.normalAutoStart.push(id); continue; }
       for (const e of [...list(c0.equipAllNeed), ...list(c0.equipSelectNeed)]) add(this.byEquip, Number(e), id);
       for (const m of list(c0.fieldEnter)) add(this.byField, Number(m), id);
     }
-    for (const [id, c] of Object.entries(this.check)) {
+    for (const [key, c] of Object.entries(this.check)) {
+      const id = Number(key);
       for (const phase of ['0', '1']) {
         const npc = Number(c[phase]?.npc);
         if (!npc) continue;
         if (!this.byNpc.has(npc)) this.byNpc.set(npc, new Set());
-        this.byNpc.get(npc).add(Number(id));
+        this.byNpc.get(npc).add(id);
       }
-      for (const it of list(c['1']?.item)) {
-        if (!this.byItem.has(it.id)) this.byItem.set(it.id, []);
-        this.byItem.get(it.id).push(Number(id));
-      }
+      for (const it of list(c['1']?.item)) add(this.byItem, Number(it.id), id);
     }
   }
 
@@ -170,11 +171,15 @@ export class QuestBook {
     this.completed = { ...completed };
   }
 
-  /** Apply a SHOW_STATUS_INFO mode 1 update. status: 0 removed/forfeit, 1 started, 2 completed. */
+  /**
+   * Apply a SHOW_STATUS_INFO mode 1 update. status: 0 removed/forfeit (its ex record goes too, so #j# text of a later
+   * quest does not read counters of a quest that is gone), 1 started, 2 completed. Any other status is logged.
+   */
   update(id, status, progress) {
-    if (status === 0) { delete this.started[id]; delete this.completed[id]; }
+    if (status === 0) { delete this.started[id]; delete this.completed[id]; delete this.ex[id]; }
     else if (status === 1) { this.started[id] = progress ?? ''; if (this.info[id]) this.recent = id; }
-    else if (status === 2) { delete this.started[id]; this.completed[id] = progress ?? true; }
+    else if (status === 2) { delete this.started[id]; this.completed[id] = progress ?? null; }
+    else console.warn(`quest ${id}: unhandled SHOW_STATUS_INFO quest status ${status}`);
   }
 
   name(id) { return this.info[id]?.name || `Quest ${id}`; }
@@ -304,9 +309,10 @@ export class QuestBook {
     const w = ctx.world, wmin = num(c.worldmin, -1), wmax = num(c.worldmax, -1);
     if (w !== undefined && ((wmin >= 0 && w < wmin) || (wmax >= 0 && w > wmax))) return false;
     const s = ctx.stats || {};
-    if (c.lvmax && s.level > c.lvmax) return false;
-    if (c.lvmin && s.level < c.lvmin - (isPartyQuest(id) ? 5 : 0)) return false;
-    if (c.pop && (s.fame ?? 0) < c.pop) return false;
+    // a gate with no stat to compare against fails, instead of passing on a comparison with undefined
+    if (c.lvmax && !(s.level <= c.lvmax)) return false;
+    if (c.lvmin && !(s.level >= c.lvmin - (isPartyQuest(id) ? 5 : 0))) return false;
+    if (c.pop && !((s.fame ?? 0) >= c.pop)) return false;
     // dates the server set (SET_QUEST_TIME) win over Check.img's, both of them
     const ov = this.timeOverride.get(id), now = this.clock(), start = ov ? ov.start : wzDate(c.start), end = ov ? ov.end : wzDate(c.end);
     if ((start !== null && start > now) || (end !== null && end < now)) return false;
@@ -329,7 +335,7 @@ export class QuestBook {
     if (ctx.skillLevel) for (const sk of list(c.skill)) if ((ctx.skillLevel(sk.id) > 0) !== !!Number(sk.acquire)) return false;
     if (!this.questsOk(c)) return false;
     if (this.hasInfoReq(c) && !this.infoOk(id, c)) return false;
-    if (c.dayOfWeek && DAYS.some((d) => c.dayOfWeek[d] !== undefined) && !Number(c.dayOfWeek[DAYS[new Date().getDay()]])) return false;
+    if (c.dayOfWeek && DAYS.some((d) => c.dayOfWeek[d] !== undefined) && !Number(c.dayOfWeek[DAYS[new Date(now).getUTCDay()]])) return false;
     const ml = ctx.mountLevel ?? 0;
     if (ml < num(c.tamingmoblevelmin, 0) || ml > num(c.tamingmoblevelmax, 30)) return false;
     if (num(c.morph, 0) && (ctx.morph || 0) !== num(c.morph, 0)) return false;
@@ -353,7 +359,8 @@ export class QuestBook {
 
   /**
    * Why a started quest can't be completed at this NPC, first failure first (null: it can):
-   * 'state', 'npc', 'item', 'quest', 'mob', 'pet', 'meso', 'info', 'other'. The stop lines are keyed by these.
+   * 'state', 'npc', 'item', 'quest', 'mob', 'nopet', 'pet', 'meso', 'mb', 'other', 'info'. The stop lines are keyed
+   * by these; 'nopet' and 'pet' have notices of their own in the quest UI, and 'mb' falls to the stop's default.
    */
   completeBlock(id, ctx, npcId) {
     if (this.status(id) !== 1 || isPartyQuest(id)) return 'state';
@@ -374,7 +381,16 @@ export class QuestBook {
       if (!pets.includes(p.id) || p.closeness < (c.pettamenessmin ?? 0) || p.closeness > (c.pettamenessmax ?? 30000)) return 'pet';
     }
     if (c.endmeso && (ctx.meso ?? 0) < c.endmeso) return 'meso';
-    if (c.mbmin && (ctx.bookCards ?? 0) < c.mbmin) return 'item';
+    // the Monster Book, checked the same way canStart checks it (mbmin / mbmax / each mbcard's min / max)
+    if (ctx.book) {
+      const bound = (v) => (v === undefined || v === '' ? -1 : Number(v));
+      const n = ctx.bookCards ?? 0, bmin = bound(c.mbmin), bmax = bound(c.mbmax);
+      if ((bmin >= 0 && n < bmin) || (bmax >= 0 && n > bmax)) return 'mb';
+      for (const m of list(c.mbcard)) {
+        const have = ctx.book[m.id] ?? 0, cmin = bound(m.min), cmax = bound(m.max);
+        if ((cmin >= 0 && have < cmin) || (cmax >= 0 && have > cmax)) return 'mb';
+      }
+    }
     if (c.questComplete && this.completedCount() < c.questComplete) return 'other';
     if (c.pop && (ctx.stats?.fame ?? 0) < c.pop) return 'other';
     if (c.level && (ctx.stats?.level ?? 0) < c.level) return 'other';
