@@ -28,7 +28,7 @@ class StepWin extends Win {
   settle(v) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done?.(v); }
   finish(v) { this.settle(v); }
   onClose() { for (const f of this.fields) f.remove(); this.settle(null); }
-  key(e) { if (e.key === 'Escape') this.finish(null); else if (e.key === 'Enter') this.ok(); }
+  key(e) { if (e.key === 'Escape') this.settle(null); else if (e.key === 'Enter') this.ok(); }
   ok() {}
   draw(ctx) {
     super.draw(ctx);
@@ -49,9 +49,9 @@ export class KiteInputWin extends StepWin {
     this.prompt = prompt || '';
     this.lines = [45, 70, 94].map((y) => this.field(28, y, 366, 17, 60));
     this.button(mgr.B.BtOK2, 330, this.h - 30, () => this.ok());
-    this.button(mgr.B.BtCancel2, 372, this.h - 30, () => this.finish(null));
+    this.button(mgr.B.BtCancel2, 372, this.h - 30, () => this.settle(null));
   }
-  ok() { this.finish(this.lines.map((f) => f.value).join('\n')); }
+  ok() { this.settle(this.lines.map((f) => f.value).join('\n')); }
   body(ctx) { this.text(ctx, this.prompt, 40, 19, { size: 12 }); }
 }
 
@@ -93,7 +93,7 @@ export class MemoSendWin extends StepWin {
     this.note = this.field(13, 114, 271, 13, 200);
     if (to) this.to.value = to;
     this.button(mgr.B.BtOK2, 193, 141, () => this.ok());
-    this.button(mgr.B.BtCancel2, 242, 141, () => this.finish(null));
+    this.button(mgr.B.BtCancel2, 242, 141, () => this.settle(null));
   }
   onOpen() { this.focusFirst(this.to.value ? this.note : this.to); }   // a prefilled recipient leaves the note first
   /** One refusal at a time, in this order (a notice keeps the window open, so the typed text survives):
@@ -105,7 +105,7 @@ export class MemoSendWin extends StepWin {
     if (to.toLowerCase() === String(this.g.player?.name || '').toLowerCase()) { say("You can't send the note to yourself."); return; }
     if (await this.g.cursed(text)) { say('Cursing is not allowed.'); return; }
     if (!text) { say('Please enter the content.'); return; }
-    this.finish({ to, text });
+    this.settle({ to, text });
   }
 }
 
@@ -122,17 +122,17 @@ export class CancelRequestWin extends StepWin {
     const C = cancelArt(mgr, mode);
     super(mgr, C.backgrnd, done);
     const y = mode === 0 ? 120 : 101;
-    this.button(C.BtYes, 20, y, () => this.finish(true));
-    this.button(C.BtNo, 148, y, () => this.finish(false));
+    this.button(C.BtYes, 20, y, () => this.settle(true));
+    this.button(C.BtNo, 148, y, () => this.settle(false));
   }
-  key(e) { if (e.key === 'Escape') this.finish(false); }
+  key(e) { if (e.key === 'Escape') this.settle(false); }
 }
 /** A cancel request's answer: CancelRequests/<kind>/suc or fail, centred, BtOK2 at (110, 87) (suc) or (110, 103) (fail). */
 export class CancelResultWin extends StepWin {
   constructor(mgr, kind, ok, done) {
     const C = cancelArt(mgr, kind);
     super(mgr, ok ? C.suc : C.fail, done);
-    this.button(mgr.B.BtOK2, 110, ok ? 87 : 103, () => this.finish(true));
+    this.button(mgr.B.BtOK2, 110, ok ? 87 : 103, () => this.settle(true));
   }
-  key(e) { if (e.key === 'Escape' || e.key === 'Enter') this.finish(true); }
+  key(e) { if (e.key === 'Escape' || e.key === 'Enter') this.settle(true); }
 }
