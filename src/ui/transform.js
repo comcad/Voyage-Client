@@ -22,8 +22,22 @@ export class TransformWin extends Win {
       if (e.key === 'Enter') this.ok(); else if (e.key === 'Escape') this.close();
     });
   }
-  onOpen() { setTimeout(() => this.field.focus(), 0); }
+  onOpen() { this.place(true); setTimeout(() => this.field.focus(), 0); }
   key(e) { if (e.key === 'Enter') this.ok(); else if (e.key === 'Escape') this.close(); }
+  /**
+   * Puts the box over the art at (23, 54). The window is dragged and the canvas resized, so this still runs from
+   * draw(); but the six styles are only written when the window's place or the scale has actually changed, so a
+   * still window costs a compare instead of a style write and a layout flush every frame.
+   */
+  place(force = false) {
+    const scale = this.g.canvas.clientWidth / UI_W;   // a style read: once per change, not once per frame
+    const x = this.x + 23, y = this.y + 54;
+    const at = this.placed;
+    if (!force && at && at.x === x && at.y === y && at.scale === scale) return;
+    this.placed = { x, y, scale };
+    this.field.rect.x = x; this.field.rect.y = y;
+    this.field.layout({ left: 0, top: 0 }, scale);
+  }
   ok() {
     const name = this.field.value;
     if (!name.length) return;
@@ -34,9 +48,5 @@ export class TransformWin extends Win {
   }
   close() { this.mgr.close(this); }
   onClose() { this.field.remove(); }
-  draw(ctx) {
-    super.draw(ctx);
-    this.field.rect.x = this.x + 23; this.field.rect.y = this.y + 54;
-    this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
-  }
+  draw(ctx) { super.draw(ctx); this.place(); }
 }
