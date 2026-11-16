@@ -73,6 +73,7 @@ export class Connection {
           continue;
         }
         if (left < 4) break;
+        if (!this.recv.validHeader(buf.subarray(at, at + 4))) { this.close(); return; }   // a desynced or corrupt frame: fail closed
         const len = MapleCipher.length(buf.subarray(at, at + 4));
         if (left < 4 + len) break;
         const body = buf.slice(at + 4, at + 4 + len);
@@ -107,6 +108,7 @@ export class Connection {
   send(w) {
     if (this.closed || !this.send_) return;
     const data = w instanceof PacketWriter ? w.toBytes() : w;
+    if (data.length > 0xffff) throw new Error(`packet too long to send: ${data.length} bytes (header would truncate)`);   // header() truncates silently (as in Java); never emit that
     const header = this.send_.header(data.length);
     const body = this.send_.crypt(shandaEncrypt(Uint8Array.from(data)));
     const out = new Uint8Array(4 + body.length);
@@ -121,12 +123,15 @@ export class Connection {
  * Browser transport: a binary WebSocket to the bridge, which relays to the game server's TCP port. The bridge
  * sends a text 'hb' every 10s; once one has come, SILENCE ms without any frame means the link died
  * without a close (a dropped tunnel or network) and the transport reports itself closed.
- */
+ * Browser transport: a binary WebSocket to the bridge, which relays to Cosmic's TCP port. The bridge
+ * sends a text 'hb' every 10s; SILENCE ms without any frame (counted from the connect, so a link that
+ * dies before the first heartbeat is caught too) means the link died without a close (a dropped tunnel
+ * or network) and the transport reports itself closed. */
 const SILENCE = 30000;
 export function wsTransport(url) {
   const ws = new WebSocket(url);
   ws.binaryType = 'arraybuffer';
-  let seen = 0, done = false, watch = null;
+  let seen = performance.now(), done = false, watch = null;
   const closed = () => {
     if (done) return;
     done = true; clearInterval(watch);
@@ -137,9 +142,11 @@ export function wsTransport(url) {
     close: () => { ws.close(); closed(); },
     onData: null, onClose: null,
   };
+  // armed at connect time: a link that dies before the first heartbeat leaves no close frame, and
+  // nothing else would ever create the interval
+  watch = setInterval(() => { if (performance.now() - seen > SILENCE) { ws.close(); closed(); } }, 5000);
   ws.onmessage = (e) => {
-    if (typeof e.data === 'string') { if (!watch) watch = setInterval(() => { if (performance.now() - seen > SILENCE) { ws.close(); closed(); } }, 5000); }
-    else t.onData?.(new Uint8Array(e.data));
+    if (typeof e.data !== 'string') t.onData?.(new Uint8Array(e.data));
     seen = performance.now();
   };
   ws.onclose = closed;
