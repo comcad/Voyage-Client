@@ -110,9 +110,10 @@ export class QuestBook {
       const ids = Object.keys(g).filter((k) => /^\d+$/.test(k)).map(Number);
       for (const id of ids) this.exclusive.set(id, [...(this.exclusive.get(id) || []), ...ids.filter((o) => o !== id)]);
     }
-    // the quests in the files' own order (kept as _order by the extractor), which the quest log's lists follow
-    const order = (o) => { const ord = o._order; delete o._order; return (ord || Object.keys(o)).filter((k) => /^\d+$/.test(k)).map(Number); };
-    this.infoOrder = order(this.info); this.checkOrder = order(this.check); order(this.act); order(this.say);
+    // the quests in the files' own order (kept as _order by the extractor, non-enumerable), which the quest log's
+    // lists follow; read, never deleted, so a second book over the same cached tree sees the same order
+    const order = (o) => (o._order || Object.keys(o)).filter((k) => /^\d+$/.test(k)).map(Number);
+    this.infoOrder = order(this.info); this.checkOrder = order(this.check);
     this.checkPos = new Map(this.checkOrder.map((id, i) => [id, i]));
     // npc id -> quest ids that start or end there; item id -> quests needing it to complete
     this.byNpc = new Map(); this.byItem = new Map();
