@@ -3,6 +3,8 @@
  *   - AES-256 in OFB-like mode keyed with the fixed Maple key, IV = 4-byte seed repeated 4x
  *   - IV shuffle after every packet (MapleAESOFB.getNewIv)
  *   - "Shanda" byte cipher (MapleCustomEncryption) applied before AES on send, after AES on receive
+ *   - A packet longer than 0x5B0 bytes continues at 0x5B4, and the second chunk restarts the keystream from the
+ *     same pre-advance IV (`crypt`, below) — matching Cosmic MapleAESOFB.java:114/131. See docs/plans/033.
  */
 
 // ------------------------------------------------------------------ AES-256 (encrypt only)
@@ -189,6 +191,8 @@ export function shandaEncrypt(d) {
 }
 
 export function shandaDecrypt(d) {
+  // j runs 1..6 (shandaEncrypt above used 0..5), so the odd j here undoes the encrypt's forward pass first and the
+  // even j the reverse pass. Changing either loop's start parity breaks the pair.
   for (let j = 1; j <= 6; j++) {
     let remember = 0, len = d.length & 0xff;
     if (j % 2 === 0) {
