@@ -12,7 +12,9 @@ import { between } from './between.js';
  * - frame times between drawn frames (average, worst) and the 1% low (the frame rate of the slowest 1% of frames);
  * - the display's refresh rate (the quickest the browser has offered frames in the last minute: a page that can't keep
  *   up is offered frames only as fast as it draws them, which would pass for a slower display) and frames that came
- *   late (more than 1.5 refreshes after the one before);
+ *   late (more than 1.5 refreshes after the one before). The rate is worked out four times a second, in stats(), so
+ *   the frames before the first read (and after a detach, which clears it) are judged against 16.7 ms — a 60 Hz
+ *   display — whatever the screen really runs at;
  * - hitches over the last 30 seconds (a frame more than 1.6 times as late as frames have lately been, and at least
  *   25ms; a page that is slow all the time shows as a low FPS, not as hitches): how many, and the latest with the
  *   game's own time for the frame before it. A hitch whose game time is small
@@ -163,12 +165,12 @@ export class PerfMeter {
     this.mark = mark;
     while (this.hitches.length && t - this.hitches[0].t > KEEP) this.hitches.shift();
     this.frames.push({ t, upd, ren, parts: game?.drawParts ? { ...game.drawParts } : null, uparts: game?.updateParts ? { ...game.updateParts } : null, firsts: was ? mark.firsts - was.firsts : 0, firstPx: was ? mark.firstPx - was.firstPx : 0 });
-    while (this.frames.length > BARS + 1 || (this.frames.length && t - this.frames[0].t > Math.max(SPAN, 4000))) this.frames.shift();
+    while (this.frames.length > BARS + 1 || (this.frames.length && t - this.frames[0].t > 4000)) this.frames.shift();
     // the beat starts again from the end of this frame's work
     this.beat.max = 0; this.beat.last = performance.now();
   }
-  /** The meter is put away: packets stop being timed. */
-  detach(game) { if (game?.net?.conn?.timing === this.onPacket) game.net.conn.timing = null; this.observer?.disconnect(); clearTimeout(this.beat.timer); }
+  /** The meter is put away: packets stop being timed, and the refresh rate it read goes with the rest of its state. */
+  detach(game) { if (game?.net?.conn?.timing === this.onPacket) game.net.conn.timing = null; this.observer?.disconnect(); clearTimeout(this.beat.timer); this.refreshMs = 0; }
   stats() {
     const f = this.frames, now = f.length ? f[f.length - 1].t : 0;
     const recentGaps = [];
