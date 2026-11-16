@@ -31,7 +31,7 @@ export class Reactor {
     this.bornAt = performance.now();
     this.anim = this.idleAnim();
   }
-  /** Drawn in the page of the floor nearest it, by the distance to each floor's middle. */
+  /** Drawn in the page of the floor nearest it, by the distance to each floor's middle; with no floors near, page 7 (a map with fewer pages than that would never draw it - a deliberate stand-in, not 0, which is behind the map's ground layer). */
   static layerFor(map, x, y) {
     let best = null, bd = Infinity;
     for (const f of map?.fh?.floors || []) {
@@ -102,7 +102,8 @@ export class Reactor {
     this.old = this.cur; this.cur = state;
     this.frozen = true;
     this.phase = 4; this.idx = -2;
-    this.playAt = this.events(state).length ? 0 : performance.now() + DESTROY_WAIT;
+    // its leave animation comes from the state it is leaving (play reads that one): when that has none, the wait
+    this.playAt = this.events(this.old).length ? 0 : performance.now() + DESTROY_WAIT;
   }
   /** Shows the hit (phases 1 and 4) or the current picture. */
   play() {
@@ -113,7 +114,11 @@ export class Reactor {
       }
       const node = this.hitNode(this.old, this.idx);
       if (!node) return;
-      this.anim = new Anim(node, false); this.frozen = false;
+      // the same state's hit replays rather than rebuilt (it starts over, as leaving that state again does)
+      const key = `${this.old}/${this.idx}`;
+      if (this.hitKey !== key || !this.hitAnim) { this.hitAnim = new Anim(node, false); this.hitKey = key; }
+      else this.hitAnim.reset();
+      this.anim = this.hitAnim; this.frozen = false;
       sfx.play(`Reactor/${pad(this.id, 7)}/${this.old}/Hit`, { volume: this.volumeAt?.(this.x, this.y) ?? 1 });
       return;
     }
