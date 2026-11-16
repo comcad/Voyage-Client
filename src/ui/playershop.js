@@ -279,7 +279,7 @@ export class PlayerShopWin extends Win {
     // a Hired Merchant's owner: the hours and minutes left of its 24 (1439 minutes from when it opened)
     if (this.ownMerchant) {
       const left = 1439 - Math.floor(((this.merchant.elapsed || 0) + performance.now() - this.openedAt) / 60000), h = Math.floor(left / 60);
-      if (h >= 0 && h < 24) uiText(ctx, `Store Closed / ${String(h).padStart(2, '0')} : ${String(left % 60).padStart(2, '0')}`, 380, 11, { color: '#000', size: 12, bold: true });
+      if (h >= 0) uiText(ctx, `Store Closed / ${String(h).padStart(2, '0')} : ${String(left % 60).padStart(2, '0')}`, 380, 11, { color: '#000', size: 12, bold: true });
     }
     // the owner and the visitors on their spots
     const spot = (p, x) => {
