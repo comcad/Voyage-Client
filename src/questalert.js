@@ -19,13 +19,18 @@ const ADMIN = 9010000, RETRY = 10000, ARRIVED = 'Quest Arrived!  Double-click th
 export class QuestAlert {
   constructor(game) {
     this.g = game;
-    this.avail = new Set(); this.pre = new Set(); this.ready = new Set(); this.sent = new Set();
-    this.sentAt = 0; this.checkedAt = 0; this.news = 0; this.anim = null; this.appear = false;
+    this.avail = new Set(); this.pre = new Set(); this.ready = new Set();
+    this.sent = new Map();                  // autoAccept quest id -> when it was sent, so each retries on its own clock
+    this.checkedAt = performance.now();     // the first autoComplete pass runs at once, not a RETRY after login
+    this.news = 0; this.anim = null; this.appear = false;
   }
   get book() { return this.g.quests; }
   get ctx() { return this.g.textCtx(); }
 
-  /** Everything again: on entering a map (and when an auto-accepted quest is still pending after 10s). */
+  /**
+   * Everything again: on entering a map (and when an auto-accepted quest is still pending after 10s). `ready` is left
+   * alone on purpose: hand-in readiness never depends on map, worn items or level, and tick() is its only writer.
+   */
   refresh() {
     const book = this.book, g = this.g;
     if (!book || !g.player) return;
@@ -63,7 +68,7 @@ export class QuestAlert {
       const npc = Number(book.check[id]?.['0']?.npc) || 0;
       if (!book.canStart(id, ctx)) { this.avail.delete(id); this.sent.delete(id); continue; }
       if (book.isAutoAccept(id)) {
-        if (!this.sent.has(id)) { this.g.net?.questAction(1, id, npc, null); this.sent.add(id); this.sentAt = performance.now(); }
+        if (!this.sent.has(id)) { this.g.net?.questAction(1, id, npc, null); this.sent.set(id, performance.now()); }
         continue;
       }
       if (fromNew && !this.avail.has(id)) this.news++;
@@ -83,7 +88,10 @@ export class QuestAlert {
         else this.ready.delete(id);
       }
     }
-    if (this.sent.size && now - this.sentAt > RETRY) { this.sent.clear(); this.refresh(); }
+    // each pending autoAccept retries on its own 10s, so a second one becoming startable does not postpone the first
+    let expired = false;
+    for (const [id, at] of this.sent) if (now - at > RETRY) { this.sent.delete(id); expired = true; }
+    if (expired) this.refresh();
     this.show();
   }
 
@@ -135,7 +143,10 @@ export class QuestAlert {
     section(0, this.pre, ' (In Progress)');
     const r = await npcTalk(g.windows, { npc: ADMIN, type: 4, text });
     if (r.action !== 1 || r.sel === null || r.sel === undefined || !choices[r.sel]) return;
-    const id = choices[r.sel], npcId = Number(book.check[id]?.['0']?.npc) || ADMIN;
+    const id = choices[r.sel];
+    // a ready pick hands in (phase 1), everything else starts (phase 0): each is that phase's NPC
+    const phase = this.ready.has(id) ? '1' : '0';
+    const npcId = Number(book.check[id]?.[phase]?.npc) || ADMIN;
     await questFlow(g, g.map?.life.find((e) => e.kind === 'Npc' && Number(e.spawn.id) === npcId) || { spawn: { id: npcId } }, id);
     this.tick();
   }
