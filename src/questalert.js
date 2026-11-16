@@ -20,7 +20,7 @@ export class QuestAlert {
   constructor(game) {
     this.g = game;
     this.avail = new Set(); this.pre = new Set(); this.ready = new Set(); this.sent = new Set();
-    this.sentAt = 0; this.checkedAt = 0; this.news = false; this.anim = null; this.appear = false;
+    this.sentAt = 0; this.checkedAt = 0; this.news = 0; this.anim = null; this.appear = false;
   }
   get book() { return this.g.quests; }
   get ctx() { return this.g.textCtx(); }
@@ -66,7 +66,7 @@ export class QuestAlert {
         if (!this.sent.has(id)) { this.g.net?.questAction(1, id, npc, null); this.sent.add(id); this.sentAt = performance.now(); }
         continue;
       }
-      if (fromNew && !this.avail.has(id)) this.news = true;
+      if (fromNew && !this.avail.has(id)) this.news++;
       this.avail.add(id);
     }
   }
@@ -79,7 +79,7 @@ export class QuestAlert {
       const ctx = this.ctx;
       for (const id of book.autoComplete) {
         const npc = Number(book.check[id]?.['1']?.npc) || undefined;
-        if (book.canComplete(id, ctx, npc)) { if (!this.ready.has(id)) { this.ready.add(id); this.news = true; } }
+        if (book.canComplete(id, ctx, npc)) { if (!this.ready.has(id)) { this.ready.add(id); this.news++; } }
         else this.ready.delete(id);
       }
     }
@@ -93,10 +93,10 @@ export class QuestAlert {
     const E = this.g.vfx?.E?.QuestAlert;
     if (!this.active || !E) { this.anim = null; this.news = false; return; }
     if (this.news && !this.g.inCashShop) {
-      this.g.hud?.message(ARRIVED, '#bbbbbb');
+      for (let i = 0; i < this.news; i++) this.g.hud?.message(ARRIVED, '#bbbbbb');   // one line per arrival
       sfx.play('Game/QuestAlert');
       if (!this.appear) { this.anim = new Anim(E.Appear, false); this.appear = true; }
-      this.news = false;
+      this.news = 0;
     } else if (!this.anim || (this.appear && this.anim.done)) { this.anim = new Anim(E.Default, true); this.appear = false; }
   }
   update(ms) { this.anim?.update(ms); if (this.appear && this.anim?.done) this.show(); }

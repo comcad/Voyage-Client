@@ -45,9 +45,9 @@ export class Guide {
   }
   get height() { return Number(this.node?.height) || 80; }
   get action() { return this.special && this.node?.[this.special] ? this.special : this.base; }
-  anim() { const n = this.node; return n ? frames(n[this.action] || n.stand) : []; }
-  setBase(a) { if (this.base !== a) { this.base = a; if (!this.special) { this.frame = 0; this.frameT = 0; } } }
-  play(a) { if (this.node?.[a]) { this.special = a; this.frame = 0; this.frameT = 0; } else this.special = null; }
+  anim() { const n = this.node; return n ? (this._frames ??= frames(n[this.action] || n.stand)) : []; }
+  setBase(a) { if (this.base !== a) { this.base = a; this._frames = null; if (!this.special) { this.frame = 0; this.frameT = 0; } } }
+  play(a) { this._frames = null; if (this.node?.[a]) { this.special = a; this.frame = 0; this.frameT = 0; } else this.special = null; }
 
   update(dt) {
     const ms = dt * 1000;
@@ -110,7 +110,7 @@ export class Guide {
     await this.g.assets.preload(picture.frames);
     if (seq !== this.talkSeq) return;   // something newer was said or shown meanwhile
     this.talk = { picture, until: performance.now() + ms };
-    if (Math.floor((this.g.stats?.job || 0) / 1000) !== 2) this.play('say');
+    if (Math.floor((this.g.stats?.job || 0) / 100) !== 21 && this.g.stats?.job !== 2000) this.play('say');   // aran(): the Legend has no say
   }
 
   /** The frame's lt / rb where it stands (mirrored facing right), with the last step's; null when it has none. */
