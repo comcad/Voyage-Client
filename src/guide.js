@@ -19,6 +19,9 @@ import { snapPx } from './view.js';
 const STEP_MS = 30, SPEED = 7, KEEP_X = 70;
 // the tutorial balloon's codes: the same table the NPC dialog draws with, plus the plain black the dialog's base gives it
 const BALLOON = { ...NPC_COLORS, k: '#000' };
+/** One scratch context for laying text out (only measureText is used): a guide says often, a canvas each time is waste. */
+let measure = null;
+const measureCtx = () => (measure ??= document.createElement('canvas').getContext('2d'));
 
 export class Guide {
   /** prev: the guide of the last map, whose loaded art is kept. */
@@ -34,6 +37,7 @@ export class Guide {
     this.prevBox = null;
     this.talk = null;              // { balloon: { layout, w, h, canvas } | picture: Anim, until }
     this.node = prev?.skill === skill ? prev.node : null; this.B = prev?.B || null;
+    this.pending = null;           // an action asked for while the summon art was still loading
     this.talkSeq = 0;
     if (this.node && this.B) return;
     game.assets.json('UI/ChatBalloon.img').then((c) => { this.B = c?.tutorial || null; if (this.B) game.assets.preload(Object.values(this.B).filter((n) => n?._canvas)); });
@@ -42,13 +46,33 @@ export class Guide {
       if (!s) return;
       await game.assets.preload(Object.values(s).flatMap((a) => (a && typeof a === 'object' ? frames(a) : [])));
       this.node = s;
+      // a deferred action waits for the running special (the summon) to finish; update() flushes it then
+      if (!this.special) this.flush();
     });
   }
   get height() { return Number(this.node?.height) || 80; }
   get action() { return this.special && this.node?.[this.special] ? this.special : this.base; }
   anim() { const n = this.node; return n ? (this._frames ??= frames(n[this.action] || n.stand)) : []; }
   setBase(a) { if (this.base !== a) { this.base = a; this._frames = null; if (!this.special) { this.frame = 0; this.frameT = 0; } } }
-  play(a) { this._frames = null; if (this.node?.[a]) { this.special = a; this.frame = 0; this.frameT = 0; } else this.special = null; }
+  /**
+   * A one-shot special (summoned / say). While the summon art is still loading every action is deferred rather than
+   * cancelled, so a TALK_GUIDE arriving in that window cannot kill the summoned one-shot; on a loaded node that does
+   * not have the action there is nothing to play and the current special stands.
+   */
+  play(a) {
+    if (!this.node) { if (a !== this.special) this.pending = a; return; }
+    if (!this.node[a]) return;
+    this._frames = null; this.pending = null;
+    this.special = a; this.frame = 0; this.frameT = 0;
+  }
+  /** Play what was asked for while the art was loading, once nothing else is playing; a stale `say` is dropped. */
+  flush() {
+    const a = this.pending;
+    if (!a) return;
+    this.pending = null;
+    if (a === 'say' && !this.talk) return;   // the balloon it announced is already gone
+    this.play(a);
+  }
 
   update(dt) {
     const ms = dt * 1000;
@@ -65,6 +89,7 @@ export class Guide {
       if (performance.now() > this.talk.until) this.talk = null;
       else this.talk.picture?.update(ms);
     }
+    if (this.pending && !this.special) this.flush();   // the summon finished: the talk that arrived meanwhile plays
   }
   /** One 30 ms step after you. */
   step() {
@@ -95,15 +120,13 @@ export class Guide {
   say(text, w, ms) {
     this.talk = null; this.talkSeq++;
     if (!text) return;
-    const ctx = document.createElement('canvas').getContext('2d');
-    const layout = richText(ctx, text, Math.max(1, w), textRef(this.g.windows), { base: '#000', size: 12, colors: BALLOON, lineH: 18, boldE: true });
+    const layout = richText(measureCtx(), text, Math.max(1, w), textRef(this.g.windows), { base: '#000', size: 12, colors: BALLOON, lineH: 18, boldE: true });
     this.talk = { balloon: { layout, w: Math.max(1, w), h: layout.height }, until: performance.now() + ms };
     this.play('say');
   }
   /** TALK_GUIDE mode 1: UI/tutorial.img/<n> for ms; `say` too, except for an Aran. */
   async show(n, ms) {
-    this.talk = null;
-    const seq = ++this.talkSeq;
+    const seq = ++this.talkSeq;             // invalidates a mid-flight say / show without blanking the current talk
     const t = await this.g.assets.json('UI/tutorial.img');
     const node = t?.[n];
     if (!node || seq !== this.talkSeq) return;
