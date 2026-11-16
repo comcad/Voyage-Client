@@ -6852,7 +6852,8 @@ export class Game {
     // in Dark Sight only Assassinate goes; with Vanish learned, anything but Dark Sight itself
     if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
-    if (this.player.ladder && (kind !== 'special' || NO_LADDER.has(id))) return false;   // on a ladder or rope only buffs
+    // on a ladder or rope only the skills NO_LADDER does not forbid may be used, a special (a buff) among them
+    if (this.player.ladder && (kind !== 'special' || NO_LADDER.has(id))) return false;
     if (SHIP_SHOTS.has(id) && !this.onShip()) { this.notice('This skill is available only when you are riding the Battleship.'); return false; }
     if (MOVE_LIMITED_SAY.has(id) && (this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
     if (performance.now() < (this.reuseAt?.[id] || 0)) return false;
@@ -6963,6 +6964,8 @@ export class Game {
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.swimming(p.x, p.y)) return false;
     // a plain attack in Dark Sight (without Vanish) only brings you out of it
+    // darkSight() hands back the live buff itself, not a copy: ds.leaving is the latch that keeps one plain attack from
+    // sending the cancel and playing the effect every frame. Never spread or clone ds.
     const ds = !skillId && !opts.final && this.darkSight();
     if (ds && !sb.level(VANISH)) {
       if (!ds.leaving) { ds.leaving = true; this.playSkillEffect(ds.source, p); this.net?.cancelBuff(ds.source); }
