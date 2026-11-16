@@ -21,12 +21,22 @@ export const MOB_INFO = ['Do not mark', 'Mark HP only', 'Mark name and HP'];
 export const FPS_CHOICES = [['vsync', 'VSync'], [60, '60 FPS'], [30, '30 FPS']];
 
 export const settings = { ...DEFAULTS };
-try { Object.assign(settings, JSON.parse(readKept(KEY) || '{}')); } catch { /* bad data: the defaults */ }
+// only what DEFAULTS has, and only in the type DEFAULTS has it: a stored blob is not trusted to be this version's
+// shape. A stale "60" string for fps or a key this version dropped used to land in settings as-is, and the System
+// Option then failed its own findIndex into an accidental default; an unknown key would simply sit there.
+try {
+  const stored = JSON.parse(readKept(KEY) || '{}') || {};
+  for (const [k, d] of Object.entries(DEFAULTS)) if (typeof stored[k] === typeof d) settings[k] = stored[k];
+  // FRAME RATE is the one setting whose stored type is not its default's: the choices are 'vsync' or a number, so it
+  // is taken on its own and the choice test below decides it, rather than the typeof check rejecting a stored 60
+  if (FPS_CHOICES.some(([v]) => v === stored.fps)) settings.fps = stored.fps;
+} catch { /* bad data: the defaults */ }
+// a stored FRAME RATE that matches no choice (a stale "60" string) goes back to the default here, so the fallback is
+// deliberate rather than whatever the System Option's findIndex happens to do
+if (!FPS_CHOICES.some(([v]) => v === settings.fps)) settings.fps = DEFAULTS.fps;
 // an alert outside 0 .. 95% (one kept from before it stopped at 95%) is the default again
 for (const k of ['hpAlert', 'mpAlert']) if (!(settings[k] >= 0 && settings[k] <= 0.95)) settings[k] = DEFAULTS[k];
-// a stored FRAME RATE that isn't one of the choices (a stale blob's "60" string, say) used to fall through the System
-// Option's findIndex to VSync by accident: put it back to the default here, so the fallback is deliberate
-if (!FPS_CHOICES.some(([v]) => v === settings.fps)) settings.fps = DEFAULTS.fps;
+
 export function saveSettings() {
   writeKept(KEY, JSON.stringify(settings));
 }
