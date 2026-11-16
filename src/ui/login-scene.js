@@ -54,6 +54,8 @@ const DELETE_NOTICE = {
 };
 // map point (28, stepY - 8) is the screen centre
 const VIEW_X = 372, VIEW_Y = 308;
+// the measured off-screen x every chrome decoration slides in from (slideIn)
+const SLIDE_IN_X = -149;
 // world tags (filled or empty) hanging from the world select rod: 15 of them, one under each of its strings (27px apart)
 const WORLD_TAGS = 15, TAG_STEP = 27;
 
@@ -69,6 +71,8 @@ const LOGIN_NOTICE = { 3: 16, 4: 3, 5: 20, 6: 15, 7: 17, 8: 15, 9: 15, 255: 15, 
 const WORLD_BUSY = 'Since There Are Many\r\nConcurrent Users in This World,\r\nYou May Encounter Some Difficulties During the Game Play.';
 const WORLD_FULL = 'The Concurrent Users in This World\r\nHave Reached the Max.\r\nPlease Try Again Later.';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+/** A ban this far off is the server's "permanent" sentinel, not a date: three Julian years in ms. */
+const PERMANENT_BAN_MS = 3 * 365.25 * 86400000;
 const NOTICE_AT = { x: 219, y: 170 }, NOTICE_SLIDE_MS = 150;
 /** "Ver. %d.%d" with the client's version, 0.83. */
 const VERSION_TEXT = 'Ver. 0.83';
@@ -379,7 +383,7 @@ export class LoginScene {
       const block = this.blockReasons?.[ban.reason > 20 && ban.reason <= 40 ? 12 : ban.reason]?.msg || '';
       const head = ban.reason === 99 ? 'You have been blocked for typing in an invalid password or pincode 5 times.\r\n' : `${block}\r\n`;
       const d = ban.until;
-      if (d.getTime() - Date.now() >= 3 * 365.25 * 86400000) return `${head}The ID has been permanently blocked.\r\nSo you won't be able to use this account.`;
+      if (d.getTime() - Date.now() >= PERMANENT_BAN_MS) return `${head}The ID has been permanently blocked.\r\nSo you won't be able to use this account.`;
       const h = d.getHours() % 12 || 12, pad = (n, w, c = ' ') => String(n).padStart(w, c);
       return `${head}You can login after\r\n${MONTHS[d.getMonth()]}/${pad(d.getDate(), 2)}/${pad(d.getFullYear(), 4)} ${pad(h, 2)}:${pad(d.getMinutes(), 2, '0')} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
     }
@@ -1792,7 +1796,7 @@ function slideIn(item, ms) {
     draw(ctx, assets) {
       t0 ??= performance.now();
       const k = Math.min(1, (performance.now() - t0) / ms);
-      ctx.save(); ctx.translate(Math.round(-149 * (1 - k)), 0);
+      ctx.save(); ctx.translate(Math.round(SLIDE_IN_X * (1 - k)), 0);
       item.draw(ctx, assets);
       ctx.restore();
     },
