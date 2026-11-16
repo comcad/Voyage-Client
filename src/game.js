@@ -5438,11 +5438,14 @@ export class Game {
   }
 
   /**
+<<<<<<< ours
    * The most a summon may hit for, as the game server's SummonDamageHandler caps it (it flags anything above):
    * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
    * damage (5.4% from 438 up). Rolled at most 95% of that.
    */
   /**
+=======
+>>>>>>> theirs
    * A physical summon's blow (Octopus, Gaviota, Wrath of the Octopi): a miss by your accuracy as for your own blows,
    * else (DEX x 0.7-1.0 x 2.5 + STR) x the skill's pad %. No weapon attack, defence, level gap or critical.
    */
@@ -5452,11 +5455,18 @@ export class Game {
     const pad = Number(this.skills.levelData(id, lv)?.pad) || 0;
     return Math.trunc(((this.totalStat('dex') * (0.7 + Math.random() * 0.3) * 2.5 + this.totalStat('str')) * pad) / 100);
   }
+  /**
+   * The most a summon may hit for, as Cosmic's SummonDamageHandler caps it (it flags anything above):
+   * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
+   * damage (5.4% from 438 up). Rolled at most 95% of that.
+   */
   summonMaxDamage(id, lv) {
     const ld = this.skills.levelData(id, lv) || {}, s = this.stats;
     let max;
     if (!ld.pad) {
-      const ti = (s.int || 0) + this.equipStat('int'), matk = Math.max(14, ti + this.equipStat('matk'));
+      // Cosmic's getTotalMagic is total INT plus equipped magic attack, capped at 2000 and floored at 14; the base
+      // magic damage then takes INT back out of it and adds the INT curve, so the two terms are not added twice
+      const ti = (s.int || 0) + this.equipStat('int'), matk = Math.max(14, Math.min(2000, ti + this.equipStat('matk')));
       max = Math.floor(((matk - ti + Math.floor(0.1996049769 * ti ** 1.290631341)) * 107) / 100) * 0.05 * (ld.mad || 0);
     } else {
       const base = this.maxDamage();
@@ -6993,7 +7003,7 @@ export class Game {
     const ride = this.riding?.item, kind = Math.floor((ride || 0) / 10000);
     if (kind !== 190 && kind !== 193) return 'go';
     const skillVehicle = isSkillVehicle(ride);
-    const ship = kind === 193 && !skillVehicle;
+    const ship = this.onShip();
     if (SKILL_VEHICLE_SKILLS.has(id)) return skillVehicle ? 'off' : null;
     if (MONSTER_RIDERS.has(id)) return kind === 190 ? 'off' : null;
     if (id === BATTLESHIP) return ship ? 'off' : null;
