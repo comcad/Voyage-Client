@@ -1734,7 +1734,6 @@ export class LoginScene {
     }
   }
 
-  /** 4-12 letters or digits, with no word from Etc/ForbiddenName.img or Etc/Curse.img in it. */
   /** 4-12 letters and digits, fewer than four I / l in all, and no forbidden or curse word (a curse entry up to its ','). */
   async nameAllowed(name) {
     if (!/^[a-zA-Z0-9]{4,12}$/.test(name) || (name.match(/[Il]/g) || []).length >= 4) return false;
