@@ -47,6 +47,8 @@ export class GuildBossField {
     const a = this.game.assets;
     this.healerArt = this.healer?.healer ? frames(await nodeAt(a, this.healer.healer)) : [];
     this.pulleyArt = this.pulley?.pulley ? frames(await nodeAt(a, this.pulley.pulley)) : [];
+    // one turn plays through the pulley's frames: its length, once
+    this.turnMs = this.pulleyArt.reduce((s, f) => s + (Number(f.delay) || 100), 0);
     await a.preload([...this.healerArt, ...this.pulleyArt].filter((n) => n?._canvas));
     return this;
   }
@@ -56,7 +58,7 @@ export class GuildBossField {
     this.t += dt * 1000;
     if (this.turn !== null) {
       this.turn += dt * 1000;
-      if (this.turn >= this.pulleyArt.reduce((s, f) => s + (Number(f.delay) || 100), 0)) this.turn = null;
+      if (this.turn >= (this.turnMs || Infinity)) this.turn = null;
     }
   }
   /** A close-range swing's box when it lands: the pulley turns, and asks to be pulled while its state is 0. */

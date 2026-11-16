@@ -1,5 +1,5 @@
 import { music, sfx } from './audio.js';
-import { pad, nodeAt, frameAt } from './assets.js';
+import { pad, nodeAt } from './assets.js';
 import { allCanvases } from './ui/windows.js';
 import { uiText } from './ui/wzui.js';
 import { VIEW_W, VIEW_H, UI_W } from './view.js';
@@ -7,6 +7,17 @@ import { VIEW_W, VIEW_H, UI_W } from './view.js';
 const isCanvas = (n) => !!n?._canvas;
 /** Burst weather (type 3): each of its five frame sets goes off `count` times every `every` ms. */
 const BURSTS = [{ every: 200, count: 1 }, { every: 1000, count: 5 }, { every: 500, count: 3 }, { every: 300, count: 2 }, { every: 200, count: 1 }];
+
+/**
+ * `frameAt` (assets.js) for a list whose whole playing time is already known: the weather keeps each set's in
+ * `totals`, so the draw does not sum the set's frame delays again for every piece. Same result, no reduce.
+ */
+function frameIn(fr, t, total, loop = true) {
+  if (!fr?.length) return null;
+  let r = loop ? t % total : Math.min(t, total - 1), i = 0;
+  while (i < fr.length - 1 && r >= (Number(fr[i].delay) || 100)) r -= Number(fr[i++].delay) || 100;
+  return fr[i];
+}
 
 /**
  * Cash weather (BLOW_WEATHER), over the whole screen until the server stops it (item 0). From the item's
@@ -36,7 +47,10 @@ export class Weather {
     await a.preload([...sets.flatMap((s) => allCanvases(s)), ...allCanvases(notice)]);
     if (seq !== this.seq) return;
     const frames = (s) => (isCanvas(s) ? [s] : Object.keys(s || {}).filter((k) => /^\d+$/.test(k)).map((k) => s[k]).filter(isCanvas));
-    const cur = { itemId, type, dir: Number(info.direction) || 0, sets: sets.map(frames).filter((f) => f.length), message, notice, msgUntil: performance.now() + 20000, pieces: [] };
+    const settled = sets.map(frames).filter((f) => f.length);
+    // each set's whole playing time, once (a piece lives that long and no more)
+    const totals = settled.map((f) => f.reduce((t, c) => t + (Number(c.delay) || 100), 0) || 1);
+    const cur = { itemId, type, dir: Number(info.direction) || 0, sets: settled, totals, message, notice, msgUntil: performance.now() + 20000, pieces: [] };
     if (type === 1 || type === 2) {
       const n = Math.round(((Number(node?.count) || 100) * (30 + Math.floor(Math.random() * 25))) / 100);
       for (let i = 0; i < n; i++) cur.pieces.push(this.piece(cur));
@@ -84,14 +98,14 @@ export class Weather {
         }
       });
       for (const p of c.pieces) p.t += ms;
-      c.pieces = c.pieces.filter((p) => p.t < c.sets[p.set].reduce((t, f) => t + (Number(f.delay) || 100), 0));
+      c.pieces = c.pieces.filter((p) => p.t < c.totals[p.set]);
     }
   }
   draw(ctx) {
     const c = this.cur, a = this.g.assets;
     if (!c) return;
     for (const p of c.pieces) {
-      const fr = c.sets[p.set], falling = c.type === 1 || c.type === 2, f = frameAt(fr, p.t, falling), img = f && a.image(f);
+      const fr = c.sets[p.set], falling = c.type === 1 || c.type === 2, f = frameIn(fr, p.t, c.totals[p.set], falling), img = f && a.image(f);
       if (!img) continue;
       const o = f.origin || [img.width / 2, img.height / 2];
       if (falling) {

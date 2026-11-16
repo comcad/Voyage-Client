@@ -20,7 +20,8 @@ export class Kites {
   remove(type, id) {
     const k = this.kites.get(id);
     if (!k) return;
-    if (type === 0) k.fade = 1000; else this.kites.delete(id);
+    if (type === 0) k.fade ??= 1000;   // a repeat remove leaves the fade where it is, not from the top again
+    else this.kites.delete(id);
   }
   update(dt) {
     for (const [id, k] of this.kites) {
@@ -43,7 +44,8 @@ export class Kites {
   }
   /** The kite whose box (30 either side, 40 above and below its rest point) holds a field point. */
   at(x, y) {
-    for (const k of this.kites.values()) if (k.fade === null && Math.abs(x - k.x0) <= 30 && Math.abs(y - k.y0) <= 40) return k;
+    // one with no art (its node missing) draws nothing, so it is no hover tip and no click hole either
+    for (const k of this.kites.values()) if (k.fade === null && k.anim && Math.abs(x - k.x0) <= 30 && Math.abs(y - k.y0) <= 40) return k;
     return null;
   }
 }
