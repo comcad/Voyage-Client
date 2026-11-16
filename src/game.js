@@ -235,7 +235,6 @@ class Input {
   }
 }
 
-/** Another character on the map (SPAWN_PLAYER / MOVE_PLAYER). */
 /**
  * Face expressions: the emotion number indexes this list (1 = hit). An expression loops its Face.img frames
  * for its own delay (5s when it has none), then the face goes back to default, which blinks now and then.
@@ -330,7 +329,6 @@ const isPetEquip = (id) => { const c = Math.floor(id / 10000); return c === 180 
 /** Weapon boosters (Sword/Axe/BW/Spear/Polearm/Bow/Crossbow/Claw/Dagger/Knuckler/Gun, Cygnus and Aran ones). */
 const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 3101002, 3201002, 4101003, 4201002, 5101006, 5201003,
   11101001, 13101001, 14101002, 15101002, 21001003]);
-/** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
 /**
@@ -591,7 +589,6 @@ const RIDE_SHIP_SKILLS = new Set([5201002, 5201003, 5211001, 5211002, 5211004, 5
 /** A tired mount: tiredness at least (level / 3) x 10 + 95 (checked on SET_TAMING_MOB_INFO / SPAWN_PLAYER). */
 const mountTired = (level, tired) => tired >= Math.floor(level / 3) * 10 + 95;
 const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
-/** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 /** How much movement (ms) gathers before it goes to the server, as the client does. */
 const MOVE_FLUSH = 500;
 /** A locked exclusive request the server never answers is abandoned this long after it was sent. */
@@ -616,6 +613,7 @@ const REUSE_ON_HIT = new Set([5101003, 5121001]);
 /** Dash, Transformation and Super Transformation are refused, with a notice, where the map forbids movement skills. */
 const MOVE_LIMITED_SAY = new Set([5001005, 15001003, 5111005, 15111002, 5121003]);
 const DASHES = [5001005, 15001003];
+/** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
 const SHADOW_PARTNERS = [4111002, 14111000], SP_MASK = 0x400000000000000n, NO_PARTNER = new Set([4121003, 14101006]);
@@ -973,7 +971,6 @@ export class Game {
     if (!this.inCashShop) return;
     await this.hop((net) => net.leaveCashShop(), 'Returning to the game...', 'You cannot leave the Cash Shop right now.', true);
   }
-  /** Notes (gift notices and the like): show each once, then let the server drop them. */
   /**
    * Report (the player menu's Report row; target: who it was opened on). It must be open (CLAIM_STATUS_CHANGED) and
    * within its hours (CLAIM_AVAILABLE_TIME, local time; 0 and 0: always). The notice picks the kind: a conversation
@@ -1027,6 +1024,7 @@ export class Game {
    * MEMO_RESULT 3: the notes waiting are kept (the last list replaces the one before) and, if there are any and no
    * new-note balloon is up, one comes. Its O opens the inbox with them; X leaves them waiting.
    */
+  /** Notes (gift notices and the like): show each once, then let the server drop them. */
   async showNotes(notes) {
     this.pendingNotes = notes;
     if (!notes.length || this.noteAsking) return;
@@ -3893,7 +3891,6 @@ export class Game {
     questNotice(this.windows, q, title, q ? book.name(q) : '', (id) => { if (this.quests.status(id) === 1) this.openQuest(id); });
   }
 
-  /** Open the quest log on a quest. */
   /** Party quests 1200-1399 that open at exactly this level (for your job): a balloon each, offering to show it. */
   async partyQuestInvites(level) {
     const [check, pq] = await Promise.all([this.assets.json('Quest/Check.img'), this.assets.json('Quest/PQuest.img')]);
@@ -3916,6 +3913,7 @@ export class Game {
       });
     }
   }
+  /** Open the quest log on a quest. */
   openQuest(id) {
     const st = this.quests.status(id), w = this.windows.open('quest');
     if (!w) return;
@@ -5213,7 +5211,6 @@ export class Game {
     }
   }
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
-  /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
   equipRing(slot, it, cell) {
     if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
     if (this.forcedRefusal('equipment')) return;
@@ -5386,7 +5383,6 @@ export class Game {
     this.fx.push({ anim, x: mob.x, y: mob.y - (mob.node?._h || 40) / 2, flip: sm.facingRight });
   }
 
-  /** SHOW_SCROLL_EFFECT: BasicEff Enchant Success / Failure over whoever scrolled, with its sound. */
   /**
    * SHOW_SCROLL_EFFECT. Yours says how it went in the chat log; with Legendary Spirit the client shows it in its
    * window instead (the Enchant sound, the line once its art is done) and nothing plays on you. Anyone else's (and
@@ -7551,7 +7547,6 @@ export class Game {
     }
     this.grenades = this.grenades.filter((g) => !g.done);
   }
-  /** A skill's looping art on `ent` for as long as `keep()` holds. */
   /** Berserk on (HP low enough): its effect stays on the character until it goes off. */
   setBerserk(ent, on) {
     if (!ent) return;
@@ -7612,6 +7607,7 @@ export class Game {
     await this.assets.preload(anim.frames);
     this.fx.push({ anim, follow: this.player, keep: () => keep() || (this.energyFx = null) });
   }
+  /** A skill's looping art on `ent` for as long as `keep()` holds. */
   async loopSkillEffect(id, ent, branch, keep) {
     const node = await this.skills?.ensure(id);
     const layers = HOLD_ART.has(branch) ? Game.fxLayers(node, branch) : [{ fx: Game.fxNode(node?.[branch]), under: false }].filter((l) => l.fx);
@@ -9141,7 +9137,6 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ skill effects
-  /** First playable frame list under a node: either numbered canvases or numbered groups of canvases. */
   /**
    * A held skill's art and the layers numbered after it (keydown, keydown0, keydown1... up to the first missing), as
    * the client plays them together: [{ fx, under }], `under` for a layer whose z is below 0 (behind the character).
@@ -9155,6 +9150,7 @@ export class Game {
     }
     return out;
   }
+  /** First playable frame list under a node: either numbered canvases or numbered groups of canvases. */
   static fxNode(node) {
     if (!node) return null;
     if (frames(node).some((f) => f?._canvas)) return node;
@@ -10172,13 +10168,13 @@ export class Game {
     this.shots.push({ anim, sx: q.sx, sy: q.sy, tx, ty, t: 0, dur: Math.min(0.6, Math.max(0.1, Math.hypot(tx - q.sx, ty - q.sy) / 600)), flip: tx > q.sx, onHit: land });
   }
 
-  /** Pick up the item you are standing on: your feet within its width, on the same ground. */
   /**
    * The pickup key: one request at a time (until the server answers, then 30ms; released after 1.5s if it never
    * does), for the first drop in arrival order whose landing point is within x-25..x+25, y-50..y+10 of your feet,
    * that has landed, came as a pickable drop, isn't pickUpBlock, is yours (or your party's, or anyone's, or 15s old)
    * and wasn't asked for in the last 3s.
    */
+  /** Pick up the item you are standing on: your feet within its width, on the same ground. */
   tryPickup() {
     if (this.hidden()) return;
     const now = performance.now();
