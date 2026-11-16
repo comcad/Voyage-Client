@@ -44,7 +44,7 @@ export class FredrickWin extends Win {
     if (!img?.stand) return;
     const anim = new Anim(img.stand, true);
     await this.g.assets.preload(anim.frames);
-    this.anim = anim; this.t = performance.now();
+    this.anim = anim;
   }
   /** GET ALL: FREDRICK_ACTION 0x1A. Every answer but success re-arms it (result() clears busy); only 0x1e disables it. */
   retrieve() {
@@ -79,11 +79,12 @@ export class FredrickWin extends Win {
     const f = this.scrollClick(lx, ly, BAR.x, BAR.y, BAR.h, this.first, Math.max(this.slots, ROWS), ROWS);
     if (f !== null) this.first = Math.min(this.maxFirst, f);
   }
+  // the stand animation advances on the manager's tick, not in the draw: a frame that draws twice (a resize, a
+  // tooltip over the window) used to advance it twice as fast
+  tick(ms) { if (this.anim) this.anim.update(ms); }
   body(ctx) {
     const m = this.mgr, im = (n) => m.image(n);
     if (this.anim) {
-      const now = performance.now();
-      this.anim.update(now - this.t); this.t = now;
       const n = this.anim.node, i = n && im(n), o = n?.origin || [0, 0];
       if (i) ctx.drawImage(i, NPC_AT[0] - o[0], NPC_AT[1] - o[1]);
     }
