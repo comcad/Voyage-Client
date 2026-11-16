@@ -11,7 +11,7 @@ import { sfx } from '../audio.js';
  *   - Rows from y 148, 13px apart: the name (cut at 70px) at x 10, the CP ending at 101, the key ("F<n>") at x 116.
  *     The selected row is white on a filled bar.
  *   - The lock under the list at (9, 162 + 13 x rows), and DECIDE at (110, 159 + 13 x rows).
- * - Picking a tab unfolds the list. Unless the lock is on, it folds itself after 8s (40 off a 30ms tick from 8000),
+ * - Picking a tab unfolds the list. Unless the lock is on, it folds itself 8s after that (one 30ms tick at a time),
  *   counted again on every use.
  * - A row is picked by a click (none outside a row) and asked for by DECIDE, a double-click or its F-key. Tab moves
  *   to the next tab (when unfolded).
@@ -23,7 +23,9 @@ import { sfx } from '../audio.js';
  *   button on the strip under the panel and its right edge, the team stars, the list's top piece and the selected
  *   row's bar.
  */
-const W = 162, FOLDED_H = 128, LIST_Y = 128, ROW0 = 20, ROW_H = 13, MAX_ROWS = 12, FOLD_MS = 8000, FOLD_STEP = 40;
+// the list folds FOLD_MS after the last use; tick() subtracts FOLD_STEP once per FOLD_TICK of elapsed time, so the two
+// must agree: a step of 40 off a 30ms tick folded it at 6000ms, not the documented 8000
+const W = 162, FOLDED_H = 128, LIST_Y = 128, ROW0 = 20, ROW_H = 13, MAX_ROWS = 12, FOLD_MS = 8000, FOLD_TICK = 30, FOLD_STEP = FOLD_TICK;
 const CP_AT = [[79, 35], [79, 55], [79, 75]], CP_TIPS = [[9, 35], [9, 55], [9, 75]];
 const STAR_AT = [[10, 51], [10, 73]], TOP_AT = [0, 104], TAB_AT = [7, 111], TAB_GAP = 1;
 const MIN_AT = [133, 110], MAX_AT = [146, 110], SIDE_AT = [151, 28], SEL_FILL = '#3a5a8c';
@@ -69,6 +71,7 @@ export class CarnivalWin extends Win {
   addRow(tab, row) {
     row.key = `F${row.index}`; row.vkey = row.index >= 1 && row.index <= 12 ? row.index : 0;
     this.rows[tab].push(row);
+    if (this.sel > this.rows[tab].length) this.sel = 0;   // a repopulated tab may be shorter than the live selection
     this.relayout();
   }
   setMine(avail, total) { this.mine = [avail, total]; }
@@ -98,17 +101,19 @@ export class CarnivalWin extends Win {
   }
   /** Tab, and F1-F12 for a row of this tab; both taken by the window while it is up. */
   key(k) {
-    if (k === 'Tab') { if (this.expanded) this.tab = (this.tab + 1) % 3; sfx.play('UI/Tab'); this.selectTab(this.tab); return true; }
+    if (k === 'Tab') { sfx.play('UI/Tab'); if (this.expanded) this.selectTab((this.tab + 1) % 3); return true; }
     const m = /^F(\d+)$/.exec(k), n = m ? Number(m[1]) : 0;
     if (n < 1 || n > 12) return false;
     const row = this.rows[this.tab].find((r) => r.vkey === n);
-    if (row) { this.sel = row.index; sfx.play('UI/Tab'); this.selectTab(this.tab); this.send(); }
+    if (!row) return false;   // no such row: the hotbar under it keeps the key, as it does for F0 / F13+
+    this.sel = row.index; sfx.play('UI/Tab'); this.selectTab(this.tab); this.send();
     return true;
   }
-  tick(ms = 16) {
+  /** `ms` since the last frame (windows.js update), never a frame count. */
+  tick(ms) {
     this.acc += ms;
-    while (this.acc >= 30) {
-      this.acc -= 30;
+    while (this.acc >= FOLD_TICK) {
+      this.acc -= FOLD_TICK;
       if (!this.lock && this.expanded) { this.timer -= FOLD_STEP; if (this.timer < 0) this.fold(); }
     }
     if (this.side) { this.side.x = this.x + 157; this.side.y = this.y; }
@@ -133,7 +138,7 @@ export class CarnivalWin extends Win {
     if (row) this.timer = FOLD_MS;
     this.relayout();
   }
-  dblclick(lx, ly) { const row = this.expanded && this.rowAt(lx, ly); if (row) { this.sel = row.index; this.send(); } }
+  dblclick(lx, ly) { const row = this.expanded && this.rowAt(lx, ly); if (row) { this.sel = row.index; this.relayout(); this.send(); } }
   tooltip(lx, ly) {
     for (let i = 0; i < 3; i++) {
       const [x, y] = CP_TIPS[i];
