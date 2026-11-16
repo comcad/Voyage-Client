@@ -119,10 +119,13 @@ export class TextField {
 /** How much taller than wide the game canvas is drawn (FIT TO SCREEN stretches it); set by Game. */
 TextField.stretchY = 1;
 
+/** The UI font stack, so uiText and wrapText measure the same face the canvas ends up with. */
+const FONT = 'Arial, "Segoe UI", sans-serif';
+
 /** Draws text the way the client's UI does: small Arial with an optional 1px dark outline. */
 export function uiText(ctx, text, x, y, { color = '#fff', size = 12, align = 'left', bold = false, outline = null, base = 'top', font = null } = {}) {
   ctx.save();
-  ctx.font = `${bold ? 'bold ' : ''}${size}px ${font ? `${font}, ` : ''}Arial, "Segoe UI", sans-serif`;
+  ctx.font = `${bold ? 'bold ' : ''}${size}px ${font ? `${font}, ` : ''}${FONT}`;
   ctx.textAlign = align; ctx.textBaseline = base;
   if (outline) { ctx.lineWidth = 3; ctx.strokeStyle = outline; ctx.strokeText(text, x, y); }
   ctx.fillStyle = color;
@@ -143,7 +146,7 @@ export function overlayText(ctx, text, x, y, base) {
 
 /** Word-wrap helper for dialog text. */
 export function wrapText(ctx, text, width, size = 12) {
-  ctx.save(); ctx.font = `${size}px Arial`;
+  ctx.save(); ctx.font = `${size}px ${FONT}`;
   const out = [];
   for (const para of String(text).split('\n')) {
     let line = '';
