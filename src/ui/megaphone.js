@@ -111,7 +111,9 @@ export class MegaphoneWin extends Win {
         if (lines.some((l) => !l) && !(await this.mgr.confirm('One of the lines has not been applied.\r\nWould you still like to use it?'))) return;
         this.close();
         if (!lines.some(Boolean)) return;
-        if (lines.some((l) => l.length > 60)) { this.mgr.notice('Use the megaphone to text up to 60 characters.'); return; }
+        // the shared gate carries the curse and level-10 checks the Triple Megaphone used to skip;
+        // blank lines were confirmed above, so only filled ones go through it
+        for (const l of lines) if (l && !(await g.megaphoneTextOk(l))) return;
       } else if (this.kind === 'avatar') {
         this.close();
         if (!lines.join('')) { this.mgr.notice('Please enter the text.'); return; }
@@ -151,8 +153,10 @@ export class MegaphoneWin extends Win {
     }
   }
   down(lx, ly) {
-    const [ex, ey] = this.spec.ear;
-    if (lx >= ex && lx < ex + 160 && ly >= ey && ly < ey + 14) { this.ear = !this.ear; sfx.play('UI/BtMouseClick'); }
+    const [ex, ey] = this.spec.ear, box = this.mgr.image(this.mgr.B.CheckBox?.[0]);
+    // the hit box is the checkbox art, not a band across most of the window
+    const bw = box?._w || 16, bh = box?._h || 14;
+    if (lx >= ex && lx < ex + bw && ly >= ey && ly < ey + bh) { this.ear = !this.ear; sfx.play('UI/BtMouseClick'); }
   }
   /** An item from your inventory onto the Item Megaphone (any tab, any item). */
   drop(lx, ly, c) {
