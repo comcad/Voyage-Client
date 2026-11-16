@@ -91,7 +91,8 @@ export class WorldMapWin extends Win {
   }
   async show(name) {
     const data = await this.load(name);
-    if (!data) { this.hover = null; return; }
+    // a link whose file is missing: no navigation, no stale highlight, and the status bar's own "not available" line
+    if (!data) { this.hover = null; this._pick = null; this.mgr.notice('You are currently at a place where\nthe world map is not available.'); return; }
     await this.mgr.assets.preload(allCanvases(data));
     this.name = name; this.data = data; this.hover = null;
     this.build();
