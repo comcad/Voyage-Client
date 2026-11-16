@@ -833,7 +833,6 @@ export class Game {
       name: 'Player', x: 0, y: 0, vx: 0, vy: 0, fh: null, ladder: null, facingRight: false,
       action: 'stand1', frame: 0, frameT: 0, attack: null, ignoreFh: null, ignoreT: 0, chat: null,
     };
-    this.effects = [];
     this.weather = new Weather(this); this.avatarBanner = new AvatarBanner(this); this.mapleTV = new MapleTVScreen(this);
     this.others = new Map(); this.drops = new Map(); this.pendingDrops = new Map(); this.lifeByOid = new Map(); this.pets = new Map(); this.summons = new Map();
     this.dragons = new Map();   // an Evan's dragon, by owner
@@ -6245,8 +6244,6 @@ export class Game {
     this.handleHotkeys();
     if (this.net) { this.syncMovement(dt); this.puppetAggro(dt); this.checkTouchDamage(dt); this.handleClicks(); this.regen(dt); }
     this.updateCamera(dt);
-    for (const e of this.effects) e.t += dt;
-    this.effects = this.effects.filter((e) => e.t < 1.2);
     lap('rest');
   }
 
@@ -10521,18 +10518,6 @@ export class Game {
     drawPartyHp(ctx, this, cam);
     this.drawMapTips(ctx, cam);
 
-    for (const e of this.effects) {
-      if (e.t < 0) continue;
-      const a = Math.max(0, 1 - e.t / 1.2);
-      ctx.save();
-      ctx.globalAlpha = a;
-      ctx.font = `bold ${e.size || 26}px "Segoe UI", system-ui, sans-serif`;
-      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.lineWidth = 4; ctx.strokeStyle = '#2a0f00'; ctx.fillStyle = e.color || '#ffb32b';
-      const x = e.x - cam.x, y = e.y - cam.y - e.t * 40;
-      ctx.strokeText(e.text, x, y); ctx.fillText(e.text, x, y);
-      ctx.restore();
-    }
     this.drawFieldClock(ctx, this.cam);   // on the station's board, over every map layer
     ctx.restore();
     this.cam = real;
