@@ -24,7 +24,9 @@ export const settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(readKept(KEY) || '{}')); } catch { /* bad data: the defaults */ }
 // an alert outside 0 .. 95% (one kept from before it stopped at 95%) is the default again
 for (const k of ['hpAlert', 'mpAlert']) if (!(settings[k] >= 0 && settings[k] <= 0.95)) settings[k] = DEFAULTS[k];
-
+// a stored FRAME RATE that isn't one of the choices (a stale blob's "60" string, say) used to fall through the System
+// Option's findIndex to VSync by accident: put it back to the default here, so the fallback is deliberate
+if (!FPS_CHOICES.some(([v]) => v === settings.fps)) settings.fps = DEFAULTS.fps;
 export function saveSettings() {
   writeKept(KEY, JSON.stringify(settings));
 }
