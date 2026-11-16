@@ -3869,8 +3869,9 @@ export class Game {
     this.statusBar?.clearLog(); this.hud.message('[Welcome] Welcome to MapleStory!!', CHAT_COLOR.yellow);
     this.playHourAt = performance.now() + 3600000; this.playHours = 1;
     this.basicGuide();
-    // logged off (or dropped) while dead: the server kept the 0 HP, so come back as the ghost, still to be revived
-    if (this.stats.hp <= 0 && !this.dead) this.die(false);
+    // logged off (or dropped) while dead: the server kept the 0 HP, so come back as the ghost, still to be revived;
+    // a changeMap on the way here dropped the notice, so a stale `dead` with no `death` asks again
+    if (this.stats.hp <= 0 && (!this.dead || !this.death)) this.die(false);
   }
 
   /**
