@@ -296,14 +296,21 @@ export class ControlTabs {
   }
 
   // ---------------------------------------------------------------- touch
-  /** The settings rows: [label, options, current value, setter]. */
+  /**
+   * The settings rows: [label, options, current value, setter]. The three rows are fixed — only their `cur`
+   * changes, read at use — so the row model is built once and every hit-test reuses it.
+   */
   rows() {
     const t = this.draft.touch;
-    return [
-      ['Show touch controls', SHOW, t.show, (v) => { t.show = v; }],
-      ['Button size', SIZES, t.size, (v) => { t.size = v; }],
-      ['Opacity', OPACITY, t.opacity, (v) => { t.opacity = v; }],
-    ];
+    if (this._rows?.t !== t) {
+      // cached per draft touch object (a reset replaces the draft wholesale); `cur` a getter, so the highlight tracks clicks
+      this._rows = { t, rows: [
+        ['Show touch controls', SHOW, () => t.show, (v) => { t.show = v; }],
+        ['Button size', SIZES, () => t.size, (v) => { t.size = v; }],
+        ['Opacity', OPACITY, () => t.opacity, (v) => { t.opacity = v; }],
+      ] };
+    }
+    return this._rows.rows;
   }
   /** A row's choices share the width left of the preview: 3 across, or 5 narrower ones. */
   optionRect(r, o) { const w = this.rows()[r][1].length > 3 ? 56 : 86; return { x: 18 + o * (w + 6), y: 46 + r * 48, w, h: 22 }; }
@@ -315,7 +322,7 @@ export class ControlTabs {
     this.rows().forEach(([label, opts, cur], r) => {
       uiText(ctx, label, 18, 30 + r * 48, { color: '#334455', size: 11, bold: true });
       opts.forEach(([v, text], o) => {
-        const q = this.optionRect(r, o), on = v === cur;
+        const q = this.optionRect(r, o), on = v === cur();
         cap(ctx, q.x, q.y, q.w, q.h, { pink: on });
         uiText(ctx, text, q.x + q.w / 2, q.y + 5, { color: on ? '#fff' : '#334455', size: 11, bold: true, align: 'center' });
       });
@@ -367,7 +374,6 @@ export class ControlTabs {
     near('stick', t.stick.x, t.stick.y, STICK * k / 2);
     return best;
   }
-  inPreview(lx, ly) { const P = preview(); return lx >= P.x && lx < P.x + P.w && ly >= P.y && ly < P.y + P.h; }
 
   // ---------------------------------------------------------------- input
   down(lx, ly, tab) {
@@ -440,11 +446,15 @@ export class ControlTabs {
     return at && at !== 'stick' ? this.draft.touch.buttons.find((t) => t.id === at)?.b || null : null;
   }
 
-  /** Default / Clear All on this tab. */
-  reset(tab) { if (tab === 'controller') { this.draft.pad = defaultPad(); this.draft.padMove = 'ls'; } else this.draft.touch = defaultTouch(); this.picked = null; }
+  /** Default / Clear All on this tab. Default keeps the touch display settings (show, size, opacity), as Clear All does. */
+  reset(tab) {
+    if (tab === 'controller') { this.draft.pad = defaultPad(); this.draft.padMove = 'ls'; }
+    else { const t = this.draft.touch; this.draft.touch = { ...defaultTouch(), show: t.show, size: t.size, opacity: t.opacity }; }
+    this.picked = null; this.dragging = null;   // a mid-drag reset must not continue on a slot that no longer exists
+  }
   clear(tab) {
     if (tab === 'controller') this.draft.pad = {};
     else for (const b of this.draft.touch.buttons) b.b = null;
-    this.picked = null;
+    this.picked = null; this.dragging = null;
   }
 }
