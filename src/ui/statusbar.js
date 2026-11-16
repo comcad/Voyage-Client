@@ -50,7 +50,9 @@ export const CHAT_BAR = {
 // these kinds wrap flush; the rest indent their continuation lines by five spaces
 const FLUSH = new Set([CHAT_COLOR.grey, CHAT_COLOR.yellow, CHAT_COLOR.result, CHAT_COLOR.notice, CHAT_COLOR.error, CHAT_BAR.gm.color]);
 // the notice box (base/box, 42x19) right of the chat line: Report (BtClaim) in the left cell, the pencil (base/iconMemo) in the right:
-// invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
+// a chat line that is a command ('/' or a '!' call-out) skips the curse, repeat and flood checks
+const isCommand = (t) => t.startsWith('/') || t.startsWith('!');
+// the notice box (base/box, 42x19) right of the chat line, its pencil (base/iconMemo) in the right cell:// invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
 const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
 export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
 // the quick slots show the keys in game.quickKeys (Key Setting's CHANGE QUICK SLOTS), each labelled by
@@ -184,7 +186,6 @@ export class StatusBar {
   /** Gone while a scene locks the UI. */
   setHidden(on) { this.hidden = on; this.showInput(); if (on) this.chat.el.blur(); }
   showInput() { this.chat?.show(!this.hidden && this.chatState !== 1); }
-  get typing() { return document.activeElement === this.chat?.el; }
 
   // ------------------------------------------------------------------ chat log
   setChatState(s) {
@@ -296,7 +297,7 @@ export class StatusBar {
    * ("Cursing is not allowed.", nothing sent), then the repeat and flood checks. Commands are not checked.
    */
   async say(t) {
-    const command = t.startsWith('/') || t.startsWith('!');
+    const command = isCommand(t);
     if (!command && performance.now() - (this.spamAt ?? -Infinity) >= 2800 && await this.game.cursed?.(t)) {
       this.game.windows?.notice('Cursing is not allowed.');
       return;
@@ -308,7 +309,7 @@ export class StatusBar {
    * 2 seconds, is stopped with a warning. Commands are not checked.
    */
   canSay(t) {
-    if (t.startsWith('/') || t.startsWith('!')) return true;
+    if (isCommand(t)) return true;
     const now = performance.now();
     if (now - (this.spamAt ?? -Infinity) < 2800) return false;
     const recent = (this.recentChat ?? []).filter((r) => now - r.t < 30000);
@@ -431,18 +432,29 @@ export class StatusBar {
   }
 
   // ------------------------------------------------------------------ quick slots
-  /** Rebuild the quick slot icons from the keymap (called whenever the keymap or skills change). */
+  /**
+   * Rebuild the quick slot icons from the keymap (called whenever the keymap or skills change). A call made while
+   * one is in flight does not start a second `Promise.all` against the same `this.quick` (a keymap burst would let
+   * the earlier one finish last and win): it asks the running pass for one more rebuild after it settles.
+   */
   async render() {
-    const g = this.game;
-    this.quick = await Promise.all(this.quickKeys.map(async (sc) => {
-      const k = g.keymap?.[sc];
-      if (!k) return null;
-      // skills, items and macros by their own icons; menus, actions and faces by the key setting's
-      const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? this.W.SkillMacro?.Macroicon?.[k.action]?.icon
-        : [2, 3, 7].includes(k.type) ? await itemIcon(this.assets, k.action) : this.W.KeyConfig?.icon?.[k.action];
-      if (node) await this.assets.preload([node]);
-      return { node, skill: k.type === 1 ? k.action : 0, item: k.type === 2 ? k.action : 0 };
-    }));
+    if (this.rendering) { this.renderAgain = true; return; }
+    this.rendering = true;
+    try {
+      do {
+        this.renderAgain = false;
+        const g = this.game;
+        this.quick = await Promise.all(this.quickKeys.map(async (sc) => {
+          const k = g.keymap?.[sc];
+          if (!k) return null;
+          // skills, items and macros by their own icons; menus, actions and faces by the key setting's
+          const node = k.type === 1 ? g.skills?.icon(k.action) : k.type === 8 ? this.W.SkillMacro?.Macroicon?.[k.action]?.icon
+            : [2, 3, 7].includes(k.type) ? await itemIcon(this.assets, k.action) : this.W.KeyConfig?.icon?.[k.action];
+          if (node) await this.assets.preload([node]);
+          return { node, skill: k.type === 1 ? k.action : 0, item: k.type === 2 ? k.action : 0 };
+        }));
+      } while (this.renderAgain);
+    } finally { this.rendering = false; }
   }
 
   /** A status bar button's ToolTipHelp key, or null (the trade and shortcut buttons and the hotkey tabs have none). */
@@ -481,9 +493,17 @@ export class StatusBar {
   }
   get quickOpen() { return this.quickLevel > 0; }
 
-  /** The quick slots' keys, the first panel's then the second's; right Shift's bindings are left Shift's. */
+  /**
+   * The quick slots' keys, the first panel's then the second's; right Shift's bindings are left Shift's.
+   * Cached against the two source arrays: game.quickKeys / quickKeys2 are replaced (never mutated) by every writer
+   * (the quickslots packet, Key Setting's setQuickKeys), so a new array is the only way the pair can change.
+   */
   get quickKeys() {
-    return [...(this.game.quickKeys || DEFAULT_QUICKSLOTS), ...(this.game.quickKeys2 || DEFAULT_QUICKSLOTS2)].map((sc) => (sc === 54 ? 42 : sc));
+    const a = this.game.quickKeys, b = this.game.quickKeys2;
+    if (this.quickCache?.a !== a || this.quickCache.b !== b) {
+      this.quickCache = { a, b, keys: [...(a || DEFAULT_QUICKSLOTS), ...(b || DEFAULT_QUICKSLOTS2)].map((sc) => (sc === 54 ? 42 : sc)) };
+    }
+    return this.quickCache.keys;
   }
 
   /**
@@ -502,7 +522,10 @@ export class StatusBar {
     return -1;
   }
 
-  /** A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. */
+  /**
+   * A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. Returns true when it
+   * bound; a drop it refuses (an item with no key binding at all) says so instead of looking like a dead slot.
+   */
   dropOnQuickSlot(x, y, c) {
     x -= this.ox;
     if (!this.quickOpen || this.inMenu(x, y)) return;
@@ -512,7 +535,7 @@ export class StatusBar {
     if (c.kind === 'skill') this.game.bindKey(sc, 1, c.id);
     else if (c.kind === 'item' && itemKeyType(c.tab, c.id)) this.game.bindKey(sc, itemKeyType(c.tab, c.id), c.id);
     else if (c.kind === 'bind') this.game.bindKey(sc, c.b.type, c.b.action);   // a macro, or a slot moved to another
-    else return false;
+    else { sfx.play('UI/DragEnd'); this.game.windows?.notice('This item cannot be put on a quick slot.'); return false; }
     this.render();
     return true;
   }
@@ -541,8 +564,10 @@ export class StatusBar {
     if (onMenu && type !== 'up' && !this.chatDrag && !this.thumbDrag) this.edgeHover = false;   // 'up' still ends a drag
     else if (!this.hidden && this.chatPointer(type, x, y)) return true;
     if (type === 'down' && this.pickQuick(x, y)) return true;
-    // the EXP gauge (441, 559)-(556, 574): charges the EXP stored from Writs of Solomon
-    if (type === 'down' && x >= 441 && x < 556 && y >= 559 && y < 574 && this.game.chargeGachaExp?.()) return true;
+    // the EXP fill the client's gauge draws (GAUGE + FILLS.exp, rows FILL_Y..FILL_Y+FILL_H): charges the EXP stored
+    // from Writs of Solomon
+    const ex = GAUGE.x + FILLS.exp.x, ey = this.y + GAUGE.y + FILL_Y;
+    if (type === 'down' && x >= ex && x < ex + FILLS.exp.w && y >= ey && y < ey + FILL_H && this.game.chargeGachaExp?.()) return true;
     const buttons = this.allButtons();
     for (const b of buttons) b.y = b.yAt ? b.yAt() : b.y;
     const over = (onMenu ? this.menu.buttons : buttons).find((b) => b.hit(x, y)) || null;
@@ -552,9 +577,9 @@ export class StatusBar {
     if (type === 'down') { for (const b of buttons) b.down = b === over; }
     // the chat target: the box opens the drop-up list, a row picks, anywhere else closes it
     if (type === 'down' && this.targetMenu) {
-      const row = this.targetRowAt(x, y);
+      const key = this.targetRowAt(x, y);
       this.targetMenu = false;
-      if (row >= 0) { this.chooseTarget(CHAT_TARGETS[row].key); return true; }
+      if (key) { this.chooseTarget(key); return true; }
       if (this.targetHit(x, y)) { sfx.play('UI/BtMouseClick'); return true; }
     } else if (type === 'down' && !over && this.targetHit(x, y)) { this.targetMenu = true; sfx.play('UI/BtMouseClick'); return true; }
     if (type === 'up') {
@@ -570,21 +595,25 @@ export class StatusBar {
   /** The chat target box ("To All") at the start of the white strip. */
   targetHit(x, y) { return this.chatState !== 1 && x >= 1 && x < 82 && y >= this.y + 8 && y < this.y + 28; }
   targetMenuTop() { return this.y + 8 - CHAT_TARGETS.length * TMENU.row - 2; }
+  /** The key of the drop-up row at (x, y), or null. The row order is CHAT_TARGETS' order and nothing else's. */
   targetRowAt(x, y) {
     const top = this.targetMenuTop() + 1;
-    if (x < TMENU.x || x >= TMENU.x + TMENU.w || y < top || y >= top + CHAT_TARGETS.length * TMENU.row) return -1;
-    return Math.floor((y - top) / TMENU.row);
+    if (x < TMENU.x || x >= TMENU.x + TMENU.w || y < top || y >= top + CHAT_TARGETS.length * TMENU.row) return null;
+    return CHAT_TARGETS[Math.floor((y - top) / TMENU.row)]?.key ?? null;
   }
-  /** A target from the list; Whisper first asks who to (keeping the old target if you cancel). */
+  /**
+   * A target from the list. Whisper first asks who to, keeping the old target if you cancel — and still opening the
+   * input (with that old target), so a chat-target key bound to Whisper never looks dead.
+   */
   async chooseTarget(key) {
     sfx.play('UI/BtMouseClick');
     if (key === 'whisper') {
       const w = this.game.windows, name = (await w.askWhisper(this.whisperTo || '', this.whisperNames || []))?.trim();
-      if (!name) return;
+      if (!name) { this.focusChat(); return; }
       // a name holding a word from Etc/ForbiddenName.img is refused
       const bad = Object.values((await this.assets.json('Etc/ForbiddenName.img')) || {}).map((v) => String(v).toLowerCase());
-      if (bad.some((b) => b && name.toLowerCase().includes(b))) { w.notice('Incorrect ID.'); return; }
-      if (name.toLowerCase() === this.game.player?.name?.toLowerCase()) { w.notice("You can't whisper to yourself."); return; }
+      if (bad.some((b) => b && name.toLowerCase().includes(b))) { w.notice('Incorrect ID.'); this.focusChat(); return; }
+      if (name.toLowerCase() === this.game.player?.name?.toLowerCase()) { w.notice("You can't whisper to yourself."); this.focusChat(); return; }
       this.whisperTo = name;
       this.whisperNames = [name, ...(this.whisperNames || []).filter((n) => n.toLowerCase() !== name.toLowerCase())].slice(0, 10);
     }
@@ -592,14 +621,15 @@ export class StatusBar {
     this.focusChat();
   }
   drawTargetMenu(ctx) {
-    const top = this.targetMenuTop(), h = CHAT_TARGETS.length * TMENU.row + 2, hover = this.targetRowAt(this.mouse?.x ?? -1, this.mouse?.y ?? -1);
+    const top = this.targetMenuTop(), h = CHAT_TARGETS.length * TMENU.row + 2;
+    const hover = this.targetRowAt(this.mouse?.x ?? -1, this.mouse?.y ?? -1);
     ctx.save();
     ctx.fillStyle = TMENU.border; ctx.fillRect(TMENU.x - 1, top - 1, TMENU.w + 2, h + 2);
     ctx.fillStyle = TMENU.inner; ctx.fillRect(TMENU.x, top, TMENU.w, h);
     ctx.fillStyle = TMENU.bg; ctx.fillRect(TMENU.x + 1, top + 1, TMENU.w - 2, h - 2);
     CHAT_TARGETS.forEach((t, i) => {
       const ry = top + 1 + i * TMENU.row;
-      if (i === hover || (hover < 0 && t.key === this.chatTarget)) { ctx.fillStyle = TMENU.lit; ctx.fillRect(TMENU.x + 1, ry, TMENU.w - 2, TMENU.row); }
+      if (t.key === (hover ?? this.chatTarget)) { ctx.fillStyle = TMENU.lit; ctx.fillRect(TMENU.x + 1, ry, TMENU.w - 2, TMENU.row); }
       uiText(ctx, t.label, TMENU.x + 7, ry + 3, { color: '#fff', size: 12 });
     });
     ctx.restore();
@@ -621,8 +651,6 @@ export class StatusBar {
     if (this.quickOpen && x >= q.x && x < (this.side ? q.x + QUICK_W : BAR_W) && y >= q.y) return true;
     return false;
   }
-
-  get hoveringButton() { return !!this.hovered; }
 
   // ------------------------------------------------------------------ frame
   update(dt) {
