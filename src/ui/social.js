@@ -164,7 +164,7 @@ export class CharInfoWin extends Win {
       this.button(U.BtDelete, SIDE_X + 118, 124, () => this.deleteExcluded()),
     ];
     this.excHide = this.button(U.BtExceptionHide, SIDE_X + 159 - 17, 5, () => this.toggleSide('exc'));
-    this.petBtns = [U.BtPet1, U.BtPet2, U.BtPet3].map((n, k) => this.button(n, 168 + 15 + k * 34, 177 + 13, () => { this.petSel = k; this.petFirst = 0; }));
+    this.petBtns = [U.BtPet1, U.BtPet2, U.BtPet3].map((n, k) => this.button(n, 168 + 15 + k * 34, 177 + 13, () => { this.petSel = k; this.petFirst = 0; this.excSel = undefined; }));   // the exclusion list is per pet: a row index would point at a different pet's item
     this.sideClose = this.button(mgr.B.BtClose, SIDE_X + 240 - 17, 6, () => this.toggleSide(this.side));
     // pet portraits (stand0, with the accessory), what each pet wears, and the wish list's catalogue
     this.petArt = []; this.petFirst = 0;
@@ -251,8 +251,10 @@ export class CharInfoWin extends Win {
   }
   deleteExcluded() {
     const pet = this.excPet(), list = this.excList();
-    if (!pet || this.excSel === undefined || this.excSel >= list.length) return;
-    list.splice(this.excSel, 1);
+    if (!pet || this.excSel === undefined) return;
+    const at = list.indexOf(this.excSel);   // excSel is an item id: a shifted list still removes the row it selected
+    if (at < 0) { this.excSel = undefined; return; }
+    list.splice(at, 1);
     this.excSel = undefined;
     this.g.setPetExcluded(pet, list);
   }
@@ -264,7 +266,7 @@ export class CharInfoWin extends Win {
     for (let k = 0; k < 6; k++) {
       const i = this.sideFirst + k, id = list[i];
       if (id === undefined) break;
-      if (i === this.excSel) { ctx.fillStyle = 'rgba(80,120,200,0.35)'; ctx.fillRect(SIDE_X + 8, 24 + k * 14, 140, 14); }
+      if (id === this.excSel) { ctx.fillStyle = 'rgba(80,120,200,0.35)'; ctx.fillRect(SIDE_X + 8, 24 + k * 14, 140, 14); }   // id, not the row index
       this.text(ctx, this.excName(id), SIDE_X + 10, 25 + k * 14, { size: 12 });
     }
     this.scrollbar(ctx, SIDE_X + 147, 22, 90, this.sideFirst, list.length, 6);
@@ -483,7 +485,7 @@ export class CharInfoWin extends Win {
       const s = this.scrollClick(lx, ly, SIDE_X + 147, 22, 90, this.sideFirst, this.excList().length, 6);
       if (s !== null) { this.sideFirst = s; return; }
       const k = Math.floor((ly - 24) / 14);
-      if (lx >= SIDE_X + 8 && lx < SIDE_X + 147 && k >= 0 && k < 6) this.excSel = this.sideFirst + k;
+      if (lx >= SIDE_X + 8 && lx < SIDE_X + 147 && k >= 0 && k < 6) { const id = this.excList()[this.sideFirst + k]; if (id !== undefined) this.excSel = id; }   // by id: the list shifts under a row index, and deleteExcluded splices by it
     } else if (this.side) {
       const bar = this.sideBar(), s = this.scrollClick(lx, ly, bar.x, bar.y, bar.h, this.sideFirst, this.sideRows().length, SIDE_ROWS);
       if (s !== null) { this.sideFirst = s; return; }
