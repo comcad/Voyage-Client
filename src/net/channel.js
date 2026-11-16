@@ -1413,7 +1413,7 @@ export class ChannelSession {
       this.emit('playerDamaged', { id, from, damage, mobId, direction, fake });
     });
 
-    const readMob = (r, controlMode) => {
+    const readMob = (r) => {
       const oid = r.int(); r.ubyte(); const id = r.int();
       const statuses = readMobStats(r, readMobMask(r));
       const pos = r.pos2(); const stance = r.ubyte(); r.short(); const fh = r.short();
@@ -1427,7 +1427,7 @@ export class ChannelSession {
     on(S.SPAWN_MONSTER_CONTROL, (r) => {
       const mode = r.ubyte();
       if (mode === 0) { this.emit('stopControl', r.int()); return; }
-      this.emit('controlMob', readMob(r, mode), mode === 2);
+      this.emit('controlMob', readMob(r), mode === 2);   // (mode is carried by the second argument; the body is the same either way)
     });
     on(S.MOVE_MONSTER, (r) => {
       // oid, 0, skill possible, activity, skill id, skill level, option (short), start position, the moves
