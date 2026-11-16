@@ -133,6 +133,7 @@ export class CashShopWin extends Win {
     this.available = d.available !== 0; this.account = d.account || ''; this.bestTable = d.best || [];
     this.serverData = d; this.stock = d.stock || new Map(); this.limited = d.limited || [];
     this.limitAsked = new Set(); this.limitAnswers = new Map(); this.accountWide = null;
+    this.listVer = 0; this.listCache = null;   // the filtered list of the current tab/sub, rebuilt when listVer moves
     this.cash = { credit: 0, prepaid: 0, maplePoint: 0 };
     this.inv = []; this.wish = []; this.storageSlots = null;
     this.tab = 1; this.sub = 0; this.page = 0; this.search = [];
@@ -210,6 +211,7 @@ export class CashShopWin extends Win {
       if (i < 0) continue;
       const [cat, sub] = k.split(':').map(Number);
       this.tab = cat; this.sub = sub; this.page = Math.floor(i / PER_PAGE); this.selCell = i % PER_PAGE; this.focusBtn = null;
+      this.invalidateList();
       return;
     }
   }
@@ -227,6 +229,7 @@ export class CashShopWin extends Win {
     for (const m of d.mods || []) bySN.set(m.SN, { ...(bySN.get(m.SN) || {}), ...m, priceSet: m.Price !== undefined });
     this.bySN = bySN;
     this.bestCache = null;   // the Best Item lookup depends on OnSale: rebuild it against the new catalogue
+    this.invalidateList();   // the groups are new: the page list has to be filtered again
     setTimeout(() => this.maybeWishGift(), 0);
     this.subNames = new Map();
     for (const c of Object.values(cats)) {
@@ -288,6 +291,7 @@ export class CashShopWin extends Win {
   setInventory(items, storageSlots) { this.inv = items; if (storageSlots != null) this.storageSlots = storageSlots; }
   setWish(sns, reply) {
     this.wish = sns;
+    this.invalidateList();
     if (reply && !this.wishRemoving) this.alert('The item has been added to the wish list.');
     this.wishRemoving = false;
   }
@@ -420,16 +424,17 @@ export class CashShopWin extends Win {
    */
   slots(kind, n, type) {
     const lim = this.g.inventory?.limits;
+    // the answer carries a count, not a reason code, so a rejected purchase can only be shown as an unknown failure
     if (kind === 'character') {
       const old = this.g.charSlots ?? 0;
-      if (!(old < n && n < 16)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+      if (!(old < n && n < 16)) { this.alert(UNKNOWN_ERROR); return; }
       this.g.charSlots = n;
     } else if (kind === 'storage') {
       const old = this.storageSlots ?? 0;
-      if (!(old < n && n < 49)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+      if (!(old < n && n < 49)) { this.alert(UNKNOWN_ERROR); return; }
       this.storageSlots = n;
     } else {
-      if (!(type >= 1 && type <= 5 && n >= (lim?.[type] ?? 0) && n < 97)) { this.alert(ERRORS[type] || UNKNOWN_ERROR); return; }
+      if (!(type >= 1 && type <= 5 && n >= (lim?.[type] ?? 0) && n < 97)) { this.alert(UNKNOWN_ERROR); return; }
       if (lim) lim[type] = n;
     }
     this.alert(kind === 'character' ? 'You have added a new character slot.' : 'You have added slots to your item inventory.');
@@ -490,13 +495,21 @@ export class CashShopWin extends Win {
     return r;
   }
   subs(tab = this.tab) { return this.subNames.get(tab) || []; }
+  /** Drops the cached page list: call it whenever the tab, sub-category, wish list or search changes (stock only feeds prices and rules, never the list). */
+  invalidateList() { this.listVer++; }
   list() {
-    if (this.tab === WISH) return this.wish.map((sn) => this.bySN.get(sn)).filter(Boolean);
-    if (this.tab === SEARCH) return this.search;
-    if (this.tab === MAIN) return [];
-    const items = this.groups.get(`${this.tab}:${this.sub}`) || [];
-    this.askLimits(items);   // the unknown SNs' queries go out once per list(), not once per filtered item
-    return items.filter((c) => this.limitOk(c));
+    if (this.listCache && this.listCache.ver === this.listVer) return this.listCache.items;
+    let items;
+    if (this.tab === WISH) items = this.wish.map((sn) => this.bySN.get(sn)).filter(Boolean);
+    else if (this.tab === SEARCH) items = this.search;
+    else if (this.tab === MAIN) items = [];
+    else {
+      const group = this.groups.get(`${this.tab}:${this.sub}`) || [];
+      this.askLimits(group);   // the unknown SNs' queries go out once per rebuild, not once per filtered item
+      items = group.filter((c) => this.limitOk(c));
+    }
+    this.listCache = { ver: this.listVer, items };
+    return items;
   }
   /**
    * One-per-account items (Limit 2: one answer for all of them, asked with SN 0; Limit 3: one per SN) stay hidden
@@ -520,14 +533,16 @@ export class CashShopWin extends Win {
   limitAnswer(sn, flag) {
     if (sn === 0) this.accountWide = flag;
     else { this.limitAnswers.set(sn, flag); if (flag) this.accountWide = 1; }
+    this.invalidateList();   // an answered limit changes which items the tab shows
   }
-  pages() { return Math.ceil(this.list().length / PER_PAGE); }
+  pages(len = this.list().length) { return Math.ceil(len / PER_PAGE); }
   cellAt(i) { return { x: LIST_X + 2 + 206 * (i % 2), y: LIST_Y + 2 + 81 * Math.floor(i / 2) }; }
-  cellItem(i) { return this.list()[this.page * PER_PAGE + i] || null; }
+  cellItem(i, list = this.list()) { return list[this.page * PER_PAGE + i] || null; }
   setTab(t, sub = 0) {
     if (t === this.tab && sub === this.sub) return;
     if (t !== this.tab) sfx.play('UI/Tab');
     this.tab = t; this.sub = sub; this.page = 0; this.selCell = 0; this.focusBtn = null;
+    this.invalidateList();
   }
   setPage(p) { const n = this.pages(); if (n) { this.page = ((p % n) + n) % n; this.selCell = 0; this.focusBtn = null; } }
   /** Best Item: 5 per tab and gender (the wish list and search use EVENT's), an off-sale SN standing in for an on-sale
@@ -555,12 +570,16 @@ export class CashShopWin extends Win {
   }
 
   // ---------------------------------------------------------------- requests
-  /** One request at a time: the NX amounts arriving (or a failure) frees the shop for the next. */
-  begin() {
-    if (this.busy || !this.available) { if (!this.available) this.alert(ERRORS[0xC3]); return false; }
+  /** Marks the shop busy and re-arms the 8-second watchdog: a request with no answer frees the shop again. */
+  armBusy() {
     this.busy = true;
     clearTimeout(this.busyTimer);
     this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
+  }
+  /** One request at a time: the NX amounts arriving (or a failure) frees the shop for the next. */
+  begin() {
+    if (this.busy || !this.available) { if (!this.available) this.alert(ERRORS[0xC3]); return false; }
+    this.armBusy();
     return true;
   }
   checkCash() { if (this.begin()) this.g.net?.checkCash(); }
@@ -677,7 +696,7 @@ export class CashShopWin extends Win {
   alert(text, cancel = false) { return new Promise((done) => this.mgr.show(new CsAlert(this, text, cancel, done))); }
   sendBuy({ c, wallet }, queued = false) {
     if (!queued && !this.begin()) return;
-    if (queued) { this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000); }
+    if (queued) this.armBusy();
     this.g.net?.csBuy(wallet, c.SN, c.ItemId);
   }
   /** The birthday code (8 digits), or null when cancelled or mistyped (a mistype says so). */
@@ -768,14 +787,14 @@ export class CashShopWin extends Win {
     const mode = ring === 11128 && id % 10 < 3 ? 0x23 : ring === 11120 && id !== 1112000 ? 0x1D : Math.floor(id / 10000) === 910 ? 0x1F : 4;
     if (this.tab === WISH) this.wishAfterBuy = c.SN;
     this.giftRun = { birthday, sn, to: [to], message, i: 1, sent: [], total: 0, name: '' };
-    this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
+    this.armBusy();
     this.g.net?.csWishGift(mode, birthday, sn, to, message);
   }
   /** The next recipient's gift, or the summary once every one has been tried. */
   nextGift() {
     const g = this.giftRun;
     if (g.i < g.to.length) {
-      this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
+      this.armBusy();
       this.g.net?.csGift(g.birthday, g.sn, g.to[g.i++], g.message);
       return;
     }
@@ -871,6 +890,7 @@ export class CashShopWin extends Win {
     }
     this.search = found;
     this.tab = SEARCH; this.sub = 0; this.page = 0;
+    this.invalidateList();
   }
   /** CODE (F3): the coupon dialog, then COUPON_CODE with the code. */
   async enterCoupon() {
@@ -1220,7 +1240,7 @@ export class CashShopWin extends Win {
     const list = this.list();
     if (!list.length) { const pic = im(C.PicturePlate.NoItem); if (pic) ctx.drawImage(pic, LIST_X + 2, LIST_Y + 83); return; }
     for (let i = 0; i < PER_PAGE; i++) {
-      const c = this.cellItem(i);
+      const c = this.cellItem(i, list);
       if (!c) continue;
       const { x, y } = this.cellAt(i), cell = this.cells[i], r = this.rules(c);
       const base = im(C.CSList.Base);
@@ -1242,7 +1262,7 @@ export class CashShopWin extends Win {
       else { cell.wish.visible = true; cell.wish.enabled = r.wish; }
     }
     // page numbers, 10 to a group, centred under the list
-    const n = this.pages(), group = Math.floor(this.page / 10), mouse = { x: m.mouse.x - this.x, y: m.mouse.y - this.y };
+    const n = this.pages(list.length), group = Math.floor(this.page / 10), mouse = { x: m.mouse.x - this.x, y: m.mouse.y - this.y };
     const parts = [];
     if (group > 0) parts.push(['◀', (group - 1) * 10 + 9]);
     for (let p = group * 10; p < Math.min(n, group * 10 + 10); p++) parts.push([String(p + 1), p]);
@@ -1359,13 +1379,19 @@ export class CashShopWin extends Win {
     }
     for (const [i, x, w] of this.subHits || []) if (ly >= SUB_Y - 1 && ly < SUB_Y + 15 && lx >= x && lx < x + w) return { sub: i };
     for (const [p, x, w] of this.pageHits || []) if (ly >= PAGE_Y - 1 && ly < PAGE_Y + 15 && lx >= x && lx < x + w) return { page: p };
-    for (let i = 0; i < PER_PAGE; i++) {
-      const { x, y } = this.cellAt(i), c = this.cellItem(i);
-      if (c && this.tab !== MAIN && lx >= x && lx < x + 200 && ly >= y && ly < y + 80) return { cell: i, item: c, icon: lx >= x + 5 && lx < x + 69 && ly >= y + 5 && ly < y + 69 };
+    if (this.tab !== MAIN) {
+      const list = this.list();
+      for (let i = 0; i < PER_PAGE; i++) {
+        const { x, y } = this.cellAt(i), c = this.cellItem(i, list);
+        if (c && lx >= x && lx < x + 206 && ly >= y && ly < y + 81) return { cell: i, item: c, icon: lx >= x + 5 && lx < x + 69 && ly >= y + 5 && ly < y + 69 };
+      }
     }
-    for (let i = 0; i < 5; i++) {
-      const y = BEST_Y + BEST_ROW * i;
-      if (lx >= BEST_X && lx < BEST_X + 90 && ly >= y && ly < y + 68) return { best: this.bestItems()[i] };
+    if (lx >= BEST_X && lx < BEST_X + 90) {
+      const best = this.bestItems();
+      for (let i = 0; i < 5; i++) {
+        const y = BEST_Y + BEST_ROW * i;
+        if (ly >= y && ly < y + 68) return { best: best[i] };
+      }
     }
     if (lx >= 90 && lx < 125 && ly >= 10 && ly < 31) return { onOff: true };   // the ON / OFF label
     for (let i = 0; i < 3; i++) if (lx >= BACKDROP_X[i] - 4 && lx < BACKDROP_X[i] + 29 && ly >= BACKDROP_Y && ly < BACKDROP_Y + 28) return { backdrop: i };
@@ -1408,7 +1434,7 @@ export class CashShopWin extends Win {
     if (!this.ready || !this.pendingLink) return;
     const p = this.pendingLink; this.pendingLink = null;
     sfx.play('UI/BtMouseClick');
-    if (p.sub !== undefined) { this.sub = p.sub; this.page = 0; } else this.page = p.page;
+    if (p.sub !== undefined) { this.sub = p.sub; this.page = 0; this.invalidateList(); } else this.page = p.page;
   }
   dblclick(lx, ly) {
     const h = this.ready && this.hit(lx, ly);
@@ -1433,7 +1459,7 @@ export class CashShopWin extends Win {
     else if (x < 256 && y >= 426) {
       const limit = this.g.inventory?.limits?.[this.itab] || 24;
       this.ifirst[this.itab] = Math.max(0, Math.min(Math.ceil(limit / ITEMS.cols) - ITEMS.rows, this.ifirst[this.itab] + d));
-    } else if (x >= LIST_X && x < LIST_X + 412 && y >= LIST_Y) this.setPage(this.page + d);
+    } else if (x >= LIST_X && x < LIST_X + 412 && y >= LIST_Y && y < this.cellAt(PER_PAGE - 1).y + 81) this.setPage(this.page + d);
   }
   tooltip(lx, ly) {
     const h = this.ready && this.hit(lx, ly);
@@ -1591,7 +1617,7 @@ export class CashShopWin extends Win {
     else if (k === 'Home') this.setTab(1);
     else if (/^[1-9]$/.test(k)) this.setTab(Number(k));
     else if (k === '`') this.setTab(((this.tab - 1 + (e.shiftKey ? 7 : 1)) % 8) + 1);
-    else if (k === 'Tab') { const n = this.subs().length; if (n) { this.sub = (this.sub + (e.shiftKey ? n - 1 : 1)) % n; this.page = 0; } }
+    else if (k === 'Tab') { const n = this.subs().length; if (n) { this.sub = (this.sub + (e.shiftKey ? n - 1 : 1)) % n; this.page = 0; this.invalidateList(); } }
     else if (k === 'F1') this.alert('Please visit the website to charge your account.');
     else if (k === 'F2') this.checkCash();
     else if (k === 'F3') this.enterCoupon();
