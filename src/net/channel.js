@@ -2283,18 +2283,15 @@ export class ChannelSession {
     this.send(new PacketWriter(C.CASHSHOP_OPERATION).byte(op).int(birthday).int(wallet).int(sn).string(to).string(message));
   }
   /**
-   * NOTE_ACTION 1: the notes discarded: how many, how many are type 3, your free Etc slots, then each id with its type
-   * (a type 3 one, while slots last, adds the number before its text's "_").
+   * NOTE_ACTION 1: the notes discarded: how many, how many are type 3, then the two bytes the server skips, then each
+   * id with its type. The server reads exactly that layout (Cosmic's NoteActionHandler: count, two ignored bytes,
+   * int id + byte fame per note) and consumes nothing else, so a per-note extra field would leave it mid-packet.
    */
   /** NOTE_ACTION 0: a gift's thank-you note to its sender (the reply, the gift's place in the list, its cash serial). */
   giftReply(sender, reply, index, cashId) { this.send(new PacketWriter(C.NOTE_ACTION).byte(0).string(sender).string(reply).byte(1).int(index).long(cashId ?? 0)); }
   discardNotes(notes, freeEtc = 0) {
     const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(notes.length).byte(notes.filter((n) => n.fame === 3).length).byte(freeEtc);
-    let slots = freeEtc;
-    for (const n of notes) {
-      w.int(n.id).byte(n.fame);
-      if (n.fame === 3 && slots > 0) { w.int(parseInt(String(n.text).split('_')[0], 10) || 0); slots--; }
-    }
+    for (const n of notes) w.int(n.id).byte(n.fame);
     this.send(w);
   }
   csWish(sns) { const w = new PacketWriter(C.CASHSHOP_OPERATION).byte(5); for (let i = 0; i < 10; i++) w.int(sns[i] || 0); this.send(w); }
