@@ -40,18 +40,26 @@ export class PacketWriter {
     const nb = new Uint8Array(Math.max(this.buf.length * 2, this.len + n));
     nb.set(this.buf); this.buf = nb;
   }
-  _dv(n) { this._grow(n); const dv = new DataView(this.buf.buffer, this.len, n); this.len += n; return dv; }
+  _dv(n) {   // one DataView for the whole buffer, rebuilt only when _grow reallocated it
+    this._grow(n);
+    if (!this.dv || this.dv.buffer !== this.buf.buffer) this.dv = new DataView(this.buf.buffer);
+    const off = this.len; this.len += n;
+    return { dv: this.dv, off };
+  }
   byte(x) { this._grow(1); this.buf[this.len++] = x & 0xff; return this; }
   bool(x) { return this.byte(x ? 1 : 0); }
-  short(x) { this._dv(2).setInt16(0, x, true); return this; }
-  int(x) { this._dv(4).setInt32(0, x | 0, true); return this; }
-  long(x) { this._dv(8).setBigInt64(0, BigInt(x), true); return this; }
+  short(x) { const { dv, off } = this._dv(2); dv.setInt16(off, x, true); return this; }
+  int(x) { const { dv, off } = this._dv(4); dv.setInt32(off, x | 0, true); return this; }
+  long(x) { const { dv, off } = this._dv(8); dv.setBigInt64(off, BigInt(x), true); return this; }
   pos(p) { return this.short(p.x).short(p.y); }
   bytes(arr) { this._grow(arr.length); this.buf.set(arr, this.len); this.len += arr.length; return this; }
   zero(n) { this._grow(n); this.len += n; return this; }
-  string(s) {
-    this.short(s.length);
-    for (let i = 0; i < s.length; i++) this.byte(s.charCodeAt(i));
+  string(s) {   // one length write and direct byte stores: no per-character _grow/byte calls
+    this._grow(2 + s.length);
+    const { dv, off } = this._dv(2);
+    dv.setUint16(off, s.length, true);
+    for (let i = 0; i < s.length; i++) this.buf[this.len + i] = s.charCodeAt(i) & 0xff;
+    this.len += s.length;
     return this;
   }
   toBytes() { return this.buf.slice(0, this.len); }
