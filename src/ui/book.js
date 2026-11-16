@@ -6,8 +6,8 @@ import { richText, drawRich, optionAt } from './richtext.js';
 /**
  * A book item (Etc 416xxxx, e.g. the Beginner's Guide): UIWindow.img/Book (478x353) at (190, 148), two pages at
  * once. Pages are the item's book/<n>; each holds paragraphs { text, align } (1 centred, 2 right) in Arial 12,
- * 190 wide from x 35 (left page) or 255 (right page), y 30. #L<n># links open page n. "n/m" is centred under
- * each page at y 293. BtPrev / BtNext turn two pages, BtClose at (430, 10).
+ * 190 wide from x 35 (left page) or 255 (right page), y 30. #L<n># links open page n, clamped to the pages there
+ * are. "n/m" is centred under each page at y 293. BtPrev / BtNext turn two pages, BtClose at (430, 10).
  */
 // lines with text are 18px, empty ones 15px; text wraps a little inside the 190px column (both measured)
 const COL_W = 190, WRAP = 185, COL_X = [35, 255], TOP = 30, LINE = 18, EMPTY_LINE = 15, PARA_GAP = 9, NUM_Y = 293;
