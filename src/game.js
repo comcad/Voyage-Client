@@ -518,8 +518,11 @@ const BODY_PRESSURE = 21101003;
 const ENERGY_CHARGE = 5110001, THUNDER_ENERGY_CHARGE = 15100004;
 /** Use types (id / 10000) used with a plain USE_ITEM: potions, food, elixirs, cures, morph potions, cards... */
 const PLAIN_USE = new Set([200, 201, 202, 205, 221, 236, 238, 245]);
-/** Use types with a request of their own (catch items, Solomon's writs, the Use-tab teleport rock, scripted items...). */
-const USE_ROUTED = new Set([227, 232, 237, 243]);
+/**
+ * The Use types routed BELOW the type checks in useConsume, which may run their own request: catch items (227) and
+ * scripted items (243). 232 (rock) and 237 (Solomon's writ) have branches of their own above and never reach the set.
+ */
+const USE_ROUTED = new Set([227, 243]);
 /**
  * The timed stats whose running out the client reports (CANCEL_DEBUFF): in the low mask Stun, Poison, Seal,
  * Darkness, Weakness and Curse; in the high mask Slow, Reverse (0x80000) and the stats at 0x100, 0x8000 and
@@ -4550,7 +4553,11 @@ export class Game {
     if (e.pendingHits > 0) {
       e.queuedKill = { anim };
       (this.dying ??= new Map()).set(oid, e);
-      this.after(1500, () => { if (e.queuedKill && e.pendingHits > 0) this.finishKill(e); });   // in case a shot never arrives
+      // in case a shot never arrives; one timer per monster, not one per packet that names it
+      if (!e.killTimer) {
+        e.killTimer = true;
+        this.after(1500, () => { e.killTimer = false; if (e.queuedKill && e.pendingHits > 0) this.finishKill(e); });
+      }
       return;
     }
     const wait = (e.linesUntil || 0) - performance.now();
@@ -4565,6 +4572,7 @@ export class Game {
   /** A blow landing on e: its last line shows `last` ms from now, and e can't die before then. */
   linesLanded(e, last) { e.linesUntil = Math.max(e.linesUntil || 0, performance.now() + last); }
   finishKill(e, anim = e.queuedKill?.anim) {
+    e.killTimer = false;   // the monster is done: its fallback timer, if still pending, has nothing to do
     e.queuedKill = null;
     this.dying?.delete(e.oid);
     this.releaseDrops(e);
@@ -5494,9 +5502,10 @@ export class Game {
 
   /** Map id prefix (map / 10,000,000) -> area, from Map/Map/AreaCode.img. */
   async areaCodes() {
+    // the promise is kept while the fetch runs, so two return scrolls checked at once share one load
     if (!this._areaCodes) {
-      const n = await this.assets.json('Map/Map/AreaCode.img');
-      this._areaCodes = new Map(Object.entries(n || {}).filter(([k]) => !k.startsWith('_')).map(([k, v]) => [Number(k), Number(v)]));
+      this._areaCodes = this.assets.json('Map/Map/AreaCode.img').then((n) =>
+        new Map(Object.entries(n || {}).filter(([k]) => !k.startsWith('_')).map(([k, v]) => [Number(k), Number(v)])));
     }
     return this._areaCodes;
   }
@@ -5560,10 +5569,10 @@ export class Game {
     if (type === 216) { if (this.canExclusive(200)) this.openNewYearCard(slot, id); return; }
     if (type === 226) { this.useMountFood(slot, id); return; }
     if (type === 228 || type === 229) { this.useSkillBook(slot, id); return; }
-    // only these Use types are used with a plain USE_ITEM, once nothing is waiting (200ms apart); the Maplemas Party
-    // Potion (221x2xxx) opens its own window, not built yet; other types without a route of their own do nothing
+    // only these Use types are used with a plain USE_ITEM, once nothing is waiting (200ms apart); other types without
+    // a route of their own do nothing (the 221x2xxx potion was routed above, and is not in PLAIN_USE)
     if (!USE_ROUTED.has(type)) {
-      if (!PLAIN_USE.has(type) || (type === 221 && Math.floor((id % 10000) / 1000) === 2)) return;
+      if (!PLAIN_USE.has(type)) return;
     } else if (!this.canExclusive(200)) return;
     if (type === 243) { this.useScriptedItem(slot, id); return; }
     if (type === 227) { this.useCatchItem(slot, id); return; }
