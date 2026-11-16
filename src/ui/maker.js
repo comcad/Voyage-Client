@@ -435,7 +435,7 @@ export class MakerWin extends Win {
   async result(d, name, gone) {
     if (this.state === 3) {
       const r = d.result;
-      if (r === 0) { if (name) this.mgr.notice(`${d.made?.count ?? 0} of ${name}  have been produced.`); }
+      if (r === 0) { if (name) this.mgr.notice(`${d.made?.count ?? 0} of ${name} have been produced.`); }
       else if (r === 1) this.mgr.notice('The item has been destroyed.');
       else if (r === 2) this.mgr.notice('Production failed due to an unknown error.');
       else if (r > 3 && r < 8) this.noRoom(r - 3);
