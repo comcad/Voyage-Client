@@ -164,7 +164,7 @@ export class RpsWin extends Win {
     const on = this.slot.enabled;
     let t = '';
     if (this.slotId === START && on) t = RPS_TEXT.start;
-    else if ((this.slotId === START || this.slotId === CONTINUE) && !on) t = this.deadline ? RPS_TEXT.pick.replace('%d', Math.ceil((this.deadline - performance.now()) / 1000)) : '';
+    else if ((this.slotId === START || this.slotId === CONTINUE || this.slotId === RETRY) && !on) t = this.deadline ? RPS_TEXT.pick.replace('%d', Math.ceil((this.deadline - performance.now()) / 1000)) : '';
     else if (this.slotId === CONTINUE) t = RPS_TEXT.cont.replace('%d', this.result + 1);
     else if (this.slotId === RETRY) t = this.result >= 10 ? RPS_TEXT.ten : this.npcSel < 0 ? RPS_TEXT.late : this.lostFirst ? RPS_TEXT.first : RPS_TEXT.retry;
     if (t !== this.text) { this.text = t; this.offset = null; }

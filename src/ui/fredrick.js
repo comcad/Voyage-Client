@@ -46,19 +46,22 @@ export class FredrickWin extends Win {
     await this.g.assets.preload(anim.frames);
     this.anim = anim; this.t = performance.now();
   }
-  /** GET ALL: FREDRICK_ACTION 0x1A, sent once (the client won't ask again until the window opens anew). */
+  /** GET ALL: FREDRICK_ACTION 0x1A. Every answer but success re-arms it (result() clears busy); only 0x1e disables it. */
   retrieve() {
     if (this.busy) return;
     this.busy = true;
     this.g.net?.fredrick(0x1a);
   }
   /**
-   * FREDRICK 0x24, after GET ALL: the storing fee. With none it asks plainly; with one the client says how many days and
-   * what it costs, but the decompile lost the percent and mesos it prints, so the plain question stands in for it.
+   * FREDRICK 0x24, after GET ALL: the storing fee, with how many days it covers and what it costs (both on the packet).
    * Yes takes them (FREDRICK_ACTION 0x1B); no lets GET ALL be pressed again.
    */
-  async askFee() {
-    if (await this.mgr.confirm('Are you sure you want to retrieve them?')) this.g.net?.fredrick(0x1b);
+  async askFee(e = {}) {
+    const days = Number(e.days) || 0, fee = Number(e.fee) || 0;
+    const q = days || fee
+      ? `The storing fee for ${days} day(s) is ${fee.toLocaleString('en-US')} mesos.\r\nAre you sure you want to retrieve them?`
+      : 'Are you sure you want to retrieve them?';
+    if (await this.mgr.confirm(q)) this.g.net?.fredrick(0x1b);
     else this.busy = false;
   }
   /** FREDRICK_MESSAGE: what came of it (GET ALL can go again after any answer); everything retrieved empties him. */
