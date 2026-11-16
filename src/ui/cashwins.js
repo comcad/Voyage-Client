@@ -125,7 +125,9 @@ export class CancelRequestWin extends StepWin {
     this.button(C.BtYes, 20, y, () => this.settle(true));
     this.button(C.BtNo, 148, y, () => this.settle(false));
   }
-  key(e) { if (e.key === 'Escape') this.settle(false); }
+  // Enter answers Yes, as the focused default of a two-button question; Esc is No. Without this Enter reached the
+  // base's empty ok() and the dialog simply ignored it, while Esc answered - the one asymmetry in the class.
+  key(e) { if (e.key === 'Escape') this.settle(false); else if (e.key === 'Enter') this.settle(true); }
 }
 /** A cancel request's answer: CancelRequests/<kind>/suc or fail, centred, BtOK2 at (110, 87) (suc) or (110, 103) (fail). */
 export class CancelResultWin extends StepWin {
