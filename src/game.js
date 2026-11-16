@@ -47,7 +47,7 @@ import { notify, notifyParcel, notifyLogin, questNotice, dropQuestNotice, hasQue
 import { TransformWin } from './ui/transform.js';
 import { TeleportWin } from './ui/teleport.js';
 import { DueyWin, dueyResult } from './ui/duey.js';
-import { PlayerMenu, CharInfoWin, drawPartyHp, drawGuildTag } from './ui/social.js';
+import { PlayerMenu, CharInfoWin, EMPTY_CHAR_INFO, drawPartyHp, drawGuildTag } from './ui/social.js';
 import { UserListWin, PartyHpWin, GuildContractWin, GuildMarkWin, heracleSays } from './ui/userlist.js';
 import { TradeWin } from './ui/trade.js';
 import { PlayerShopWin } from './ui/playershop.js';
@@ -4167,15 +4167,26 @@ export class Game {
     }
     // UserInfo: an empty Character Info window, nothing sent; a later CHAR_INFO replaces it
     if (type === 10) {
-      if (!this.infoWin || !this.windows.order.includes(this.infoWin)) this.infoWin = this.windows.show(new CharInfoWin(this.windows, { id: 0, name: '', level: 0, job: 0, fame: 0, guild: '', alliance: '', pets: [], wish: [] }), null);
+      if (!this.infoWin || !this.windows.order.includes(this.infoWin)) this.infoWin = this.windows.show(new CharInfoWin(this.windows, EMPTY_CHAR_INFO), null);
       return;
     }
+    // each name carries the data its window needs before it may open (null: opens on the client's own state). The
+    // old by-name guard listed skill / quest / medal and silently let every other name through, so a new one could
+    // be added without stating whether it reads server data; here it cannot.
+    const NEEDS = { inventory: null, equip: null, stat: null, keyconfig: null, energybar: null, partysearch: null, family: null,
+      familytree: null, guildbbs: null, skill: () => this.skills, quest: () => this.quests, medal: () => this.quests, monsterbook: null };
     const name = { 0: 'inventory', 1: 'equip', 2: 'stat', 3: 'skill', 5: 'keyconfig', 6: 'quest', 9: 'monsterbook', 0xb: 'guildbbs', 0x14: 'energybar', 0x16: 'partysearch', 0x1b: 'family', 0x1c: 'familytree', 0x1f: 'medal', 0x21: 'skill' }[type];
-    if (!name || (name === 'skill' && !this.skills) || ((name === 'quest' || name === 'medal') && !this.quests) || this.windows.isOpen(name)) return;
+    const need = NEEDS[name];
+    if (!name || this.windows.isOpen(name) || (need && !need())) return;
     const w = this.windows.open(name);
     if (name === 'familytree') w?.load(this.player.name);
   }
 
+  /**
+   * How many of an item the tabs hold. `?? 1`, not `|| 1`: a quantity is read as a u16 off the wire
+   * (proto.js readItem), so a real 0 means "this slot holds none of it" and must count as 0 - `||` would
+   * turn it into 1. An item with no quantity field at all is one.
+   */
   itemCount(id) {
     const t = invType(id);
     let n = 0;
