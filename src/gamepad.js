@@ -8,14 +8,14 @@ import { PAD_MOVE } from './controls.js';
 const STICK_DEAD = 0.5;
 
 export class PadInput {
-  constructor(input, moveMode = () => 'ls') { this.input = input; this.moveMode = moveMode; this.pad = null; this.lastPressed = null; }
+  constructor(input, moveMode = () => 'ls') { this.input = input; this.moveMode = moveMode; this.pad = null; }
 
   /** The controller's name for the settings tab, or null. */
   get name() { return this.pad?.id || null; }
 
   poll() {
     const pads = navigator.getGamepads?.() || [];
-    const p = [...pads].find((x) => x && x.connected) || null;
+    const p = [...pads].find((x) => x && x.connected) || null;   // a disconnected pad reads back with connected false, so this clears it
     this.pad = p;
     const held = new Set(), dpadMoves = this.moveMode() === 'dpad';
     if (p) {
@@ -23,7 +23,6 @@ export class PadInput {
         if (!(b.pressed || b.value > 0.5)) return;
         if (dpadMoves && PAD_MOVE[i]) { held.add(PAD_MOVE[i]); return; }
         held.add(`pad:${i}`);
-        this.lastPressed = i;
       });
       if (!dpadMoves) {
         const ax = p.axes[0] || 0, ay = p.axes[1] || 0;
