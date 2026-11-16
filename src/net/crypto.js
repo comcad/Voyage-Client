@@ -123,7 +123,17 @@ export class MapleCipher {
 
   static length(h) { return ((h[0] ^ h[2]) & 0xff) | (((h[1] ^ h[3]) & 0xff) << 8); }
 
-  /** In-place AES-OFB transform, then advance the IV. */
+  /** Cosmic PacketDecoder:23 / MapleAESOFB:166 — reject frames whose header doesn't match the IV and version. */
+  validHeader(h) {
+    return (((h[0] ^ this.iv[2]) & 0xff) === ((this.version >> 8) & 0xff)) &&
+           (((h[1] ^ this.iv[3]) & 0xff) === (this.version & 0xff));
+  }
+
+  /**
+   * In-place AES-OFB transform, then advance the IV. A packet longer than 0x5B0 bytes continues at 0x5B4 (Cosmic's
+   * llength reset), and the second chunk's keystream restarts from the same pre-advance IV because Cosmic rebuilds
+   * myIv inside its while loop — that restart is the protocol's, not a port bug, so leave it alone.
+   */
   crypt(data) {
     let remaining = data.length, chunk = 0x5b0, start = 0;
     while (remaining > 0) {
