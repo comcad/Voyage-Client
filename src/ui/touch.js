@@ -17,7 +17,6 @@ export class TouchControls {
     Object.assign(this.el.style, { position: 'absolute', inset: '0', pointerEvents: 'none', zIndex: '5' });
     root.append(this.el);
     this.held = new Map();   // pointerId -> codes it holds
-    this.stick = null;       // { pointerId, el, knob }
     this.ends = new Map();   // pointerId -> what lets go of its control
     // a finger lifted anywhere lets go of its control, even when the control didn't see it (the capture failed or
     // was taken away, or the controls were rebuilt under it)
@@ -170,10 +169,12 @@ export class TouchControls {
     this.g.input.setHeld('touch', all);
   }
   /** Hidden while Key Setting is open (the layout is edited there, and the buttons would cover the window). */
-  suspend(on) { this.suspended = on; this.el.style.visibility = on ? 'hidden' : ''; if (on) this.release(); }
+  suspend(on) { this.el.style.visibility = on ? 'hidden' : ''; if (on) this.release(); }
   release() {
+    // held cleared first so each end's sync() publishes the empty set; upLocked goes with it — a later up
+    // push (e.g. after a portal) must not be swallowed by a latch from a previous hold
+    this.held.clear(); this.upLocked = false;
     for (const end of [...this.ends.values()]) end();
-    this.held.clear(); this.g.input?.setHeld('touch', new Set());
   }
   /** A new map: up from the stick stops until the stick leaves up. */
   mapChanged() {
