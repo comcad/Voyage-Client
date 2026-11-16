@@ -1,4 +1,5 @@
 import { invType } from '../data.js';
+import { isRechargeable } from '../net/proto.js';
 import { uiText, TextField } from './wzui.js';
 import { Win, drawTabStrip } from './windows.js';
 import { UI_W, UI_H } from '../view.js';
@@ -29,8 +30,8 @@ export class WishListInputWin extends Win {
   add() {
     const t = this.field.value.trim();
     if (!t) return;
-    this.field.value = '';
     if (this.list.length >= 10) { this.mgr.notice('You have exceeded the maximum number of requests.'); return; }
+    this.field.value = '';   // only once the wish is accepted: a refused one stays typed
     this.list.push(t);
   }
   remove() { if (this.sel >= 0) { this.list.splice(this.sel, 1); this.sel = -1; } }
@@ -112,9 +113,9 @@ export class WeddingGiftWin extends Win {
     const e = this.mine[idx];
     if (!e || this.pending) return;
     if (this.items.length) { this.mgr.notice('You cannot give more than one present for each wishlist.'); return; }
-    const it = e.item, k = Math.floor(it.id / 10000);
+    const it = e.item;
     let qty = 1;
-    if ([2, 3, 4].includes(invType(it.id)) && k !== 207 && k !== 233 && !it.expiration) {
+    if ([2, 3, 4].includes(invType(it.id)) && !isRechargeable(it.id) && !it.expiration) {
       qty = await this.mgr.askNumber('How many will you store?', it.quantity || 1, 1, it.quantity || 1);
       if (!qty || qty < 1 || qty > (it.quantity || 1)) return;
     }
@@ -136,7 +137,7 @@ export class WeddingGiftWin extends Win {
     return -1;
   }
   down(lx, ly) {
-    const t = (this.tabRects || []).findIndex(([x, w, y]) => lx >= x + 232 && lx < x + 232 + w && ly >= y && ly < y + 19);
+    const t = (this.tabRects || []).findIndex(([x, w, y]) => lx >= x && lx < x + w && ly >= y && ly < y + 19);
     if (t >= 0) { this.tab = t; this.mySel = -1; this.first.mine = 0; return; }
     const l = this.rowHit(lx, ly, 7, this.leftY, this.leftRows, this.first.left), m = this.rowHit(lx, ly, 236, 103, 4, this.first.mine);
     if (l >= 0 && l < this.items.length) { this.leftSel = l; this.mySel = -1; }
@@ -170,7 +171,8 @@ export class WeddingGiftWin extends Win {
     // the tabs, on Basic.img's tab frames, in the strip at (235, 61)
     const T = this.L.Tab;
     ctx.save(); ctx.translate(232, 0);
-    this.tabRects = drawTabStrip(ctx, this.mgr, T && { enabled: T.En, disabled: T.Ds }, 5, this.tab, 220, 61);
+    // the strip is drawn inside translate(232, 0); store the rects where they land, so the hit test needs no offset
+    this.tabRects = drawTabStrip(ctx, this.mgr, T && { enabled: T.En, disabled: T.Ds }, 5, this.tab, 220, 61).map(([x, w, y]) => [x + 232, w, y]);
     ctx.restore();
     this.mine.slice(this.first.mine, this.first.mine + 4).forEach((e, k) => this.row(ctx, { id: e.item.id, quantity: e.item.quantity }, 236, 103 + 40 * k, this.first.mine + k === this.mySel));
     this.scrollbar(ctx, 439, 98, 155, this.first.mine, this.mine.length, 4, V);
