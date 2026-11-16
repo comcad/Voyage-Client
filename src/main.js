@@ -12,7 +12,10 @@ import { loadConfig } from './config.js';
 setupTouchDevice();
 
 const PRELOAD = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert',
-  'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2'];
+  // every pose the attack tables can pick (character.js ATTACK_POSES / SHOOT_POSES), so the first stab or shot
+  // does not load its art behind the frame it happens in
+  'swingO1', 'swingO2', 'swingO3', 'stabO1', 'stabO2', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'stabT2',
+  'swingP1', 'swingP2', 'shoot1', 'shoot2', 'shot'];
 
 // Firefox opens its menu bar when Alt is let go, and its File menu when F10 goes down: never, while the game is open
 addEventListener('keyup', (e) => { if (e.key === 'Alt' || e.code === 'F10') e.preventDefault(); }, true);
