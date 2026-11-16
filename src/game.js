@@ -164,6 +164,8 @@ const WHEEL_OF_DESTINY = 5510000;
 const FIELD_NO_MOVEMENT_SKILLS = 0x2;
 /** A portal with no target map of its own (tm 999999999): it only asks the server to run a script. */
 const SCRIPT_ONLY_PORTAL = 999999999;
+/** Portal re-use cooldowns (s): a script portal, within the map, to another map. */
+const PORTAL_COOLDOWN = { script: 0.5, inner: 0.6, map: 0.5 };
 
 const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST_GREY = '#bbbbbb';
 
@@ -6448,7 +6450,7 @@ export class Game {
       if (HEROS_WILLS.has(hw) && performance.now() >= (this.attackLock || 0) && this.useSkill(hw)) return;
       // on a ladder or rope you let go: with no input the plain physics runs, not the climb, and you fall
       if (p.ladder) { p.ladder = null; p.attack = null; p.vx = 0; p.vy = 0; }
-      this.coast(dt);
+      this.coast(dt, this.moveStats());   // ms is declared below this block: ask for the stats here, not there
       this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
     }
@@ -6606,6 +6608,7 @@ export class Game {
           if (below) {
             this.moveEvent = { kind: 'down', ofh: p.fh.id, x: p.x, y: p.y };
             p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump');
+            if (swim) this.swimJumpAt = performance.now();
           }
           else if (!dir) action = 'prone';   // nothing to drop to: stay lying down
         } else {
@@ -6614,7 +6617,8 @@ export class Game {
           const J = PHYS.walk * ms.speed;   // not slowed in water
           if (dir * p.vx < J * 0.8) p.vx += dir * J * 0.8;
           if (dir * p.vx > J) p.vx = dir * J;
-          p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * (swim ? 0.7 : 1);   // leaving a floor lifts you 1px
+          p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * (swim ? 0.7 : 1);   // leaving a floor lifts
+          if (swim) this.swimJumpAt = performance.now();   // the gate above is pure; the stamp belongs to the jump you 1px
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
           sfx.play('Game/Jump');
         }
@@ -6637,6 +6641,7 @@ export class Game {
         const key = this.keysFor(5, ACTION.JUMP).some((c) => inp.hit(c) || inp.repeated(c));
         if (key && !this.hasDisease(WEAKEN) && this.swimJumpReady(true)) {
           p.vy = -PHYS.swimSpeed * 5 * this.swimShoe(ms).v;
+          this.swimJumpAt = performance.now();
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
         }
         this.playerFall(dt, dir, inY, ms);
@@ -6686,13 +6691,9 @@ export class Game {
       fh.fall(p, dt, p.ignoreFh, false, glide ? { vx: old.vx, vy: p.vy } : old);   // a glide caps the fall itself
     }
   }
-  /** In water a jump or a stroke is taken at most every 300ms. */
+  /** In water a jump or a stroke is taken at most every 300ms (the jump sites stamp swimJumpAt, not this). */
   swimJumpReady(swim) {
-    if (!swim) return true;
-    const now = performance.now();
-    if (now - (this.swimJumpAt || -Infinity) < 300) return false;
-    this.swimJumpAt = now;
-    return true;
+    return !swim || performance.now() - (this.swimJumpAt || -Infinity) >= 300;
   }
 
   /**
@@ -6707,13 +6708,13 @@ export class Game {
     // a script portal with no target map (types 7, 8, 11) only asks the server to run its script: no sound, no fade
     if (portal.tm === SCRIPT_ONLY_PORTAL) {
       if (!this.net) return;
-      this.portalCooldown = 0.5;
+      this.portalCooldown = PORTAL_COOLDOWN.script;
       this.net.scriptPortal(portal.pn, { x: Math.round(this.player.x), y: Math.round(this.player.y) });
       return;
     }
     sfx.play('Game/Portal');
     if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
-      this.portalCooldown = 0.6;
+      this.portalCooldown = PORTAL_COOLDOWN.inner;
       const p = this.player, from = { x: Math.round(p.x), y: Math.round(p.y) };
       const t = map.spawnPortal(portal.tn);
       this.playTeleportEffect(from.x, from.y);
@@ -6729,7 +6730,7 @@ export class Game {
       this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
       return;
     }
-    this.portalCooldown = 0.5;
+    this.portalCooldown = PORTAL_COOLDOWN.map;
     this.fadeOut();
     this.after(3000, () => { if (this.fade?.dir === 'out' && !this.loading && this.map === map) this.fade = { dir: 'in', t0: performance.now() }; });
     if (!this.net) this.changeMap(portal.tm, { portal: portal.tn });
@@ -6847,10 +6848,10 @@ export class Game {
     this.coast(dt);
   }
   /** No input: on a floor you slide to a stop, in the air you fall (and stop on landing). */
-  coast(dt) {
+  coast(dt, ms = null) {
     const p = this.player, fh = this.map.fh;
     if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
-    else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
+    else { this.playerFall(dt, 0, 0, ms); if (p.fh) p.vx = 0; }
   }
 
   /** Mounts can't climb, except Monster Rider's (190xxxx) and those of 1932001-1932005 and 1932007-1932011. */
@@ -7256,10 +7257,10 @@ export class Game {
     const max = Math.max(1, Math.min(20, ld?.attackCount || 1));
     const mesos = [...this.drops.values()].filter((d) => d.meso && d.landed && !d.pickedBy && box
       && d.x >= box.left && d.x <= box.right && d.y >= box.top && d.y <= box.bottom
-      && (d.type === 0 ? d.owner === mine : d.type === 1 ? d.owner === party : true)).slice(0, max).sort((a, b) => a.id - b.id);
+      && (d.type === 0 ? d.owner === mine : d.type === 1 ? d.owner === party : true)).sort((a, b) => a.id - b.id).slice(0, max);
     const touches = (m, d) => { const h = m.hitBox(true); return h.right >= d.x - 50 && h.left <= d.x + 50 && h.bottom >= d.y - 50 && h.top <= d.y + 50; };
     const mobs = this.targetMobs().filter((m) => mesos.some((d) => touches(m, d))).slice(0, Math.max(1, Math.min(15, ld?.mobCount || 1)));
-    const damage = (m) => mesos.slice(0, 15).filter((d) => touches(m, d)).map((d) => {
+    const damage = (m) => mesos.filter((d) => touches(m, d)).slice(0, 15).map((d) => {
       const a = d.id, ratio = a <= 1000 ? (a * 0.82 + 28) / 5300 : a / (a + 5250);
       return Math.max(1, Math.trunc(50 * (ld?.x || 0) * ratio * (0.5 + Math.random() * 0.5)));
     });
@@ -7274,18 +7275,20 @@ export class Game {
   }
   /** A meso blowing up (Meso Explosion): it goes after `delay` ms with the skill's hit art, the sound at most every 90ms. */
   explodeMeso(oid, delay) {
-    this.after(delay, async () => {
-      const d = this.drops.get(oid);
-      if (!d) return;
-      this.drops.delete(oid);
-      const now = performance.now();
-      if (now - (this.lastMesoBoom || 0) > 89) { this.lastMesoBoom = now; sfx.play(`Skill/${pad(MESO_EXPLOSION, 7)}/Hit`); }
-      const node = Game.fxNode((await this.skills?.ensure(MESO_EXPLOSION))?.hit);
-      if (!node) return;
-      const anim = new Anim(node, false);
-      await this.assets.preload(anim.frames);
-      this.fx.push({ anim, x: d.x, y: d.y, flip: false });
-    });
+    this.after(delay, () => this.mesoBoom(oid).catch((e) => console.error(e)));   // a throw here must not leave the queue wedged
+  }
+  /** The delayed half of explodeMeso: the sound, the hit art, then the burst. */
+  async mesoBoom(oid) {
+    const d = this.drops.get(oid);
+    if (!d) return;
+    this.drops.delete(oid);
+    const now = performance.now();
+    if (now - (this.lastMesoBoom || 0) > 89) { this.lastMesoBoom = now; sfx.play(`Skill/${pad(MESO_EXPLOSION, 7)}/Hit`); }
+    const node = Game.fxNode((await this.skills?.ensure(MESO_EXPLOSION))?.hit);
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.fx.push({ anim, x: d.x, y: d.y, flip: false });
   }
   /** The screen shake of a skill landing (see SHAKERS); `near` is 400 for your own, 400 less the distance for another's. */
   startShake(skillId, near, delay) {
