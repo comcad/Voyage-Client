@@ -83,6 +83,7 @@ export class Assets {
     this.useSheets = true;   // /fps sheets: packed images drawn from the server's sheets, or each from its own file
     this.cuts = new WeakMap();   // canvas node -> its image cut out of its sheet, for whoever asks for it whole (image)
     this.sheets = 0;         // sheets loaded so far (the /fps report)
+    // slice() hands out this one object every call: each caller takes its fields at once (map.js, character.js)
     this._slice = { img: null, x: 0, y: 0, w: 0, h: 0 };
   }
 
