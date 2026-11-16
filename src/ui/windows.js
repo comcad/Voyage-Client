@@ -302,7 +302,6 @@ export class WindowManager {
   }
 }
 
-/** A window: background from UIWindow.img, its own buttons (window-local coords) and the close button. */
 /**
  * The client's tab strip (tab type 1, Basic.img/Tab2), as openms recovered it: `count` tabs share `span` px
  * from x 7 at y 23, each a stretched fill plus an 8px edge (a 4px end on the last), after a 4px left cap.
@@ -335,6 +334,7 @@ const tabAt = (rects, lx, ly) => (rects || []).findIndex(([x, w, y]) => lx >= x 
 
 /** The close box sits this far in from a window's right edge (12px wide, 5px margin). */
 const CLOSE_INSET = 17;
+/** A window: background from UIWindow.img, its own buttons (window-local coords) and the close button. */
 export class Win {
   /** The window's text boxes (page elements over the canvas): its `field` and `fields`. */
   textFields() { return [this.field, ...(Array.isArray(this.fields) ? this.fields : [])].filter((f) => f?.el); }
@@ -2182,7 +2182,6 @@ class KeyConfigWin extends Win {
 }
 
 // ==================================================================== tooltip
-/** A text tooltip in the client's panel: translucent navy with a white ring, the title centred, lines below. */
 /** The tooltip box: dark blue with a white inner edge. */
 function tipFrame(ctx, x, y, w, h) {
   ctx.fillStyle = 'rgba(0,0,64,0.627)';
