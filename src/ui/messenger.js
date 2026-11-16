@@ -106,8 +106,9 @@ export class MessengerWin extends Win {
     this.reset();
     this.enter.enabled = false;
     this.active = true;
-    for (const t of HELP) this.say(t);
+    // the help banner belongs to a deliberate open, not to accepting an invitation
     if (this.joining) { this.joining = false; this.myPos = -1; return; }      // accepting: the server seats you
+    for (const t of HELP) this.say(t);
     // opening it starts a messenger with you in spot 0 (the server sends nothing back for that)
     this.g.net?.messengerJoin(0);
     this.members[0] = this.self(); this.seated = true;
@@ -130,10 +131,11 @@ export class MessengerWin extends Win {
   event(e) {
     const name = (p) => this.members[p]?.name ?? '';
     if (e.op === 'join') {
-      // a spot below 0: the room couldn't be joined, and you sit alone in spot 0
-      if (e.pos < 0) this.say('- You have been unable to join the invited chat room.');
-      this.myPos = Math.max(0, e.pos); this.members[this.myPos] = this.self(); this.seated = true;
-      if (e.pos >= 0) this.say(`- '${this.g.player.name}' has entered.`);
+      // a spot below 0: the room couldn't be joined (the server's getLowestPosition is -1 when it is full), so stay
+      // unseated — send() and step() both gate on myPos >= 0 — rather than sit alone in a room the server refused
+      if (e.pos < 0) { this.say('- You have been unable to join the invited chat room.'); this.myPos = -1; this.seated = false; return; }
+      this.myPos = e.pos; this.members[this.myPos] = this.self(); this.seated = true;
+      this.say(`- '${this.g.player.name}' has entered.`);
     } else if (e.op === 'add' || e.op === 'update') {
       this.members[e.pos] = { name: e.name, look: this.g.lookFrom(e.look), channel: e.channel };
       this.typing[e.pos] = false;
@@ -147,7 +149,7 @@ export class MessengerWin extends Win {
         else this.members[p] = { name: s.name, look: this.g.lookFrom(s.look), channel: s.channel };
       });
     } else if (e.op === 'remove') {
-      if (e.pos >= 0 && e.pos < 3) { this.say(`- '${name(e.pos)}' have left the room.`); this.flash(); this.typing[e.pos] = false; }
+      if (e.pos >= 0 && e.pos < 3) { this.say(`- '${name(e.pos)}' has left the room.`); this.flash(); this.typing[e.pos] = false; }
       delete this.members[e.pos];
     } else if (e.op === 'invited') this.say(e.ok ? `- You have sent the invite to '${e.name}'.` : `- '${e.name}' can't be found.`);
     else if (e.op === 'declined') this.say(e.mode ? `'${e.name}' is currently not accepting chat.` : `'${e.name}' denied the request.`);
@@ -158,13 +160,19 @@ export class MessengerWin extends Win {
       const who = at < 0 ? e.text.slice(0, -1) : e.text.slice(0, at), on = at < 0 && e.text.slice(-1) !== '0';
       const pos = this.members.findIndex((m) => m?.name?.toLowerCase() === who.toLowerCase());
       if (pos < 0) return;
-      if (this.size !== 2) this.typing[pos] = on;
+      if (this.size !== 2 || !on) this.typing[pos] = on;   // the "stopped" half always lands, or the balloon never clears
       if (at < 0) return;
       this.g.maskCurses(e.text.slice(at + 3)).then((t) => this.say(`${who} : ${t}`, SPOT_COLORS[pos]));
       this.flash();
     }
   }
-  say(text, color = NOTICE) { this.lines.push({ text, color }); if (this.lines.length > 100) this.lines.shift(); this.first = null; }
+  /** A new line; the view only follows it when it was already pinned to the bottom (or the dropped line shifted it). */
+  say(text, color = NOTICE) {
+    const dropped = this.lines.length >= 100;
+    if (dropped && this.first !== null) this.first = Math.max(0, this.first - 1);   // the window's top line went away
+    this.lines.push({ text, color });
+    if (dropped) this.lines.shift();
+  }
   /** Something came while the window is at its smallest: its blink starts (unless it is going). */
   flash() { if (this.blink < 1) this.blink = 30; }
 
@@ -175,7 +183,7 @@ export class MessengerWin extends Win {
    * ends your typing without a notice (your line ends it for the others) and puts BtEnter out.
    */
   async send() {
-    const text = this.field.value;
+    const text = this.field.value.trim();
     if (!text || this.myPos < 0 || this.size === 2) return;
     this.field.value = '';
     this.enter.enabled = false;
@@ -193,12 +201,13 @@ export class MessengerWin extends Win {
   command(text) {
     if (text.toLowerCase() === '/q') { this.mgr.close(this); return; }
     const pre = '/invite ';
-    if (text.length > pre.length && text.slice(0, pre.length).toLowerCase() === pre) this.inviteByName(text.slice(pre.length));
+    if (text.length > pre.length && text.slice(0, pre.length).toLowerCase() === pre) this.inviteByName(text.slice(pre.length).trim());
   }
   /** /invite: not yourself, and not a name holding a word from Etc/ForbiddenName.img. */
   async inviteByName(name) {
     const me = this.g.player.name;
-    if (!me || name.toLowerCase() === me.toLowerCase()) { this.say("- Please enter the user's name."); return; }
+    if (!name) { this.say("- Please enter the user's name."); return; }
+    if (me && name.toLowerCase() === me.toLowerCase()) { this.say('- You cannot invite yourself.'); return; }
     const bad = Object.values((await this.g.assets.json('Etc/ForbiddenName.img')) || {}).map((v) => String(v).toLowerCase());
     if (bad.some((b) => b && name.toLowerCase().includes(b))) { this.say('- The character name is invalid.'); return; }
     this.g.net?.messengerInvite(name);
@@ -226,8 +235,9 @@ export class MessengerWin extends Win {
    * smallest size's blink (on for 15 ticks, off for 15, first on 30 ticks after it starts).
    */
   step(ms) {
-    if (this.typeWait > 0) { this.typeWait -= ms; return; }
-    if (this.size !== 2 && this.active && this.myPos >= 0) {
+    // the typing latch only holds the notice back; the blink below still counts down
+    if (this.typeWait > 0) this.typeWait -= ms;
+    else if (this.size !== 2 && this.active && this.myPos >= 0) {
       const has = !!this.field.value;
       if (has !== this.mine) {
         this.mine = has;
@@ -240,7 +250,7 @@ export class MessengerWin extends Win {
     if (this.size === 2 && this.blink > 0) {
       this.blink--;
       if (this.blink === 15) this.blinkOn = false;
-      else if (this.blink === 0) { this.blink = 30; this.blinkOn = true; }
+      else if (this.blink === 0) this.blinkOn = false;   // one cycle only: flash() re-arms it
     } else { this.blink = 0; this.blinkOn = false; }
   }
 
