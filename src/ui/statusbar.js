@@ -49,10 +49,10 @@ export const CHAT_BAR = {
 };
 // these kinds wrap flush; the rest indent their continuation lines by five spaces
 const FLUSH = new Set([CHAT_COLOR.grey, CHAT_COLOR.yellow, CHAT_COLOR.result, CHAT_COLOR.notice, CHAT_COLOR.error, CHAT_BAR.gm.color]);
-// the notice box (base/box, 42x19) right of the chat line: Report (BtClaim) in the left cell, the pencil (base/iconMemo) in the right:
 // a chat line that is a command ('/' or a '!' call-out) skips the curse, repeat and flood checks
 const isCommand = (t) => t.startsWith('/') || t.startsWith('!');
-// the notice box (base/box, 42x19) right of the chat line, its pencil (base/iconMemo) in the right cell:// invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
+// the notice box (base/box, 42x19) right of the chat line: Report (BtClaim) in the left cell, the pencil (base/iconMemo) in the right:
+// invitations rise out of it (ui/notifier.js points at NOTICE_ICON)
 const NOTICE_BOX = { x: 571, y: 7 }, TABS_X = 614;
 export const NOTICE_ICON = { x: 596, y: 11, w: 14 };       // log above the bar, as wide as base/chat
 // the quick slots show the keys in game.quickKeys (Key Setting's CHANGE QUICK SLOTS), each labelled by
@@ -495,11 +495,11 @@ export class StatusBar {
 
   /**
    * The quick slots' keys, the first panel's then the second's; right Shift's bindings are left Shift's.
-   * Cached against the two source arrays: game.quickKeys / quickKeys2 are replaced (never mutated) by every writer
+   * Cached against the two source arrays: game.quickKeys / localQuickKeys are replaced (never mutated) by every writer
    * (the quickslots packet, Key Setting's setQuickKeys), so a new array is the only way the pair can change.
    */
   get quickKeys() {
-    const a = this.game.quickKeys, b = this.game.quickKeys2, c = this.quickCache;
+    const a = this.game.quickKeys, b = this.game.localQuickKeys, c = this.quickCache;
     if (!c || c.a !== a || c.b !== b) {
       this.quickCache = { a, b, keys: [...(a || DEFAULT_QUICKSLOTS), ...(b || DEFAULT_QUICKSLOTS2)].map((sc) => (sc === 54 ? 42 : sc)) };
     }

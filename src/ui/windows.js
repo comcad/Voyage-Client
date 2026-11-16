@@ -2050,7 +2050,7 @@ class KeyConfigWin extends Win {
     });
     // CHANGE QUICK SLOTS: its OK puts the keys on the quick slots at once; they are kept with this window's OK
     this.button(W.BtQuickSlot, 260, 236, () => {
-      const w = new QuickSlotConfigWin(mgr, [this.g.quickKeys, this.g.quickKeys2], this.draft, (b) => this.iconFor(b), (sets) => { if (sets) this.setQuickKeys(...sets); });
+      const w = new QuickSlotConfigWin(mgr, [this.g.quickKeys, this.g.localQuickKeys], this.draft, (b) => this.iconFor(b), (sets) => { if (sets) this.setQuickKeys(...sets); });
       mgr.assets.preload(w.frames()).then(() => mgr.show(w));
     });
   }
@@ -2059,14 +2059,14 @@ class KeyConfigWin extends Win {
     this.draft = Object.fromEntries(Object.entries(this.g.keymap || {}).map(([k, v]) => [k, { ...v }])); this.picked = null;
     this.ctlDraft = cloneControls(this.g.controls); this.tabs.picked = null;
     this.g.touch?.suspend(true);
-    this.quickBefore = [[...this.g.quickKeys], [...this.g.quickKeys2]];
+    this.quickBefore = [[...this.g.quickKeys], [...this.g.localQuickKeys]];
   }
   /** Leaving without OK puts the quick slots back as well. */
   onClose() { this.g.touch?.suspend(false); if (this.quickChanged()) this.setQuickKeys(...this.quickBefore); }
-  setQuickKeys(keys, keys2 = this.g.quickKeys2) { this.g.quickKeys = [...keys]; this.g.quickKeys2 = [...keys2]; this.mgr.bar.render(); }
+  setQuickKeys(keys, keys2 = this.g.localQuickKeys) { this.g.quickKeys = [...keys]; this.g.localQuickKeys = [...keys2]; this.mgr.bar.render(); }
   quickChanged() {
     const b = this.quickBefore, g = this.g;
-    return !!b && (g.quickKeys.some((k, i) => k !== b[0][i]) || g.quickKeys2.some((k, i) => k !== b[1][i]));
+    return !!b && (g.quickKeys.some((k, i) => k !== b[0][i]) || g.localQuickKeys.some((k, i) => k !== b[1][i]));
   }
 
   /** KeyConfig/notice/<n> (0 reset, 1 delete all, 2 save changes) with OK / Cancel: true for OK. */
@@ -2089,8 +2089,8 @@ class KeyConfigWin extends Win {
     }
     if (changes.length) g.net?.changeKeymap(changes);
     g.net?.changeQuickslots(g.quickKeys);
-    if (g.stats?.name) saveQuickKeys2(g.stats.name, g.quickKeys2);
-    this.quickBefore = [[...g.quickKeys], [...g.quickKeys2]];
+    if (g.stats?.name) saveQuickKeys2(g.stats.name, g.localQuickKeys);
+    this.quickBefore = [[...g.quickKeys], [...g.localQuickKeys]];
     g.keymap = { ...this.draft };
     this.mgr.bar.render();
     g.controls = cloneControls(this.ctlDraft);
