@@ -226,6 +226,7 @@ export class CashShopWin extends Win {
     for (const c of Object.values(com)) if (c?.SN && !removed.has(c.SN)) bySN.set(c.SN, { ...c });
     for (const m of d.mods || []) bySN.set(m.SN, { ...(bySN.get(m.SN) || {}), ...m, priceSet: m.Price !== undefined });
     this.bySN = bySN;
+    this.bestCache = null;   // the Best Item lookup depends on OnSale: rebuild it against the new catalogue
     setTimeout(() => this.maybeWishGift(), 0);
     this.subNames = new Map();
     for (const c of Object.values(cats)) {
@@ -302,13 +303,15 @@ export class CashShopWin extends Win {
    * Gifts waiting for you (0x4D): each opens its thank-you note in turn; OK answers the sender (NOTE_ACTION 0) and
    * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (the game server sends one
    * only after a reply, so an unanswered gift would stay hidden until you came back).
-   */
+   * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (Cosmic sends one
+   * only after a reply, so an unanswered gift would stay hidden until you came back). Escape stops asking — the rest
+   * stay in the locker, to be answered next time.   */
   async receivedGifts(gifts) {
     for (let i = 0; i < gifts.length; i++) {
       const g = gifts[i];
       if (!this.inv.some((c) => String(c.cashId) === String(g.cashId))) this.inv.push(g);
       const reply = await new Promise((done) => { const w = new CsGiftNoteDialog(this, g, done); this.mgr.assets.preload(w.frames()).then(() => this.mgr.show(w)); });
-      if (reply === null) continue;
+      if (reply === null) return;
       this.g.net?.giftReply(g.from, reply, i, g.cashId);
       await this.alert('The note has successfully been sent');
     }
@@ -388,6 +391,7 @@ export class CashShopWin extends Win {
     else if (left === 0) r.state = 0xC0;
     r.remaining = left;
     if (r.state === 0xC0) this.stock.set(sn, 1); else if (r.state === -1) this.stock.delete(sn);
+    this.bestCache = null;   // a limited item going on or off sale changes what Best Item stands in
   }
   /** The limited-goods record for a commodity (its item, with its SN listed), if any. */
   limitedFor(c) { return c && this.limited.find((x) => x.itemId === c.ItemId && x.sns.includes(c.SN)); }
@@ -411,21 +415,22 @@ export class CashShopWin extends Win {
   }
   /**
    * A slot purchase went through: taken only when it grows and stays in range (an inventory tab 1-5 up to 96, the
-   * storage up to 48, character slots up to 15); anything else is shown as an error, as the client does.
+   * storage up to 48, character slots up to 15); anything else is shown as an error, as the client does, without
+   * touching the count.
    */
   slots(kind, n, type) {
     const lim = this.g.inventory?.limits;
-    if (kind === 'inventory') {
-      if (!(type >= 1 && type <= 5 && n >= (lim?.[type] ?? 0) && n < 97)) { this.alert(ERRORS[type] || UNKNOWN_ERROR); return; }
-      if (lim) lim[type] = n;
+    if (kind === 'character') {
+      const old = this.g.charSlots ?? 0;
+      if (!(old < n && n < 16)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+      this.g.charSlots = n;
     } else if (kind === 'storage') {
       const old = this.storageSlots ?? 0;
-      this.storageSlots = n;
       if (!(old < n && n < 49)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+      this.storageSlots = n;
     } else {
-      const old = this.g.charSlots ?? 0;
-      this.g.charSlots = n;
-      if (!(old < n && n < 16)) { this.alert(ERRORS[n] || UNKNOWN_ERROR); return; }
+      if (!(type >= 1 && type <= 5 && n >= (lim?.[type] ?? 0) && n < 97)) { this.alert(ERRORS[type] || UNKNOWN_ERROR); return; }
+      if (lim) lim[type] = n;
     }
     this.alert(kind === 'character' ? 'You have added a new character slot.' : 'You have added slots to your item inventory.');
   }
@@ -489,18 +494,27 @@ export class CashShopWin extends Win {
     if (this.tab === WISH) return this.wish.map((sn) => this.bySN.get(sn)).filter(Boolean);
     if (this.tab === SEARCH) return this.search;
     if (this.tab === MAIN) return [];
-    return (this.groups.get(`${this.tab}:${this.sub}`) || []).filter((c) => this.limitOk(c));
+    const items = this.groups.get(`${this.tab}:${this.sub}`) || [];
+    this.askLimits(items);   // the unknown SNs' queries go out once per list(), not once per filtered item
+    return items.filter((c) => this.limitOk(c));
   }
   /**
    * One-per-account items (Limit 2: one answer for all of them, asked with SN 0; Limit 3: one per SN) stay hidden
-   * until the server answers 0 (CS mode 0x28, answered by 0x9A).
+   * until the server answers 0 (CS mode 0x28, answered by 0x9A). The queries for a page's items are asked here, so
+   * limitOk stays a pure predicate over the answers.
    */
+  askLimits(items) {
+    for (const c of items) {
+      const lim = Number(c.Limit);
+      if (lim !== 2 && lim !== 3) continue;
+      const sn = lim === 2 ? 0 : c.SN;
+      if (!this.limitAsked.has(sn)) { this.limitAsked.add(sn); this.g.net?.csLimitQuery(sn); }
+    }
+  }
   limitOk(c) {
     const lim = Number(c.Limit);
     if (lim !== 2 && lim !== 3) return true;
-    const sn = lim === 2 ? 0 : c.SN;
-    if (!this.limitAsked.has(sn)) { this.limitAsked.add(sn); this.g.net?.csLimitQuery(sn); }
-    return lim === 2 ? this.accountWide === 0 : this.limitAnswers.get(sn) === 0;
+    return lim === 2 ? this.accountWide === 0 : this.limitAnswers.get(c.SN) === 0;
   }
   /** 0x9A: SN 0 is the account-wide answer; any other is that SN's, and a set one also sets the account-wide one. */
   limitAnswer(sn, flag) {
@@ -516,14 +530,19 @@ export class CashShopWin extends Win {
     this.tab = t; this.sub = sub; this.page = 0; this.selCell = 0; this.focusBtn = null;
   }
   setPage(p) { const n = this.pages(); if (n) { this.page = ((p % n) + n) % n; this.selCell = 0; this.focusBtn = null; } }
-  /** Best Item: 5 per tab and gender (the wish list and search use EVENT's), an off-sale SN standing in for an on-sale twin. */
+  /** Best Item: 5 per tab and gender (the wish list and search use EVENT's), an off-sale SN standing in for an on-sale
+   * twin. Cached per (tab, gender) — drawBest and hit both call it — until the catalogue or the stock changes. */
   bestItems() {
     const tab = this.tab === WISH || this.tab === SEARCH ? 1 : this.tab, g = this.stats.gender ? 1 : 0, out = [];
+    (this.bestCache ??= new Map());
+    const key = tab * 2 + g;
+    if (this.bestCache.has(key)) return this.bestCache.get(key);
     for (let i = 0; i < 5; i++) {
       let c = this.bySN.get(this.bestTable[(tab * 2 + g) * 5 + i]);
       if (c && c.OnSale !== 1) c = [...this.bySN.values()].find((x) => x.OnSale === 1 && x.ItemId === c.ItemId && x.Count === c.Count && x.Period === c.Period) || null;
       out.push(c || null);
     }
+    this.bestCache.set(key, out);
     return out;
   }
   /** Locker and inventory icons: the raw icon (2x in the list). */
@@ -701,16 +720,18 @@ export class CashShopWin extends Win {
     if (birthday === null) return;
     const name = this.mgr.itemName(c.ItemId) || '';
     if (!(await this.alert(`Would you like to gift this item to someone?\n${c.Count > 1 ? `${c.Count} ` : ''}[ ${name} ]`, true))) return;
+    let typed = null;   // the recipients and message when the purchase dialog is dismissed, so a retry keeps them
     for (;;) {
-      const r = await new Promise((done) => this.mgr.show(new CsGiftDialog(this, done)));
+      const r = await new Promise((done) => this.mgr.show(new CsGiftDialog(this, done, typed)));
       if (!r) { this.alert('Not ready to gift items? \nPlease come back later.'); return; }
+      typed = r;
       const total = r.to.length * c.Price;
       if (total > (this.cash.prepaid || 0)) { this.alert("You don't have enough cash."); return; }
       if (r.to.length >= 2 && !(await this.alert(`Do you want to give gifts to ${r.to.length} persons?`, true))) continue;
       const text = `You will spend ${total} NX Prepaid \nin this process.\nWould you like to proceed?`;
       if (!(await this.dialog({ mode: 2, items: [c], text, wallets: 4 }))) continue;
       if (this.tab === WISH) this.wishAfterBuy = c.SN;
-      this.giftRun = { birthday, sn: c.SN, to: r.to, message: r.message, i: 0, sent: [], total: 0, name: '' };
+      this.giftRun = { birthday, sn: c.SN, to: r.to, message: r.message.text, i: 0, sent: [], total: 0, name: '' };
       this.nextGift();
       return;
     }
@@ -1668,10 +1689,6 @@ class CsNoticeDialog extends Win {
 }
 
 /**
- * A Cash Shop message box from CSNotice/4: the blue panel (top, a stretched middle, the rounded bottom from the
- * first 12 rows of 4/4) round the centred text, then 4/4's grey band (its last 42 rows) with OK (and CANCEL).
- */
-/**
  * The wish-list gift's message (CashShop.img/CSNotice/2, 266x142, centred): the receiver's name at (84, 25), two
  * message lines of 34 letters (72 at most in all) and OK / Cancel. The lines and buttons sit as in CSGift, whose art
  * is the same 27px lower.
@@ -1760,6 +1777,10 @@ class CsGiftNoteDialog extends Win {
   }
 }
 
+/**
+ * A Cash Shop message box from CSNotice/4: the blue panel (top, a stretched middle, the rounded bottom from the
+ * first 12 rows of 4/4) round the centred text, then 4/4's grey band (its last 42 rows) with OK (and CANCEL).
+ */
 class CsAlert extends Win {
   constructor(shop, text, cancel, done) {
     const lines = wrapText((CsAlert.scratch ??= document.createElement('canvas').getContext('2d')), String(text), 236, 11);
@@ -2216,7 +2237,7 @@ class CsWorldDialog extends Win {
  * row, a double-click adds it to the recipients. Resolves with { to: [names], message } or null.
  */
 class CsGiftDialog extends Win {
-  constructor(shop, done) {
+  constructor(shop, done, prefill = null) {
     const mgr = shop.mgr, G = shop.C.CSGift;
     super(mgr, G.backgrnd, 267, 215);
     this.buttons = [];
@@ -2224,7 +2245,10 @@ class CsGiftDialog extends Win {
     this.mode = 0; this.list = []; this.sel = null; this.first = 0; this.mouse = { x: -1, y: -1 };
     this.fields = [editBox(shop, 122, 13, 0xffff), editBox(shop, 210, 13, 34), editBox(shop, 210, 13, 34)];
     [this.to, this.line1, this.line2] = this.fields;
+    // a retry keeps what was typed: the recipients and message come back in
+    if (prefill) { this.to.value = prefill.to || ''; this.line1.value = prefill.line1 || ''; this.line2.value = prefill.line2 || ''; }
     this.focus = this.to;
+
     this.fields.forEach((f, i) => {
       f.el.addEventListener('focus', () => { this.focus = f; });
       f.el.addEventListener('keydown', (e) => {
@@ -2262,24 +2286,28 @@ class CsGiftDialog extends Win {
   say(t) { this.shop.alert(t); }
   async ok() {
     const me = (this.shop.g.player?.name || '').toLowerCase(), to = [], l1 = this.line1.value.trim(), l2 = this.line2.value.trim();
+    // the length, self-send and duplicate checks for one recipient name, shared by every name in the list
+    const take = (t) => {
+      if (t.length < 4 || t.length > 12) { this.say('Please enter the name of \nthe receiving character.'); return false; }
+      if (t.toLowerCase() === me) { this.say('You cannot send gifts to yourself.'); return false; }
+      if (to.includes(t)) { this.say('There are repeating character names.'); return false; }
+      to.push(t);
+      return true;
+    };
     let rest = this.to.value;
     for (;;) {
       rest = rest.replace(/^;+|;+$/g, '').trim();
-      if (!rest) { this.say('Please enter the name of \nthe receiving character.'); return; }
+      if (!rest) { if (!to.length) { this.say('Please enter the name of \nthe receiving character.'); return; } break; }
       const k = rest.indexOf(';');
-      if (k < 0) { to.push(rest); break; }
-      const t = rest.slice(0, k);
-      if (t.length < 4 || t.length > 12) { this.say('Please enter the name of \nthe receiving character.'); return; }
-      if (t.toLowerCase() === me) { this.say('You cannot send gifts to yourself.'); return; }
-      if (to.includes(t)) { this.say('There are repeating character names.'); return; }
-      to.push(t);
+      if (k < 0) { if (!take(rest)) return; break; }
+      if (!take(rest.slice(0, k))) return;
       rest = rest.slice(k + 1);
     }
     const message = `${l1}\n${l2}`;
     if ((await this.shop.g.cursed(l1)) || (await this.shop.g.cursed(l2))) { this.say('Cursing is not allowed.'); return; }
     if (!l1 && !l2) { this.say('Please enter the message.'); return; }
     if (message.length > 72) { this.say('The message can be no longer than 72 characters long.'); return; }
-    this.finish({ to, message });
+    this.finish({ to, message: { text: message, line1: l1, line2: l2 } });
   }
   finish(v) { if (this.answered) return; this.answered = true; for (const f of this.fields) f.remove(); this.mgr.close(this); this.done(v); }
   key(e) {
