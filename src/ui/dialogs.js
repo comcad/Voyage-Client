@@ -147,7 +147,7 @@ export class NpcDialog extends Win {
     this.face = list;
   }
   frames() { const U = this.U; return [...allCanvases(this.F), U.dot0, U.dot1, U.bar, U.list0, U.list1, U.list2, U.list3, ...this.buttons.flatMap((b) => b.frames())]; }
-  reply(action, sel) { this.close(); this.done({ action, sel }); }
+  reply(action, sel, cancelled) { this.close(); this.done({ action, sel, cancelled }); }
   pick(o) { if (o === null || o === undefined || o < 0) return; sfx.play('UI/BtMouseClick'); this.reply(1, this.opts[o] ?? o); }
   /**
    * The client's checks before it answers, each a notice that leaves the box open: a number must be digits only and
@@ -346,7 +346,7 @@ export class SlideMenu extends Win {
     if (this.answered) return;
     this.answered = true; this.mgr.close(this);
     const e = this.entries[this.cur];
-    this.done(ok && e ? { action: 1, sel: e.id } : { action: 0 });
+    this.done(ok && e ? { action: 1, sel: e.id } : { action: 0, cancelled: this.purged });
   }
   draw(ctx) {
     const m = this.mgr, bg = this.S.backgrd || {}, fr = Object.keys(bg).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k) => bg[k]);
