@@ -4333,7 +4333,7 @@ export class Game {
         const gb = new GuildBossField(this, map);
         gb.load().then(() => { if (this.map === map) this.guildBoss = gb; });
       }
-      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged();
+      this.doors?.clear(); this.mists?.clear(); this.clock = null; this.fieldClock = null; this.dojo?.mapChanged(); this.imitated = new Map(); this.pyramid?.mapChanged(); this.touch?.mapChanged(); this.questMsg?.clear();
       this.mapEnteredAt = performance.now(); this.setupShip(); this.refreshQuestBlink();
       // a spawn portal with 0x80 set is a Mystic Door's slot: in town its door portal, elsewhere where the door was opened
       const door = !pos && portalIdx !== null && portalIdx & 0x80 ? this.doorLanding(map, portalIdx & 0x7f) : null;
