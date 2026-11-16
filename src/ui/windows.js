@@ -937,7 +937,13 @@ const SKILL_ROW_Y = 99, SKILL_ROW_H = 40;
 /** Text lands 2px under its v83 coordinate when drawn from a canvas 'top' baseline. */
 const SKILL_TEXT_DY = 2;
 const SKILL_BAR = [153, 99, 156];
-/** Skills a double-click doesn't cast: the ones held down, and Aran's combo / hidden skills. */
+/**
+ * Skills a double-click doesn't cast: hold-to-charge / hold-to-fire ones (a click is a one-frame key press that
+ * would start then instantly stop them), the Evan breaths, and the Aran / Legend combo-chain and hidden swing
+ * skills (driven by runs of key presses, or mirrors of Full / Over Swing). Not derived from game.js's
+ * MONSTER_MAGNETS / BIG_BANGS / HELD_SHOTS: the overlap is partial (breaths and chain skills aren't in them), and
+ * the list is a stable v83 constant the UI should not read game internals for.
+ */
 const NO_DBLCLICK = new Set([1121001, 1221001, 1321001, 2121001, 2221001, 2321001, 3121004, 3221001, 5101004, 5201002, 5221004,
   13111002, 14111006, 15101003, 22121000, 22151001, 20000014, 20000015, 20000016, 21000002, 21100001, 21100002, 21100004,
   21100005, 21110003, 21110004, 21110006, 21110007, 21110008, 21120005, 21120006, 21120007, 21120009, 21120010]);
