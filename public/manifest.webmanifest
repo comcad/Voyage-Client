@@ -2,7 +2,7 @@
   "id": "/",
   "name": "Voyage Client — Version 83 Web Client",
   "short_name": "Voyage",
-  "description": "Play Voyage Client, a Version 83 MapleStory web client.",
+  "description": "Play Voyage Client, a Version 83 web client.",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",
