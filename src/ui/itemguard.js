@@ -2,7 +2,7 @@ import { Win } from './windows.js';
 import { UI_W, UI_H } from '../view.js';
 
 const NEVER = 0x0217E646BB058000n;   // FILETIME 2079-01-01: no expiry
-const FT_EPOCH = 116444736000000000n;
+export const FT_EPOCH = 116444736000000000n;
 export const permanent = (exp) => !exp || BigInt(exp) <= 0n || BigInt(exp) >= NEVER;
 const toDate = (exp) => new Date(Number((BigInt(exp) - FT_EPOCH) / 10000n));
 // FILETIMEs and the server's clock are wall-clock times: read their UTC fields
