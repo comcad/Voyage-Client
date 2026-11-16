@@ -8227,7 +8227,8 @@ export class Game {
     }
     // the way there: sideways from 65px up down to the held up / down direction's reach, up or down 40px wide
     const [x1, x2] = dx ? [Math.min(p.x, tx), Math.max(p.x, tx)] : [p.x - 20, p.x + 20];
-    const reach = p.y + dist * dy, top = (dx ? p.y : Math.min(p.y, reach)) - 65, bottom = dx ? reach : Math.max(p.y, reach);
+    // sideways the landing spot is up to 79px off the feet, so the band spans both elevations; up or down, the reach
+    const reach = p.y + dist * dy, top = Math.min(p.y, reach) - 65, bottom = Math.max(p.y, reach) + (dx ? 79 : 0);
     const blocked = bottom > top && this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying).filter((m) => {
       const h = m.hitBox(true);
       return h.right > x1 && h.left < x2 && h.bottom > top && h.top < bottom;
