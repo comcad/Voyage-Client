@@ -13,6 +13,13 @@ export const BAR_TOP_FALLBACK = UI_H - 71;
 // server notices: 0 '[Notice] ' in light blue, 5 light red, 6 light blue
 const NOTICE_COLORS = { 0: CHAT_COLOR.notice, 5: CHAT_COLOR.error, 6: CHAT_COLOR.notice };
 
+/**
+ * An event map's millions prefix ends in 9 (the 109xxxxxx and 209xxxxxx ranges and their kin): world messages are
+ * hidden there unless you are a GM. 809xxxxxx is exempt. This client-side test is all there is - the server does
+ * not gate these messages.
+ */
+const isEventMap = (mapId) => { const field = Math.floor((mapId || 0) / 1000000); return field % 100 === 9 && field !== 809; };
+
 /** In-game HTML interface layered over the canvas. */
 export class Hud {
   constructor(game) {
@@ -20,7 +27,10 @@ export class Hud {
     // level, name, job and the HP / MP / EXP gauges are drawn on the canvas by StatusBar
     // chat log and input belong to the canvas status bar; the map name is on the minimap
     addEventListener('keydown', (e) => {
-      if (document.activeElement instanceof HTMLInputElement || document.querySelector('.modal-overlay') || game.inCashShop) return;
+      // a locked or disabled UI (a scene, a cutscene) has no windows and no status bar: Enter/Escape would open what cannot be seen
+      if (game.uiLocked || game.uiDisabled) return;
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement
+        || document.querySelector('.modal-overlay') || game.inCashShop) return;
       // window hotkeys (I, S, K, Q, M...) come from the server keymap via Game.handleHotkeys
       if (e.key === 'Enter') { e.preventDefault(); game.statusBar?.focusChat(); }
       else if (e.key === 'Escape') this.closeWindows();
@@ -67,7 +77,7 @@ export class Hud {
     }
   }
 
-  message(text, color = '#fff') { this.game.statusBar?.message(text, color); }
+  message(text, color = '#fff', opts) { this.game.statusBar?.message(text, color, opts); }
 
   notice(n) {
     const { type, msg } = n, g = this.game;
@@ -76,7 +86,7 @@ export class Hud {
     if (type === 7) { localTalk(g.windows, n.npc || 0, msg, ['OK']); return; }   // in an NPC's dialog
     // megaphones (2, 3, 8, 9, 10): none on an event map unless you are a GM; others' words masked; the swindle check
     if ([2, 3, 8, 9, 10].includes(type)) {
-      if (Math.floor((g.map?.id || 0) / 1e6) % 100 === 9 && !g.gm) return;
+      if (isEventMap(g.map?.id) && !g.gm) return;
       const lines = (n.lines || [msg]).map((l) => g.megaphoneMasked(l));
       g.swindleCheck?.(lines.join(' '));
       if (type === 2) { this.megaphone(lines, CHAT_BAR.mega); return; }   // Megaphone: this channel
@@ -84,6 +94,7 @@ export class Hud {
       return;
     }
     if (type === 0x0B && n.item) { g.swindleCheck?.(msg); this.gachapon(n); return; }
+    if (type === 6 && n.item) { this.message(msg, NOTICE_COLORS[6], { item: n.item }); return; }   // a notice with an item attached
     this.message(type === 0 ? `[Notice] ${msg}` : msg, NOTICE_COLORS[type] || CHAT_COLOR.notice);
   }
   /**
@@ -94,8 +105,8 @@ export class Hud {
    * you are a GM.
    */
   async gachapon(n) {
-    const g = this.game, field = Math.floor((g.map?.id ?? 0) / 1000000);
-    if (!g.gm && field % 100 === 9 && field !== 809) return;
+    const g = this.game;
+    if (!g.gm && isEventMap(g.map?.id)) return;
     const cut = n.msg.indexOf(' : '), who = cut >= 0 ? n.msg.slice(0, cut) : n.msg, what = cut >= 0 ? n.msg.slice(cut + 3) : '';
     const name = (await itemName(this.assets, n.item.id).catch(() => '')) || '';
     g.windows.itemName(n.item.id);
