@@ -10,7 +10,8 @@ const FADE = 480;
 
 /**
  * A flowerpot's window (Item/Etc/0422.img info: questId, uiData, exp, grade, name, message/n, consumeItem): the
- * raise/backgrnd frame (top 20px, 5px sides), the name at (5, 5), Basic BtClose at (w - 16, 4), and the stage
+ * raise/backgrnd frame (top 20px, 5px sides), the name at (5, 5), the base class's Basic BtClose on the title bar's
+ * right end (Win.draw keeps it at w - 17, y 6; it closes through the pot's own closeRaise), and the stage
  * picture uiData/<stage> at (10, 30); the window is the picture's size plus 20 x 40. The exp kind's stage is
  * value / exp (at most grade); the bitmask kind (no exp) layers uiData/<i> for each bit set. A new stage fades in
  * over 480ms, puts its message in the chat log and (above 0) plays the item's Use sound. Dropping one of its
@@ -22,13 +23,21 @@ export class RaiseWin extends Win {
     super(mgr, null, x, y);
     this.itemId = itemId; this.info = info; this.R = mgr.W.raise;
     this.questId = Number(info.questId); this.uiData = String(info.uiData).replace('UI/UIWindow/', '');
+    this.art = this.R[this.uiData.split('/')[1]];   // the stage pictures' list, resolved once
     this.exp = Number(info.exp) || 0; this.grade = Number(info.grade) || 0;
     this.messages = []; for (let i = 0; info.message?.[i] != null && info.message[i] !== ''; i++) this.messages.push(String(info.message[i]));
-    this.consume = Object.values(info.consumeItem || {}).map((c) => (typeof c === 'object' ? Number(c?.[0]) : Number(c))).filter(Boolean);
+    // the consumeItem node's own child name is the bit each item stands for (not its position in the list); a node
+    // whose names are not numeric falls back to that position
+    this.consume = new Map();
+    Object.entries(info.consumeItem || {}).forEach(([k, c], i) => {
+      const id = Number(typeof c === 'object' ? c?.[0] : c), n = Number(k), bit = Number.isInteger(n) && n >= 0 ? n : i;
+      if (id) this.consume.set(id, bit);
+    });
     this.value = this.exp >= 1 ? -this.exp : -1; this.stage = -1; this.pics = []; this.old = null; this.fadeAt = 0;
     this.w = 150; this.h = 150; this.dragH = 20;
-    this.closeBtn.visible = false;
-    this.button(mgr.B.BtClose, this.w - 16, 4, () => this.g.closeRaise(this.itemId));
+    // the base class's BtClose, wired to the pot's own close (which saves its place and sends CLOSE_ITEMUI); its x
+    // is Win.draw's (w - CLOSE_INSET) as the window resizes
+    this.closeBtn.onClick = () => { sfx.play('UI/BtMouseClick'); this.g.closeRaise(this.itemId); };
     this.g.net?.closeItemUi(itemId, 1); this.g.net?.openItemUi(this.questId);
   }
   frames() { const B = this.R.backgrnd; return [...super.frames(), ...['top', 'center', 'bottom'].flatMap((k) => [B[k]?.left, B[k]?.center, B[k]?.right])].filter(Boolean); }
@@ -44,23 +53,23 @@ export class RaiseWin extends Win {
     const stage = this.stageOf(v);
     if (stage === this.stage && !this.bitmask) return;
     const nodes = stage < 0 ? [] : this.bitmask
-      ? Array.from({ length: 31 }, (_, i) => i).filter((i) => (v >>> i) & 1).map((i) => this.R[this.uiData.split('/')[1]]?.[i])
-      : [this.R[this.uiData.split('/')[1]]?.[stage]];
+      ? Array.from({ length: 31 }, (_, i) => i).filter((i) => (v >>> i) & 1).map((i) => this.art?.[i])
+      : [this.art?.[stage]];
     const pics = nodes.filter(Boolean);
     await this.mgr.assets.preload(pics);
     const changed = stage !== this.stage;
     if (changed) { this.old = this.pics; this.fadeAt = performance.now(); }
     this.pics = pics; this.stage = stage;
     const w = Math.max(0, ...pics.map((p) => p._w || 0)), h = Math.max(0, ...pics.map((p) => p._h || 0));
-    if (pics.length) { this.w = w + 20; this.h = h + 40; this.closeBtn.x = this.w - 16; }
+    if (pics.length) { this.w = w + 20; this.h = h + 40; }   // Win.draw keeps the close box at w - CLOSE_INSET
     if (!changed || stage < 0) return;
     if (stage < this.messages.length) this.g.hud.message(this.messages[stage], CHAT_COLOR.error);
     if (stage > 0) sfx.play(`Item/${pad(this.itemId, 8)}/Use`);
   }
   async drop(lx, ly, c) {
     if (c?.kind !== 'item' || typeof c.tab !== 'number') return;
-    const idx = this.consume.indexOf(c.id);
-    if (idx < 0 || (this.bitmask && this.value >= 0 && (this.value >>> idx) & 1)) { this.mgr.notice('This item is not available.'); return; }
+    const bit = this.consume.get(c.id);
+    if (bit === undefined || (this.bitmask && this.value >= 0 && (this.value >>> bit) & 1)) { this.mgr.notice('This item is not available.'); return; }
     if (!this.bitmask && this.value >= this.exp * this.grade) {
       const msg = (await itemInfo(this.g.assets, c.id))?.message?.[0];
       if (msg) this.mgr.notice(String(msg));
@@ -72,9 +81,9 @@ export class RaiseWin extends Win {
     this.g.lockExclusive();
   }
   tooltip(lx, ly) { return ly > 20 && this.stage >= 0 && this.messages[this.stage] ? { title: this.messages[this.stage], lines: [] } : null; }
-  draw(ctx) {
+  /** The frame, name and stage pictures; Win.draw's own body (no bg: this draws its three-row frame instead). */
+  body(ctx) {
     const im = (n) => this.mgr.image(n), B = this.R.backgrnd, w = this.w, h = this.h;
-    ctx.save(); ctx.translate(this.x, this.y);
     const row = (r, y, rh) => {
       const l = im(r.left), c = im(r.center), rr = im(r.right);
       if (l) ctx.drawImage(l, 0, y, 5, rh);
@@ -87,8 +96,6 @@ export class RaiseWin extends Win {
     const layer = (pics, a) => { if (a <= 0) return; ctx.save(); ctx.globalAlpha = a; for (const p of pics) { const i = im(p); if (i) ctx.drawImage(i, 10, 30); } ctx.restore(); };
     if (this.old && k < 1) layer(this.old, 1 - k);
     layer(this.pics, k);
-    for (const b of this.buttons) b.draw(ctx, this.mgr.assets);
-    ctx.restore();
   }
 }
 
@@ -127,13 +134,13 @@ export class IncubatorWin extends Win {
 /**
  * A Gold / Silver box (UIWindow.img/TreasureBox/<0 gold, 1 silver>, 170x172 at (315, 214)): mode 0 backgrnd with
  * BtOK2 (30, 147) and BtCancel2 (95, 147); mode 1 backgrndOpened and 2 backgrndClosed with BtOK2 at (63, 147).
- * OK answers true, Cancel / Esc false.
+ * OK answers true, Cancel / Esc false; modes 1/2 have no Cancel, so Esc there answers nothing.
  */
 export class TreasureBoxWin extends Win {
   constructor(mgr, mode, gold, done) {
     const T = mgr.W.TreasureBox[gold ? 0 : 1], bg = [T.backgrnd, T.backgrndOpened, T.backgrndClosed][mode];
     super(mgr, bg, 315 + Math.round((UI_W - 800) / 2), 214 + Math.round((UI_H - 600) / 2));
-    this.modal = true; this.closeBtn.visible = false; this.done = done;
+    this.modal = true; this.closeBtn.visible = false; this.done = done; this.mode = mode;
     if (mode === 0) {
       this.button(mgr.B.BtOK2, 30, 147, () => this.finish(true));
       this.button(mgr.B.BtCancel2, 95, 147, () => this.finish(false));
@@ -141,5 +148,6 @@ export class TreasureBoxWin extends Win {
   }
   finish(v) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done?.(v); }
   onClose() { if (!this.answered) { this.answered = true; this.done?.(false); } }
-  key(e) { if (e.key === 'Escape') this.finish(false); else if (e.key === 'Enter') this.finish(true); }
+  // Escape only where a Cancel exists (mode 0 draws BtCancel2); modes 1/2 offer OK alone, so a "no" is not an answer
+  key(e) { if (e.key === 'Escape') { if (this.mode === 0) this.finish(false); } else if (e.key === 'Enter') this.finish(true); }
 }
