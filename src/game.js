@@ -454,8 +454,19 @@ const ENERGY_ORB = 5121002, ORB_HOP = 150, ORB_REACH = 400, ORB_MS_PER_PX = 1.25
 /**
  * Hurricane fires while its key is held, once 101ms have passed on the game's 30ms clock (so every 120ms); Piercing
  * Arrow charges up to 1s and fires when let go.
+ *
+ * HURRICANE_GAP is four ticks plus one: the shot clock counts whole ticks, and 101 is the smallest value that makes
+ * the fourth tick fall short, so the cadence is 4 x 30 = 120ms. Any value in (90, 120] gives that same 120ms
+ * cadence; 121 would push it to the fifth tick (150ms).
  */
 const HURRICANES = new Set([3121004, 13111002]), HURRICANE_GAP = 101, TICK = 30, PIERCING_ARROW = 3221001, PIERCE_HOLD = 1000;
+/**
+ * The frame loop's clock. A frame is never integrated further than MAX_FRAME_DT (50ms): a longer gap is a stall, not
+ * time the world moved in, and integrating it in one step would teleport everything. Past CATCH_UP_GAP (250ms) the
+ * missed time is played through the queued movement paths first, in CATCH_UP_STEP (50ms) slices, so a tab that was
+ * hidden for a while shows entities where the server says they are rather than snapping them on the next packet.
+ */
+const MAX_FRAME_DT = 0.05, CATCH_UP_GAP = 0.25, CATCH_UP_STEP = 0.05;
 /**
  * Rapid Fire fires like Hurricane while held, on its own clock (kept between holds), with the bullet's art. It plays
  * Use once when it starts, not on every shot, and its shots go out with the gun's "shot" action.
@@ -6230,11 +6241,16 @@ export class Game {
    * A hidden browser tab gets no frames, but MOVE_PLAYER / MOVE_PET / MOVE_SUMMON / MOVE_MONSTER keep arriving and
    * queue. The v83 client keeps running in the background and times a path against the current time,
    * so what came in meanwhile has already played when you look. Play the missed time through
-   * every queued path at once, in 50ms steps, until it is used up or nothing is left to play.
+   * every queued path at once, in CATCH_UP_STEP steps, until it is used up or nothing is left to play.
    */
   catchUpPaths(sec) {
-    const STEP = 0.05;
-    for (let t = 0; t < sec; t += STEP) {
+    const STEP = CATCH_UP_STEP;
+    // A stall is replayed at most this far (20 steps = 1s): the caller hands over the whole gap, and at a 0.05 step
+    // a 30s tab-hide would be 600 steps of every other entity's path on one frame, which is longer than the stall it
+    // is catching up from. The rest is dropped, so those entities simply arrive where the server's last packet put
+    // them; a path longer than this is stale anyway.
+    const steps = Math.min(20, Math.ceil(sec / STEP));
+    for (let i = 0; i < steps; i++) {
       let any = false;
       for (const rp of this.others.values()) if (rp.path) { rp.update(STEP); any = true; }
       for (const pet of this.pets.values()) if (!pet.mine && pet.path) { pet.replay(STEP); any = true; }
@@ -6273,11 +6289,11 @@ export class Game {
         if (t < next - cap * 0.4) return;
         next += cap;
       }
-      const gap = (t - last) / 1000, dt = Math.min(pace.step(t - last) / 1000, 0.05);
+      const gap = (t - last) / 1000, dt = Math.min(pace.step(t - last) / 1000, MAX_FRAME_DT);
       last = t;
       if (this.map && !this.loading) {
         try {
-          if (gap > 0.25) this.catchUpPaths(gap - dt);
+          if (gap > CATCH_UP_GAP) this.catchUpPaths(gap - dt);
           const u0 = performance.now(); this.update(dt); const u1 = performance.now(); this.render();
           if (meter) { meter.frame(t, u1 - u0, performance.now() - u1, this); meter.draw(this.ctx, this); }
         } catch (e) {
