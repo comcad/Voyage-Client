@@ -3404,8 +3404,11 @@ export class Game {
         const q = id ? (await this.assets.json('Etc/OXQuiz.img'))?.[set]?.[id] : null;
         if (!q) { this.quizNotice = null; return; }
         let text;
-        if (ask) text = String(q.q ?? '');
-        else {
+        if (ask) {
+          text = String(q.q ?? '');
+          if (this.clock) this.clock.end = performance.now() + (this.clock.dur ?? QUIZ_CLOCK_MS);
+          else { this.clock = { end: performance.now() + QUIZ_CLOCK_MS, dur: QUIZ_CLOCK_MS }; this.loadClockArt(); }
+        } else {
           const d = String(q.d ?? '');
           text = `${d}${d ? ' ' : ''}[Answer:${Number(q.a) ? 'O' : 'X'}]`;
         }
@@ -3413,11 +3416,6 @@ export class Game {
         if (!text) { this.quizNotice = null; return; }
         const N = this.windows.W.FloatNotice?.[0];
         await this.assets.preload([N?.[0], N?.[1], N?.[2]].filter(Boolean));
-        // the clock is set only once the art is in, so the 30s is not spent waiting on a load
-        if (ask) {
-          if (this.clock) this.clock.end = performance.now() + (this.clock.dur ?? QUIZ_CLOCK_MS);
-          else { this.clock = { end: performance.now() + QUIZ_CLOCK_MS, dur: QUIZ_CLOCK_MS }; this.loadClockArt(); }
-        }
         this.quizNotice = { text, N };
       }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
