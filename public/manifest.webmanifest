@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "Voyage Client — Version 83 Web Client",
+  "short_name": "Voyage",
+  "description": "Play Voyage Client, a Version 83 MapleStory web client.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#101a30",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

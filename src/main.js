@@ -28,6 +28,10 @@ addEventListener('keydown', (e) => {
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+const standalone = navigator.standalone
+  || globalThis.matchMedia?.('(display-mode: standalone)').matches
+  || globalThis.matchMedia?.('(display-mode: fullscreen)').matches;
+if (standalone) addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });
 // ?b=: the address the game comes back by after a disconnect, so the browser has to ask the server for the page
 // (Game.leave). It has done its work once the page is here: taken off the address again.
 if (params.has('b')) { params.delete('b'); history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : '') + location.hash); }
@@ -67,7 +71,7 @@ async function online(assets) {
   await game.goOnline(entered, $('ui-root'));
   game.start();
   // closing the tab, reloading or going back while in game asks first (the browser's own prompt)
-  addEventListener('beforeunload', (e) => { if (!game.leaving) { e.preventDefault(); e.returnValue = ''; } });
+  if (!standalone) addEventListener('beforeunload', (e) => { if (!game.leaving) { e.preventDefault(); e.returnValue = ''; } });
   assets.preload(lookCanvases(look, look.actionList())); // every body action, for skills
   window.game = game;
 }
@@ -103,6 +107,8 @@ async function main() {
 
 main().catch((e) => {
   console.error(e);
-  $('loading-overlay').classList.remove('hidden');
-  $('loading-text').textContent = `Error: ${e.message}`;
+  const overlay = $('loading-overlay');
+  overlay.classList.remove('hidden');
+  overlay.classList.add('error');
+  $('loading-text').textContent = `Unable to start: ${e.message}. Check that the client server and game assets are reachable, then reload.`;
 });

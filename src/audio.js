@@ -42,10 +42,21 @@ class Music {
     this.fading = new Set();    // old tracks still fading out
     this.current = null;
     // resume on any gesture: browsers hold audio back until the first one
-    const unlock = () => { const el = this.track?.el; if (this.current && el?.src && el.paused && !el.ended) el.play().catch(() => {}); };   // not one that played out
+    const unlock = () => this.resume();
     // a phone lets sound start on a finger lifted (or a click), not on one put down: music a warp started while
     // nobody was touching the screen (a ship arriving) comes on with the next tap
     for (const t of GESTURES) addEventListener(t, unlock, true);
+    document.addEventListener('visibilitychange', () => document.hidden ? this.pause() : this.resume());
+    document.addEventListener('freeze', () => this.pause());
+    document.addEventListener('resume', () => this.resume());
+    addEventListener('pagehide', () => this.pause());
+    addEventListener('pageshow', () => { if (!document.hidden) this.resume(); });
+  }
+
+  pause() { for (const t of [this.track, ...this.fading]) t?.el.pause(); }
+  resume() {
+    const el = this.track?.el;
+    if (!document.hidden && this.current && el?.src && el.paused && !el.ended) el.play().catch(() => {});
   }
 
   loadVolume() {
@@ -108,7 +119,7 @@ class Music {
     el.loop = loop; el.muted = this.isMuted;
     const t = { el, k: fadeIn > 0 ? 0 : 1, timer: 0 };
     this.track = t; this.apply(t);
-    el.play().catch(() => {});
+    if (!document.hidden) el.play().catch(() => {});
     if (fadeIn > 0) this.ramp(t, 1, fadeIn);
   }
 
