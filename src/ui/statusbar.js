@@ -499,8 +499,8 @@ export class StatusBar {
    * (the quickslots packet, Key Setting's setQuickKeys), so a new array is the only way the pair can change.
    */
   get quickKeys() {
-    const a = this.game.quickKeys, b = this.game.quickKeys2;
-    if (this.quickCache?.a !== a || this.quickCache.b !== b) {
+    const a = this.game.quickKeys, b = this.game.quickKeys2, c = this.quickCache;
+    if (!c || c.a !== a || c.b !== b) {
       this.quickCache = { a, b, keys: [...(a || DEFAULT_QUICKSLOTS), ...(b || DEFAULT_QUICKSLOTS2)].map((sc) => (sc === 54 ? 42 : sc)) };
     }
     return this.quickCache.keys;
