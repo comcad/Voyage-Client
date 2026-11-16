@@ -3068,6 +3068,9 @@ export class Game {
   // ------------------------------------------------------------------ online wiring
   /** Hook a ChannelSession's events to this game. `entered` is the result of session.enter(). */
   async goOnline(entered, uiRoot) {
+    // once per game: a second entry would interleave two half-built games (unlike hop, this is never re-entered)
+    if (this.wiredOnline) return;
+    this.wiredOnline = true;
     const info = entered.info;
     this.setServerTime(entered.serverTime);
     this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.linked = info.linked;
