@@ -43,11 +43,11 @@ export function lineDelay(skillId, line, weaponId = 0, scale = 1) {
 }
 const FOREIGN = { 0: 'LevelUp', 8: 'JobChanged', 9: 'QuestClear', 0x0d: 'MonsterBook/cardGet', 0x0f: 'ItemLevelUp' };
 
-/** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
 /** Room round a kept balloon's text box for its corners, edges and arrow (see WorldFx.drawBalloon). */
 const BALLOON_PAD = 32;
 let balloonIds = 0;
 
+/** A balloon's lines: words wrapped at `max` px, and a word wider than that split across lines. */
 function balloonLines(ctx, text, max) {
   const out = [];
   for (const para of String(text).split('\n')) {

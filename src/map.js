@@ -549,7 +549,6 @@ const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
  * monster moves on to its next one. A status of that kind coming or going sets the counter to 1 and moves on at once.
  */
 const STATUS_TURN = { n: 0, every: 22, tick: 30 };
-/** A monster AI wait: `base` + up to `spread` ms, counted in 90ms units of its 30ms ticks (so a third as long). */
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
 /** How much of a path is still to play, in ms. */
@@ -1226,7 +1225,6 @@ export class Life {
       ctx.drawImage(img, Math.round(hx + dx - io[0]), Math.round(hy + dy - io[1]));
     });
   }
-  /** Its speed now: a Speed status (Slow's negative value) is added to its own speed stat before the conversion. */
   /**
    * Its walking speed: the character's walk speed (125px/s) times its speed stat over 100, held to 10-140 - its
    * chaseSpeed while it chases if it has a chase pose, plus a Speed status (Slow's negative value). Doomed, the

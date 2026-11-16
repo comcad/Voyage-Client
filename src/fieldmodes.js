@@ -511,7 +511,6 @@ export class CarnivalField extends CarnivalWaitField {
     if (this.win) { if (this.win.side) g.windows.close(this.win.side); g.windows.close(this.win); g.carnivalSaved = { x: this.win.x, y: this.win.y, tab: this.win.tab }; }
     this.win = null;
   }
-  /** MONSTER_CARNIVAL_START: { team, cp: [mine, total, team, total, other, total] | null, counts: [per monster] }. */
   /** The Carnival window with this field's three lists, made once: by MONSTER_CARNIVAL_START or a script's OPEN_UI 0x12. */
   async openWindow() {
     const g = this.game;
