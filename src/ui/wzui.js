@@ -106,10 +106,16 @@ export class TextField {
   set value(v) { this.el.value = v; }
   focus() { this.el.focus(); }
   show(v) { this.el.style.display = v ? '' : 'none'; }
-  remove() { this.el.remove(); }
+  /** Detach the input. Blur first: a removed element keeps focus in some browsers, swallowing the game's keys. */
+  remove() { this.el.blur(); this.el.remove(); }
   /** Place the input over its canvas rect, given the canvas' on-screen box and scale (sy: the height's, when stretched). */
   layout(box, scale, sy = scale * TextField.stretchY) {
     const { x, y, w, h } = this.rect;
+    // windows redraw every frame but move rarely: write the styles only when something they are made of changed
+    const c = this._laid;
+    if (c && c.bl === box.left && c.bt === box.top && c.s === scale && c.sy === sy
+        && c.x === x && c.y === y && c.w === w && c.h === h) return;
+    this._laid = { bl: box.left, bt: box.top, s: scale, sy, x, y, w, h };
     Object.assign(this.el.style, {
       left: `${box.left + x * scale}px`, top: `${box.top + y * sy}px`,
       width: `${w * scale}px`, height: `${h * sy}px`, fontSize: `${Math.max(9, 12 * Math.min(scale, sy))}px`,
