@@ -621,6 +621,8 @@ const MOVE_FLUSH = 500;
 const EXCLUSIVE_TIMEOUT_MS = 10000;
 /** The least gap between two cash-item requests (ms), and how long one with no server answer stays busy. */
 const CASH_COOLDOWN_MS = 500, CASH_BUSY_MS = 5000;
+/** How long an OX quiz question leaves on the field clock (ms). */
+const QUIZ_CLOCK_MS = 30000;
 const NEED_TARGET = new Set([5121007, 15111004, 5111004, 15111001]);
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 /** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
@@ -3402,16 +3404,20 @@ export class Game {
         const q = id ? (await this.assets.json('Etc/OXQuiz.img'))?.[set]?.[id] : null;
         if (!q) { this.quizNotice = null; return; }
         let text;
-        if (ask) {
-          text = String(q.q ?? '');
-          if (this.clock) this.clock.end = performance.now() + (this.clock.dur ?? 30000);
-          else { this.clock = { end: performance.now() + 30000, dur: 30000 }; this.loadClockArt(); }
-        } else {
+        if (ask) text = String(q.q ?? '');
+        else {
           const d = String(q.d ?? '');
           text = `${d}${d ? ' ' : ''}[Answer:${Number(q.a) ? 'O' : 'X'}]`;
         }
+        // an empty question shows no blank notice and starts no timer
+        if (!text) { this.quizNotice = null; return; }
         const N = this.windows.W.FloatNotice?.[0];
         await this.assets.preload([N?.[0], N?.[1], N?.[2]].filter(Boolean));
+        // the clock is set only once the art is in, so the 30s is not spent waiting on a load
+        if (ask) {
+          if (this.clock) this.clock.end = performance.now() + (this.clock.dur ?? QUIZ_CLOCK_MS);
+          else { this.clock = { end: performance.now() + QUIZ_CLOCK_MS, dur: QUIZ_CLOCK_MS }; this.loadClockArt(); }
+        }
         this.quizNotice = { text, N };
       }),
       fieldClock: later((h, m, s) => { this.fieldClock = { secs: h * 3600 + m * 60 + s, at: performance.now() }; this.loadClockArt(); }),
