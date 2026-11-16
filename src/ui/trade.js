@@ -87,7 +87,7 @@ export class TradeWin extends Win {
     const it = this.g.inventory?.[tab]?.[pos];
     const slot = this.nextSlot();
     if (!it || this.confirmed[0]) return;
-    if (!slot) { this.mgr.notice("The trade window's slots are full."); return; }   // nine offers placed: say so
+    if (!slot) { this.g.notice("The trade window's slots are full."); return; }   // nine offers placed: say so, as a wrong-side drop does
     if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
     let qty = 1;
     if (tab !== 1 && it.quantity > 1) {
