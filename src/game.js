@@ -1894,7 +1894,7 @@ export class Game {
    * sealed; notExtend refused) it asks with the time it adds, held to the item's maxDays from now.
    */
   async useSandglass(slot, id, pos = 0) {
-    if (!pos) { this.sendCashItem(slot, id, (w) => w.short(0)); return; }
+    if (!pos) { this.sendCashItem(slot, id, (w) => w.short(0)); this.lockExclusive(); return; }   // retail: usable while dead, so no gate here
     if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
     if (!this.canExclusive(500)) return;
     const it = this.inventory?.equipped?.[pos], glass = this.inventory?.[5]?.[slot];
@@ -1910,7 +1910,10 @@ export class Game {
     const d = Math.floor(add / 86400), h = Math.floor((add % 86400) / 3600), m = Math.floor((add % 3600) / 60);
     const dur = `${d > 0 ? `${d} days` : ''}${h > 0 ? `${h} hrs.` : ''}${m > 0 ? `${m} min.` : ''}`;
     if (!(await this.windows.confirm(`When used on ${this.windows.itemName(it.id) || ''},  the effective date will be extended by ${dur}. Would you like to use it?`))) return;
+    // the awaits above may have taken seconds (a modal): what is still there is what gets extended
+    if (this.inventory?.equipped?.[pos] !== it || this.inventory?.[5]?.[slot] !== glass) return;
     this.sendCashItem(slot, id, (w) => w.short(pos));
+    this.lockExclusive();
   }
   async openKarma(slot, id) {
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
