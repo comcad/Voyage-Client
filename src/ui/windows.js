@@ -48,7 +48,7 @@ export class WindowManager {
   open(name, sound = null) {
     const w = this.wins[name];
     if (!w) return null;
-    if (!this.order.includes(w)) { this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; w.onOpen?.(); this.fit(w); const s = w.openSound || sound; if (s) sfx.play(s); } else this.raise(w);
+    if (!this.order.includes(w)) { this.order.push(w); w.onOpen?.(); this.fit(w); const s = w.openSound || sound; if (s) sfx.play(s); } else this.raise(w);
     return w;
   }
   /**
@@ -79,30 +79,30 @@ export class WindowManager {
     this.open(name, 'UI/MenuUp');
     w.setArg?.(arg);
   }
-  /** Esc: the window opened last goes, with MenuUp. False when there is none to close. */
+  /** Esc: the window on top goes (raise() and clicking reorder `order`, so z-order is what the user sees), with MenuUp. */
   closeTop() {
-    let top = null;
-    for (const w of this.order) {
+    for (let i = this.order.length - 1; i >= 0; i--) {
+      const w = this.order[i];
       if (w.modal || w.keepOnEscape || w === this.wins.minimap || w === this.wins.questalarm) continue;
-      if (!top || (w.openedSeq || 0) > (top.openedSeq || 0)) top = w;
+      sfx.play('UI/MenuUp');
+      this.close(w);
+      return true;
     }
-    if (!top) return false;
-    sfx.play('UI/MenuUp');
-    this.close(top);
-    return true;
+    return false;
   }
   /** A transient window (dialog, shop) on top of everything. */
-  show(w, sound = 'UI/DlgNotice') { this.fit(w); this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; if (sound) sfx.play(sound); return w; }
+  show(w, sound = 'UI/DlgNotice') { this.fit(w); this.order.push(w); if (sound) sfx.play(sound); return w; }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
     // Escape puts back an item held by a click
     if (e.key === 'Escape' && this.carry?.sticky) { e.preventDefault(); e.stopImmediatePropagation(); this.carry = null; return; }
-    const top = this.modal || (this.order[this.order.length - 1]?.key && e.key === 'Escape' ? this.order[this.order.length - 1] : null);
+    const modal = this.modal;
+    const top = modal || (this.order[this.order.length - 1]?.key && e.key === 'Escape' ? this.order[this.order.length - 1] : null);
     if (!top) return;
     const typing = e.target instanceof HTMLInputElement;
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); top.key?.(e); return; }
-    if (!typing && top === this.modal && top.keys?.(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }   // a dialog's own keys (arrows, Tab)
-    if (!typing && this.modal) e.stopImmediatePropagation();   // no walking or attacking under a dialog
+    if (!typing && modal && top.keys?.(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }   // a dialog's own keys (arrows, Tab)
+    if (!typing && modal) e.stopImmediatePropagation();   // no walking or attacking under a dialog
   }
   raise(w) { const i = this.order.indexOf(w); if (i >= 0 && i !== this.order.length - 1) { this.order.splice(i, 1); this.order.push(w); } }
   top(x, y) { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].contains(x, y)) return this.order[i]; return null; }
@@ -283,9 +283,9 @@ export class WindowManager {
       }
     }
     // text boxes sit over the canvas: under a question box they hide, let clicks through and let go of the keyboard
-    const modal = this.modal, top = modal ? this.order.indexOf(modal) : -1;
+    const modalAt = this.order.indexOf(this.modal);   // not `top`: that is the hit-test method
     this.order.forEach((w, i) => {
-      const covered = i < top;
+      const covered = i < modalAt;
       for (const f of w.textFields?.() || []) {
         f.el.style.opacity = covered ? '0' : ''; f.el.style.pointerEvents = covered ? 'none' : '';
         if (covered && document.activeElement === f.el) f.el.blur();
@@ -398,6 +398,8 @@ const scrollSizes = (V) => ({ w: V?.enabled?.prev0?._w || 12, a: V?.enabled?.pre
  * with BtCoin at its left. BtFull / BtSmall switch between them; the choice is kept per character.
  */
 const FULL_W = 603, SMALL_W = 175;
+/** The small inventory's scrollbar: x, y and height, shared by its draw and its click test. */
+const INV_BAR = [156, 51, 201];
 /** BtCashshop's Cash Shop item, by tab: the slot expansion for Equip, Use and Etc. */
 const SLOT_ITEM_SN = { 1: 50200093, 2: 50200094, 4: 50200095 };
 class InventoryWin extends Win {
@@ -509,7 +511,7 @@ class InventoryWin extends Win {
     // the star, arrow or bullet the next shot throws
     const ammo = this.tab === 2 && g.ammoSlot?.(), ac = ammo && this.cell(ammo), active = ac && m.image(this.W.activeIcon);
     if (active) ctx.drawImage(active, ac.x - 2, ac.y - 2);
-    if (!this.full) this.scrollbar(ctx, 156, 51, 201, this.first, this.rows, 6);
+    if (!this.full) this.scrollbar(ctx, ...INV_BAR, this.first, this.rows, 6);
     this.text(ctx, (g.meso || 0).toLocaleString('en-US'), 135, 268, { align: 'right' });
     this.drawNew(ctx);
   }
@@ -534,7 +536,7 @@ class InventoryWin extends Win {
   down(lx, ly) {
     const hit = tabAt(this.tabRects, lx, ly);
     if (hit >= 0) { if (this.tab !== hit + 1) { this.setTab(hit + 1); sfx.play('UI/Tab'); } return; }
-    const s = this.full ? null : this.scrollClick(lx, ly, 156, 51, 201, this.first, this.rows, 6);
+    const s = this.full ? null : this.scrollClick(lx, ly, ...INV_BAR, this.first, this.rows, 6);
     if (s !== null) { this.first = s; return; }
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
     if (it) this.mgr.startCarry({ kind: 'item', tab: this.tab, slot, id: it.id }, this.mgr.icon(it.id));
@@ -1237,6 +1239,8 @@ class SkillWin extends Win {
  * (quests sharing a parent) is one row named after the parent; its text is each part's name and words so far.
  */
 const QROW_Y = 50, QROW_H = 22, QROWS = 13, QFONT = 12;
+/** The quest list's scrollbar: x, y and height, shared by its draw and its click test. */
+const QUEST_BAR = [229, 46, 324];
 const QDETAIL = { x: 18, y: 127, w: 263, h: 237, hSum: 114, line: 8 }, QLINE = 18;
 const QSUM = { x: 18, y: 249, w: 263, h: 108 };
 /**
@@ -1558,7 +1562,7 @@ class QuestWin extends Win {
       const n = m.image(this.W[`notice${this.tab}`]);
       if (n) ctx.drawImage(n, ((210 - n.width) >> 1) - 2, ((309 - n.height) >> 1) + 50);
     }
-    this.scrollbar(ctx, 229, 46, 324, this.first, rows.length, QROWS);
+    this.scrollbar(ctx, ...QUEST_BAR, this.first, rows.length, QROWS);
   }
   drawDetail(ctx, dx) {
     if (this.laidOut !== this.mgr.namesVersion || (!this.laidStr && this.str)) { this.laidStr = !!this.str; this.layoutDetail(); }
@@ -1645,7 +1649,7 @@ class QuestWin extends Win {
       return;
     }
     const rows = this.rows();
-    const s = this.scrollClick(lx, ly, 229, 46, 324, this.first, rows.length, QROWS);
+    const s = this.scrollClick(lx, ly, ...QUEST_BAR, this.first, rows.length, QROWS);
     if (s !== null) { this.first = s; return; }
     const i = this.rowAt(lx, ly), r = rows[i];
     if (!r) { if (ly >= 40 && lx < 228 && this.sel) { this.sel = null; this.showDetail(false); } return; }
