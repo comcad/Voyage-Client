@@ -54,7 +54,7 @@ export class GuildRankWin extends Win {
     this.text(ctx, rank < 10 ? `0${rank}` : String(rank), 44, y, o);
     this.text(ctx, gd.name, 85, y, o);
     this.text(ctx, String(gd.gp), 275, y, { ...o, align: 'right' });
-    ctx.restore();
     drawEmblem(ctx, this.g, gd.emblem, 64, y - 5);
+    ctx.restore();
   }
 }

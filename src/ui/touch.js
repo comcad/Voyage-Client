@@ -18,6 +18,7 @@ export class TouchControls {
     root.append(this.el);
     this.held = new Map();   // pointerId -> codes it holds
     this.ends = new Map();   // pointerId -> what lets go of its control
+    this.suspended = false;  // Key Setting is open: hidden, and the 1 Hz icon refresh must not touch the DOM
     // a finger lifted anywhere lets go of its control, even when the control didn't see it (the capture failed or
     // was taken away, or the controls were rebuilt under it)
     const end = (e) => this.ends.get(e.pointerId)?.(e);
@@ -94,7 +95,7 @@ export class TouchControls {
 
   /** Each button's icon (and item count) from its binding; skill and item icons can arrive late. */
   refreshIcons() {
-    if (this.el.style.display === 'none') return;
+    if (this.suspended || this.el.style.display === 'none') return;
     for (const el of this.el.querySelectorAll('[data-id]')) {
       const b = this.layout.buttons.find((x) => String(x.id) === el.dataset.id)?.b;
       const label = bindingLabel(b), node = b && !label && this.g.bindingIcon(b);
@@ -150,6 +151,7 @@ export class TouchControls {
     const up = (ev) => {
       if (ev && ev.pointerId !== e.pointerId) return;
       knob.style.transform = '';
+      this.upLocked = false;   // the gesture is over: the next straight-up push must not be swallowed
       this.held.delete(e.pointerId); this.ends.delete(e.pointerId);
       base.removeEventListener('pointermove', move);
       for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) base.removeEventListener(t, up);
@@ -169,7 +171,7 @@ export class TouchControls {
     this.g.input.setHeld('touch', all);
   }
   /** Hidden while Key Setting is open (the layout is edited there, and the buttons would cover the window). */
-  suspend(on) { this.el.style.visibility = on ? 'hidden' : ''; if (on) this.release(); }
+  suspend(on) { this.suspended = on; this.el.style.visibility = on ? 'hidden' : ''; if (on) this.release(); }
   release() {
     // held cleared first so each end's sync() publishes the empty set; upLocked goes with it — a later up
     // push (e.g. after a portal) must not be swallowed by a latch from a previous hold

@@ -4,6 +4,7 @@ import { drawParts } from '../character.js';
 import { nameTag } from '../map.js';
 import { sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
+import { isRechargeable } from '../net/proto.js';
 import { UI_W } from '../view.js';
 
 /**
@@ -26,7 +27,7 @@ export class StorageWin extends Win {
   constructor(mgr, s) {
     const T = mgr.W.Trunk;
     super(mgr, T.backgrnd, Math.round((UI_W - 463) / 2), 60);
-    this.buttons = [];
+    this.buttons = []; this.closeBtn = null;
     this.T = T; this.npc = s.npc; this.slots = s.slots; this.meso = s.meso;
     this.tab = 1; this.first = [0, 0]; this.sel = [-1, -1];
     this.setAll(s.items);
@@ -189,4 +190,3 @@ export class StorageWin extends Win {
     return null;
   }
 }
-const isRechargeable = (id) => [207, 233].includes(Math.floor(id / 10000));
