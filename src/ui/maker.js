@@ -48,7 +48,7 @@ function grey(img) {
       const d = c.getImageData(0, 0, g.width, g.height), p = d.data;
       for (let i = 0; i < p.length; i += 4) p[i] = p[i + 1] = p[i + 2] = (p[i + 1] * 53 + p[i] * 37 + p[i + 2] * 10) / 100;
       c.putImageData(d, 0, 0);
-    } catch { /* left in colour */ }
+    } catch (e) { /* left in colour */ console.warn('maker: an icon could not be greyed', e); }
     greys.set(img, g);
   }
   return g;
@@ -360,8 +360,14 @@ export class MakerWin extends Win {
     if (!out && inBox(...CATALYST, SLOT, SLOT, lx, ly)) out = this.takeCatalyst();
     if (out) sfx.play('UI/DragEnd');
   }
-  move(lx, ly) { this.cats.hover = this.cats.rowAt(lx, ly); this.items.hover = this.items.rowAt(lx, ly); }
-  wheel(dy) { this.cats.wheel(dy); this.items.wheel(dy); }
+  move(lx, ly) {
+    if (this.state > 1) return;
+    this.cats.hover = this.cats.rowAt(lx, ly); this.items.hover = this.items.rowAt(lx, ly);
+  }
+  wheel(dy) {
+    if (this.state > 1) return;
+    this.cats.wheel(dy); this.items.wheel(dy);
+  }
 
   // ---------------------------------------------------------------- making it
   /** What it costs: an item's mesos plus a tenth per gem level x3, +5 tenths with a Stimulator; a disassembly by the equip's grade. */
@@ -464,7 +470,7 @@ export class MakerWin extends Win {
     const c = this.catalyst;
     if (!c.real || !c.base || (!c.need && this.type !== 2)) { if (notUse) ctx.drawImage(notUse, ...CATALYST); }
     else this.centred(ctx, c.applied ? this.icon(c.real) : grey(this.icon(c.base)), ...CATALYST);
-    if ((this.type === 1 && this.rec) || this.type === 4) {
+    if ((this.type === 1 && this.rec) || (this.type === 4 && this.slots[0].id)) {
       uiText(ctx, this.fee().toLocaleString('en-US'), 277, 226, { color: FEE_COLOR, size: 11, align: 'right' });
     }
     this.drawGauge(ctx);
@@ -476,7 +482,7 @@ export class MakerWin extends Win {
     ctx.drawImage(bar, GAUGE_X, GAUGE_Y);
     let fill = 0;
     if (this.state === 2) {
-      fill = Math.trunc((Math.trunc((bar.width - 4) / 5) * (performance.now() - this.startedAt)) / 1000);
+      fill = Math.trunc(((bar.width - 4) * (performance.now() - this.startedAt)) / MAKE_MS);
       if (fill > bar.width - 4) return;
     }
     if (cover) ctx.drawImage(cover, fill + 8, GAUGE_Y, bar.width + 4 - (fill + 8), cover.height);
