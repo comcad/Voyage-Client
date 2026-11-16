@@ -35,6 +35,11 @@ function expandKey(key) {
   return { w, nr };
 }
 
+/**
+ * One AES block: the state is built in a scratch copy so the caller's input survives. This copy and the per-chunk
+ * block in `crypt` are deliberate and left alone: the AES loop, not the Shanda rounds, is where a packet's cost sits,
+ * and v83 UI traffic is a handful of small packets a second, so there is nothing to win here.
+ */
 function aesEncryptBlock({ w, nr }, block) {
   const s = Uint8Array.from(block);
   for (let i = 0; i < 16; i++) s[i] ^= w[i];
