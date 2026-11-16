@@ -3106,8 +3106,7 @@ export class Game {
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.maskCurses('');   // loads the word list for incoming lines
-    this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
-    this.windows.fit(this.windows.wins.minimap);
+    this.windows.show(this.windows.wins.minimap, null);   // the minimap starts open, under every window
     this.bindUiPointer();
     this.hud = new Hud(this);
     this.quests = new QuestBook(this.assets);
