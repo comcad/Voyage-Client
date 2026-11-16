@@ -155,7 +155,6 @@ const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
 const WHEEL_OF_DESTINY = 5510000;
 /** fieldLimit bit: no movement skills (Teleport, Monster Magnet...) on this map. */
 const FIELD_NO_MOVEMENT_SKILLS = 0x2;
-
 const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST_GREY = '#bbbbbb';
 
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
@@ -2255,14 +2254,16 @@ export class Game {
    */
   /** A consumable's effect (Effect/ItemEff.img/<item>) loops on them until another (or 0) comes; not while morphed. */
   async setConsumeEffect(ent, id) {
+    // the token is its own counter, not the item id: consuming the same item twice must cancel the first
+    const token = (ent.consumeFxGen = (ent.consumeFxGen || 0) + 1);
     ent.consumeFxId = id;
     if (!id) return;
     const node = (await this.assets.json('Effect/ItemEff.img'))?.[id], fx = Game.fxNode(node);
-    if (!fx || ent.consumeFxId !== id) return;
+    if (!fx || ent.consumeFxGen !== token) return;
     const anim = new Anim(fx, true);
     await this.assets.preload(anim.frames);
     const here = () => ent === this.player || this.others.get(ent.id) === ent;
-    this.fx.push({ anim, follow: ent, keep: () => ent.consumeFxId === id && here() && !ent.morph && !ent.ghost });
+    this.fx.push({ anim, follow: ent, keep: () => ent.consumeFxGen === token && here() && !ent.morph && !ent.ghost });
   }
   /**
    * Heart-Shaped Chocolates (5110000): n % 10 small hearts (ItemEff.img/5110000/0) and n / 10 big ones (/1) over their
@@ -3767,6 +3768,7 @@ export class Game {
         rp.attackScale = this.attackScale(Math.max(2, Math.min(10, how.speed ?? 6)));
         const charge = { id: skillId, pose, until: performance.now() + (node.keydown ? Infinity : 2000) };
         rp.charge = charge;
+        rp.alertUntil = 0;   // a new charge owns the pose; a stale 5s alert from an earlier cancel must not resurface after it
         const keep = () => rp.charge === charge && this.others.get(chrId) === rp;
         if (frames(node.prepare).length) this.playSkillEffect(skillId, rp, false, 'prepare');
         const at = Number(node.prepare?.time) || 0;
