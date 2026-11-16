@@ -41,16 +41,15 @@ export function familyResult(code, mesos, severed = '') {
   if (code === 1) return [[`You have severed ties with ${severed}.\r\nYour family relationship has ended.`], []];
   if (RESULT_CHAT[code]) return [[], [RESULT_CHAT[code]]];
   const t = RESULTS[code];
-  if (!t) return [[], []];
+  if (!t) { console.warn(`family: unrecognised FAMILY_RESULT 0x${Number(code).toString(16)}`); return [[], []]; }
   const notices = [t.replace('%d', String(mesos))];
   if (code === 0x52) notices.push(RESULTS[0x4E]);
   return [notices, []];
 }
-const plain = (t) => (t || '').replace(/\\n/g, '\n').replace(/#[a-z]/g, '').replace(/#/g, '');
-// RightIcon per privilege (the game server's FamilyEntitlement order): 2 EXP, 3 DROP, 4 the family ones (reunion, summon, bonding)
-const ICONS = [4, 4, 3, 2, 4, 3, 2, 3, 2, 3, 2];
+const plain = (t) => (t || '').replace(/\\n/g, '\n').replace(/#[a-zA-Z]/g, '').replace(/#/g, '');
 // RightIcon from the privilege's own name: 3 Drop, 2 EXP, else 4 (Reunion / Summon / Bonding)
 const iconOf = (p) => (/Drop/i.test(p.name) ? 3 : /EXP/i.test(p.name) ? 2 : 4);
+
 export class FamilyWin extends Win {
   constructor(mgr) {
     const F = mgr.W.Family;
@@ -142,6 +141,8 @@ export class FamilyWin extends Win {
  */
 const SLOT = { leader: [233, 41], grand: [233, 96], senior: [233, 149], self: [233, 202], sibling: [379, 202],
   j0: [88, 255], j1: [379, 255], s00: [19, 308], s01: [157, 308], s10: [310, 308], s11: [448, 308] };
+/** The plate hit rectangle, measured from the art (see the comment above). */
+const PLATE_W = 133, PLATE_H = 34;
 
 export class FamilyTreeWin extends Win {
   constructor(mgr) {
@@ -227,11 +228,11 @@ export class FamilyTreeWin extends Win {
     }
   }
   down(lx, ly) {
-    const h = this.hits?.find(([x, y]) => lx >= x && lx < x + 133 && ly >= y && ly < y + 34);
+    const h = this.hits?.find(([x, y]) => lx >= x && lx < x + PLATE_W && ly >= y && ly < y + PLATE_H);
     if (h) { this.sel = h[2].id; sfx.play('UI/BtMouseClick'); }
   }
   dblclick(lx, ly) {
-    const h = this.hits?.find(([x, y]) => lx >= x && lx < x + 133 && ly >= y && ly < y + 34);
+    const h = this.hits?.find(([x, y]) => lx >= x && lx < x + PLATE_W && ly >= y && ly < y + PLATE_H);
     if (h && h[2].id !== this.chart.self) this.load(h[2].name);
   }
 }
