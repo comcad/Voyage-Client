@@ -16,7 +16,8 @@ export class ShopBoards {
     this.g = game;
     game.assets.json('UI/ChatBalloon.img').then(async (cb) => {
       this.M = cb?.miniroom;
-      if (this.M) await game.assets.preload([this.M.Able, this.M.Disable, ...Object.values(this.M.PSSkin || {})].filter(Boolean));
+      // only Disable is ever drawn (the pill art already shows O), so Able isn't loaded
+      if (this.M) await game.assets.preload([this.M.Disable, ...Object.values(this.M.PSSkin || {})].filter(Boolean));
     });
     this.items = null;
     game.assets.json('Item/Cash/0503.img').then((m) => { this.items = m; });
@@ -99,10 +100,16 @@ export class ShopBoards {
     if (b.playing) put(M.Progress, 60, 39);
     else { put(M.cNum?.[b.players], 70, 42); put(M.mNum?.[b.max], 90, 42); }
     ctx.save(); ctx.font = '12px Arial, sans-serif';
-    let first = '', t = String(b.title || '');
-    for (const ch of t) { if (ctx.measureText(first + ch).width > 100) break; first += ch; }
-    let rest = t.slice(first.length);
-    if (ctx.measureText(rest).width > 100) { while (rest && ctx.measureText(`${rest}..`).width > 100) rest = rest.slice(0, -1); rest += '..'; }
+    // the split is measured out once per title: it changes only when an update packet says so
+    let first, rest;
+    if (b.splitFor === String(b.title || '')) { first = b.splitFirst; rest = b.splitRest; }
+    else {
+      first = ''; const t = String(b.title || '');
+      for (const ch of t) { if (ctx.measureText(first + ch).width > 100) break; first += ch; }
+      rest = t.slice(first.length);
+      if (ctx.measureText(rest).width > 100) { while (rest && ctx.measureText(`${rest}..`).width > 100) rest = rest.slice(0, -1); rest += '..'; }
+      b.splitFor = t; b.splitFirst = first; b.splitRest = rest;
+    }
     ctx.restore();
     uiText(ctx, first, x + 8, y + 8, { color: '#000', size: 12 });
     if (rest) uiText(ctx, rest, x + 8, y + 22, { color: '#000', size: 12 });
@@ -116,7 +123,11 @@ export class ShopBoards {
     ctx.restore();
     lines.forEach((l, i) => uiText(ctx, l, x, y + i * 14, { color: '#000', size: 12 }));
   }
-  /** The boards' pill art already shows O (room for visitors); a full shop gets Disable over it. */
+  /**
+   * The boards' pill art already shows O (room for visitors); a full shop gets Disable over it. Note the server's
+   * spawn packet writes the visitor count into `max` and a literal 1 into `players` (its update packet doesn't),
+   * so the pill - and the booth/balloon skin - read right only after that first update.
+   */
   pill(ctx, box, x, y) {
     if (!box.max || box.players < box.max) return;
     const p = this.g.assets.image(this.M?.Disable);
