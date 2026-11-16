@@ -69,12 +69,15 @@ export class MorphView {
   constructor(tpl) { this.tpl = tpl; this.act = null; this.frame = 0; this.left = 0; this.acc = 0; this.dropped = false; }
   update(ent, action, oneTime, dt, scale = 1) {
     if (this.dropped) return;
+    // the time is taken whether or not this action has frames: an unsupported one left it banking up, and the
+    // next supported action ran all its saved-up steps in a single frame (120ms of banked time at most)
+    this.acc = Math.min((this.acc || 0) + dt * 1000, 120);
     const act = morphAction(this.tpl, action, oneTime);
     if (!act) return;
     const frames = framesOf(this.tpl.img[act]);
     if (!frames.length) { this.dropped = true; return; }
     if (act !== this.act) { this.act = act; this.frame = 0; this.left = this.delay(frames[0], act, scale); }
-    for (this.acc += dt * 1000; this.acc >= 30; this.acc -= 30) {
+    for (; this.acc >= 30; this.acc -= 30) {
       this.left -= 30;
       if (this.left >= 1) continue;
       if ((act === 'ladder' || act === 'rope') && ent.y === this.lastY) { this.left = 0; continue; }
