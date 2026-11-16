@@ -6734,7 +6734,8 @@ export class Game {
   touchPortal() {
     if (this.portalCooldown > 0) return;
     const p = this.player, portal = this.map.boxPortalAt(p.x, p.y, 3);
-    const enter = portal && this.touchedBoxPortal !== undefined && portal !== this.touchedBoxPortal && portal.tm !== 999999999;
+    // a script-only portal has no destination of its own: it is not this touch's to take
+    const enter = portal && this.touchedBoxPortal !== undefined && portal !== this.touchedBoxPortal && portal.tm !== SCRIPT_ONLY_PORTAL;
     this.touchedBoxPortal = portal || null;   // undefined only until the first check on a map
     if (enter) this.usePortal(portal);
   }
@@ -8732,6 +8733,8 @@ export class Game {
     // a critical: Critical Shot / Throw, Sharp Eyes, and Stun Mastery on a stunned monster (+its prop and damage)
     let rate = crit?.rate || 0, extra = crit ? crit.dmg + 100 : 0;
     const stun = this.skills.level(STUN_MASTERY) && (m.status?.second & 0x80) && this.skills.levelData(STUN_MASTERY);
+    // Stun Mastery's prop is clamped to 0..100 as a rate; the total is not capped (Sharp Eyes on top may cross
+    // 100 - "always" is a valid answer, not an error)
     if (stun) { rate += Math.max(0, Math.min(100, stun.prop || 0)); extra += stun.damage || 0; }
     const c = rate > 0 && extra > 0 && skillId !== BLIZZARD && Math.random() * 100 < rate;
     if (c) d += ((extra - 100) * base) / 100;
@@ -8757,13 +8760,13 @@ export class Game {
     const acc = Math.min(999, Math.max(0, this.accuracy() + accBuff)), hit = (acc * 100) / (over * 10 + 255);
     return hit * (0.7 + Math.random() * 0.6) < Math.min(999, Math.max(0, info.eva || 0));
   }
-  /** A Shadow Partner line: pct% of the line it follows, then Wind Walk and Vanish over again. */
+  /**
+   * A Shadow Partner line: the source line's share (the skill's y for a skill, x for a plain attack). Wind Walk
+   * and Vanish already went into the source line (physicalHit applies both), so they must not be applied here
+   * again: at 120% Wind Walk the partner would carry 1.2 x 1.2 of the factor.
+   */
   partnerHit(src, pct) {
-    const now = Date.now(), buffed = (ids) => (this.buffs || []).some((b) => ids.includes(b.source) && b.until > now);
-    let d = Math.trunc((src * pct) / 100);
-    if (buffed([WIND_WALK])) d = (d * (this.skills.levelData(WIND_WALK)?.damage || 100)) / 100;
-    if (this.skills.level(VANISH) && buffed(DARK_SIGHTS)) d = (d * (this.skills.levelData(VANISH)?.damage || 100)) / 100;
-    return Math.max(1, Math.trunc(d));
+    return Math.max(1, Math.trunc((src * pct) / 100));
   }
   /** Your Shadow Partner buff's level data, if it is on. */
   partner() {
