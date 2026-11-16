@@ -4326,6 +4326,9 @@ export class Game {
       this.touchedBoxPortal = undefined;   // arriving inside a touch portal doesn't take it
       this.charging = null;   // a skill being charged doesn't carry over
       this.keydown = null;
+      // a death notice that was up belongs to the map it came up on (openCashShop cancels it the same way); the
+      // ghost is re-tombed below, so the two ways of leaving a map while dead agree
+      if (this.death) { const d = this.death; this.death = null; if (d.notice) d.notice.answered = true; d.cancel?.(); }
       this.grenades = [];
       this.rush = null;
       this.weather.stop(false);   // weather belongs to the map it fell on
