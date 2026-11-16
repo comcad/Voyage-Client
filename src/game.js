@@ -1609,7 +1609,7 @@ export class Game {
       w.pending = false; w.names = e.names; w.merge(e.block);
       await this.windows.notice('You have sent a gift.');
       w.exit();
-    } else if (e.mode === 12) this.windows.notice('You cannot give more than one present for each wishlist.');
+    } else if (e.mode === 12) { w.pending = false; this.windows.notice('You cannot give more than one present for each wishlist.'); }
     else if ((e.mode === 13 || e.mode === 14) && w.give) { w.pending = false; this.windows.notice('Failed to send the gift.'); }
     else if (e.mode === 15 && !w.give) {
       w.pending = false; w.merge(e.block);
@@ -4180,7 +4180,7 @@ export class Game {
   interactNpc(npc) {
     if (this.windows.order.some((w) => w instanceof NpcDialog || w instanceof SlideMenu)) return;   // one conversation at a time: close it first
     const q = this.quests?.npcQuests(Number(npc.spawn.id), this.textCtx());
-    if (q?.all) npcQuestMenu(this, npc, q);
+    if (q?.all) npcQuestMenu(this, npc, q).catch((e) => console.error(e));   // a thrown line must not leave the box open
     else this.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
   }
 
@@ -4531,7 +4531,8 @@ export class Game {
   }
   /** Monsters waiting on a parent (appear -3) show once the parent is gone. */
   revealChildren() {
-    for (const m of this.map.life) if (m.parentMob && (m.parentMob.removed || !this.map.life.includes(m.parentMob))) { m.parentMob = null; m.appearing = false; }
+    const live = new Set(this.map.life);   // membership in one look per mob, not a scan per mob per frame
+    for (const m of this.map.life) if (m.parentMob && (m.parentMob.removed || !live.has(m.parentMob))) { m.parentMob = null; m.appearing = false; }
   }
 
   /**
