@@ -75,6 +75,8 @@ export const bookFile = (book) => `Skill/${pad(book, 3)}.img`;
 
 /** Bamboo Rain and Rage of Pharaoh for the Beginner, Noblesse, Legend and Evan. */
 const ARENA_ATTACKS = new Set([1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
+/** Space Dash and its Noblesse copy: computed but never shown in a book. */
+const SPACE_DASH = new Set([1014, 10001015]);
 
 export class SkillBook {
   constructor(assets) {
@@ -161,10 +163,14 @@ export class SkillBook {
     if (!j || j instanceof Promise) return [];
     return Object.keys(j.skill || {}).map(Number).filter((id) => {
       const n = j.skill[pad(id, 7)];
-      return id !== 1014 && id !== 10001015 && (id in this.levels || !n?.invisible) && (!n?.timeLimited || this.level(id) > 0);
+      return !SPACE_DASH.has(id) && (id in this.levels || !n?.invisible) && (!n?.timeLimited || this.level(id) > 0);
     });
   }
 
+  /**
+   * The id sets above are tested in a fixed order, so they must stay disjoint: a skill in two sets is
+   * classified by whichever test runs first. The data heuristic runs last, for skills no set names.
+   */
   kind(id, weaponId) {
     const n = this.node(id), ld = n?.level?.[1];
     if (!n || !ld || PROCS.has(id) || PASSIVES.has(id)) return 'passive';
@@ -179,7 +185,8 @@ export class SkillBook {
     // an attack has power (damage, magic, a projectile's x...); one that also lasts a while (a stun, a poison, a
     // freeze) is still an attack when it has targets - only heals, summons and the buffs below are not
     const targets = ld.mobCount || ld.attackCount || ld.bulletCount || n.ball;
-    const power = ld.damage || ld.mad || ld.fixdamage || ld.attackCount || ld.bulletCount || (ld.x && n.ball);
+    const hasBall = !!n.ball;
+    const power = ld.damage || ld.mad || ld.fixdamage || ld.attackCount || ld.bulletCount || (hasBall ? ld.x : 0);
     if (power && (targets || !ld.time) && !ld.hp && !n.summon && !NOT_ATTACKS.has(id)) {
       if (ld.mad) return 'magic';
       if (isBowman(id)) return BOW_SWINGS.has(id) ? 'melee' : 'ranged';
@@ -225,10 +232,13 @@ export class SkillBook {
 }
 
 /**
+<<<<<<< ours
  * Max damage per line, mirroring the server checks in AbstractDealDamageHandler.parseDamage
  * (client-side numbers must stay below calcDmgMax * 1.5 or the game server flags the character).
  */
 /**
+=======
+>>>>>>> theirs
  * Your critical chance and extra damage (percentage points on top of the skill's own damage%), v83 style:
  * Critical Shot with a bow or crossbow, Critical Throw with a claw (their Cygnus copies), Critical Punch with a knuckle, plus Sharp Eyes
  * from yourself or a party member. A critical hit does (skill damage% + extra)% instead of the skill's damage%.
@@ -256,6 +266,10 @@ export function critical(game, weaponCat, shot = true) {
   return rate > 0 ? { rate, dmg } : null;
 }
 
+/**
+ * Max damage per line, mirroring the server checks in AbstractDealDamageHandler.parseDamage
+ * (client-side numbers must stay below calcDmgMax * 1.5 or Cosmic flags the character).
+ */
 export function skillMaxDamage(game, id, lv, kind) {
   const s = game.stats;
   const ld = id ? game.skills.levelData(id, lv) : null;
