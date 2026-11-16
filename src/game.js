@@ -10869,8 +10869,3 @@ export function equipSlotFor(id, pet = 0) {
   if (ability[id]) return ability[id];
   return map[cat] ?? null;
 }
-/** Which pet an equipped slot belongs to (-1: not a pet's; the potion pouches are the lead pet's). */
-export function petOfSlot(pos) {
-  if (SHARED_PET_SLOTS.includes(pos)) return 0;
-  return PET_SLOTS.findIndex((s) => Object.values(s).includes(pos));
-}
