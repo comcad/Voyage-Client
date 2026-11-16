@@ -5,7 +5,8 @@ const NEVER = 0x0217E646BB058000n;   // FILETIME 2079-01-01: no expiry
 export const FT_EPOCH = 116444736000000000n;
 export const permanent = (exp) => !exp || BigInt(exp) <= 0n || BigInt(exp) >= NEVER;
 const toDate = (exp) => new Date(Number((BigInt(exp) - FT_EPOCH) / 10000n));
-// FILETIMEs and the server's clock are wall-clock times: read their UTC fields
+// FILETIMEs and the server's clock are wall-clock times: read their UTC fields, so the dialog text is always shown in
+// UTC whatever the player's timezone (do not "localize" it)
 const fmt = (d) => `${d.getUTCMonth() + 1}-${d.getUTCDate()}-${d.getUTCFullYear()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`;
 
 /**
