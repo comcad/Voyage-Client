@@ -9971,7 +9971,7 @@ export class Game {
   /**
    * Your curses last until the server lifts them (CANCEL_BUFF); while one of Stun, Poison, Seal, Darkness,
    * Weakness, Curse, Slow, Reverse and the few other stats in EXPIRY_CHECKED is within 100ms of its end or past
-   * it, CANCEL_DEBUFF goes out every frame. Other players' curses still end on their own timer.
+   * it, CANCEL_DEBUFF goes out once, held until none of them is due. Other players' curses still end on their own timer.
    */
   updateDiseases(dt) {
     const now = Date.now();
@@ -9981,7 +9981,8 @@ export class Game {
       for (const d of ent.diseases) d.anim?.update(dt * 1000);
     }
     const due = (d) => now - d.until > -100 && ((BigInt.asUintN(64, BigInt(d.m2 ?? 0)) & EXPIRY_CHECKED.low) || (BigInt.asUintN(64, BigInt(d.m1 ?? 0)) & EXPIRY_CHECKED.high));
-    if (this.diseases?.some(due)) this.net?.cancelDebuff();
+    if (this.diseases?.some(due)) { if (!this.debuffSent) { this.debuffSent = true; this.net?.cancelDebuff(); } }
+    else this.debuffSent = false;
   }
   drawDiseases(ctx, cam, p = this.player, list = this.diseases) {
     for (const d of list || []) {
@@ -10091,11 +10092,10 @@ export class Game {
     if (!this.net || this.player?.id == null || hypnotized(v) === hypnotized(m)) return;
     const now = performance.now();
     if (now - (v.mobHitAt ?? -Infinity) < 2000) return;
-    v.mobHitAt = now;
     const magic = !!a?.info?.magic;
     const atk = Number(m.src.info?.[magic ? 'MADamage' : 'PADamage']) || 0, def = Number(v.src.info?.[magic ? 'MDDamage' : 'PDDamage']) || 0;
     const atkRoll = atk * ((magic ? 0.75 : 0.8) + 0.05 * Math.random()), defRoll = def < 1 ? 0 : def * (0.5 + 0.1 * Math.random());
-    const dmg = Math.trunc((atkRoll + 100) * atk * 0.01 - defRoll);
+    const dmg = Math.max(0, Math.trunc((atkRoll + 100) * atk * 0.01 - defRoll));   // defence can outrun the attack
     const b = v.hitBox(), cx = Math.round((b.left + b.right) / 2), cy = Math.round((b.top + b.bottom) / 2);
     const hit = a?.info?.hit && Game.fxNode(a.info.hit);
     if (hit) {
@@ -10103,8 +10103,9 @@ export class Game {
       this.assets.preload(anim.frames).then(() => this.fx.push({ anim, x, y, flip: m.facingRight }));
     }
     if (a && CHAR_DAM[a.index]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[a.index]}`, { volume: this.volumeAt(v.x, v.y) });
-    v.hit(Math.max(0, dmg), m.x > v.x);
-    this.damageNumbers(v, [Math.max(0, dmg)], false);
+    v.hit(dmg, m.x > v.x);
+    this.damageNumbers(v, [dmg], false);
+    v.mobHitAt = now;   // stamped only once the blow has landed, so a refused one does not burn the 2s
     const left = a ? !m.facingRight : v.x < m.x;
     this.net.mobDamageMob(m.oid, this.player.id, v.oid, a ? a.index : -1, dmg, left, cx, cy);
   }
