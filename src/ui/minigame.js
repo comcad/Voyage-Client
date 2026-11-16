@@ -80,7 +80,10 @@ export class MinigameCreateWin extends Win {
   }
 }
 
-const CARD_TABLE = [{ n: 12, cols: 4, left: 89, top: 106 }, { n: 20, cols: 5, left: 61, top: 72 }, { n: 30, cols: 6, left: 33, top: 39 }];
+// the shared board metrics: the Omok hit-test origin (25, 32) against the painter's own stone origin, and the
+// Match Cards pitch: a 49x62 card on a 56x67 grid (CARD_TABLE locates its top-left card)
+const OMOK_HIT = [25, 32], PITCH = 24, CARD = [49, 62], CARD_PITCH = [56, 67];
+const CARD_TABLE = [{ cols: 4, left: 89, top: 106 }, { cols: 5, left: 61, top: 72 }, { cols: 6, left: 33, top: 39 }];
 
 /**
  * An Omok or Match Card room (Minigame/Omok|MemoryGame/backgrnd, 734x429, centred). The right side: the two players
@@ -98,10 +101,11 @@ export class MinigameRoomWin extends Win {
     Object.assign(this, { capacity: room.capacity, me: room.mySlot, users: room.users, records: room.records, title: room.title, piece: room.piece, tournament: room.tournament });
     this.state = 0; this.myTurn = false; this.ready = false; this.leaveAfter = false; this.gaveUp = false; this.tieAsked = false; this.tiePending = false;
     this.timer = 0; this.shown = 0; this.lines = []; this.first = 0; this.result = null; this.everTurn = false;
+    this.pressed = null; this.blink = null; this.endMark = null; this.flipBack = null;
     // Omok
     this.stones = []; this.myColor = 0; this.myStones = 0; this.backAsked = false; this.backPending = false; this.backUsed = false;
     // Match Cards
-    this.table = CARD_TABLE[this.piece] || CARD_TABLE[0]; this.cards = []; this.pairs = [0, 0]; this.firstCard = -1; this.step = 0; this.fx = [];
+    this.table = CARD_TABLE[this.piece] || CARD_TABLE[0]; this.cards = []; this.pairs = [0, 0]; this.firstCard = -1; this.secondCard = -1; this.step = 0; this.fx = []; this.dealt = 0; this.previewed = [];
     const C = this.C, B = mgr.B;
     this.button(B.BtClaim, 705, 371, () => {});
     this.startBtn = this.button(C.btStart, 625, 243, () => this.start());
@@ -146,7 +150,7 @@ export class MinigameRoomWin extends Win {
   name(slot) { return this.users[slot]?.name || ''; }
 
   // ---------------------------------------------------------------- your actions
-  start() { if (this.count > 0) this.g.net?.roomOp(0x3D); }
+  start() { if (this.count > 1 && this.ready) this.g.net?.roomOp(0x3D); }
   toggleReady() { play('Ready'); this.g.net?.roomOp(this.ready ? 0x3B : 0x3A); }
   async askTie() {
     if (this.tieAsked || this.tiePending) return;
@@ -194,14 +198,14 @@ export class MinigameRoomWin extends Win {
   down(lx, ly) {
     if (ly >= 288 && ly < 362 && lx >= 713 && lx < 725) { const v = this.scrollClick(lx, ly, 713, 288, 74, this.first, this.lines.length, 4); if (v !== null) this.first = v; return; }
     if (this.omok) {
-      const cx = Math.floor((lx - 25) / 24), cy = Math.floor((ly - 32) / 24);
-      if (cx >= 0 && cx < 15 && cy >= 0 && cy < 15 && lx - 25 - 24 * cx < 14 && ly - 32 - 24 * cy < 14) this.pressed = { x: cx, y: cy };
+      const cx = Math.floor((lx - OMOK_HIT[0]) / PITCH), cy = Math.floor((ly - OMOK_HIT[1]) / PITCH);
+      if (cx >= 0 && cx < 15 && cy >= 0 && cy < 15 && lx - OMOK_HIT[0] - PITCH * cx < 14 && ly - OMOK_HIT[1] - PITCH * cy < 14) this.pressed = { x: cx, y: cy };
       return;
     }
     const t = this.table;
     for (let i = 0; i < this.cards.length; i++) {
-      const x = t.left + 56 * (i % t.cols), y = t.top + 67 * Math.floor(i / t.cols);
-      if (lx >= x && lx < x + 49 && ly >= y && ly < y + 62) { this.pressed = { card: i }; return; }
+      const x = t.left + CARD_PITCH[0] * (i % t.cols), y = t.top + CARD_PITCH[1] * Math.floor(i / t.cols);
+      if (lx >= x && lx < x + CARD[0] && ly >= y && ly < y + CARD[1]) { this.pressed = { card: i }; return; }
     }
   }
   wheel(s) { this.first = Math.max(0, Math.min(Math.max(0, this.lines.length - 4), this.first + s)); }
@@ -245,8 +249,8 @@ export class MinigameRoomWin extends Win {
         if (this.stones.length) this.stones[this.stones.length - 1].anim = this.stoneAnim(this.stones[this.stones.length - 1].color);
         this.myTurn = d.slot === this.me; if (this.myTurn) this.backUsed = true; this.timer = 30000;
         break;
-      case 0x3A: this.ready = true; if (this.me === 0) this.startBtn.enabled = true; break;
-      case 0x3B: this.ready = false; if (this.me === 0) this.startBtn.enabled = false; break;
+      case 0x3A: this.ready = true; break;
+      case 0x3B: this.ready = false; break;
       case 0x3D: this.begin(d); break;
       case 0x3E: this.end(d); break;
       case 0x3F:
@@ -295,8 +299,7 @@ export class MinigameRoomWin extends Win {
     this.records = [d.records[0], d.records[1]];
     this.result = d.type === 1 ? 'draw' : won ? 'win' : 'lose';
     this.endMark = this.count > 1 && d.type !== 1 ? (won ? 'charLose' : 'charWin') : null;
-    this.state = 2; this.flipBack = null; this.ready = false; this.leaveAfter = false; this.tieAsked = false; this.tiePending = false; this.gaveUp = false; this.backAsked = false; this.backPending = false;
-    if (this.me === 0) this.startBtn.enabled = false;
+    this.flipBack = null; this.ready = false; this.leaveAfter = false; this.tieAsked = false; this.tiePending = false; this.gaveUp = false; this.backAsked = false; this.backPending = false;
     this.state = 0;
   }
   flipUp(i, mismatch = false) {
@@ -320,7 +323,7 @@ export class MinigameRoomWin extends Win {
 
   // ---------------------------------------------------------------- frame
   tick() {
-    const now = performance.now(), dt = now - this.t; this.t = now;
+    const now = performance.now(), dt = Math.min(now - this.t, 250); this.t = now;
     if (this.flipBack && now >= this.flipBack.at) { for (const i of this.flipBack.cards) this.flipDown(i); this.flipBack = null; this.firstCard = -1; this.secondCard = -1; }
     for (const s of this.stones) s.anim?.update(dt);
     // the deal: card i turns up at step i (200ms each) and back down five steps later
@@ -331,12 +334,12 @@ export class MinigameRoomWin extends Win {
       if (i >= n + 5) this.dealt = 0;
     }
     if (this.state !== 1) return;
-    this.timer -= dt;
+    this.timer = Math.max(0, this.timer - dt);   // clamped and absolute: a long pause (hidden tab) cannot skip the whole clock
     let shown = Math.max(0, Math.floor((this.timer + 999) / 1000));
     if (!this.omok) shown = Math.min(10, shown);
     if (shown !== this.shown) {
       if (this.myTurn && this.shown >= 1 && this.shown <= 9) play('Timer');
-      if (shown === 0) this.g.net?.roomOp(0x3F);
+      if (shown === 0 && this.myTurn) this.g.net?.roomOp(0x3F);
       this.shown = shown;
     }
   }
@@ -385,7 +388,7 @@ export class MinigameRoomWin extends Win {
       const node = s.anim?.node || st?.[s.color === 1 ? 'black' : 'white']?.[0];
       if (blinking && s.color === this.blink.color && Math.floor(now / 180) % 2) continue;
       const img = node && im(node);
-      if (img) { const o = node.origin || [0, 0]; ctx.drawImage(img, 21 + 24 * s.x - o[0], 28 + 24 * s.y - o[1]); }
+      if (img) { const o = node.origin || [0, 0]; ctx.drawImage(img, 21 + PITCH * s.x - o[0], 28 + PITCH * s.y - o[1]); }
     }
     if (this.everTurn && this.myColor) {
       const mine = st?.[this.myColor === 1 ? 'black' : 'white']?.[0], theirs = st?.[this.myColor === 1 ? 'white' : 'black']?.[0];
@@ -397,7 +400,7 @@ export class MinigameRoomWin extends Win {
   drawTable(ctx) {
     const G = this.M.MemoryGame, t = this.table, im = (n) => this.mgr.image(n), now = performance.now();
     this.cards.forEach((c, i) => {
-      const x = t.left + 56 * (i % t.cols), y = t.top + 67 * Math.floor(i / t.cols), press = this.pressed?.card === i ? 2 : 0;
+      const x = t.left + CARD_PITCH[0] * (i % t.cols), y = t.top + CARD_PITCH[1] * Math.floor(i / t.cols), press = this.pressed?.card === i ? 2 : 0;
       const showing = c.up || c.taken;
       const k = Math.min(1, (now - c.flipAt) / 600), face = showing ? k >= 0.5 : k < 0.5;
       const img = im(face ? G.card?.[c.id] : G.card?.[`back${this.piece}`]);
@@ -410,7 +413,7 @@ export class MinigameRoomWin extends Win {
       if (k >= 5) continue;
       const node = G[`effect${this.piece}`]?.[k] || G[`effect${this.piece}`]?.[0], img = node && im(node);
       if (!img) continue;
-      const i = f.i, x = t.left + 56 * (i % t.cols), y = t.top + 67 * Math.floor(i / t.cols), o = node.origin || [0, 0];
+      const i = f.i, x = t.left + CARD_PITCH[0] * (i % t.cols), y = t.top + CARD_PITCH[1] * Math.floor(i / t.cols), o = node.origin || [0, 0];
       ctx.save(); ctx.globalAlpha = k % 2 ? 0.5 : 1; ctx.drawImage(img, x - o[0], y - o[1]); ctx.restore();
     }
     const num = (n, x) => { const img = im(G.number?.[n]); if (img) ctx.drawImage(img, x, 207); };

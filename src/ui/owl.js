@@ -14,6 +14,8 @@ const clip = (ctx, t, w) => {
 };
 const withFont = (ctx, font, fn) => { ctx.save(); ctx.font = font; const r = fn(); ctx.restore(); return r; };
 const ASC = 'Show 200 results in ascending order', DESC = 'Show 200 results in descending order';
+// the tree's row offsets in each state: how far Use / Etc / Setup sit below Eqp (13px a row)
+const TREE_KEYS = (s) => ({ kU: { 1: 11, 4: 7, 5: 11 }[s] || 0, kE: { 1: 11, 2: 5, 4: 7, 5: 11 }[s] || 0, kS: { 1: 11, 2: 5, 3: 4, 4: 7, 5: 11 }[s] || 0 });
 
 // the category tree: labels, and the id ranges each leaf searches ([from, to], second range or null)
 const EQP = ['HAT', 'EARRING', 'TOP', 'BOTTOM', 'Overall Armor', 'GLOVE', 'SHOES', 'SHIELD', 'CAPE', 'One-handed Weapon', 'Two-handed Weapon'];
@@ -117,12 +119,14 @@ export class OwlWin extends Win {
     if (seq === this.seq) this.right.enabled = this.matches.length > 10;
   }
   async page(d) {
+    const seq = this.seq;
     if (this.panel === 1) {
       this.pg = d > 0 ? 1 : 0; this.left.enabled = this.pg === 1; this.right.enabled = this.pg === 0; this.sel = -1;
       return;
     }
     const p = Math.max(0, this.pg + d);
     await this.ensure((p + 1) * 10 + 1);
+    if (seq !== this.seq) return;   // a rebuild started while we loaded: its own state wins
     if (p * 10 >= this.matches.length) return;
     this.pg = p; this.sel = -1; this.find.enabled = false;
     this.left.enabled = p > 0; this.right.enabled = this.matches.length > (p + 1) * 10;
@@ -157,7 +161,7 @@ export class OwlWin extends Win {
   /** The tree's clicks: rows 13px apart from y 40 (x doesn't matter). */
   treeClick(ly) {
     const r = Math.trunc((ly - 40) / 13), s = this.tree;
-    const kU = { 1: 11, 4: 7, 5: 11 }[s] || 0, kE = { 1: 11, 2: 5, 4: 7, 5: 11 }[s] || 0, kS = { 1: 11, 2: 5, 3: 4, 4: 7, 5: 11 }[s] || 0;
+    const { kU, kE, kS } = TREE_KEYS(s);
     this.ranges = null;
     if (r === 0) { this.tree = s === 4 ? 0 : 1; return; }
     if (r === kU + 1) { this.tree = 2; return; }
@@ -177,13 +181,13 @@ export class OwlWin extends Win {
     const sortText = this.panel === 3 ? (desc ? DESC : ASC) : ASC;
     const byte = this.panel === 1 ? this.checks[1] : desc;
     const name = this.mgr.itemName(id) || (await itemTable(this.g.assets)).find((e) => e.id === id)?.raw || '';
+    if (!this.g.canExclusive(500)) { this.mgr.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
     if (!(await this.mgr.confirm(`Would you like to search for\r\n[${name}]?\r\nThe Owl of Minerva will disappear\r\n${sortText}\r\nif there's a search result after pressing OK.`))) return;
-    if (this.g.canExclusive(500)) {
-      const u = this.use;
-      if (u.kind === 'cash') this.g.net?.useCashItem(u.slot, u.id, (w) => w.int(id).byte(byte ? 1 : 0));
-      else this.g.net?.useOwlItem(u.slot, u.id, id, byte);
-      this.g.lockExclusive();
-    }
+    if (!this.g.canExclusive(500)) { this.mgr.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
+    const u = this.use;
+    if (u.kind === 'cash') this.g.net?.useCashItem(u.slot, u.id, (w) => w.int(id).byte(byte ? 1 : 0));
+    else this.g.net?.useOwlItem(u.slot, u.id, id, byte);
+    this.g.lockExclusive();
     this.close();
   }
   drawPanel(ctx) {
@@ -214,7 +218,7 @@ export class OwlWin extends Win {
     if (this.panel === 2) {
       const s = this.tree, arrow = im(S.BtRight?.normal?.[0]);
       const row = (t, x, y) => { if (arrow) ctx.drawImage(arrow, x0 + x - 15, y); uiText(ctx, t, x0 + x, y, { color: '#000', size: 12 }); };
-      const kU = { 1: 11, 4: 7, 5: 11 }[s] || 0, kE = { 1: 11, 2: 5, 4: 7, 5: 11 }[s] || 0, kS = { 1: 11, 2: 5, 3: 4, 4: 7, 5: 11 }[s] || 0;
+      const { kU, kE, kS } = TREE_KEYS(s);
       row('Eqp', 30, 40);
       if (s !== 4 && s !== 5) { row('Use', 30, 53 + 13 * kU); row('Etc', 30, 66 + 13 * kE); row('Setup', 30, 79 + 13 * kS); }
       if (s === 1) EQP.forEach((t, i) => row(t, 50, 53 + 13 * i));
