@@ -49,7 +49,7 @@ export class DirectionScene {
       this.visuals.push({ anims: e.layers.map((l) => new Anim(l, false)), x: Number(e.x) || 0, y: Number(e.y) || 0,
         dx: Number(e.x1) || 0, dy: Number(e.y1) || 0, duration: Number(e.duration) || 0, z: Number(e.z) || 0, i: e.i, t: 0 });
       this.visuals.sort((a, b) => a.z - b.z || a.i - b.i);
-    } else if (type === 2 && e.field) g.directionField(Number(e.field));
+    } else if (type === 2 && e.field && Number(e.field) !== 999999999) g.directionField(Number(e.field));   // 999999999: no target (as game.js guards a directionField send)
     else if (type === 3) g.directionLook(Object.fromEntries(Object.entries(e).filter(([k]) => /^\d+$/.test(k)).map(([k, v]) => [Number(k), Number(v)])));
     else if (type === 4 && e.action) g.directionAction(String(e.action));
   }
