@@ -7507,7 +7507,9 @@ export class Game {
   }
   /** Milliseconds from the start of an action to the start of frame n (unscaled). */
   frameTime(action, n) { let t = 0; for (let i = 0; i < n; i++) t += this.look.delay(action, i); return t; }
-  afterimageLevel() { return Math.min(10, Math.floor((this.stats?.level || 1) / 10)); }
+  /** The afterimage art's level band: one per ten levels, the last one serving from 100 up. */
+  static afterimageLevelOf(level) { return Math.min(10, Math.floor((level || 1) / 10)); }
+  afterimageLevel() { return Game.afterimageLevelOf(this.stats?.level); }
   /** Character/Afterimage/<weapon's afterImage>.img: the swing trail for this action, by level tens. */
   async loadAfterimage() {
     const name = this.windows?.info(this.weaponId())?.afterImage;
@@ -7521,7 +7523,7 @@ export class Game {
     const local = ent === this.player;
     const name = local ? this.windows?.info(this.weaponId())?.afterImage : ent.look?.weapon?.info?.afterImage;
     const set = local ? this.afterimage : this.afterimageSet(name);
-    const lv = local ? this.afterimageLevel() : Math.min(10, Math.floor((ent.level || 1) / 10));
+    const lv = local ? this.afterimageLevel() : Game.afterimageLevelOf(ent.level);
     const own = skillId && (await this.skills?.ensure(skillId))?.afterimage;
     // a skill with its own trail (Dragon Fury's dragon) uses it instead of the weapon's, under the weapon's
     // afterImage name and the pose; with nothing there, no trail at all
@@ -7563,13 +7565,13 @@ export class Game {
   remoteAfterimage(rp, skillId, kind) {
     const action = rp.attack, look = rp.look;
     if (!action || !look) return;
-    const set = this.afterimageSet(look.weapon?.info?.afterImage), lv = Math.min(10, Math.floor((rp.level || 1) / 10));
+    const set = this.afterimageSet(look.weapon?.info?.afterImage), lv = Game.afterimageLevelOf(rp.level);
     const last = Math.max(0, look.frameCount(action) - 1);
     const keys = Object.keys(set?.[lv]?.[action] || {}).filter((k) => /^\d+$/.test(k)).map(Number);
     const frame = kind === 'ranged' ? Math.min(1, last) : kind === 'magic' ? last : keys.length ? Math.min(...keys) : last;
     let t = 0; for (let i = 0; i < frame; i++) t += look.delay(action, i);
     this.after(t * (rp.attackScale || 1), () => {
-      if (rp.attack !== action) return;
+      if (rp.attack !== action || this.others.get(rp.id) !== rp) return;   // they may be gone or replaced by now
       this.playAfterimage(action, frame, skillId, rp);
       if (kind === 'melee') this.playWeaponSound(rp);   // their shots sound as they fly instead
     });
