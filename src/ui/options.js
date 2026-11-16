@@ -1,6 +1,7 @@
 import { music, sfx } from '../audio.js';
 import { Win, allCanvases } from './windows.js';
 import { settings, saveSettings, MOB_INFO, FPS_CHOICES } from '../settings.js';
+import { gameOptions, saveGameOptions } from '../gameopt.js';
 import { RESOLUTIONS, VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, maxUiScale, resolutionName, resolutionIndex } from '../view.js';
 
 /**
@@ -87,7 +88,7 @@ const GAME_ROWS = ['whisper', 'friends', 'chatInvite', 'tradeRequest', 'partyInv
 export class GameOptWin extends Win {
   constructor(mgr) {
     super(mgr, mgr.W.GameOpt.backgrnd, 470, 70);
-    try { this.allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { this.allow = {}; }
+    this.allow = { ...gameOptions() };
     this.button(mgr.B.BtOK2, 34, 262, () => this.mgr.close(this));
     this.button(mgr.B.BtCancel2, 84, 262, () => this.cancel());
   }
@@ -95,7 +96,7 @@ export class GameOptWin extends Win {
   /** Cancel: the switches as they were when the window opened. */
   cancel() {
     this.allow = { ...(this.before || this.allow) };
-    try { localStorage.setItem('maple.gameopt', JSON.stringify(this.allow)); } catch { /* storage off */ }
+    saveGameOptions(this.allow);
     this.mgr.close(this);
   }
   key(e) { if (e.key === 'Escape') this.cancel(); }
@@ -116,7 +117,7 @@ export class GameOptWin extends Win {
     if (i < 0) return;
     const k = GAME_ROWS[i];
     this.allow[k] = this.allow[k] === false;
-    try { localStorage.setItem('maple.gameopt', JSON.stringify(this.allow)); } catch { /* storage off */ }
+    saveGameOptions(this.allow);
   }
 }
 
