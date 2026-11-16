@@ -8,10 +8,11 @@ import { snapPx } from './view.js';
  * attacks, as the game server expects (MOVE_SUMMON, SUMMON_ATTACK). Movement types as the game server sends them:
  * 0 stays where it was cast, 1 follows behind you, 3 circles above your shoulder (the birds).
  */
-const STAY = 0, FOLLOW = 1;
+const STAY = 0, FOLLOW = 1, ROAM = 2;   // MOVE_SUMMON's three types: on its spot, behind you, wandering
 /** Ranger / Sniper / Wind Archer Puppet: monsters near it go after it instead of you. */
 export const PUPPETS = new Set([3111002, 3211002, 13111004]);
-export const PUPPET_RANGE = 421;     // the game server hands you the monsters within this of your puppet (distanceSq < 177777)
+export const PUPPET_RANGE = 421;     // the game server hands you the monsters within this of your puppet (distanceSq < 177241)
+                                       // its own constant is 177777; 421 is that constant's truncating square root, and this is what the client enforces.
 const ATTACK_EVERY = 1.6;     // seconds between a summon's attacks (at least its attack animation)
 const SYNC_EVERY = 0.4;
 /** Octopus, Wrath of the Octopi and Gaviota: the summons that still attack while you are on a ladder or rope. */
@@ -21,7 +22,7 @@ const PIRATE_EVERY = { 5211001: 3, 5211002: 1.5, 5220002: 1.5 };
 /** Wrath of the Octopi picks attack1 or attack2 at random each time. */
 const WRATH = 5220002;
 /** A summon attack's action (attack1 is 4, attack2 5), sent with facing left in the top bit. */
-export const SUMMON_ACTIONS = { attack1: 4, attack2: 5 };
+const SUMMON_ACTIONS = { attack1: 4, attack2: 5 };
 const BEHOLDER = 1321007, AURA = 1320008, BERSERK = 1320006, HEX = 1320009;
 
 export class Summon {
@@ -83,7 +84,7 @@ export class Summon {
     if (this.moveType === STAY) return;
     const p = this.g.player, back = p.facingRight ? -1 : 1;
     this.phase += dt * 2.4;
-    const tx = p.x + back * (this.moveType === FOLLOW ? 55 : 40);
+    const tx = p.x + back * (this.moveType === FOLLOW ? 55 : 40);   // FOLLOW trails at 55, ROAM and anything else at 40
     const ty = p.y + Math.sin(this.phase) * 4;
     const k = 1 - Math.exp(-dt * 4);
     const dx = (tx - this.x) * k;
