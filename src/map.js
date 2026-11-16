@@ -122,11 +122,10 @@ export class GameMap {
     this.fh.fs = Number(data.info?.fs) || 1;   // the map's drag (1 when unset)
     this.ladders = Object.entries(data.ladderRope || {}).map(([id, l]) => ({ ...l, id: Number(id) }));   // the id goes in movement
 
-    // Bounds: VR* when present, else derived from footholds.
-    const i = this.info;
-    this.bounds = i.VRLeft !== undefined
-      ? { left: i.VRLeft, right: i.VRRight, top: i.VRTop, bottom: i.VRBottom }
-      : { left: this.fh.left + 10, right: this.fh.right - 10, top: this.fh.top - 360, bottom: this.fh.bottom + 110 };
+    // Bounds: VR* when present, else derived from the footholds. Per field, not all-or-nothing: a map with only
+    // some VR set must not hand undefined to clampCamera's arithmetic (b.right - b.left reads NaN otherwise).
+    const i = this.info, d = { left: this.fh.left + 10, right: this.fh.right - 10, top: this.fh.top - 360, bottom: this.fh.bottom + 110 };
+    this.bounds = { left: i.VRLeft ?? d.left, right: i.VRRight ?? d.right, top: i.VRTop ?? d.top, bottom: i.VRBottom ?? d.bottom };
 
     const [strMap, strNpc, strMob, helper] = await Promise.all([
       a.json('String/Map.img'), a.json('String/Npc.img'), a.json('String/Mob.img'), a.json('Map/MapHelper.img'),
@@ -215,12 +214,22 @@ export class GameMap {
     return out;
   }
 
+  /** The portal with that name, else the last-listed spawn portal, else portals[0], else the map's corner. */
   spawnPortal(name) {
     return this.portals.find((p) => p.pn === name) || this.portals.find((p) => p.pt === 0) || this.portals[0] || { x: 0, y: 0 };
   }
 
+  /**
+   * The portal the server's enter packet names by index. An index with no portal here - a mismatched client or a
+   * republished map - falls back to the spawn portal rather than landing at 0,0, and says so once per index: the
+   * arrival otherwise reads as correct on the player's screen while the map log says which id went missing.
+   */
   portalById(idx) {
-    return this.portals.find((p) => p.idx === idx) || this.spawnPortal(null);
+    const p = this.portals.find((q) => q.idx === idx);
+    if (p) return p;
+    const seen = this._missWarned ??= new Set();
+    if (!seen.has(idx)) { seen.add(idx); console.warn(`map ${this.id}: no portal idx ${idx}, arriving at the spawn portal`); }
+    return this.spawnPortal(null);
   }
 
   /** The portal Up takes you through: the client's [x-20, x+20) x [y-50, y+50) round your feet, last listed first. */
@@ -248,8 +257,14 @@ export class GameMap {
     const near = this.portals.find((p) => p.hidden && x >= p.x - 100 && x < p.x + 100 && y >= p.y - 50 && y < p.y + 50) || null;
     if (near === this.shownHidden) return;
     const old = this.shownHidden;
-    if (old) { old.anim = new Anim(old.hidden.exit, false); old.phase = 'exit'; }
-    if (near) { near.anim = new Anim(near.hidden.start, false); near.phase = 'start'; }
+    // a hidden door's art comes in three parts and not every portal has all three: a part that is missing is
+    // stepped over rather than built - a closing door with no exit art is simply gone, and an opening one
+    // with no start art is already in its continue phase
+    if (old && old.hidden.exit) { old.anim = new Anim(old.hidden.exit, false); old.phase = 'exit'; }
+    if (near) {
+      if (near.hidden.start) { near.anim = new Anim(near.hidden.start, false); near.phase = 'start'; }
+      else near.phase = 'cont';
+    }
     this.shownHidden = near;
   }
 
@@ -551,7 +566,7 @@ const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
 const STATUS_TURN = { every: 22, tick: 30 };
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
-/** How much of a path is still to play, in ms. */
+/** How long a monster's brain waits before its next think (Mob think: aggroed 800+0-400ms, idle 1000+0-2000ms, quantised to the 30ms AI tick). */
 const aiWait = (base, spread) => (Math.floor((base + Math.random() * spread) / 90) * 30) / 1000;
 
 /**
