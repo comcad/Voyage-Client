@@ -34,10 +34,12 @@ export function readSets(img) {
 export function wornSet(sets, equips, cashWeapon, pets) {
   let other = -1, multi = -1;
   for (const s of sets) {
-    const worn = s.parts.every(([part, list]) => slotsFor(part, list[0]).some((slot) => {
+    // per id: a part lists several items that may land in different slots, so asking only the first one's slot
+    // would miss a match the others would have made
+    const worn = s.parts.every(([part, list]) => list.some((cand) => slotsFor(part, cand).some((slot) => {
       const id = slot === 11 && cashWeapon ? cashWeapon : equips[slot];
       return list.includes(id);
-    }));
+    })));
     if (!worn) continue;
     if (s.pets.length && ![0, 1, 2].every((i) => s.pets.includes(pets?.[i]))) continue;
     if (s.type === 1) return s.index;
