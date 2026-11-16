@@ -1762,8 +1762,7 @@ export class Game {
     const name = (await this.windows.askText('Please enter the guest name.', '', { max: 12, minLen: 4 }))?.trim();
     if (!name) return;
     if (name === m.husband || name === m.wife) { this.windows.notice("You may not send the wedding invitation to yourself.\r\nYou're the one getting married!"); return; }
-    this.net.inviteGuest(name, m.id, slot);
-    this.lockExclusive();
+    this.net.inviteGuest(name, m.id, slot);   // no RING_ACTION 5 result exists, so a lock here would never be released (doc 118)
   }
   /**
    * Two characters on the map holding the same New Year card: Effect/ItemEff.img/4300000 loops at their midpoint,
