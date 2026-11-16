@@ -448,6 +448,13 @@ const HURRICANES = new Set([3121004, 13111002]), HURRICANE_GAP = 101, TICK = 30,
 const RAPID_FIRE = 5221004, HELD_SHOTS = new Set([...HURRICANES, RAPID_FIRE]);
 const DRAGONS_BREATH = new Set([3121003, 3221003]), POWER_KNOCKBACK = new Set([3101003, 3201003]);
 const MORTAL_BLOWS = [3110001, 3210001], SNIPE = 3221007, SOUL_ARROWS = [3101004, 3201004, 13101003];
+/**
+ * A weapon category's ammo, by item id: a bow's arrows (2060xxx), a crossbow's bolts (2061xxx), a claw's throwing-stars
+ * (207xxxx; 233 is a bullet for a gun, but 2331xxx and 2332xxx are not) and a gun's bullets (233xxxx). Both the ammo
+ * search and Shadow Stars' star pick read this one table.
+ */
+const AMMO_OK = { 145: (id) => Math.floor(id / 1000) === 2060, 146: (id) => Math.floor(id / 1000) === 2061,
+  147: (id) => Math.floor(id / 10000) === 207, 149: (id) => Math.floor(id / 10000) === 233 && ![2331, 2332].includes(Math.floor(id / 1000)) };
 const AMMO_OUT = { 145: 'You have used up all of your arrows.', 146: 'You have used up all of your arrows.',
   147: 'You have used up all of your throwing-stars.', 149: 'You do not have enough bullets to use this skill.' };
 /** Inferno and Blizzard count a weak or strong monster's element at only x% of the usual. */
@@ -7752,9 +7759,12 @@ export class Game {
     }
     this.net?.cancelBuff(k.id);
     this.skills.ensure(k.id).then((n) => {
+      // the same staleness guard keydownArt uses: tap, release, tap quickly and this release's end art must not land
+      // on top of the new hold
+      if (this.keydown) return;
       for (const { fx, under } of Game.fxLayers(n, 'keydownend')) {
         const anim = new Anim(fx, false);
-        this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p, under }));
+        this.assets.preload(anim.frames).then(() => { if (!this.keydown) this.fx.push({ anim, follow: p, under }); });
       }
     });
   }
@@ -7770,7 +7780,7 @@ export class Game {
     const slots = Object.keys(use).map(Number).sort((a, b) => a - b);
     for (const [i, s] of slots.entries()) {
       const it = use[s];
-      if (!it || Math.floor(it.id / 10000) !== 207 || !((it.quantity ?? 1) > 0)) continue;
+      if (!it || !AMMO_OK[147](it.id) || !((it.quantity ?? 1) > 0)) continue;
       const total = slots.slice(i).reduce((t, k) => t + (use[k]?.id === it.id ? use[k].quantity ?? 1 : 0), 0);
       if (total >= need) return it.id;
     }
@@ -8334,9 +8344,7 @@ export class Game {
    * capsule (2331xxx / 2332xxx) first and any bullet otherwise; nothing else ever takes a capsule.
    */
   ammoItem(count = 1, skillId = 0) {
-    const cat = Math.floor(this.weaponId() / 10000);
-    const ok = { 145: (id) => Math.floor(id / 1000) === 2060, 146: (id) => Math.floor(id / 1000) === 2061,
-      147: (id) => Math.floor(id / 10000) === 207, 149: (id) => Math.floor(id / 10000) === 233 && ![2331, 2332].includes(Math.floor(id / 1000)) }[cat];
+    const cat = Math.floor(this.weaponId() / 10000), ok = AMMO_OK[cat];
     if (!ok) return 0;
     const use = this.inventory?.[2] || {}, slots = Object.keys(use).map(Number).sort((a, b) => a - b);
     const capsule = CAPSULES[skillId];
