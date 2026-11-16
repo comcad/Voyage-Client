@@ -90,8 +90,15 @@ export class WindowManager {
     }
     return false;
   }
-  /** A transient window (dialog, shop) on top of everything. */
-  show(w, sound = 'UI/DlgNotice') { this.fit(w); this.order.push(w); if (sound) sfx.play(sound); return w; }
+  /** A transient window (dialog, shop) on top of everything: the same entry rules as open(), plus a notice sound. */
+  show(w, sound = 'UI/DlgNotice') {
+    if (this.order.includes(w)) { this.raise(w); return w; }
+    this.order.push(w);
+    w.onOpen?.();
+    this.fit(w);
+    if (sound) sfx.play(sound);
+    return w;
+  }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
     // Escape puts back an item held by a click
@@ -287,7 +294,10 @@ export class WindowManager {
     this.order.forEach((w, i) => {
       const covered = i < modalAt;
       for (const f of w.textFields?.() || []) {
-        f.el.style.opacity = covered ? '0' : ''; f.el.style.pointerEvents = covered ? 'none' : '';
+        if (f.covered !== covered) {   // per field: a window can gain fields after its first frame
+          f.covered = covered;
+          f.el.style.opacity = covered ? '0' : ''; f.el.style.pointerEvents = covered ? 'none' : '';
+        }
         if (covered && document.activeElement === f.el) f.el.blur();
       }
     });
