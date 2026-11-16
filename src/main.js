@@ -71,6 +71,8 @@ async function online(assets) {
   const game = new Game($('game-canvas'), assets, look, hooks, net);
   Object.assign(game, { server: pick.server, worldId: pick.world, channel: entered.channel ?? pick.channel, channelCount: pick.channels || 1, channelNames: pick.channelNames || [], gm: !!pick.gm, admin: pick.admin || 0, charSlots: pick.slots, charCount: pick.charCount, cafe: !!pick.cafe });
   if (debug) globalThis.maple = game;   // inspect from the console (?debug)
+  // the opcodes the server sent that nothing handled: a live view, since the session outlives this handle
+  if (debug) Object.defineProperty(game, 'unhandled', { get: () => net.unhandled, configurable: true });
   await game.goOnline(entered, $('ui-root'));
   game.start();
   // closing the tab, reloading or going back while in game asks first (the browser's own prompt)
