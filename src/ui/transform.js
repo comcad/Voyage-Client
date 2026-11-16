@@ -17,6 +17,7 @@ export class TransformWin extends Win {
     this.button(T.BtOk, 60, 100, () => this.ok());
     this.button(T.BtCancel, 170, 100, () => this.close());
     this.field = new TextField(mgr.game.statusBar.layer, 0, 0, 200, 14, { max: 12, color: '#000' });
+    // Enter reaches only here (the window is never modal); windows.js's capture handler routes Escape to key().
     this.field.el.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') this.ok(); else if (e.key === 'Escape') this.close();
@@ -28,6 +29,9 @@ export class TransformWin extends Win {
    * Puts the box over the art at (23, 54). The window is dragged and the canvas resized, so this still runs from
    * draw(); but the six styles are only written when the window's place or the scale has actually changed, so a
    * still window costs a compare instead of a style write and a layout flush every frame.
+   *
+   * The scale is read here rather than cached at open, which is what makes a resize work without a hook into
+   * setResolution: clientWidth changes, the compare misses, and the next frame rewrites the styles.
    */
   place(force = false) {
     const scale = this.g.canvas.clientWidth / UI_W;   // a style read: once per change, not once per frame
