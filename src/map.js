@@ -135,10 +135,10 @@ export class GameMap {
 
     onStatus?.('Loading backgrounds...');
     for (const [k, b] of Object.entries(data.back || {})) {
-      if (!b.bS) continue;
+      if (!b.bS || b.ani === 2) continue;   // a moving-parallax background the client doesn't draw: its set isn't fetched
       const set = await a.json(`Map/Back/${b.bS}.img`);
       const node = set?.[b.ani === 1 ? 'ani' : 'back']?.[b.no];
-      if (!node || b.ani === 2) continue;
+      if (!node) continue;
       this.backs.push({ ...b, idx: Number(k), node, anim: new Anim(node) });
     }
 
@@ -545,10 +545,10 @@ function findMapName(strMap, id) {
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
 /**
  * Looping status art with `repeat` (not icons: Weapon / Magic Immunity) shows one at a time: every monster update
- * (one per 30ms tick) of a monster that has some counts on a counter all monsters share, and on each 22nd that
- * monster moves on to its next one. A status of that kind coming or going sets the counter to 1 and moves on at once.
+ * (one per 30ms tick) of a monster that has some counts on a counter of its own, and on each 22nd that monster
+ * moves on to its next one. A status of that kind coming or going sets the counter to 1 and moves on at once.
  */
-const STATUS_TURN = { n: 0, every: 22, tick: 30 };
+const STATUS_TURN = { every: 22, tick: 30 };
 /** What a planned path's stand-in leaves behind for the path to play out rather than taking over. */
 const PLAYED = new Set(['x', 'y', 'fh', 'state', 'facingRight', 'prevX', 'prevY', 'setState']);
 /** How much of a path is still to play, in ms. */
@@ -597,7 +597,6 @@ export class Life {
     this.facingRight = !!spawn.f;   // f=1 mirrors the art, for NPCs and monsters alike
     this.maxHp = src.info?.maxHP || 1; this.hp = this.maxHp;
     const info = src.info || {};
-    this.speed = Math.max(0, (info.speed ?? 0) + 100) * 0.78;   // an NPC's walk
     // a monster's speed, flySpeed and chaseSpeed each count from 100 (held to 0-140); see walkSpeed
     const stat = (v) => Math.max(0, Math.min(140, (v ?? 0) + 100));
     this.speedStat = stat(info.speed); this.flySpeedStat = stat(info.flySpeed); this.chaseSpeedStat = stat(info.chaseSpeed);
@@ -862,7 +861,7 @@ export class Life {
       if (x < L0) { x = L0; cx = true; } else if (x > R0 - 1) { x = R0 - 1; cx = true; }
       if (y < T0) { y = T0; cy = true; } else if (y > B0 - 1) { y = B0 - 1; cy = true; }
       if (cx) F.tx = Math.trunc(x === L0 ? x + 30 : x - 30);
-      if (cy) F.ty = Math.trunc(y === T0 ? x + 30 : y - 30);
+      if (cy) F.ty = Math.trunc(y === T0 ? y + 30 : y - 30);
       // the step's point
       const e = { cmd: 0, x: Math.trunc(x), y: Math.trunc(y), vx: Math.trunc(vx), vy: Math.trunc(vy), fh: 0, stance: F.action, duration: 90 };
       const l = moves[moves.length - 1];
@@ -882,9 +881,8 @@ export class Life {
   kill(type = 1) {
     this.status = { first: 0, second: 0 }; this.statusArt.clear();
     this.dying = true;
-    if (type !== 1 && type !== 3 && this.anims.attack1) { this.deathAttack = true; this.attacking = null; this.playAttack(0); return; }
-    const dies = Object.keys(this.src).filter((k) => k.startsWith('die')).length;
-    const name = type === 3 ? 'skill1' : ['die1', 'die2', 'dieF'][Math.floor(Math.random() * dies)];
+    const dies = Object.keys(this.src).filter((k) => /^die(?:[1-9]|F)$/.test(k)).sort();
+    const name = type === 3 ? 'skill1' : dies[Math.floor(Math.random() * dies.length)] || 'die1';
     if (name && name !== 'die1' && this.src[name]) this.anims.die1 = new Anim(this.src[name], false);
     this.dieAction = { die1: 9, die2: 10, dieF: 11, skill1: 21 }[name] ?? 9;   // its action number, for the line it says
     this.state = ''; this.setState('die1'); if (!this.anims.die1) this.removed = true;
@@ -911,7 +909,7 @@ export class Life {
     const stanceBefore = this.stance;
     this.hp -= dmg;
     if (this.online) this.hp = Math.max(0, this.hp); // the server decides death (KILL_MONSTER)
-    else if (this.hp <= 0) { this.setState('die1'); return; }
+    else if (this.hp <= 0) { this.kill(); return; }   // the same pose, statuses and onDie as the server's word
     if (dmg < (this.src.info?.pushed ?? 1)) return;
     if (this.state === 'hit1' && this.hitTimer > 0) return;
     if (this.attacking) return;   // a monster mid-attack keeps its attack pose (the client's)
@@ -1049,7 +1047,8 @@ export class Life {
     this.beaconMark?.update(dt * 1000);
     if ([...this.statusArt.values()].some((e) => e.turn)) {
       for (this.turnAcc = (this.turnAcc || 0) + dt * 1000; this.turnAcc >= STATUS_TURN.tick; this.turnAcc -= STATUS_TURN.tick) {
-        if (STATUS_TURN.n++ % STATUS_TURN.every === 0) this.turnAt = (this.turnAt || 0) + 1;
+        // counted on this monster: with one shared, every other statused monster's odd turn fell on another's tick and froze
+        if ((this.turnN = (this.turnN || 0) + 1) % STATUS_TURN.every === 0) this.turnAt = (this.turnAt || 0) + 1;
       }
     }
     for (const e of this.statusArt.values()) {
@@ -1183,8 +1182,8 @@ export class Life {
     for (const [src, e] of this.statusArt) { e.first &= ~first; e.second &= ~second; if (!e.first && !e.second) { turned ||= !!e.turn; this.statusArt.delete(src); } }
     if (turned) this.turnNow();
   }
-  /** A turning status came or went: the shared counter starts again at 1 and this monster moves on to its next one. */
-  turnNow() { STATUS_TURN.n = 1; this.turnAt = (this.turnAt || 0) + 1; this.turnAcc = 0; }
+  /** A turning status came or went: this monster's counter starts again at 1 and it moves on to its next one at once. */
+  turnNow() { this.turnN = 1; this.turnAt = (this.turnAt || 0) + 1; this.turnAcc = 0; }
   /** The turning status art showing now (STATUS_TURN), or null. */
   get turnShown() {
     const list = [...this.statusArt.values()].filter((e) => e.turn);
@@ -1309,18 +1308,22 @@ export class Life {
   /**
    * An NPC we control (one that stays put): once its 3-9s wait is up, with no line up, no action playing and no answer
    * waiting, it picks a number below 50, taken modulo its actions (but the special ones) and lines together. An
-   * action (not the shop) goes as 2 + its place, with one of its own lines if it has any; otherwise that line of its
-   * own. It sends NPC_ACTION and does nothing until the server sends it back (npcActed).
+   * action (not the shop) goes as 2 + its place in the list, with one of its action's lines if it has any; otherwise
+   * that line of its own. The shop counts towards the roll but never goes at random, its next wait starting then.
+   * It sends NPC_ACTION and does nothing until the server sends it back (npcActed).
    */
   npcAsk(dt) {
     if ((this.actT -= dt) > 0 || this.chat || this.acting || this.npcWaiting) return;
     this.actT = (3000 + Math.floor(Math.random() * 6000)) / 1000;
-    const L = this.npcLists, n = L.actions.filter((a) => !a.special).length, m = L.lines.length;
+    const L = this.npcLists, acts = L.actions.filter((a) => !a.special), n = acts.length, m = L.lines.length;
     if (!(n + m)) return;
     const r = npcRoll() % (n + m);
     let action = -1, chat;
-    if (r < n && !L.actions[r].shop) { action = r + 2; const k = L.actions[r].lines.length; chat = k ? npcRoll() % k : -1; }
-    else chat = r - n;
+    // the count is of the ones that may go, but the id is the place in the whole list (npcActed reads it back);
+    // the shop counts towards the roll yet never goes at random (its menu picks it): nothing this time
+    if (r < n && !acts[r].shop) { const a = acts[r]; action = L.actions.indexOf(a) + 2; const k = a.lines.length; chat = k ? npcRoll() % k : -1; }
+    else if (r >= n) chat = r - n;
+    else return;
     this.npcWaiting = true;
     this.onNpcAction(this, action, chat);
   }
