@@ -1649,7 +1649,15 @@ export class Game {
     let n = 0; for (let s = 1; s <= limit; s++) if (!inv[s]) n++;
     return n;
   }
-  async showSingle(win) { await this.assets.preload(win.frames()); this.windows.show(win); return win; }
+  /**
+   * Show a window of which only one may be open, and none beside a shop-type one: refused (null) when one already is.
+   * Every caller that checks tradeOpen itself lands here too, so the rule holds even for the ones that forget.
+   */
+  async showSingle(win) {
+    if (this.tradeOpen()) return null;
+    await this.assets.preload(win.frames());
+    return this.windows.show(win);
+  }
   /** An engagement ring box: a free Etc slot, a male account, no engagement or marriage yet; then the partner's name. */
   async useRingBox(slot, id) {
     if (this.freeSlots(4) < 1) { this.windows.notice('Your ETC slot is full.\r\nPlease remove some items.'); return; }
