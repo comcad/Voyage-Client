@@ -30,7 +30,7 @@ function drawNumber(ctx, im, font, x, y, value, digits, step) {
   };
   let v = Math.trunc(value), slot = digits - 1;
   const neg = v < 0;
-  v = Math.abs(v);
+  v = Math.min(Math.abs(v), 10 ** digits - 1);   // more digits than the field: draw all nines, not a truncated tail
   for (;;) {
     put(font[v % 10], slot);
     v = Math.trunc(v / 10);
