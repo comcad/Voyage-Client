@@ -2819,11 +2819,19 @@ export class Game {
       if (d.meso ? !f.pickupMeso : (!f.pickupItem && !(f.sweep && f.pickupOthers)) || Number(this.windows.info(d.id)?.pickUpBlock)) return false;
       const me = this.player.id;
       const ours = (f.pickupOthers && now - (d.freeAt ?? d.born ?? 0) > 15000) || !d.dropper || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || d.type >= 2;
-      return ours && now - (d.petTry || -Infinity) >= 3000 && !this.petIgnores(d);
+      return ours && now - (d.petTry || -Infinity) >= 3000 && !petExcluded(d);
+    };
+    // (pet 0's Item Ignore Pendant speaks for every pendant-wearing pet: one step, not one read per drop)
+    const lead = this.myPets()[0];
+    const ignoreOn = !!lead && lead.slot === 0 && this.petFlags(lead).ignorePickup;
+    const petExcluded = (d) => {
+      if (!ignoreOn) return false;
+      const id = d.meso ? MESO_ID : d.id;
+      return this.myPets().some((pet) => this.petFlags(pet).ignorePickup && (this.petExcluded?.get(pet.uid) || []).includes(id));
     };
     for (const pet of mine) {
       const f = this.petFlags(pet);
-      if (pet.lootPauseAt && now - pet.lootPauseAt >= 500) continue;
+      if (pet.lootPauseAt) { if (now - pet.lootPauseAt < 500) continue; pet.lootPauseAt = 0; }   // Boots / Scales pause their pet for 500ms
       for (const d of this.drops.values()) {
         if (!can(pet, d, f)) continue;
         if (!(d.x >= pet.x - 25 && d.x < pet.x + 25 && d.y >= pet.y - 50 && d.y < pet.y + 10)) continue;
@@ -2847,13 +2855,6 @@ export class Game {
       }
       if (best) best.lootDir = d.x <= best.x ? -1 : 1;
     }
-  }
-  /** The ignore list counts while the lead pet wears an Item Ignore Pendant: anything on any pendant-wearing pet's list. */
-  petIgnores(d) {
-    const mine = this.myPets();
-    if (!mine[0] || mine[0].slot !== 0 || !this.petFlags(mine[0]).ignorePickup) return false;
-    const id = d.meso ? MESO_ID : d.id;
-    return mine.some((pet) => this.petFlags(pet).ignorePickup && (this.petExcluded?.get(pet.uid) || []).includes(id));
   }
 
   /**
