@@ -27,6 +27,12 @@ export class WishListInputWin extends Win {
     this.field.el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') this.field.el.blur(); });
     this.field.el.addEventListener('focus', () => { this.sel = -1; });
   }
+  // The window is modal with no close box, and closeTop() skips modal windows on purpose - so without this it had no
+  // way out at all once opened, only the OK that submits. Escape abandons the list; nothing is sent unless OK is used.
+  key(e) { if (e.key === 'Escape') this.mgr.close(this); }
+  // the text field lives in the status bar's layer, not this window: every exit has to take it down (submit() used to
+  // do it by hand, which is why closing any other way left it behind)
+  onClose() { this.field.remove(); }
   add() {
     const t = this.field.value.trim();
     if (!t) return;
@@ -38,7 +44,7 @@ export class WishListInputWin extends Win {
   async submit() {
     if (!(await this.mgr.confirm('This is your last chance to make any\r\nchanges. Are you sure that you want to\r\nsubmit this list?'))) return;
     this.g.net?.weddingWishList(this.list);
-    this.field.remove(); this.mgr.close(this);
+    this.mgr.close(this);
   }
   down(lx, ly) {
     for (let r = 0; r < 10; r++) {
