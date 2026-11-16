@@ -8786,8 +8786,8 @@ export class Game {
    * Where an attack's area strikes a monster: the area pulled onto its body (at least a pixel in), then the middle
    * of where the two meet - on a boss, the part of it the blow reaches.
    */
-  hitPoint(m, area) {
-    const b = m.hitBox();
+  hitPoint(m, area, withPrevious = false) {
+    const b = m.hitBox(withPrevious);   // the box the attack picked the monster by, not a different one
     if (!area) return { x: Math.trunc((b.left + b.right) / 2), y: Math.trunc((b.top + b.bottom) / 2) };
     let { left, right, top, bottom } = area;
     if (left >= b.right) left = b.right - 1; else if (right <= b.left) right = b.left + 1;
@@ -8890,8 +8890,9 @@ export class Game {
       const box = dir > 0 ? { left: last.x, right: Math.min(last.x + ORB_HOP, first.x + ORB_REACH) }
         : { left: Math.max(last.x - ORB_HOP, first.x - ORB_REACH), right: last.x };
       box.top = last.y - ORB_HOP; box.bottom = last.y + ORB_HOP;
-      const next = this.mobsIn(box, last.x, last.y).filter((m) => !chain.includes(m))
-        .sort((a, b) => Math.hypot(a.x - last.x, a.y - last.y) - Math.hypot(b.x - last.x, b.y - last.y))[0];
+      if (box.right <= box.left) break;   // the hop is spent: past the reach, there is nothing left to find
+      // mobsIn already sorts by the distance from (last.x, last.y): the nearest monster is the hop
+      const next = this.mobsIn(box, last.x, last.y).filter((m) => !chain.includes(m))[0];
       if (!next) break;
       chain.push(next);
     }
@@ -8905,7 +8906,8 @@ export class Game {
   shotFx(plan, ent, skillId, ld, ammoId, leave) {
     for (const [i, h] of (plan.orb || []).entries()) this.after(leave + h.at, () => this.fly(skillId, ammoId, h.sx, h.sy, h.tx, h.ty, ent, h.dur, i > 0));
     if (plan.arrows) {
-      const n = Math.max(1, ld?.bulletCount || 1), gap = arrowGap(skillId, ammoId) || (plan.partner ? 120 : 0), dir = ent.facingRight ? 1 : -1;
+      // 60ms apart when the skill says nothing (0 would stack every bullet at one instant); Shadow Partner's own 120
+      const n = Math.max(1, ld?.bulletCount || 1), gap = arrowGap(skillId, ammoId) || (plan.partner ? 120 : 60), dir = ent.facingRight ? 1 : -1;
       // Shadow Partner's follow on, from 30px behind, carrying on the 14px steps
       for (let i = 0; i < (plan.partner ? n * 2 : n); i++) {
         const sx = plan.sx - (i >= n ? dir * 30 : 0);
