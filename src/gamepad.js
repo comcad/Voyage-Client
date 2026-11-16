@@ -8,7 +8,12 @@ import { PAD_MOVE } from './controls.js';
 const STICK_DEAD = 0.5;
 
 export class PadInput {
-  constructor(input, moveMode = () => 'ls') { this.input = input; this.moveMode = moveMode; this.pad = null; }
+  constructor(input, moveMode = () => 'ls') {
+    this.input = input; this.moveMode = moveMode; this.pad = null;
+    // A pad held as the window loses focus would stay held: the frame loop (and so poll) stops, and nothing else
+    // clears the input's `sources` sets. Drop what the pad holds here, so the next poll re-populates the truth.
+    addEventListener('blur', () => this.input.setHeld('pad', new Set()));
+  }
 
   /** The controller's name for the settings tab, or null. */
   get name() { return this.pad?.id || null; }
