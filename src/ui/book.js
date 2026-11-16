@@ -22,6 +22,7 @@ export class BookWin extends Win {
     this.prev = this.button(B.BtPrev, 31, 287, () => this.open(this.left - 2));
     this.next = this.button(B.BtNext, 403, 287, () => this.open(this.left + 2));
     this.layouts = new Map();
+    this.laidOut = this.mgr.namesVersion;   // the cache is dropped when a name or icon lands (dialogs.js does the same)
     this.refresh();
   }
   frames() {
@@ -38,7 +39,7 @@ export class BookWin extends Win {
     this.next.enabled = this.left + 2 <= this.pages.length - 1;
   }
 
-  /** A page's paragraphs laid out: [{ layout, y, align }]. */
+  /** A page's paragraphs laid out: [{ layout, shifted, y, align }]. Laid out once, and again only when an icon lands. */
   page(i) {
     if (this.layouts.has(i)) return this.layouts.get(i);
     const ctx = document.createElement('canvas').getContext('2d');
@@ -51,7 +52,21 @@ export class BookWin extends Win {
       let ly = 0;
       for (const l of layout.lines) { if (!l.runs.length) l.h = EMPTY_LINE; l.y = ly; ly += l.h; }
       layout.height = ly;
-      out.push({ layout, y, align: Number(p.align) || 0 });
+      const align = Number(p.align) || 0;
+      // centred / right-aligned paragraphs shift each line by its own width: once here, not every frame
+      let shifted = layout;
+      if (align) {
+        ctx.font = '12px Arial';
+        shifted = {
+          ...layout,
+          lines: layout.lines.map((l) => {
+            const w = Math.max(0, ...l.runs.map((r) => r.x + (r.t ? ctx.measureText(r.t).width : 0)));
+            const dx = align === 1 ? Math.floor((COL_W - w) / 2) : COL_W - w;
+            return { ...l, runs: l.runs.map((r) => ({ ...r, x: r.x + dx })) };
+          }),
+        };
+      }
+      out.push({ layout, shifted, y, align });
       y += layout.height + PARA_GAP;
     }
     this.layouts.set(i, out);
@@ -59,22 +74,13 @@ export class BookWin extends Win {
   }
 
   body(ctx) {
+    if (this.laidOut !== this.mgr.namesVersion) { this.layouts.clear(); this.laidOut = this.mgr.namesVersion; }
     const U = this.mgr.W.UtilDlgEx, im = (n) => this.mgr.image(n);
     for (let side = 0; side < 2; side++) {
       const i = this.left + side;
       if (i >= this.pages.length) break;
       const x0 = COL_X[side];
-      for (const { layout, y, align } of this.page(i)) {
-        // centred / right-aligned paragraphs shift each line by its own width
-        const shifted = align ? {
-          ...layout,
-          lines: layout.lines.map((l) => {
-            ctx.font = '12px Arial';
-            const w = Math.max(0, ...l.runs.map((r) => r.x + (r.t ? ctx.measureText(r.t).width : 0)));
-            const dx = align === 1 ? Math.floor((COL_W - w) / 2) : COL_W - w;
-            return { ...l, runs: l.runs.map((r) => ({ ...r, x: r.x + dx })) };
-          }),
-        } : layout;
+      for (const { shifted, y } of this.page(i)) {
         drawRich(ctx, shifted, x0, TOP + y, {
           size: 12, hover: this.hover?.page === i ? this.hover.opt : null,
           drawBullet: (bx, by, on) => { const d = im(on ? U?.dot1 : U?.dot0); if (d) ctx.drawImage(d, bx, by); },
