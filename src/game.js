@@ -33,8 +33,6 @@ import { AvatarBanner } from './ui/avatarmega.js';
 import { MapleTVWin, MapleTVScreen } from './ui/mapletv.js';
 import { ItemGuardWin } from './ui/itemguard.js';
 import { ApResetWin, ApConfirmWin, SpResetWin, SpConfirmWin, branchOf, advancement, spBook } from './ui/reset.js';
-/** ENABLE_TV's error codes. */
-const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
 import { WindowManager, allCanvases, drawTip, lineTip } from './ui/windows.js';
 import { ChannelWin, GameOptWin, SysOptWin } from './ui/options.js';
 import { QuestAlarmWin } from './ui/questalarm.js';
@@ -95,6 +93,9 @@ import { WitchTowerScore, GuildBossField } from './guildboss.js';
 import { FramePace } from './framepace.js';
 import { snapToPixels } from './snapdraw.js';
 import { BUILD } from './build.js';
+
+/** ENABLE_TV's error codes. */
+const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
 
 // Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
