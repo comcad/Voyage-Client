@@ -47,7 +47,10 @@ export class NewYearCardWin extends Win {
     this.list = names; this.first = 0; this.hoverRow = -1;
   }
   rowAt(lx, ly) {
-    if (!this.list || lx < 368 || lx >= 0x1e8) return -1;
+    // the rows start where they are drawn (368) and stop at backgrnd2's right edge, so the drawn
+    // list and the clickable one are the same box (the old 0x1e8 bound lay past the list panel)
+    const right = 353 + (this.mgr.image(this.N.backgrnd2)?._w || 160);
+    if (!this.list || lx < 368 || lx >= Math.min(right, this.w)) return -1;
     for (let i = 0; i < 5; i++) if (ly >= 25 + 15 * i && ly <= 38 + 15 * i && this.first + i < this.list.length) return this.first + i;
     return -1;
   }
