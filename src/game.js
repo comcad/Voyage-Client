@@ -525,10 +525,9 @@ const USE_ROUTED = new Set([227, 232, 237, 243]);
  * Darkness, Weakness and Curse; in the high mask Slow, Reverse (0x80000) and the stats at 0x100, 0x8000 and
  * 0x80000000000-0x200000000000.
  */
-const EXPIRY_CHECKED = {
-  low: 0x2000000000000n | 0x4000000000000n | 0x8000000000000n | 0x10000000000000n | 0x4000000000000000n | 0x8000000000000000n,
-  high: 0x1n | 0x100n | 0x8000n | 0x80000n | 0x80000000000n | 0x100000000000n | 0x200000000000n,
-};
+// Stun, Poison, Seal, Darkness, Weakness, Curse, Slow, Reverse arrive with m1 in the high dword and m2 in the low
+// (the client's two 32-bit words, widened); the bits are those stats' own positions.
+const EXPIRY_CHECKED = { low: 0xc01e000000000000n, high: 0x380000088101n };
 /** The Dark Sight (second mask) and Wind Walk (first mask) buff bits. */
 const DS_MASK = 0x40000000000n, WW_MASK = 0x400000000n, ASSASSINATE = 4221001;
 const RIDING_MASK = 0x20000000000000n;   // BuffStat.MONSTER_RIDING (first mask)
