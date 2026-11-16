@@ -8795,6 +8795,11 @@ export class Game {
    * The first monster a shot meets along its line (y), from `from` px in front out to `range`: checked in 20px steps,
    * each reaching a quarter of its distance from you up and down.
    */
+  /**
+   * The first monster a line from `ent` meets: the slab 20px out, then the next, and within the first slab that holds
+   * one, the nearest by x. A monster straddling a slab edge is met by the slab it overlaps first, so this is the first
+   * *slab* with a monster rather than a global nearest; the slabs are the client's own strike granularity.
+   */
   firstOnLine(ent, from, range, y) {
     const dir = ent.facingRight ? 1 : -1, mobs = this.targetMobs();
     for (let d = from; d < range; d += 20) {
@@ -8909,9 +8914,9 @@ export class Game {
     const chain = [first];
     while (chain.length < count) {
       const last = chain[chain.length - 1];
-      const box = dir > 0 ? { left: last.x, right: Math.min(last.x + ORB_HOP, first.x + ORB_REACH) }
-        : { left: Math.max(last.x - ORB_HOP, first.x - ORB_REACH), right: last.x };
-      box.top = last.y - ORB_HOP; box.bottom = last.y + ORB_HOP;
+      const l = last.x, top = last.y - ORB_HOP;
+      const box = { left: dir > 0 ? l : Math.max(l - ORB_HOP, first.x - ORB_REACH), top,
+        right: dir > 0 ? Math.min(l + ORB_HOP, first.x + ORB_REACH) : l, bottom: top + 2 * ORB_HOP };
       if (box.right <= box.left) break;   // the hop is spent: past the reach, there is nothing left to find
       // mobsIn already sorts by the distance from (last.x, last.y): the nearest monster is the hop
       const next = this.mobsIn(box, last.x, last.y).filter((m) => !chain.includes(m))[0];
