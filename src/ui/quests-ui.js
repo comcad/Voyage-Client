@@ -12,7 +12,7 @@ const pos = (game) => ({ x: Math.round(game.player.x), y: Math.round(game.player
 function npcScript(game, npc) {
   const set = game.npcScripts?.get(Number(npc.spawn.id));
   if (set) return set;
-  const today = Number(new Date().toISOString().slice(0, 10).replace(/-/g, ''));
+  const d = new Date(), today = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();   // the local date, as the scripts are written in
   const list = Object.values(npc.src?.info?.script || {}).filter((s) => s?.script);
   return list.find((s) => (Number(s.start) || 19000101) <= today && today <= (Number(s.end) || 20790101))?.script || null;
 }
