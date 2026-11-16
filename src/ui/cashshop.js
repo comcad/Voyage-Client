@@ -125,6 +125,9 @@ function clipText(ctx, text, width, size = 12) {
   ctx.restore();
   return t;
 }
+/** A scratch 2d context for cached text measuring: pkgLayout sizes tooltips on it, the painting stays on the real ctx. */
+let layoutCtx;
+const scratch = () => (layoutCtx ??= document.createElement('canvas').getContext('2d'));
 
 export class CashShopWin extends Win {
   constructor(mgr, d) {
@@ -306,10 +309,9 @@ export class CashShopWin extends Win {
   /**
    * Gifts waiting for you (0x4D): each opens its thank-you note in turn; OK answers the sender (NOTE_ACTION 0) and
    * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (the game server sends one
-   * only after a reply, so an unanswered gift would stay hidden until you came back).
-   * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (Cosmic sends one
    * only after a reply, so an unanswered gift would stay hidden until you came back). Escape stops asking — the rest
-   * stay in the locker, to be answered next time.   */
+   * stay in the locker, to be answered next time.
+   */
   async receivedGifts(gifts) {
     for (let i = 0; i < gifts.length; i++) {
       const g = gifts[i];
@@ -1486,22 +1488,38 @@ export class CashShopWin extends Win {
     return r ? r.Price : c.Price;
   }
   /**
+   * A package tooltip's layout: its items, the two-column split past 9 and the box they need. Measured on a scratch
+   * context, not the drawing one, because only the painting is per-frame (the tooltip follows the mouse). Cached
+   * against the package's SN and the manager's namesVersion: item names load one by one, any that lands can move
+   * the width or re-wrap the description, and a name landing is exactly what bumps namesVersion.
+   */
+  pkgLayout(pkg) {
+    const k = this.pkgLayoutCache;
+    if (k && k.sn === pkg.SN && k.v === this.mgr.namesVersion) return k;
+    const c = scratch(), items = this.contents(pkg).filter((x) => x.ItemId);
+    c.font = '12px Arial, sans-serif';   // measureText uses it as-is; wrapText switches to its own font and restores
+    const n = items.length, rows = n > 9 ? Math.ceil(n / 2) : n;
+    let w = 260, col2 = 0;
+    items.forEach((it, i) => { if (n > 9 && i === rows) col2 = w; w = Math.max(w, c.measureText(this.mgr.itemName(it.ItemId) || '').width + (i >= rows ? col2 : 0) + 100); });
+    w = Math.ceil(Math.max(220, w));
+    if (n <= 9) col2 = w;
+    const desc = this.special[pkg.ItemId]?.desc, descLines = desc ? wrapText(c, String(desc).replace(/\\n|\r?\n/g, '\n'), w - 21, 12) : [];
+    const top = Math.max(1, descLines.length) * 18 + 30;
+    return (this.pkgLayoutCache = { sn: pkg.SN, v: this.mgr.namesVersion, items, n, rows, w, col2, descLines, top,
+      h: rows * 53 + 65 + top - 30, rate: pkg.Discount || 0 });
+  }
+  /**
    * A package's tooltip on the tooltip panel: its name centred, its description, then a 53px row per item (two
    * columns past 9): the icon on CSDiscount/backgrnd, the name, the regular price struck through -> the package
    * price with its discount badge (or the one price), "AVAILABLE FOR n DAYS." and CSDiscount/Line under it; then
    * CSDiscount/total, both totals and the package's badge.
    */
   drawPackageTip(ctx, pkg, x, y) {
-    const m = this.mgr, D = this.C.CSDiscount, im = (n) => m.image(n), items = this.contents(pkg).filter((c) => c.ItemId);
-    const n = items.length, rows = n > 9 ? Math.ceil(n / 2) : n, rate = pkg.Discount || 0;
+    const m = this.mgr, D = this.C.CSDiscount, im = (n) => m.image(n);
+    const L = this.pkgLayout(pkg);
+    const { items, rows, w, col2, descLines, top, h, rate } = L;
     ctx.save();
     ctx.font = '12px Arial, sans-serif';
-    let w = 260, col2 = 0;
-    items.forEach((c, i) => { if (n > 9 && i === rows) col2 = w; w = Math.max(w, ctx.measureText(m.itemName(c.ItemId) || '').width + (i >= rows ? col2 : 0) + 100); });
-    w = Math.ceil(Math.max(220, w));
-    if (n <= 9) col2 = w;
-    const desc = this.special[pkg.ItemId]?.desc, descLines = desc ? wrapText(ctx, String(desc).replace(/\\n|\r?\n/g, '\n'), w - 21, 12) : [];
-    const top = Math.max(1, descLines.length) * 18 + 30, h = rows * 53 + 65 + top - 30;
     x = Math.min(x, UI_W - w - 2); y = Math.min(y, UI_H - h - 2);
     ctx.fillStyle = 'rgba(0,0,64,0.627)';
     ctx.fillRect(x + 1, y, w - 2, 1); ctx.fillRect(x, y + 1, w, h - 2); ctx.fillRect(x + 1, y + h - 1, w - 2, 1);
