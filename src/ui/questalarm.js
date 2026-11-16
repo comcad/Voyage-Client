@@ -6,11 +6,13 @@ import { UI_W } from '../view.js';
 /**
  * The Quest Helper (UIWindow.img/QuestAlarm, 223 wide): "Quest Helper (n/5)" at (25, 2) over backgrndmax (25),
  * then 18px rows on backgrndcenter and backgrndbottom (5); minimised or empty it is backgrndmin (20 tall).
- * Each quest is its bold title (blue while it was added by itself and isn't done), a row per objective - required
+ * Each quest is its bold title (blue while Auto added it and its requirements aren't all met), a row per objective - required
  * quests, items, monsters, mesos - and a spacer row. Up to 5 quests: ones you add go above the ones Auto adds, which
  * come on a quest's first progress and go again after 10 minutes without any. Kept per character.
  */
 const W = 223, ROW = 18, MAX = 5, AUTO_LIFE = 600000;
+/** The right edge of a row's text (the status column ends here), so the click band matches what is drawn. */
+const ROW_W = 195;
 const RED = '#ff2020', GREEN = '#336600';
 const progressColor = (have, need) => { const p = (have * 100) / (need || 1); return p < 33 ? RED : p < 66 ? '#ff3399' : p < 100 ? '#ff9900' : GREEN; };
 
@@ -28,7 +30,6 @@ export class QuestAlarmWin extends Win {
       : { title: 'Auto Alarm on', lines: ['When you click it, quests in progress will register automatically and if it is not in progress for 10 minutes, it will disappear.'] });
     this.minBtn = this.button(mgr.B.BtMin, 190, 4, () => { this.state.min = true; this.save(); });
     this.maxBtn = this.button(mgr.B.BtMax, 190, 4, () => { this.state.min = false; this.save(); });
-    this.excluded = new Set();   // closed by hand: not added by Auto again this session
   }
   frames() { return [...super.frames(), ...allCanvases(this.Q), ...allCanvases(this.mgr.B.BtClose2)]; }
   onOpen() { this.state.opened = true; this.save(); }
@@ -40,9 +41,9 @@ export class QuestAlarmWin extends Win {
       let s = null;
       try { s = JSON.parse(localStorage.getItem(this.key) || 'null'); } catch { /* storage off */ }
       const book = this.g.quests, at = s?.autoAt, auto = at ? Object.keys(at) : s?.autoIds || [];
-      // quests no longer in progress go, and so do the ones Auto added that weren't finished
-      const keep = (id) => book?.status(id) === 1 && (!auto.includes(id) || this.complete(id));
-      this._state = { key: this.key, ids: (s?.ids || []).filter(keep), auto: s?.auto ?? true, min: s?.min ?? true, opened: s?.opened ?? true, autoAt: new Map() };
+      // quests no longer in progress go; an Auto id stays while the quest is in progress, its 10 minutes carrying over
+      const keep = (id) => book?.status(id) === 1;
+      this._state = { key: this.key, ids: (s?.ids || []).filter(keep), auto: s?.auto ?? true, min: s?.min ?? true, opened: s?.opened ?? true, autoAt: new Map(), excluded: new Set() };
       // autoAt is stored in wall time, so when it is restored the 10 minutes keep counting from where they were (old saves: a fresh clock)
       const now = performance.now();
       for (const id of this._state.ids) if (auto.includes(id)) this._state.autoAt.set(id, at ? Math.max(now - (Date.now() - at[id]), 0) : now);
@@ -59,17 +60,20 @@ export class QuestAlarmWin extends Win {
   tracked(id) { return this.state.ids.includes(id); }
   isAutoAdded(id) { return this.state.autoAt.has(id); }
   full() { return this.state.ids.length >= MAX; }
-  /** Every item and monster count reached (the title then turns black). */
+  /** Every requirement reached - items, monsters, mesos and required quests (the title then turns black). */
   complete(id) {
     const book = this.g.quests, r = book?.requirements(id);
     if (!r) return false;
-    return r.items.every((it) => this.g.itemCount(it.id) >= (it.count ?? 0)) && r.mobs.every((m) => m.have >= m.need);
+    return r.items.every((it) => this.g.itemCount(it.id) >= (it.count ?? 0)) && r.mobs.every((m) => m.have >= m.need)
+      && (!r.meso || this.g.meso >= r.meso) && r.quests.every((q) => book.status(q.id) === (q.state ?? 0));
+  }
+  /** The helper may hold it: in progress, not a party or title quest, and with something to show. */
+  eligible(id) {
+    const book = this.g.quests;
+    return book.status(id) === 1 && !isPartyQuest(id) && book.area(id) !== TITLE_AREA && book.trackable(id);
   }
   /** The quest log's button can add this one. */
-  canAdd(id) {
-    const book = this.g.quests;
-    return book.status(id) === 1 && !isPartyQuest(id) && book.area(id) !== TITLE_AREA && book.trackable(id) && !this.full() && !this.tracked(id);
-  }
+  canAdd(id) { return this.eligible(id) && !this.full() && !this.tracked(id); }
 
   /** Added from the quest log: above every quest Auto added, and the helper opens up. */
   track(id) {
@@ -81,10 +85,10 @@ export class QuestAlarmWin extends Win {
   }
   /** Auto: only on real progress, and only while there is something left to do. */
   offer(id) {
-    const book = this.g.quests, s = this.state;
-    if (!s.auto || !this.mgr.isOpen('questalarm') || this.excluded.has(id) || this.tracked(id) || this.full()) return;
-    if (book.status(id) !== 1 || isPartyQuest(id) || book.area(id) === TITLE_AREA || !book.trackable(id) || book.canComplete(id, this.g.textCtx())) return;
-    const r = book.requirements(id);
+    const s = this.state;
+    if (!s.auto || !this.mgr.isOpen('questalarm') || s.excluded.has(id) || this.tracked(id) || this.full()) return;
+    if (!this.eligible(id) || this.g.quests.canComplete(id, this.g.textCtx())) return;
+    const book = this.g.quests, r = book.requirements(id);
     const moved = r.items.some((it) => this.g.itemCount(it.id) !== 0) || r.mobs.some((m) => m.have !== 0)
       || (r.meso && this.g.meso !== 0) || r.quests.some((q) => book.status(q.id) !== 0);
     if (!moved) return;
@@ -103,7 +107,7 @@ export class QuestAlarmWin extends Win {
     s.ids = s.ids.filter((x) => x !== id); s.autoAt.delete(id);
     this.save();
   }
-  clearAll() { const s = this.state; s.ids = []; s.autoAt.clear(); s.opened = false; this.save(); this.mgr.close(this); }
+  clearAll() { const s = this.state; s.ids = []; s.autoAt.clear(); s.excluded.clear(); s.opened = false; this.save(); this.mgr.close(this); }
   /** Open (and maximise) to show a quest just added. */
   show() { const s = this.state; if (s.min) { s.min = false; this.save(); } this.mgr.open('questalarm'); }
 
@@ -128,20 +132,19 @@ export class QuestAlarmWin extends Win {
     this._laid = m.namesVersion;
     return (this._list = list);
   }
-  update(dt) {
-    super.update?.(dt);
-    // Auto's quests go after 10 minutes without progress, unless they're done
+  /** Auto's quests go after 10 minutes without progress, unless they're done. The manager ticks every open window. */
+  tick() {
     const s = this.state, now = performance.now();
     for (const [id, t] of s.autoAt) if (now - t > AUTO_LIFE && !this.complete(id)) this.remove(id);
   }
   draw(ctx) {
-    this.update(0);
-    const list = this.state.min ? [] : this.entries();
-    this.list = list;
-    const rows = list.reduce((n, e) => n + 2 + e.rows.length, 0);
+    const all = this.entries();
+    this.count = all.length;              // what the header counts: every quest that has rows
+    this.list = this.state.min ? [] : all;
+    const rows = this.list.reduce((n, e) => n + 2 + e.rows.length, 0);
     this.h = rows ? 25 + rows * ROW + 5 : 20;
     this.minBtn.visible = !this.state.min; this.maxBtn.visible = this.state.min;
-    this.autoBtn.forceState = this.state.auto ? null : 'disabled';
+    this.autoBtn.forceState = this.state.auto ? null : 'pressed';
     super.draw(ctx);
     // BtQ blinks (its ani) while there is a quest you could start
     const ani = this.blinkQ && this.Q.BtQ?.ani, frames = Object.keys(ani || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b);
@@ -170,24 +173,25 @@ export class QuestAlarmWin extends Win {
       if (mid) for (let y = 25; y < this.h - 5; y += ROW) ctx.drawImage(mid, 0, y, W, Math.min(ROW, this.h - 5 - y));
       if (bot) ctx.drawImage(bot, 0, this.h - 5);
     }
-    this.text(ctx, `Quest Helper (${this.state.ids.length}/${MAX})`, 25, 2 + 3, { size: 12 });
-    const x2 = this.mgr.B.BtClose2?.normal?.[0], xi = im(x2);
+    this.text(ctx, `Quest Helper (${this.count ?? 0}/${MAX})`, 25, 2 + 3, { size: 12 });
+    const xn = this.mgr.B.BtClose2?.normal?.[0], xi = im(xn), xo = xn?.origin || [0, 0];
     let y = 25;
     this.hits = [];
     for (const e of this.list) {
       ctx.font = 'bold 12px Arial, sans-serif';
       const [title, cut] = this.fit(ctx, e.name, 170), tw = ctx.measureText(title).width;
       this.text(ctx, title, 10, y + 3, { size: 12, bold: true, color: e.blue ? '#2000ff' : '#000' });
-      const close = { x: Math.min(203, Math.ceil(10 + tw + 4)), y: y + 2 };
-      if (xi) ctx.drawImage(xi, close.x, close.y);
+      const cx = Math.min(203, Math.ceil(10 + tw + 4)), cy = y + 2;
+      if (xi) ctx.drawImage(xi, cx - xo[0], cy - xo[1]);
+      const close = { x: cx - xo[0], y: cy - xo[1], w: xi?.width ?? 14, h: xi?.height ?? 14 };
       const hit = { id: e.id, title: { x: 10, y, w: tw, h: ROW }, close, full: cut ? e.name : null, top: y };
       y += ROW;
       ctx.font = '12px Arial, sans-serif';
       for (const r of e.rows) {
         if (r.status) {
           const sw = ctx.measureText(r.status).width;
-          this.text(ctx, this.fit(ctx, r.label, 180 - sw)[0], 10, y + 3, { size: 12 });
-          this.text(ctx, r.status, 195 - sw, y + 3, { size: 12, color: r.color });
+          this.text(ctx, this.fit(ctx, r.label, ROW_W - 15 - sw)[0], 10, y + 3, { size: 12 });
+          this.text(ctx, r.status, ROW_W - sw, y + 3, { size: 12, color: r.color });
         } else if (r.amount) {
           const lw = ctx.measureText(r.label).width;
           this.text(ctx, r.label, 10, y + 3, { size: 12 });
@@ -208,9 +212,9 @@ export class QuestAlarmWin extends Win {
   }
   at(lx, ly) {
     for (const h of this.hits || []) {
-      if (lx >= h.close.x && lx < h.close.x + 14 && ly >= h.close.y && ly < h.close.y + 14) return { h, part: 'close' };
+      if (lx >= h.close.x && lx < h.close.x + h.close.w && ly >= h.close.y && ly < h.close.y + h.close.h) return { h, part: 'close' };
       if (lx >= h.title.x && lx < h.title.x + h.title.w && ly >= h.title.y && ly < h.title.y + ROW) return { h, part: 'title' };
-      if (lx >= 10 && lx < 170 && ly >= h.top + ROW && ly < h.bottom) return { h, part: 'rows' };
+      if (lx >= 10 && lx < ROW_W && ly >= h.top + ROW && ly < h.bottom) return { h, part: 'rows' };
     }
     return null;
   }
@@ -227,8 +231,8 @@ export class QuestAlarmWin extends Win {
     if (a.part === 'close') {
       sfx.play('UI/BtMouseClick');
       const name = this.g.quests.name(a.h.id);
-      this.excluded.add(a.h.id); this.remove(a.h.id);
-      this.g.hud.message(`[${name}] It has been excluded from the auto alarm and it will not be automatically reigstered until you re log-on`, '#bbbbbb');
+      this.state.excluded.add(a.h.id); this.remove(a.h.id);
+      this.g.hud.message(`[${name}] It has been excluded from the auto alarm, and it will not be registered automatically again this session`, '#bbbbbb');
     } else if (a.part === 'title' && this.isAutoAdded(a.h.id)) { this.keep(a.h.id); this.justKept = a.h.id; }
   }
   dblclick(lx, ly) {
