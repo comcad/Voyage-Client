@@ -14,10 +14,12 @@ export const CODE_TO_SC = {
   Home: 71, PageUp: 73, End: 79, PageDown: 81, Insert: 82, Delete: 83,
 };
 export const SC_LABEL = Object.fromEntries(Object.entries(CODE_TO_SC).map(([code, sc]) => [sc,
-  code.replace(/^Key|^Digit/, '').replace(/Left$|Right$/, '').replace('Control', 'Ctrl').replace('Backquote', '`')
-    .replace('Semicolon', ';').replace('Quote', "'").replace('Comma', ',').replace('Period', '.').replace('Slash', '/')
-    .replace('Backslash', '\\').replace('BracketLeft', '[').replace('BracketRight', ']').replace('Minus', '-').replace('Equal', '=')
-    .replace('PageUp', 'PgUp').replace('PageDown', 'PgDn').replace('Insert', 'Ins').replace('Delete', 'Del').replace('Escape', 'Esc')]));
+  code.replace(/^Key|^Digit/, '').replace(/^(Control|Shift|Alt)(Left|Right)$/, (m, k) => (k === 'Control' ? 'Ctrl' : k))
+    .replace('Backquote', '`').replace('BracketLeft', '[')
+    .replace('BracketRight', ']').replace('Semicolon', ';').replace('Quote', "'").replace('Comma', ',').replace('Period', '.')
+    .replace('Slash', '/').replace('Backslash', '\\').replace('Minus', '-').replace('Equal', '=')
+    .replace('PageUp', 'PgUp').replace('PageDown', 'PgDn').replace('Insert', 'Ins')
+    .replace('Delete', 'Del').replace('Escape', 'Esc')]));
 
 // GameConstants.DEFAULT_KEY / DEFAULT_TYPE / DEFAULT_ACTION in the game server (used offline / before KEYMAP arrives)
 const DK = [18, 65, 2, 23, 3, 4, 5, 6, 16, 17, 19, 25, 26, 27, 31, 34, 35, 37, 38, 40, 43, 44, 45, 46, 50, 56, 59, 60, 61, 62, 63, 64, 57, 48, 29, 7, 24, 33, 41, 39];
