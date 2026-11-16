@@ -776,10 +776,15 @@ const ARRIVALS_MS = 4000;
 /**
  * Skills that reach out to their range once the swing has a target: Slash Blast, Coma (sword, axe, Dawn Warrior's)
  * and Charged Blow. Others with only a range keep to the swing.
+ *
+ * Membership is read two ways, and they are the same fact from both sides: positively, "this swing extends to the
+ * skill's range" (attack's swingRange, findTargets' reach); negatively, "this is not a plain ranged skill, so do not
+ * use the shot's range" (attackBox). A skill in here never takes the shot's range, and one out of it never extends
+ * the swing's - so the two readings cannot disagree.
  */
 const RANGE_SWINGS = new Set([1001005, 11001003, 1111005, 1111006, 11111003, 1211002]);
-/** How long a pickup takes (s); see updateDrops. */
-const PICKUP_TIME = 0.7;
+/** How long a pickup takes; see updateDrops. In seconds (it is compared against d.age), hence the _S. */
+const PICKUP_TIME_S = 0.7;
 
 // SUE_CHARACTER_RESULT: the answer to a report, in the chat log
 const SUE_RESULTS = { 0: 'You have successfully reported the user.', 1: 'Unable to locate the user.', 2: 'You may only report users 10 times a day.',
@@ -888,8 +893,10 @@ export class Game {
     this.invincible = 0; this.portalCooldown = 0;
     this.stats = null; this.inventory = null; this.meso = 0;
     this.keymap = defaultKeymap();
-    this.quickKeys = [...DEFAULT_QUICKSLOTS];   // the quick slots' keys, from the server
-    this.quickKeys2 = [...DEFAULT_QUICKSLOTS2];  // the second quick slot panel's, kept in this browser
+    this.quickKeys = [...DEFAULT_QUICKSLOTS];   // the quick slots' keys, from the server (KEYMAP replaces them)
+    // the second quick slot panel's: this browser's, not the server's (loadQuickKeys2/saveQuickKeys2 in keymap.js),
+    // which is why it is not named like quickKeys
+    this.localQuickKeys = [...DEFAULT_QUICKSLOTS2];
     this.buffs = [];   // {source, until, m1, m2}
     this.fx = [];      // skill effect animations {anim, x, y, flip, follow}
     this.shots = [];   // projectiles {anim, x, y, tx, ty, t, dur, onHit}
@@ -3089,7 +3096,7 @@ export class Game {
     this.stats = info.stats; this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.linked = info.linked;
     this.buddyCapacity = info.buddyCapacity;
     this.player.name = info.stats.name; this.player.id = info.stats.id;
-    this.quickKeys2 = loadQuickKeys2(info.stats.name);
+    this.localQuickKeys = loadQuickKeys2(info.stats.name);
     this.statusBar = new StatusBar(this, uiRoot);
     this.touch = new TouchControls(this, uiRoot);
     this.statusBar.layout(UI_W, UI_H);
@@ -6386,14 +6393,13 @@ export class Game {
   }
 
   /**
-   * Natural regeneration is client-driven in v83 (HEAL_OVER_TIME). The game server rejects heals faster than
-   * 1.5s apart and autobans HP heals above 77 * map recovery * 1.5, so stay at the classic +10 HP / 10s.
-   */
-  /**
    * Natural recovery, as the client does it (openms, docs/offline-combat.md): HP and MP on their own 10s timers.
    * HP only while you keep still, standing or sitting (moving, attacking or the alert pose start it over), and it
    * shows as a blue number over you; MP goes on through anything and shows no number. A map's info/recovery
    * multiplies both.
+   *
+   * The server rejects heals faster than 1.5s apart and autobans HP heals above 77 * map recovery * 1.5; the 10s
+   * timer above is well inside that, so the tick never needs its own guard.
    */
   regen(dt) {
     const p = this.player, s = this.stats;
@@ -6416,7 +6422,7 @@ export class Game {
       mp = s.mp < maxMp ? Math.min(Math.trunc(tick * k), 100, maxMp - s.mp) : 0;
     }
     if (!hp && !mp) return;
-    this.net.healOverTime(hp, mp);
+    this.net?.healOverTime(hp, mp);   // regen's one caller is already inside `if (this.net)`; this keeps it safe if another is added
     if (hp) this.vfx?.damage(p, [hp], 'blue');
   }
 
@@ -6445,14 +6451,14 @@ export class Game {
       d.anim.update(dt * 1000);
       d.age += dt;
       if (d.pickedBy) {
-        const L = d.pickedBy, u = Math.min(PICKUP_TIME, d.age), k = u / PICKUP_TIME, ms = u * 1000;
+        const L = d.pickedBy, u = Math.min(PICKUP_TIME_S, d.age), k = u / PICKUP_TIME_S, ms = u * 1000;
         // a character: half its frame's height up (a morph's own frame; otherwise the 64px body box); a pet: its feet
         const ch = L === this.player || this.others.has(L.id), box = ch && L.morphView?.box(L.x, L.y, drawnRight(L));
         const tx = L.x, ty = !ch ? L.y : box ? L.y - Math.trunc((box.bottom - box.top) / 2) : L.y - 32;
         d.cx = d.sx + (tx - d.sx) * k;
         d.cy = d.sy + (ty - d.sy) * k - 40 + ((ms - 350) ** 2 * 160) / 490000;
         d.alpha = ms < 420 ? 1 : (255 - ((ms - 420) * 192) / 280) / 255;
-        if (d.age >= PICKUP_TIME) this.drops.delete(oid);
+        if (d.age >= PICKUP_TIME_S) this.drops.delete(oid);
         continue;
       }
       if (d.landed) {
