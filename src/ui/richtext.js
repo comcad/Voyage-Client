@@ -8,6 +8,7 @@ import { uiText } from './wzui.js';
  *   #a a quest's monster kill count ("have / need"), #R a quest's in-progress record ("(empty)" when not started),
  *   #j<key># a value from the shown quest's ex record (see QuestBook.jValue; rank is an inline image),
  *   #f<path># / #F<path># a UI image (UtilDlgEx/list0 "QUEST IN PROGRESS" and the like). Ids may end in ':' (#v4000000:#).
+ *   #W<name># a quest heading image (Quest/summary, reward, prob), inserted by the quest window itself.
  * bullet: indent options this far, leaving room for the dot drawn before each one.
  * ref supplies names and icons: { player, item(id), mob(id), npc(id), map(id), count(id), icon(id), quest(id), questState(id), kills(n), record(id), j(key) }.
  * Returns { lines, height }; each line is { y, h, runs, opt } with runs of
@@ -123,7 +124,7 @@ export function drawRich(ctx, layout, x, y, { drawIcon, drawImage, drawBullet, o
       // the client's option: a gray dot (red under the mouse), and a dashed rule under the hovered one
       drawBullet(x + l.x0 - 14, ly + Math.round((size - 7) / 2) + 2, on);
       if (on) {
-        ctx.font = `${size}px Arial, sans-serif`;
+        ctx.font = `${l.runs.some((r) => r.bold) ? 'bold ' : ''}${size}px Arial, sans-serif`;
         const end = Math.max(...l.runs.map((r) => r.x + (r.t ? ctx.measureText(r.t).width : 34)));
         ctx.fillStyle = '#a0a0a0';
         for (let dx = x + l.x0 - 4; dx < x + end + 4; dx += 4) ctx.fillRect(dx, ly + size + 4, 2, 1);
