@@ -594,6 +594,8 @@ const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 /** How much movement (ms) gathers before it goes to the server, as the client does. */
 const MOVE_FLUSH = 500;
+/** A locked exclusive request the server never answers is abandoned this long after it was sent. */
+const EXCLUSIVE_TIMEOUT_MS = 10000;
 const NEED_TARGET = new Set([5121007, 15111004, 5111004, 15111001]);
 const ASSAULTER = 4211002, BOOMERANG_STEP = 4221007, DOUBLE_STAB = 4001334;
 /** Spear / Pole Arm Crusher: their effect layers go up to effect<attackCount>. */
@@ -5465,9 +5467,10 @@ export class Game {
    */
   canExclusive(ms, ignoreHp = false) {
     const x = this.excl ??= { busy: false, at: -Infinity };
-    return !x.busy && (ignoreHp || (this.stats?.hp ?? 0) > 0) && performance.now() - x.at >= ms;
+    if (x.busy && performance.now() - x.at >= EXCLUSIVE_TIMEOUT_MS) { const at = x.at; this.releaseExclusive(); this.excl.at = at; }   // abandon it, still spaced from the send
+    return !this.excl.busy && (ignoreHp || (this.stats?.hp ?? 0) > 0) && performance.now() - this.excl.at >= ms;
   }
-  lockExclusive() { this.excl = { busy: true, at: performance.now() }; }
+  lockExclusive() { this.excl = { busy: true, at: performance.now() }; clearTimeout(this.exclTimer); this.exclTimer = setTimeout(() => this.releaseExclusive(), EXCLUSIVE_TIMEOUT_MS); }
   /**
    * End an item's buff early (right-click its icon). Like the other requests it waits for an answer pending (200ms
    * apart, alive), but takes no lock. While transformed, a morph potion (221) marked noCancelMouse refuses.
@@ -5485,7 +5488,7 @@ export class Game {
     const now = Date.now();
     return (this.buffs || []).some((b) => b.until > now && (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & MORPH) !== 0n);
   }
-  releaseExclusive() { this.excl = { busy: false, at: performance.now() }; }
+  releaseExclusive() { clearTimeout(this.exclTimer); this.excl = { busy: false, at: performance.now() }; }
 
   /** Map id prefix (map / 10,000,000) -> area, from Map/Map/AreaCode.img. */
   async areaCodes() {
