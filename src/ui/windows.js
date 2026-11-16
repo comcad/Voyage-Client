@@ -15,6 +15,8 @@ import { CODE_TO_SC, DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2, saveQuickKeys2 } f
  * double-click actions and drag-and-drop (inventory slots, skills/items onto the quick slots).
  * Positions inside each window are measured from its background art (see each class).
  */
+/** One wheel row per 100 units. `pointer('wheel', x, y, dy)` gets `dy` already in pixel-ish units: the canvas
+ * listener in game.js scales a line delta (deltaMode 1) by 40 and a page delta (2) by 400 before calling here. */
 const WHEEL_STEP = 100;
 
 const NO_DROP_WEDDING = new Set([1112803, 1112806, 1112807, 1112809, 4031481, 4031376, 4031480, 4031375, 4031373, 4031374, 3994085]);
@@ -70,7 +72,12 @@ export class WindowManager {
     }
     const i = this.order.indexOf(w);
     // closing (its X, the game) makes no sound of its own: only a hotkey or menu closing it plays MenuDown
-    if (i >= 0) { this.order.splice(i, 1); if (w.closeSound) sfx.play(w.closeSound); this.tip = null; w.onClose?.(); }
+    if (i >= 0) {
+      this.order.splice(i, 1); if (w.closeSound) sfx.play(w.closeSound); this.tip = null; w.onClose?.();
+      // no scroll residue carried into a reopened window (the standard windows are single instances, so this is
+      // the whole of it: a half-row left on close would jump the next open's first scroll)
+      if (this.wheelWin === w) { this.wheelWin = null; this.wheelAcc = 0; }
+    }
   }
   toggle(name, arg) {
     const w = this.wins[name];
@@ -658,15 +665,7 @@ class EquipWin extends Win {
       cells.push(...this.petCells().map(([s, c, r]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
     }
     for (const [cell, x, y] of cells) {
-      if (cell === 'hp' || cell === 'mp') {
-        // without the lead pet wearing its pouch the cell is red, and a potion set in it is let go (with no pet here
-        // yet, as just after a map change, it is only red: the pets come back a moment later)
-        const pouch = this.g.petPouch(cell);
-        if (pouch !== false) { const id = this.g.petPotions?.[cell]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }   // (null: still being read)
-        ctx.fillStyle = 'rgba(255,0,0,0.25)'; ctx.fillRect(x, y, 32, 32);
-        if (pouch === false && this.g.myPets()[0]) this.g.clearPetPotion(cell);
-        continue;
-      }
+      if (cell === 'hp' || cell === 'mp') { const id = this.g.petPotions?.[cell]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
       const slot = this.shown(Number(cell)), it = eq[slot];
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
