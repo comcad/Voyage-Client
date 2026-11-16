@@ -21,6 +21,8 @@ import { config } from './config.js';
 const SETS = { red: ['NoRed1', 'NoRed0'], crit: ['NoCri1', 'NoCri0'], violet: ['NoViolet1', 'NoViolet0'], blue: ['NoBlue1', 'NoBlue0'] };
 // damage numbers, as openms recovered the original: opaque for 400ms, fading over the next 600, rising 30px
 const NUM_MS = 1000, NUM_OPAQUE = 400, NUM_RISE = 30, LINE_GAP = 30;
+/** `list` with the entries failing `keep` dropped, without a per-frame allocation when nothing expires. */
+const prune = (list, keep) => list.every(keep) ? list : list.filter(keep);
 /**
  * How long each damage line waits before it shows (ms), per skill; the rest wait 120 per line. Brandish, Assassinate
  * and Boomerang Step wait 80ms more per line and their second line longer still: 160 (Brandish with a one-handed
@@ -122,7 +124,7 @@ export class WorldFx {
     this.L ??= await this.assets.json('UI/Login.img');
     const node = this.L?.WorldNotice?.Balloon;
     if (!node) return;
-    this.hints = [{ text, wrap: Math.max(40, width), until: performance.now() + Math.max(1, seconds) * 1000, ent, node }];
+    this.hints.push({ text, wrap: Math.max(40, width), until: performance.now() + Math.max(1, seconds) * 1000, ent, node });   // queue: a second PLAYER_HINT does not cut one short
   }
   /**
    * A tombstone for `ent` at (x, y). Fresh, it spins down from 600px above, landing 880ms later (its frames on their
@@ -135,7 +137,7 @@ export class WorldFx {
     this.tombs.push({ anim, ent, x, y, fresh, t0: performance.now() });
   }
   untomb(ent) { const i = this.tombs.findIndex((t) => t.ent === ent); if (i >= 0) this.tombs.splice(i, 1); }
-  clearTombs() { this.tombs.length = 0; }
+  // (no clearTombs: mapChanged already clears the array inline, and no caller ever needed a manual clear)
   bossHp(d) { this.boss = d.hp > 0 ? d : null; }
   /** Map/Effect.img/<name> played once on the screen, centred at (400, 260) by its own origin (as on 800x600). */
   async screen(name, node = null) {
@@ -167,18 +169,21 @@ export class WorldFx {
 
   // ---------------------------------------------------------------- frame
   update(dt) {
+    // expire without allocating: each list is compacted in place only when something drops out
     for (const n of this.nums) n.t += dt * 1000;
-    this.nums = this.nums.filter((n) => n.t < NUM_MS);
+    if (this.nums.some((n) => n.t >= NUM_MS)) { let k = 0; for (const n of this.nums) if (n.t < NUM_MS) this.nums[k++] = n; this.nums.length = k; }
     for (const a of this.anims) a.anim.update(dt * 1000);
+    this.anims = prune(this.anims, (a) => !a.anim.done);
     if (this.screens?.length) {
       for (const a of this.screens) a.update(dt * 1000);
-      this.screens = this.screens.filter((a) => !a.done);
+      this.screens = prune(this.screens, (a) => !a.done);
     }
     if (this.flashes?.length) {
       for (const f of this.flashes) f.t += dt * 1000;
-      this.flashes = this.flashes.filter((f) => f.t < f.hold + f.fade);
+      this.flashes = prune(this.flashes, (f) => f.t < f.hold + f.fade);
     }
-    this.anims = this.anims.filter((a) => !a.anim.done);
+    const now = performance.now();
+    if (this.hints?.length) this.hints = prune(this.hints, (h) => now < h.until);   // expiry moved out of the draw path
     for (const t of this.tombs) t.anim.update(dt * 1000);
     this.bulb?.update(dt * 1000); this.book?.update(dt * 1000); this.bubble?.update(dt * 1000);
     // which NPCs have quests to hand in / start / in progress, in that order of priority (refreshed every second)
@@ -219,10 +224,7 @@ export class WorldFx {
     for (const a of this.anims) drawAt(ctx, im, a.anim.node, a.ent.x - cam.x, a.ent.y - cam.y, a.anim.alpha);
     for (const f of this.flashes || []) drawAt(ctx, im, f.node, f.x - cam.x, f.y - cam.y, f.t < f.hold ? 1 : 1 - (f.t - f.hold) / f.fade);
     for (const n of this.nums) this.drawNumber(ctx, n, cam);
-    if (this.hints?.length) {
-      this.hints = this.hints.filter((h) => performance.now() < h.until);
-      for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24, rich: true });
-    }
+    if (this.hints?.length) for (const h of this.hints) this.drawBalloon(ctx, cam, h.ent, h.text, null, { node: h.node, width: h.wrap, arrowDx: 24, rich: true });
   }
   /** A tombstone (the game draws each just behind its ghost, in the ghost's page: Game.drawOrder). */
   drawTomb(ctx, cam, t) {
