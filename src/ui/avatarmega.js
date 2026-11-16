@@ -40,16 +40,18 @@ export class AvatarBanner {
     if (!c) return;
     const now = performance.now();
     if (!c.out && now - c.at >= SHOW) c.out = now;
-    const inK = Math.min(1, (now - c.at) / SLIDE), outK = c.out ? Math.min(1, (now - c.out) / SLIDE) : 0;
+    // a banner cleared mid-slide keeps the position it reached: only the out-ramp may advance from here
+    const inK = c.out ? Math.min(1, (c.out - c.at) / SLIDE) : Math.min(1, (now - c.at) / SLIDE), outK = c.out ? Math.min(1, (now - c.out) / SLIDE) : 0;
     if (outK >= 1) { this.cur = null; return; }
     const x = Math.round(UI_W - W * inK + W * outK), y = 0;
     const f = frameAt(c.art, now - c.at), bg = f && as.image(f);
     if (bg) ctx.drawImage(bg, x, y);
     drawParts(ctx, as, c.parts, x + 82, y + 85, false);
-    if (c.nameW == null) { ctx.save(); ctx.font = '12px Arial, sans-serif'; c.nameW = ctx.measureText(c.name).width; ctx.restore(); }
+    // measured in the font the name is drawn in (wzui's FONT), so the plate it picks fits the text
+    if (c.nameW == null) { ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif'; c.nameW = ctx.measureText(c.name).width; ctx.restore(); }
     const wide = c.nameW > 69, tag = as.image(c.names?.[wide ? 1 : 0]);
     if (tag) ctx.drawImage(tag, x + (wide ? 3 : 48), y + 84);
     uiText(ctx, c.name, x + 78, y + 85, { color: '#fff', size: 12, align: 'center' });
-    c.lines.forEach((l, k) => uiText(ctx, l || '', x + 124, y + 14 + k * 18, { color: '#000', size: 12 }));
+    c.lines.forEach((l, k) => { if (l) uiText(ctx, l, x + 124, y + 14 + k * 18, { color: '#000', size: 12 }); });
   }
 }
