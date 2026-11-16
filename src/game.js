@@ -5755,7 +5755,7 @@ export class Game {
     const h = this.playHours;
     this.hud.message(`You have played MapleStory for ${h} hour(s).`, CHAT_COLOR.error);
     if (h >= 3) this.hud.message('We suggest you take a break from Mapling.', CHAT_COLOR.error);
-    this.playHourAt += 3600000; this.playHours = h + 1;
+    this.playHourAt = performance.now() + 3600000; this.playHours = h + 1;   // from now: a catch-up tab must not fire one per frame
   }
   /** Laughing or crying words in your own line show on your face. */
   chatFace(text) {
