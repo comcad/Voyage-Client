@@ -169,7 +169,12 @@ export class PerfMeter {
     // the beat starts again from the end of this frame's work
     this.beat.max = 0; this.beat.last = performance.now();
   }
-  /** The meter is put away: packets stop being timed, and the refresh rate it read goes with the rest of its state. */
+  /**
+   * The meter is put away: packets stop being timed, and the refresh rate it read goes with the rest of its state.
+   * The timing hook is cleared only when it is still this meter's - the connection outlives the meter and a newer
+   * one may have taken the slot - while the observer and the beat timer are the meter's own, so they go without the
+   * check. Those are the two ownership rules that make this one line look inconsistent.
+   */
   detach(game) { if (game?.net?.conn?.timing === this.onPacket) game.net.conn.timing = null; this.observer?.disconnect(); clearTimeout(this.beat.timer); this.refreshMs = 0; }
   stats() {
     const f = this.frames, now = f.length ? f[f.length - 1].t : 0;
