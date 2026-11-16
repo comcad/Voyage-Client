@@ -136,9 +136,12 @@ export class PlayerShopWin extends Win {
     this.sales.total += gross; this.sales.received += gross - shopFee(gross);
     this.salesWin?.refresh();
   }
-  /** A room chat line in its seat's colour (or a line of the client's own, in grey). */
+  /** A room chat line in its seat's colour (or a line of the client's own, in grey), wrapped once for chat box. */
   seatSay(slot, text) { this.say(text, SEAT_COLORS[slot] || '#000'); }
-  say(text, color = '#000') { this.lines.push({ text, color }); if (this.lines.length > 60) this.lines.shift(); }
+  say(text, color = '#000') {
+    this.lines.push({ text, color, rows: null });   // `rows` caches the wrap; chat's `ctx.font` never changes between frames
+    if (this.lines.length > 60) this.lines.shift();
+  }
   end(reason = 0) {
     this.chat.remove();
     for (const w of [this.blackWin, this.visitWin, this.salesWin]) if (w) this.mgr.close(w);
@@ -315,8 +318,10 @@ export class PlayerShopWin extends Win {
     this.scrollbar(ctx, 208, 156, 196, this.first, this.items.length, ROWS);
     // chat
     ctx.save(); ctx.beginPath(); ctx.rect(239, 160, 257, 161); ctx.clip();
-    const rows = this.lines.flatMap((l) => wrapText(ctx, l.text, 251, 11).map((text) => ({ text, color: l.color }))).slice(-10);
-    rows.forEach((l, i) => uiText(ctx, l.text, 242, 163 + i * 15, { color: l.color, size: 11 }));
+    // chat: each line's wrap is cached on the line; wrapText fixes its own font, so the result never goes stale
+    const rows = [];
+    for (const l of this.lines) { if (!l.rows) l.rows = wrapText(ctx, l.text, 251, 11).map((text) => ({ text, color: l.color })); rows.push(...l.rows); }
+    rows.slice(-10).forEach((l, i) => uiText(ctx, l.text, 242, 163 + i * 15, { color: l.color, size: 11 }));
     ctx.restore();
   }
   rowAt(lx, ly) {
