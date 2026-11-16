@@ -41,6 +41,7 @@ export class Pet {
     this.lootDir = 0; this.formation = 0; this.sprintAt = 0; this.sprintExtra = 0; this.sprint = 1;
     this.speed = 1; this.jump = 1;
     this.acc = 0; this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null;
+    this.drawFromX = d.x; this.drawFromY = d.y;   // drawPos glides from here before the first step
     this.path = null;
     this.data = null; this.customs = [];
     game.assets.json(`Item/Pet/${d.id}.img`).then(async (n) => {
@@ -156,7 +157,10 @@ export class Pet {
     if (this.ladder) {
       this.ladderMs += TICK;
       if (this.ladderMs < 200) { this.climb(p); return; }
-      this.inX = g.lastJumpDir || 0;   // off a ladder after 200ms: the owner's last jump direction, nothing else (none: straight up)
+      // off a ladder after 200ms: the way you are steering, else the owner's last jump direction, else the way it faces -
+      // inX 0 would leave it hanging there, since physics only lets go when there is a direction
+      const held = (g.input.is('right') ? 1 : 0) - (g.input.is('left') ? 1 : 0);
+      this.inX = held || g.lastJumpDir || (p.facingRight ? 1 : -1);
       this.jumpReq = true;
       return;
     }
