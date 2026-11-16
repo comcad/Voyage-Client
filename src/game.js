@@ -155,6 +155,9 @@ const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
 const WHEEL_OF_DESTINY = 5510000;
 /** fieldLimit bit: no movement skills (Teleport, Monster Magnet...) on this map. */
 const FIELD_NO_MOVEMENT_SKILLS = 0x2;
+/** A portal with no target map of its own (tm 999999999): it only asks the server to run a script. */
+const SCRIPT_ONLY_PORTAL = 999999999;
+
 const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' }, QUEST_GREY = '#bbbbbb';
 
 const PRELOAD_ACTIONS = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert', 'dead',
@@ -6694,7 +6697,7 @@ export class Game {
     const map = this.map;
     this.flushMovement();   // the server and everyone else see where you were before you go
     // a script portal with no target map (types 7, 8, 11) only asks the server to run its script: no sound, no fade
-    if (portal.tm === 999999999) {
+    if (portal.tm === SCRIPT_ONLY_PORTAL) {
       if (!this.net) return;
       this.portalCooldown = 0.5;
       this.net.scriptPortal(portal.pn, { x: Math.round(this.player.x), y: Math.round(this.player.y) });
