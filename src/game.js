@@ -1130,6 +1130,9 @@ export class Game {
   openCashShop(d) {
     this.inCashShop = true;
     const info = d.info;
+    // stats keeps its identity here (Object.assign) while the rest is rebound - the same line as hop's, and
+    // deliberately not goOnline's `this.stats = info.stats`, which rebinds; the two forms are not interchangeable
+    // (doc 190 finding 4), so this stays explicit rather than going through a shared helper
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
     this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
     this.raiseKept = this.windows.order.filter((w) => w instanceof RaiseWin).map((w) => w.itemId);   // back up on the next map
@@ -1140,6 +1143,8 @@ export class Game {
     if (death) { this.death = null; if (death.notice) death.notice.answered = true; death.cancel?.(); }
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
+    // guide and questAlert are neither stopped nor cleared: update() returns before them in the shop, so their
+    // anims freeze where they are and go on from there once back on a map - the shop has no map to be from
     music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
     this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
