@@ -7723,7 +7723,7 @@ export class Game {
   hurricaneFire(k) {
     const ld = this.skills.levelData(k.id, k.lv), wcat = Math.floor(this.weaponId() / 10000);
     // running out mid-hold reads the arrows notice, a gun's too
-    if (this.net && !this.hasAmmo(k.id)) { this.notice(AMMO_OUT[145]); this.endKeydown(); return; }
+    if (this.net && !this.hasAmmo(k.id)) { this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]); this.endKeydown(); return; }
     if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice("You don't have enough MP to use this skill."); this.endKeydown(); return; }
     if (this.swingsClose()) { this.endKeydown(); this.attack(0); return; }
     const rapid = k.id === RAPID_FIRE;
@@ -7810,6 +7810,13 @@ export class Game {
   /** Heal: the party heal goes out (with the members it reaches), then its strike on the undead in its box. */
   castHeal(id, lv) {
     if (this.player.ladder) return false;
+    // the checks attack would refuse on, taken first: a heal packet for a cast that then failed is a heal the party got
+    // for free, and the effect would have played for nothing
+    if (this.net) {
+      const ld = this.skills.levelData(id, lv);
+      if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+      if (!this.skills.weaponOk(id, this.weaponId())) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+    }
     this.playSkillEffect(id, this.player);
     this.net?.heal(id, lv, this.partyMask(id, lv));
     return this.attack(id, 'magic', { heal: true });
