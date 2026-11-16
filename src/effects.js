@@ -129,6 +129,9 @@ export class WorldFx {
   /**
    * A tombstone for `ent` at (x, y). Fresh, it spins down from 600px above, landing 880ms later (its frames on their
    * own clock); otherwise it is lying there already (its last frame).
+   * Two independent clocks: the drop is timed by `t0` (drawTomb), while the spin frames run on the art's own delay
+   * clock, so a fall art that finishes early lands mid-pose. `fresh = false` pins the last frame by index regardless
+   * of the anim's own progress, so the stone is already down from the first millisecond.
    */
   tomb(ent, x, y, fresh = true) {
     this.untomb(ent);
