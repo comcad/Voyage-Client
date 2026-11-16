@@ -1,21 +1,21 @@
+const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' };
 import { itemName, itemDesc, invType } from '../data.js';
 import { sfx } from '../audio.js';
-
-const TAB_NAMES = { 1: 'Eqp', 2: 'Use', 3: 'Setup', 4: 'Etc', 5: 'Cash' };
-import { mapPath } from '../map.js';
 import { uiText } from './wzui.js';
 import { CHAT_COLOR, CHAT_BAR } from './statusbar.js';
 import { localTalk } from './dialogs.js';
 import { UI_W, UI_H } from '../view.js';
 
-const GAIN_LIFE = 5, GAIN_FADE = 1, GAIN_MAX = 7, GAIN_LINE = 16, BANNER_SPEED = 70;
+const GAIN_LIFE = 5, GAIN_FADE = 1, GAIN_MAX = 7, GAIN_LINE = 16, BANNER_SPEED = 70, BANNER_FONT = '12px Arial, "Segoe UI", sans-serif';
+/** The status bar's top before it exists: gains (below) and notification balloons (notifier.js) stack from it. */
+export const BAR_TOP_FALLBACK = UI_H - 71;
 
 // server notices: 0 '[Notice] ' in light blue, 5 light red, 6 light blue
 const NOTICE_COLORS = { 0: CHAT_COLOR.notice, 5: CHAT_COLOR.error, 6: CHAT_COLOR.notice };
 
 /** In-game HTML interface layered over the canvas. */
 export class Hud {
-  constructor(root, game) {
+  constructor(game) {
     this.game = game; this.assets = game.assets;
     // level, name, job and the HP / MP / EXP gauges are drawn on the canvas by StatusBar
     // chat log and input belong to the canvas status bar; the map name is on the minimap
@@ -27,8 +27,6 @@ export class Hud {
     });
   }
 
-  update() {}
-
   // ------------------------------------------------------------------ on-screen notices (drawn on the canvas)
   /**
    * What you gain (items, mesos, EXP, fame) is told in the lower-right corner, as the v83 client does: white
@@ -39,13 +37,14 @@ export class Hud {
     if (this.gains.length > GAIN_MAX) this.gains.shift();
   }
   /** The server's scrolling notice (type 4): it runs across a dark strip at the top until replaced or emptied. */
-  banner(text) { this.slide = text ? { text, t: performance.now() } : null; }
+  banner(text) { this.slide = text ? { text, t: performance.now(), w: null } : null; }
   drawBanner(ctx) {
     const now = performance.now();
     if (this.slide) {
       ctx.save();
-      ctx.font = '12px Arial, sans-serif';
-      const w = ctx.measureText(this.slide.text).width, run = UI_W + w + 40;
+      ctx.font = BANNER_FONT;
+      if (this.slide.w === null) this.slide.w = ctx.measureText(this.slide.text).width;   // its text is fixed: measure once per banner
+      const run = UI_W + this.slide.w + 40;
       const x = UI_W - (((now - this.slide.t) / 1000) * BANNER_SPEED) % run;
       ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, UI_W, 18);
       uiText(ctx, this.slide.text, x, 3, { color: '#ffff7e', size: 12 });
@@ -55,8 +54,9 @@ export class Hud {
   draw(ctx) {
     const now = performance.now(), bar = this.game.statusBar;
     if (this.gains?.length) {
-      this.gains = this.gains.filter((g) => now - g.t < (GAIN_LIFE + GAIN_FADE) * 1000);
-      const base = (bar?.y ?? UI_H - 72) - 34;
+      // ordered by time: the expired are at the front, so shift them off instead of filtering
+      while (this.gains.length && now - this.gains[0].t >= (GAIN_LIFE + GAIN_FADE) * 1000) this.gains.shift();
+      const base = (bar?.y ?? BAR_TOP_FALLBACK) - 34;
       ctx.save();
       this.gains.forEach((g, i) => {
         const age = (now - g.t) / 1000, k = this.gains.length - 1 - i;
@@ -66,8 +66,6 @@ export class Hud {
       ctx.restore();
     }
   }
-
-  setMap() {}
 
   message(text, color = '#fff') { this.game.statusBar?.message(text, color); }
 
@@ -171,8 +169,4 @@ export class Hud {
   // ------------------------------------------------------------------ windows (canvas, ui/windows.js)
   toggleInventory(tab) { this.game.windows.toggle(tab === 1 ? 'equip' : 'inventory'); }
   toggleStats() { this.game.windows.toggle('stat'); }
-  renderInventory() {}
-  renderStats() {}
 }
-
-export { mapPath };

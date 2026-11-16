@@ -48,7 +48,12 @@ function minMaxMp(job, L) {
   if (inLine(g, 500, [10, 20])) return L * 18 + 95;
   return null;
 }
-/** The MP the client counts an AP taken off as (for its minimum check): magicians INT x 3 / 40 + 30. */
+/**
+ * The MP the client counts an AP taken off as (for its minimum check): magicians INT x 3 / 40 + 30. Unlike the rest
+ * of the tables this diverges from the server (Cosmic takes a flat 31, AssignAPProcessor.takeMp) on purpose: it is
+ * the real v83 client's INT-scaled formula, and it can under-estimate by 1 at low INT, leaving the MP row enabled
+ * for a reset the server then refuses with "You don't have the minimum MP pool required to swap."
+ */
 function mpLoss(job, int) {
   const b = branchOf(job);
   return [8, 4, Math.trunc((int * 3) / 40) + 30, 12, 12, 16][b] ?? 0;
@@ -70,7 +75,7 @@ export function apChange(row, job, give) {
  * thief DEX 25, magician INT 20, pirate DEX 20). Putting it on: HP / MP over 30000, a stat at 999, the one taken from.
  */
 export function apDisabled(s, give, from) {
-  const job = s.job || 0, b = branchOf(job), lv = s.level || 1, off = new Set();
+  const job = s.job || 0, b = Math.min(5, branchOf(job)), lv = s.level || 1, off = new Set();
   if (give) {
     if ((s.maxHp || 0) + apChange(AP_ROWS[0], job, true) > 30000) off.add('maxHp');
     if ((s.maxMp || 0) + apChange(AP_ROWS[1], job, true) > 30000) off.add('maxMp');
@@ -83,7 +88,7 @@ export function apDisabled(s, give, from) {
   if ((s.str || 0) + (s.dex || 0) + (s.int || 0) + (s.luk || 0) + (s.ap || 0) >= 20 + bonus + lv * 5) { off.add('maxHp'); off.add('maxMp'); }
   // nor below the job's least max HP / MP for the level
   const minHp = minMaxHp(job, lv), minMp = minMaxMp(job, lv);
-  if (minHp !== null && (s.maxHp || 0) - (b <= 5 ? HP_LOSS[b] : 0) < minHp) off.add('maxHp');
+  if (minHp !== null && (s.maxHp || 0) - HP_LOSS[b] < minHp) off.add('maxHp');
   if (minMp !== null && (s.maxMp || 0) - mpLoss(job, s.int || 0) < minMp) off.add('maxMp');
   for (const k of ['str', 'dex', 'int', 'luk']) if ((s[k] || 0) < 5) off.add(k);
   if ((b === 1 && s.str <= 35) || ((b === 3 || b === 4) && s.dex < 26) || (b === 2 && s.int <= 20) || (b === 5 && s.dex <= 20)) off.add(b === 1 ? 'str' : b === 2 ? 'int' : 'dex');
