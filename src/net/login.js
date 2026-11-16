@@ -6,7 +6,7 @@ import { readCharEntry } from './proto.js';
 export const LOGIN_ERRORS = {
   2: 'This account has been banned.', 3: 'This ID has been deleted or blocked.', 4: 'Incorrect password.',
   5: 'Not a registered ID.', 6: 'System error.', 7: 'This account is already logged in.',
-  8: 'System error.', 9: 'System error.', 10: 'Too many connections.', 13: 'Unable to log on as master at this IP.',
+  8: 'System error.', 9: 'System error.', 10: 'Too many connections.', 12: 'Trouble logging into the game.', 13: 'Unable to log on as master at this IP.',
   14: 'Wrong gateway.', 16: 'Please verify your account through email.', 17: 'Wrong gateway.',
   21: 'Please verify your account through email.', 23: 'License agreement not accepted.',
 };
@@ -56,9 +56,10 @@ export class LoginSession {
   }
 
   _status(r) {
+    const start = r.pos;
     const reason = r.ubyte(), regStatus = r.ubyte();
     r.int();
-    if (reason !== 0 && reason !== 12 && reason !== 23) {
+    if (reason !== 0 && reason !== 23) {
       const res = { ok: false, reason, message: LOGIN_ERRORS[reason] || `Login failed (${reason}).` };
       if (reason === 2) {
         const banReason = r.ubyte(), lo = r.int() >>> 0, hi = r.int() >>> 0;
@@ -68,7 +69,7 @@ export class LoginSession {
       return res;
     }
     if (reason === 23) return { ok: false, reason, regStatus };
-    r.pos -= 6;
+    r.pos = start;   // readAuth starts at the result byte again (no magic 6)
     this.account = readAuth(r);
     return { ok: true, regStatus, account: this.account };
   }
@@ -233,6 +234,8 @@ export class LoginSession {
   /** -> { port } | { code } (login result) | { wrongPic: true } */
   async selectChar(charId, pic) {
     const { macs, host } = this.ids;
+    // picFlag arrives with the character list: without it, sending CHAR_SELECT would skip a needed PIC
+    if (this.picFlag === undefined) throw new Error('no character list: PIC mode unknown');
     if (this.picFlag === 0) return this._select(new PacketWriter(C.REGISTER_PIC).byte(1).int(charId).string(macs).string(host).string(pic));
     if (this.picFlag === 1) return this._select(new PacketWriter(C.CHAR_SELECT_WITH_PIC).string(pic).int(charId).string(macs).string(host));
     return this._select(new PacketWriter(C.CHAR_SELECT).int(charId).string(macs).string(host));
