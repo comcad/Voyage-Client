@@ -113,6 +113,12 @@ const SIDE_X = 271, SIDE_ROWS = 3, SIDE_ROW_Y = 31, MESO = 2147483647;
 /** Look slots of pet ability items and rings by pet: 31-37 and 47 the second's, 39-45 and 48 the third's, the rest the first's. */
 const lookSlotPet = (i) => (i >= 31 && i <= 37) || i === 47 ? 1 : (i >= 39 && i <= 45) || i === 48 ? 2 : 0;
 const PET_ROWS = 3, PET_ROW_Y = 215;
+/**
+ * What CharInfoWin opens with when the server has said nothing: an own-id record with no name, level or job, no
+ * pet out (so the panel starts on 'none'), empty pets and wish. The constructor reads id, pets?.length and name
+ * from it; CHAR_INFO replaces it whole when the answer comes.
+ */
+export const EMPTY_CHAR_INFO = { id: 0, name: '', level: 0, job: 0, fame: 0, guild: '', alliance: '', pets: [], wish: [] };
 export class CharInfoWin extends Win {
   constructor(mgr, info) {
     const U = mgr.W.UserInfo;
