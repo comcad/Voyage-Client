@@ -21,6 +21,9 @@ const ids = (n) => Object.values(n || {}).map(Number).filter((v) => v > 0);
 export function readSets(img) {
   return Object.keys(img || {}).filter((k) => /^\d+$/.test(k)).sort((a, b) => a - b).map((k, index) => {
     const s = img[k], info = s.info || {};
+    // two nodes, not one: the type test reads the top-level `multipet` marker, while `pets` reads the
+    // `info/multipet` list. A set with the marker but no list would read as worn by everyone (no parts and no
+    // pets to fail its gates); a list without the marker reads as plain. No shipped set has only one.
     const type = Number(s.cash) ? 1 : s.multipet !== undefined ? 2 : 0;
     const parts = Object.entries(info).filter(([p]) => p !== 'multipet').map(([p, n]) => [Number(p), ids(n)]).filter(([, l]) => l.length);
     return { index, type, parts, pets: ids(info.multipet) };

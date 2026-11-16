@@ -66,6 +66,8 @@ export function bindingLabel(b) {
 export function loadControls() {
   try {
     const c = JSON.parse(readKept(STORE) || 'null');
+    // a stored pad replaces the defaults wholesale (a binding it lacks stays missing) while the stored touch
+    // layout merges over its defaults: a pad saved before a default was added never gains the newer binding.
     if (c) return { pad: c.pad || defaultPad(), padMove: c.padMove === 'dpad' ? 'dpad' : 'ls', touch: { ...defaultTouch(), ...c.touch } };
   } catch { /* storage blocked or bad data: the defaults */ }
   return { pad: defaultPad(), padMove: 'ls', touch: defaultTouch() };
