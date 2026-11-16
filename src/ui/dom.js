@@ -14,13 +14,23 @@ export function el(tag, attrs = {}, ...children) {
   return e;
 }
 
-/** Modal with buttons; resolves with the clicked button index. */
+/**
+ * Modal with buttons; resolves with the clicked button index. A one-button modal (the error and connection notices)
+ * can also be dismissed with Escape or a click on the backdrop, which answers its one button: a modal nothing can
+ * dismiss is an await that never settles (the login retry loop, main.js's onError). A modal that offers a real choice
+ * (e.g. the gender question, whose answer is sent to the server) ignores both and waits for a button.
+ */
 export function modal({ title, body, buttons = ['OK'] }) {
   return new Promise((resolve) => {
     const overlay = el('div', { class: 'modal-overlay' }, el('div', { class: 'panel modal' },
       el('h3', {}, title), el('p', {}, body),
-      el('div', { class: 'row' }, ...buttons.map((b, i) => el('button', { class: i === 0 ? 'primary' : '', onclick: () => { overlay.remove(); resolve(i); } }, b)))));
+      el('div', { class: 'row' }, ...buttons.map((b, i) => el('button', { class: i === 0 ? 'primary' : '', onclick: () => answer(i) }, b)))));
     document.body.append(overlay);
+    const only = buttons.length === 1;
+    const answer = (i) => { removeEventListener('keydown', onKey, true); overlay.remove(); resolve(i); };
+    const onKey = (e) => { if (only && e.key === 'Escape') { e.preventDefault(); answer(0); } };
+    if (only) overlay.addEventListener('pointerdown', (e) => { if (e.target === overlay) answer(0); });
+    addEventListener('keydown', onKey, true);
     overlay.querySelector('button')?.focus();
   });
 }
