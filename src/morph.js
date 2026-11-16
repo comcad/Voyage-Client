@@ -26,8 +26,6 @@ export function morphTemplate(assets, id) {
 }
 /** The template once loaded (null while loading or for none). */
 export const morphTemplateNow = (id) => LOADED.get(id) || null;
-export const isSuperman = (t) => !!t?.superman;
-export const isNormalMorph = (t) => !!t && !t.superman && !t.hide;
 export const isHideMorph = (t) => !!t?.hide;
 
 // a superman morph's attack actions: the character action -> the morph node of the same meaning

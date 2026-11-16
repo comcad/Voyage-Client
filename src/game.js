@@ -55,7 +55,7 @@ import { WishListInputWin, WeddingGiftWin } from './ui/weddinggifts.js';
 import { uiText, TextField } from './ui/wzui.js';
 import { ShopBoards } from './shopboards.js';
 import { Kites } from './kites.js';
-import { morphTemplate, morphTemplateNow, MorphView, isSuperman, isNormalMorph, isHideMorph, supermanPlainAttackOk, SUPERMAN_BLOCKED } from './morph.js';
+import { morphTemplate, morphTemplateNow, MorphView, isHideMorph, supermanPlainAttackOk, SUPERMAN_BLOCKED } from './morph.js';
 import { ProposalWaitWin, InvitationWin } from './ui/wedding.js';
 import { NewYearCardWin, NewYearCardViewWin } from './ui/newyear.js';
 import { RaiseWin, IncubatorWin, TreasureBoxWin } from './ui/etcwins.js';
@@ -5477,14 +5477,6 @@ export class Game {
   }
 
   /**
-<<<<<<< ours
-   * The most a summon may hit for, as the game server's SummonDamageHandler caps it (it flags anything above):
-   * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
-   * damage (5.4% from 438 up). Rolled at most 95% of that.
-   */
-  /**
-=======
->>>>>>> theirs
    * A physical summon's blow (Octopus, Gaviota, Wrath of the Octopi): a miss by your accuracy as for your own blows,
    * else (DEX x 0.7-1.0 x 2.5 + STR) x the skill's pad %. No weapon attack, defence, level gap or critical.
    */
@@ -9992,9 +9984,9 @@ export class Game {
    */
   fieldHurt(d, vx, vy, disease = 0) {
     const p = this.player;
-    this.net.takeObstacleDamage(d, disease);
+    this.net?.takeObstacleDamage(d, disease);   // the packet sends around a field obstacle all use ?.
     this.petHitPots(null, d, -2);
-    this.net?.takeObstacleDamage(d, disease);   // the packet sends around a field obstacle all use ?.    this.vfx?.damage(p, [d], 'violet');
+    this.vfx?.damage(p, [d], 'violet');
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
     if ((vx || vy) && !this.holdsStance()) {
