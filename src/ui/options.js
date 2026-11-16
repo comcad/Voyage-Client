@@ -125,7 +125,7 @@ export class GameOptWin extends Win {
  * SysOpt backgrnd 299x366: ten rows every 30px, centres from y 46, each with its label box at x 9-60:
  *   PICTURE QUALITY  slider NORMAL .. BEST          SCREEN SHOT   where pictures go (ScrLk / PrtSc take one)
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
- *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
+ *   HP / MP ALERT    slider of 20 steps, DO NOT ALERT and then 5% .. 95%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
  * Five rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
  * under them: SCREEN SIZE (the game's resolution, a combo box), FRAME RATE (a combo box: VSync draws a frame on every
@@ -215,6 +215,7 @@ export class SysOptWin extends Win {
     if (k === 'mouse') return 0.5;
     if (k === 'uiScale') { const max = maxUiScale(); return max > 1 ? ((this.pendingScale ?? UI_SCALE) - 1) / (max - 1) : 0; }
     if (k === 'zoom') return ((Number(settings.zoom) || 1) - 1) / (ZOOM_MAX - 1);
+    if (k === 'hpAlert' || k === 'mpAlert') return Math.min(1, (Number(settings[k]) || 0) / 0.95);   // step 19 at the right end
     return settings[k];
   }
   off(k) { return SLIDERS[k].disabled || this.muted(k) || (k === 'uiScale' && maxUiScale() <= 1); }
@@ -223,6 +224,7 @@ export class SysOptWin extends Win {
     else if (k === 'zoom') { settings.zoom = Math.round((1 + v * (ZOOM_MAX - 1)) * 10) / 10; saveSettings(); }
     else if (k === 'bgm') music.setVolume(v);
     else if (k === 'sound') sfx.setVolume(v);
+    else if (k === 'hpAlert' || k === 'mpAlert') { settings[k] = (Math.round(v * 19) * 5) / 100; saveSettings(); }
     else { settings[k] = k === 'quality' ? v : Math.round(v * 20) / 20; saveSettings(); }
   }
   muted(k) { return k === 'bgm' ? music.muted : k === 'sound' ? sfx.muted : false; }

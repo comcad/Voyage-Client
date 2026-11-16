@@ -2890,8 +2890,8 @@ export class Game {
     const lead = this.myPets()[0], s = this.stats;
     if (!lead || lead.slot !== 0 || !this.net || this.dead || !s || s.hp <= 0) return;
     if (!this.petFlags(lead)[kind === 'hp' ? 'consumeHP' : 'consumeMP']) return;
-    const max = kind === 'hp' ? this.maxHpShown() : this.maxMpShown(), alert = settings[`${kind}Alert`];
-    if (!alert || !max || ((kind === 'hp' ? s.hp - pending : s.mp) * 100) / max >= alert * 100) return;
+    const max = kind === 'hp' ? this.maxHpShown() : this.maxMpShown(), alert = Math.round((settings[`${kind}Alert`] || 0) * 100);
+    if (!alert || !max || ((kind === 'hp' ? s.hp - pending : s.mp) * 100) / max >= alert) return;
     const id = this.petPotions?.[kind];
     if (!id) return;
     const slot = Object.entries(this.inventory?.[2] || {}).find(([, it]) => it.id === id)?.[0];
@@ -2911,13 +2911,33 @@ export class Game {
     if (kind === 'mp') this.petMpArmed = false;
     else said.hp = 0;
   }
-  /** Set the potion a pet drinks (dropped on PET HP / PET MP): the lead pet needs the pouch, the potion must restore it. */
+  /**
+   * Whether the lead pet wears the HP (MP) Potion Pouch; null while what it wears is still being read. No lead pet
+   * here: false.
+   */
+  petPouch(kind) {
+    const lead = this.myPets()[0];
+    if (!lead || lead.slot !== 0) return false;
+    const f = this.petFlags(lead);
+    return this.petFlagCache?.has(lead.slot) ? !!f[kind === 'hp' ? 'consumeHP' : 'consumeMP'] : null;
+  }
+  /** The pet's HP (MP) potion is let go: the server is told, and nothing is drunk until another is set. */
+  clearPetPotion(kind) {
+    if (!this.petPotions?.[kind] || !this.net) return;
+    this.net.petPotion(kind === 'hp' ? 1 : 2, 0);
+    this.petPotions[kind] = null;
+  }
+  /**
+   * Set the potion a pet drinks (dropped on PET HP / PET MP): the lead pet needs the pouch, the potion must restore it;
+   * the potion already set does nothing.
+   */
   async setPetPotion(kind, id) {
     const lead = this.myPets()[0];
     if (!lead || !this.petFlags(lead)[kind === 'hp' ? 'consumeHP' : 'consumeMP']) return false;
     const spec = await itemSpec(this.assets, id);
     const ok = kind === 'hp' ? Number(spec?.hp) || Number(spec?.hpR) : Number(spec?.mp) || Number(spec?.mpR);
     if (!ok) { this.windows.notice(`Only usable on Auto ${kind === 'hp' ? 'HP' : 'MP'} Potion Pouch.`); return false; }
+    if (this.petPotions?.[kind] === id) return false;
     this.net.petPotion(kind === 'hp' ? 1 : 2, id);
     (this.petPotions ??= {})[kind] = id;
     this.hud.message(`Your pet will consume the Potion once when your ${kind === 'hp' ? 'HP' : 'MP'} goes below ${kind === 'hp' ? 'HP' : 'MP'} alert setting.`, CHAT_COLORS.notice);

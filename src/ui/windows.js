@@ -646,7 +646,15 @@ class EquipWin extends Win {
       cells.push(...this.petCells().map(([s, c, r]) => [s, PET_X + 13 + c * 33, 12 + r * 33]));
     }
     for (const [cell, x, y] of cells) {
-      if (cell === 'hp' || cell === 'mp') { const id = this.g.petPotions?.[cell]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }
+      if (cell === 'hp' || cell === 'mp') {
+        // without the lead pet wearing its pouch the cell is red, and a potion set in it is let go (with no pet here
+        // yet, as just after a map change, it is only red: the pets come back a moment later)
+        const pouch = this.g.petPouch(cell);
+        if (pouch !== false) { const id = this.g.petPotions?.[cell]; if (id) m.drawIcon(ctx, m.icon(id), x, y); continue; }   // (null: still being read)
+        ctx.fillStyle = 'rgba(255,0,0,0.25)'; ctx.fillRect(x, y, 32, 32);
+        if (pouch === false && this.g.myPets()[0]) this.g.clearPetPotion(cell);
+        continue;
+      }
       const slot = this.shown(Number(cell)), it = eq[slot];
       if (!it || (m.carry?.tab === 'equip' && m.carry.slot === slot)) continue;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);

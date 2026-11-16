@@ -1,7 +1,8 @@
 /**
  * System Option choices, kept on this device (storage and a cookie, see kept.js):
  *   quality   0..1  canvas density, NORMAL (1 pixel per game pixel) .. BEST (the screen's own density)
- *   hpAlert / mpAlert  0..1  the gauge flashes below this share (0 = never)
+ *   hpAlert / mpAlert  0 .. 0.95 in steps of 0.05: the gauge flashes, and a pet with the potion pouch drinks, below
+ *              this share (0 = never)
  *   shake     shake the screen with skills that do
  *   mobInfo   0 nothing / 1 HP bar / 2 name and HP bar, over monsters you hit
  *   resolution  the game's screen size, 'WxH'
@@ -14,13 +15,15 @@
 import { readKept, writeKept } from './kept.js';
 
 const KEY = 'maple.sysopt';
-export const DEFAULTS = { quality: 1, hpAlert: 0.2, mpAlert: 0.2, shake: true, mobInfo: 2, resolution: '800x600', uiScale: 1, zoom: 1, fit: false, fps: 'vsync', fpsMeter: false };
+export const DEFAULTS = { quality: 1, hpAlert: 0.5, mpAlert: 0.5, shake: true, mobInfo: 2, resolution: '800x600', uiScale: 1, zoom: 1, fit: false, fps: 'vsync', fpsMeter: false };
 export const MOB_INFO = ['Do not mark', 'Mark HP only', 'Mark name and HP'];
 /** FRAME RATE's choices, in the order the list shows them. */
 export const FPS_CHOICES = [['vsync', 'VSync'], [60, '60 FPS'], [30, '30 FPS']];
 
 export const settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(readKept(KEY) || '{}')); } catch { /* bad data: the defaults */ }
+// an alert outside 0 .. 95% (one kept from before it stopped at 95%) is the default again
+for (const k of ['hpAlert', 'mpAlert']) if (!(settings[k] >= 0 && settings[k] <= 0.95)) settings[k] = DEFAULTS[k];
 
 export function saveSettings() {
   writeKept(KEY, JSON.stringify(settings));
