@@ -6069,7 +6069,7 @@ export class Game {
 
   /** A whisper with your own whispers off in the Game Option warns you that the answer may not come (chat type 9). */
   whisperTo(name, text) {
-    this.pendingWhisper = { name, text };
+    (this.pendingWhisper ??= []).push({ name, text });   // a queue: two whispers out at once each get their own answer
     this.net.whisper(name, text);
     if (text && !this.optionAllowed('whisper')) this.hud.message('Since the character has the whispers blocked at this point, you may not receive an answer.', CHAT_COLOR.result);
   }
@@ -6081,10 +6081,11 @@ export class Game {
     this.hud.message(`${w.from}${ch}>> ${this.masked(w.text)}`, CHAT_COLORS.whisper);
   }
   onWhisperResult(r) {
-    const p = this.pendingWhisper;
+    // the answer names its recipient: take that whisper's own line out of the queue (an unnamed one takes the oldest)
+    const q = this.pendingWhisper || [], i = q.findIndex((w) => w.name === r.to);
+    const p = i >= 0 ? q.splice(i, 1)[0] : q.shift();
     if (r.ok && p) this.hud.message(`${r.to}<< ${p.text}`, CHAT_COLORS.whisper);
     else if (!r.ok) this.hud.message(`Unable to find '${r.to}'`, CHAT_COLORS.notice);
-    this.pendingWhisper = null;
   }
   /**
    * A /find answer, in the client's words: a map is "'name' is currently at 'street : map'." in grey (a GM also sees
