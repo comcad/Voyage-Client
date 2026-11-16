@@ -101,6 +101,8 @@ const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've 
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
 // and how long it takes to glide to a new focus height (s)
 const CAM_LIFT = 50, CAM_DEADBAND = 28, CAM_DAMPING = 100;   // the original camera filter
+/** While protected after a hit, how long the character is drawn gray before it is drawn normal again (s). */
+const BLINK_PERIOD = 0.06;
 /** How long after arriving on a map the Balrog ship counts as already at its station (ms). */
 const SHIP_ALREADY_THERE = 1500;
 /**
@@ -116,8 +118,13 @@ for (const s of PET_SLOTS) s.ability = [s.pouch, s.magnet, s.boots, s.binocular,
 export const SHARED_PET_SLOTS = [-124, -125];
 const PET_WEAR_PARTS = [30, 31, 32, 38, 39, 40];
 const PET_FLAGS = ['pickupMeso', 'pickupItem', 'pickupOthers', 'longRange', 'sweepForDrop', 'consumeHP', 'consumeMP', 'ignorePickup'];
+// a pet sent home, by the reason the server gives: 1 hungry, 2 its magical time ran out, 3 not allowed here; any other
+// code (0 included: it is sent home without a reason) says nothing
 const PET_GONE = { 1: "The pet went back home because it's hungry.", 2: "The pet's magical time has run out, and so it has turned back into a doll.", 3: 'You cannot use pet here.' };
 const PET_DOLL_TIME = 0x0217E646BB058000n;   // a dateDead from 2079 on: a doll
+// Follow the Lead by v83 job group: 0 every Explorer class (skill 8, the shared beginner's book - any class can
+// have learned it; pet-leading is gated on it server-side for all of them), 1 Cygnus (10000018), 2 Legends
+// (20000024). `?? 8` is a guard no real job id reaches: every group above is in the table.
 const FOLLOW_THE_LEAD = { 0: 8, 1: 10000018, 2: 20000024 };
 export const MESO_ID = 2147483647;
 const MAGIC_GUARDS = [2001002, 12001001, 22111001], POWER_GUARDS = [1101007, 1201007];
@@ -10804,14 +10811,16 @@ export class Game {
   drawChar(ctx, cam, ent, look, local) {
     if (look) look.ghost = ent.ghost || 0;   // (a look built again carries it on)
     // on a mount (not as a ghost: dead clears it): the mount, its saddle and mount equipment, the rider
-    // on it; the mount's frames run on their own clock from when its pose last changed
+    // on it; the mount's frames run on their own clock from when its pose or the mount itself last changed
     const mountId = local ? this.riding?.item : ent.mount, mount = ent.action !== 'dead' && this.mountData(mountId)?.img;
     let parts;
     if (mount) {
       const worn = local ? this.inventory?.equipped || {} : null, eqs = ent.lookData?.equips || {};
       const gear = (local ? [worn[-19]?.id, worn[-20]?.id] : [eqs[19], eqs[20]]).map((g) => g && this.mountData(g)?.img).filter(Boolean);
       const tired = local ? this.player.mountTired : ent.mountTired, pose = mountPose(mountId, ent.action, tired);
-      if (ent.mountPose !== pose) { ent.mountPose = pose; ent.mountT0 = performance.now(); }
+      // the clock restarts when the pose changes, and when the mount does (two mounts can share a pose, and the new
+      // one's art must start from its first frame rather than mid-cycle)
+      if (ent.mountPose !== pose || ent.mountArt !== mountId) { ent.mountPose = pose; ent.mountArt = mountId; ent.mountT0 = performance.now(); }
       parts = composeMounted(look, mount, mountId, ent.action, ent.expr, performance.now() - ent.mountT0, tired, gear);
     } else parts = look.compose(ent.action, ent.frame, ent.expr);
     // dead: the ghost (body action "dead") circles over its tombstone, and all that is drawn of them goes with it
@@ -10821,15 +10830,18 @@ export class Game {
     const chair = local ? ent.seat?.item : ent.action === 'sit' && ent.chair;
     if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight);
     // while protected after a hit, alternate gray and normal every 60ms, as the original does (never a ghost)
-    const blink = local && !dead && this.invincible > 0 && !this.missed && Math.floor(this.invincible / 0.06) % 2 === 0;
+    const blink = local && !dead && this.invincible > 0 && !this.missed && Math.floor(this.invincible / BLINK_PERIOD) % 2 === 0;
     if (performance.now() < ((local ? this.boomerangUntil : ent.boomerangUntil) || 0)) return;   // gone mid Boomerang Step
+    const seeThrough = local ? this.hidden() || this.gmHidden : ent.hidden;   // Dark Sight / Wind Walk / GM hide: half alpha
+    // the same alpha either way: a morph in Dark Sight is half-transparent, and a morphing ghost fades in like a body
+    const alpha = (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1);
     // morphed: only the morph's frame (no body, equipment or their effects); its character effect stays
     const morphed = !mount && ent.morphView?.node();
     if (morphed) {
       this.drawSetFx(ctx, cam, ent, false, gx, gy);
       this.drawItemFx(ctx, cam, ent, parts, false, gx, gy);
       if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }
-      ent.morphView.draw(ctx, this.assets, sx, sy, drawnRight(ent), (local ? this.hidden() || this.gmHidden : ent.hidden) ? 0.5 : 1);
+      ent.morphView.draw(ctx, this.assets, sx, sy, drawnRight(ent), alpha);
       if (blink) ctx.restore();
       this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
       this.drawSetFx(ctx, cam, ent, true, gx, gy);
@@ -10844,7 +10856,6 @@ export class Game {
     this.drawEquipFx(ctx, cam, ent, parts, false, gx, gy);
     this.drawUnderFx(ctx, cam, ent);
     if (blink) { ctx.save(); ctx.filter = 'brightness(0.502)'; }   // the client tints to 0x808080, not grey
-    const seeThrough = local ? this.hidden() || this.gmHidden : ent.hidden;   // Dark Sight / Wind Walk / GM hide: half alpha
     if (!dead && (local ? this.partner() : ent.partner)) this.drawPartner(ctx, ent, sx, sy, local);
     const mirror = drawnRight(ent);
     // a frame whose image isn't made yet (its art still loading, or this frame's time for making them used up) doesn't
@@ -10857,7 +10868,7 @@ export class Game {
       if (made === 'made') holdFrame(ent, parts);
       else if (made !== 'no' && ent.wholeSprite) { whole = ent.wholeParts; held = ent.wholeSprite; }
     }
-    drawParts(ctx, this.assets, whole, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead, held);
+    drawParts(ctx, this.assets, whole, sx, sy, mirror, alpha, !dead, held);
     if (blink) ctx.restore();
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
@@ -10882,13 +10893,14 @@ export class Game {
       if (!this.inView(x, y, 80, 100, 60)) continue;
       // icons hang from their left edge (origin x ~0), so centre them on the spot they lie on
       const oy = node.origin?.[1] ?? img.height;
+      const wasAlpha = ctx.globalAlpha;   // put back what was there, not a literal 1
       ctx.globalAlpha = d.alpha;
       if (d.angle) {                            // spinning on its way down: turn about the icon's middle
         ctx.save(); ctx.translate(snapPx(x - cam.x), snapPx(y - oy + img.height / 2 - cam.y)); ctx.rotate(d.angle);
         ctx.drawImage(img, Math.round(-img.width / 2), Math.round(-img.height / 2));
         ctx.restore();
       } else ctx.drawImage(img, snapPx(x - img.width / 2 - cam.x), snapPx(y - oy - cam.y));
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = wasAlpha;
     }
   }
 
