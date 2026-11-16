@@ -60,7 +60,7 @@ import { ProposalWaitWin, InvitationWin } from './ui/wedding.js';
 import { NewYearCardWin, NewYearCardViewWin } from './ui/newyear.js';
 import { RaiseWin, IncubatorWin, TreasureBoxWin } from './ui/etcwins.js';
 import { RemoteGachaponWin, KarmaWin, HammerWin, VegaWin } from './ui/cashwins2.js';
-import { permanent } from './ui/itemguard.js';
+import { FT_EPOCH, permanent } from './ui/itemguard.js';
 import { MapleLifeWin } from './ui/maplelife.js';
 import { OwlWin, OwlResultWin } from './ui/owl.js';
 import { openMaker, makerOutcome } from './ui/maker.js';
@@ -1947,7 +1947,7 @@ export class Game {
     if (!info) return;
     if (Number((await itemInfo(this.assets, it.id))?.notExtend)) { this.windows.notice('Time limit extension is not possible on this item.'); return; }
     const add = Number(info.addTime) || 0, maxDays = Number(info.maxDays) || 0;
-    const ends = Number((BigInt(it.expiration) - 116444736000000000n) / 10000n) + add * 1000;
+    const ends = Number((BigInt(it.expiration) - FT_EPOCH) / 10000n) + add * 1000;
     if (maxDays > 0 && ends > Date.now() + maxDays * 864e5) { this.windows.notice(`You cannot extend the effective date beyond ${maxDays} days.`); return; }
     const d = Math.floor(add / 86400), h = Math.floor((add % 86400) / 3600), m = Math.floor((add % 3600) / 60);
     const dur = `${d > 0 ? `${d} days` : ''}${h > 0 ? `${h} hrs.` : ''}${m > 0 ? `${m} min.` : ''}`;
