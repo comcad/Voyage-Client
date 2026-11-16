@@ -82,7 +82,6 @@ const ERRORS = {
 };
 /** The weapon types a cash weapon can have art for, in the client's order. */
 const WEAPON_TYPES = [30, 31, 32, 33, 37, 38, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 39];
-/** Items only NX Prepaid can pay for. */
 /** NAME_TRANSFER / WORLD_TRANSFER refusals, by error code. */
 const TRANSFER_ERRORS = {
   name: { 1: 'The name change is already submitted \ndue to the item purchase', 2: 'This applies to the limitations on the request.\nPlease check if you were recently banned \nwithin 3 months.',
@@ -97,6 +96,7 @@ const isCoupleRing = (id) => Math.floor(id / 100) === 11120 && id !== 1112000;
 const isFriendRing = (id) => Math.floor(id / 100) === 11128 && id % 10 < 3;
 /** A pet accessory (1802xxx, not the Pet Collar): the one piece of pet equipment the preview pet can try on. */
 const isPetAcc = (id) => Math.floor(id / 10000) === 180 && id !== 1802100;
+/** Items only NX Prepaid can pay for. */
 const prepaidOnly = (id) => id === 5400000 || id === 5401000 || Math.floor(id / 10) === 520000 || Math.floor(id / 1000) === 549 || id === 5221001 || id === 5222000;
 /** Items a character must reach a level to buy (BUY and RESERVE are greyed below it). */
 const LEVEL_GATE = { 507: 11, 539: 11, 503: 16, 514: 16, 520: 16, 504: 7 };
@@ -298,7 +298,6 @@ export class CashShopWin extends Win {
     sfx.play('UI/BuyShopItem');
     this.alert('You have successfully made the purchase.');
   }
-  /** Gifts waiting for us: the server already moved them into the Cash Inventory. */
   /**
    * Gifts waiting for you (0x4D): each opens its thank-you note in turn; OK answers the sender (NOTE_ACTION 0) and
    * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (the game server sends one
