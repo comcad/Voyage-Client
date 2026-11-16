@@ -179,10 +179,15 @@ export class MonsterBookWin extends Win {
   drawSummary(ctx) {
     const im = (n) => this.mgr.image(n), B = this.B, cards = this.book.cards;
     const ip = im(B.infoPage); if (ip) ctx.drawImage(ip, 40, 30);
-    const ids = Object.keys(cards).map(Number), special = ids.filter((id) => id >= 2388000).length;
-    const lv = this.level();
+    // counted once per card-set change, not per frame: the summary is the same for every draw in between
+    const n = Object.keys(cards).length;
+    if (this._sumN !== n) {
+      const ids = Object.keys(cards).map(Number), special = ids.filter((id) => id >= 2388000).length;
+      this._sumN = n; this._sum = { total: ids.length, special, other: ids.length - special, lv: this.level() };
+    }
+    const S = this._sum, lv = S.lv;
     const icon = im(B.icon?.[lv - 1]); if (icon) ctx.drawImage(icon, 117, 43);
-    for (const [v, y] of [[lv, 30], [ids.length, 81], [special, 114], [ids.length - special, 133]]) this.text2(ctx, v, 180, y, { align: 'right' });
+    for (const [v, y] of [[lv, 30], [S.total, 81], [S.special, 114], [S.other, 133]]) this.text2(ctx, v, 180, y, { align: 'right' });
     const cover = this.cards[this.book.cover];
     if (cover) this.text2(ctx, cover.name, 181, 171, { align: 'right' });
   }
