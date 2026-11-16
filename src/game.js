@@ -3452,9 +3452,10 @@ export class Game {
         if (!mobId || attack < 0) return;
         if (CHAR_DAM[attack]) sfx.play(`Mob/${pad(mobId, 7)}/${CHAR_DAM[attack]}`, { volume: this.volumeAt(sm.x, sm.y) });
         const hit = (await this.assets.json(`Mob/${pad(mobId, 7)}.img`))?.[`attack${attack + 1}`]?.info?.hit, fx = hit && Game.fxNode(hit);
-        if (!fx) return;
+        if (!fx || this.summons.get(oid) !== sm) return;   // gone while its art loaded: nothing to hit
         const anim = new Anim(fx, false);
         await this.assets.preload(anim.frames);
+        if (this.summons.get(oid) !== sm) return;   // and gone again after the preload
         if (Number(hit.attach)) this.fx.push({ anim, follow: sm, flip: !!sm.facingRight });
         else this.fx.push({ anim, x: sm.x - 15 + Math.random() * 30, y: sm.y - 40 + Math.random() * 40, flip: !!dir });
       }),
