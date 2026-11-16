@@ -9,7 +9,12 @@ const MAX_AGE = 400 * 24 * 3600;
 const COOKIE_MAX = 3800;
 
 // base64 of the UTF-8 text: a cookie value can't hold the quotes, commas and semicolons JSON is full of
-const encode = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
+const encode = (s) => {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x2000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x2000));
+  return btoa(bin);
+};
 const decode = (s) => new TextDecoder().decode(Uint8Array.from(atob(s), (c) => c.charCodeAt(0)));
 
 function readCookie(key) {
