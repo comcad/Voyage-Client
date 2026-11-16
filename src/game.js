@@ -2854,10 +2854,11 @@ export class Game {
   }
 
   /**
-   * A monster's blow is what sets the pet's potions off: HP is checked against what the blow will take from it, and a
-   * blow that also went elsewhere (Power Guard's reflected share, Meso Guard's share paid in mesos, Magic Guard's share
-   * to MP: flag 1, 2 or 4, the first that applies) starts the MP checks, which then run on every stat update until an
-   * MP potion goes. Spending HP / MP on skills sets off nothing. meso: the share Meso Guard took (already off damage).
+   * A blow (a monster's, a trap's or an obstacle's) sets the pet's potions off: HP is checked against what the blow will
+   * take from it, and a blow that also went elsewhere (Power Guard's reflected share, Meso Guard's share paid in mesos,
+   * Magic Guard's share to MP: flag 1, 2 or 4, the first that applies) starts the MP checks. So does any skill that goes
+   * off. Once started, MP is checked every frame and on every stat update until an MP potion goes. m: the monster (none
+   * for a trap); meso: the share Meso Guard took (already off damage).
    */
   petHitPots(m, damage, from, meso = 0) {
     const now = Date.now(), on = (ids) => ids.find((id) => this.buffs?.some((b) => b.source === id && b.until > now));
@@ -2879,7 +2880,10 @@ export class Game {
   }
   /**
    * Auto HP / MP Potion Pouch: the lead pet drinks the set potion when HP (MP) is under your alert setting (HP counting
-   * the blow just taken), at most every 200ms. Without one left it says so.
+   * the blow just taken). Without one left it says so (and the pet does, its first three times; an HP potion that goes
+   * lets it say so again). A pouch potion is a request like the others: none goes while another waits for its answer,
+   * and it then holds them back until its own answer (the game server always gives one); it also waits 200ms from the
+   * last HP potion, the MP one too. On a map that forbids potions nothing goes.
    */
   petAutoPot(kind, pending = 0, flag = 0) {
     if (kind === 'mp' && !this.petMpArmed) return;
@@ -2889,7 +2893,7 @@ export class Game {
     const max = kind === 'hp' ? this.maxHpShown() : this.maxMpShown(), alert = settings[`${kind}Alert`];
     if (!alert || !max || ((kind === 'hp' ? s.hp - pending : s.mp) * 100) / max >= alert * 100) return;
     const id = this.petPotions?.[kind];
-    if (!id || (this.map?.info?.fieldLimit || 0) & 0x400) return;
+    if (!id) return;
     const slot = Object.entries(this.inventory?.[2] || {}).find(([, it]) => it.id === id)?.[0];
     const said = (this.petPotSaid ??= { hp: 0, mp: 0 });
     if (!slot) {
@@ -2897,12 +2901,15 @@ export class Game {
       if (said[kind] < 3) { said[kind]++; this.petEvent(kind === 'hp' ? 'e_NOHPPotion' : 'e_NOMPPotion'); }
       return;
     }
-    const t = (this.petPotT ??= { hp: 0, mp: 0 }), now = performance.now();
-    if (now - t[kind] < 200) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x400 || this.excl?.busy) return;
+    const t = (this.petPotT ??= { hp: -Infinity, mp: -Infinity }), now = performance.now();
+    if (now - t.hp < 200) return;
     t[kind] = now;
     this.net.petAutoPot(lead.sn, Number(slot), id, flag);
+    this.excl = { busy: true, at: this.excl?.at ?? -Infinity };   // until the server's answer
     sfx.play(`Item/${pad(id, 8)}/Use`);
     if (kind === 'mp') this.petMpArmed = false;
+    else said.hp = 0;
   }
   /** Set the potion a pet drinks (dropped on PET HP / PET MP): the lead pet needs the pouch, the potion must restore it. */
   async setPetPotion(kind, id) {
@@ -6185,6 +6192,7 @@ export class Game {
     if (this.net) this.friendlyMobHit();
     if (this.net) this.hypnoTouch();
     for (const e of this.map.life) if (e.kind === 'Mob' && e.chat && (e.chat.t -= dt) <= 0) e.chat = null;   // monsters' lines run out
+    if (this.net && this.petMpArmed) this.petAutoPot('mp');
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
     lap('mobs');
@@ -6811,9 +6819,9 @@ export class Game {
     if ((SHOCKWAVES.has(id) && !this.player.morph) || (SUPER_ONLY.has(id) && !(this.player.morph && this.morphReason === SUPER_TRANSFORMATION))) {
       this.notice('This skill is available only during transformation.'); return false;
     }
-    if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION || CHARGE_BLOWS.has(id)) return this.holdCharge(id, lv);
-    if (FLASH_JUMPS.has(id)) return this.flashJump(id, lv);
-    if (id === CHAKRA) return this.castChakra(id, lv);
+    if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION || CHARGE_BLOWS.has(id)) return this.skillWentOff(this.holdCharge(id, lv));
+    if (FLASH_JUMPS.has(id)) return this.skillWentOff(this.flashJump(id, lv));
+    if (id === CHAKRA) return this.skillWentOff(this.castChakra(id, lv));
     // Assaulter needs a monster to go for and floor where it ends; Boomerang Step floor 150px ahead
     const ahead = (dx) => this.floorNear(this.player.x + (this.player.facingRight ? dx : -dx), this.player.y, 80);
     if (id === ASSAULTER && (!ahead(-(sb.levelData(id)?.lt?.[0] || 200))
@@ -6821,7 +6829,7 @@ export class Game {
     // Barrage and Energy Drain only go off with a monster in reach
     if (NEED_TARGET.has(id) && !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length) return false;
     if (id === BOOMERANG_STEP && (!ahead(-(sb.levelData(id)?.lt?.[0] || 300) / 2) || performance.now() < (this.boomerangLock || 0))) return false;
-    if (HELD_SHOTS.has(id) || id === PIERCING_ARROW) return this.holdKeydown(id, lv);
+    if (HELD_SHOTS.has(id) || id === PIERCING_ARROW) return this.skillWentOff(this.holdKeydown(id, lv));
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
     if (FINISHERS.has(id) && this.comboValue() < 2) return false;
     if (id === ENRAGE && this.comboValue() < 10) return false;
@@ -6837,6 +6845,11 @@ export class Game {
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
     const used = this.attack(id, kind);
     if (used && this.net) this.skillReactors(id);   // a cast can set off reactors waiting for that skill
+    return this.skillWentOff(used);
+  }
+  /** A skill that went off starts the pet's MP potion checks (see petHitPots). */
+  skillWentOff(used) {
+    if (used) this.petMpArmed = true;
     return used;
   }
 
@@ -9708,6 +9721,7 @@ export class Game {
   fieldHurt(d, vx, vy, disease = 0) {
     const p = this.player;
     this.net.takeObstacleDamage(d, disease);
+    this.petHitPots(null, d, -2);
     this.vfx?.damage(p, [d], 'violet');
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
