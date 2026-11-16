@@ -39,17 +39,22 @@ export class QuestAlarmWin extends Win {
     if (this._state?.key !== this.key) {
       let s = null;
       try { s = JSON.parse(localStorage.getItem(this.key) || 'null'); } catch { /* storage off */ }
-      const book = this.g.quests, auto = s?.autoIds || [];
+      const book = this.g.quests, at = s?.autoAt, auto = at ? Object.keys(at) : s?.autoIds || [];
       // quests no longer in progress go, and so do the ones Auto added that weren't finished
       const keep = (id) => book?.status(id) === 1 && (!auto.includes(id) || this.complete(id));
       this._state = { key: this.key, ids: (s?.ids || []).filter(keep), auto: s?.auto ?? true, min: s?.min ?? true, opened: s?.opened ?? true, autoAt: new Map() };
-      for (const id of this._state.ids) if (auto.includes(id)) this._state.autoAt.set(id, performance.now());
+      // autoAt is stored in wall time, so when it is restored the 10 minutes keep counting from where they were (old saves: a fresh clock)
+      const now = performance.now();
+      for (const id of this._state.ids) if (auto.includes(id)) this._state.autoAt.set(id, at ? Math.max(now - (Date.now() - at[id]), 0) : now);
+      this._list = null;
     }
     return this._state;
   }
   save() {
-    const s = this.state;
-    try { localStorage.setItem(this.key, JSON.stringify({ ids: s.ids, autoIds: [...s.autoAt.keys()], auto: s.auto, min: s.min, opened: s.opened })); } catch { /* storage off */ }
+    const s = this.state, at = {};
+    for (const [id, t] of s.autoAt) at[id] = Date.now() - (performance.now() - t);
+    try { localStorage.setItem(this.key, JSON.stringify({ ids: s.ids, autoIds: [...s.autoAt.keys()], autoAt: at, auto: s.auto, min: s.min, opened: s.opened })); } catch { /* storage off */ }
+    this._list = null;
   }
   tracked(id) { return this.state.ids.includes(id); }
   isAutoAdded(id) { return this.state.autoAt.has(id); }
@@ -89,7 +94,7 @@ export class QuestAlarmWin extends Win {
   }
   /** A quest record came in: a tracked one keeps its place for another 10 minutes, any other may be added. */
   onRecord(id) { if (this.tracked(id)) this.touch(id); else this.offer(id); }
-  touch(id) { if (this.state.autoAt.has(id)) this.state.autoAt.set(id, performance.now()); }
+  touch(id) { if (this.state.autoAt.has(id)) this.state.autoAt.set(id, performance.now()); this._list = null; }
   /** Ready to hand in: it stays for good. */
   keep(id) { if (this.state.autoAt.delete(id)) this.save(); }
   remove(id) {
@@ -107,7 +112,9 @@ export class QuestAlarmWin extends Win {
   entries() {
     const book = this.g.quests, m = this.mgr;
     if (!book) return [];
-    return this.state.ids.filter((id) => book.status(id) === 1).map((id) => {
+    // laid out once per change: a quest's counters move only when a packet or an async name load changed them
+    if (this._list && this._laid === m.namesVersion) return this._list;
+    const list = this.state.ids.filter((id) => book.status(id) === 1).map((id) => {
       const req = book.requirements(id), rows = [];
       for (const q of req.quests) {
         const done = book.status(q.id) === 2;
@@ -118,6 +125,8 @@ export class QuestAlarmWin extends Win {
       if (req.meso) rows.push({ label: 'Meso', amount: String(req.meso), color: this.g.meso >= req.meso ? GREEN : RED });
       return { id, name: book.name(id), rows, blue: this.isAutoAdded(id) && !this.complete(id) };
     });
+    this._laid = m.namesVersion;
+    return (this._list = list);
   }
   update(dt) {
     super.update?.(dt);
@@ -128,9 +137,9 @@ export class QuestAlarmWin extends Win {
   draw(ctx) {
     this.update(0);
     const list = this.state.min ? [] : this.entries();
-    const rows = list.reduce((n, e) => n + 2 + e.rows.length, 0);
-    this.h = rows ? 30 + (rows - 1) * ROW : 20;
     this.list = list;
+    const rows = list.reduce((n, e) => n + 2 + e.rows.length, 0);
+    this.h = rows ? 25 + rows * ROW + 5 : 20;
     this.minBtn.visible = !this.state.min; this.maxBtn.visible = this.state.min;
     this.autoBtn.forceState = this.state.auto ? null : 'disabled';
     super.draw(ctx);
