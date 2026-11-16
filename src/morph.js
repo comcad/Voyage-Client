@@ -106,7 +106,8 @@ export class MorphView {
     const n = this.node();
     if (!n?.lt || !n?.rb) return null;
     const [l, t] = n.lt, [r, b] = n.rb;
-    return right ? { left: x - r, right: x - l, top: y + t, bottom: y + b } : { left: x + l, right: x + r, top: y + t, bottom: y + b };
+    const flip = right && this.act !== 'ladder' && this.act !== 'rope';   // the same condition draw() mirrors on
+    return flip ? { left: x - r, right: x - l, top: y + t, bottom: y + b } : { left: x + l, right: x + r, top: y + t, bottom: y + b };
   }
   frames() { return Object.values(this.tpl.img).flatMap((n) => (n && typeof n === 'object' ? framesOf(n) : [])); }
 }
