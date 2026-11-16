@@ -8660,11 +8660,6 @@ export class Game {
     return [clamp(((main * m * mult[0] + other) * pad) / 100), clamp(((main * mult[1] + other) * pad) / 100)];
   }
 
-  /**
-   * Combo Attack's % on every blow while it is on, by the orbs held (its buff value less 1): with one orb the skill's
-   * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
-   * and +24 to +40 from six to ten. Panic and Coma climb faster.
-   */
   /** The White Knight / Paladin / Dawn Warrior charge on you: { id, ld, elem } or null. */
   activeCharge() {
     const now = Date.now(), b = (this.buffs || []).find((x) => CHARGES[x.source] && x.until > now);
@@ -8706,6 +8701,11 @@ export class Game {
       ctx.restore();
     }
   }
+  /**
+   * Combo Attack's % on every blow while it is on, by the orbs held (its buff value less 1): with one orb the skill's
+   * damage (Advanced Combo's once Combo Attack is maxed), then a little more for each orb up to five, by skill level,
+   * and +24 to +40 from six to ten. Panic and Coma climb faster.
+   */
   comboPercent(skillId) {
     const now = Date.now(), held = (this.buffs || []).find((b) => b.combo && b.until > now)?.combo;
     if (!held) return 0;
