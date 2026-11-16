@@ -881,6 +881,7 @@ export class Life {
   kill(type = 1) {
     this.status = { first: 0, second: 0 }; this.statusArt.clear();
     this.dying = true;
+    if (type !== 1 && type !== 3 && this.anims.attack1) { this.deathAttack = true; this.attacking = null; this.playAttack(0); return; }
     const dies = Object.keys(this.src).filter((k) => /^die(?:[1-9]|F)$/.test(k)).sort();
     const name = type === 3 ? 'skill1' : dies[Math.floor(Math.random() * dies.length)] || 'die1';
     if (name && name !== 'die1' && this.src[name]) this.anims.die1 = new Anim(this.src[name], false);
