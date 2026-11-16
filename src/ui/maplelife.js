@@ -12,6 +12,7 @@ const spText = (job, i) => {
   return i === 0 ? `Don't spend SP, increase MAX ${what} 0` : `spend SP ${i + 5}, increase MAX ${what} ${v}`;
 };
 const scratch = () => document.createElement('canvas').getContext('2d');
+const BAD_NAME = 'You can not use this name.\r\nPlease check again';
 
 /**
  * Maple Life (5431000 / 5432000): CharacterClone/MainStep1-5 (434x276, centred), six steps -
@@ -32,7 +33,7 @@ export class MapleLifeWin extends Win {
     this.step = 1; this.job = 0; this.sp = 0; this.gender = 0; this.busy = false;
     const rot = (l) => { const a = [...l]; const k = a.length ? Math.floor(Math.random() * a.length) : 0; return [...a.slice(k), ...a.slice(0, k)]; };
     const lists = (g) => [0, 1, 2, 3].map((c) => Object.values(mci?.Info?.[g ? 'CharFemale' : 'CharMale']?.[c] || {}).map(Number));
-    this.lists = [lists(0).map(rot), lists(1)];
+    this.lists = [lists(0).map(rot), lists(1).map(rot)];
     this.names = mci?.Name || {};
     const B = (art, x, y, fn) => { const b = this.button(art, x, y, fn); b.visible = false; return b; };
     this.bt = {
@@ -85,7 +86,11 @@ export class MapleLifeWin extends Win {
     else on(this.bt.back, this.bt.next);
     if (s === 2) { this.bt.next.enabled = !!this.field.value; setTimeout(() => this.field.focus(), 0); }
     if (s === 3) this.bt.next.enabled = false;
-    if (s === 4) { on(...this.rowBt); if (!this.look) this.lookChanged(); }
+    if (s === 4) {
+      on(...this.rowBt);
+      for (let r = 0; r < 4; r++) { const empty = !this.list(r).length; this.rowBt[2 * r].enabled = this.rowBt[2 * r + 1].enabled = !empty; }   // no cycling an absent list
+      if (!this.look) this.lookChanged();
+    }
     if (s === 5) on(this.bt.spL, this.bt.spR);
   }
   next() {
@@ -101,30 +106,35 @@ export class MapleLifeWin extends Win {
     this.show();
   }
   async check() {
-    if (this.busy) return;
-    if (!(await this.nameOk(this.field.value))) { await this.mgr.notice('You can not use this name.\r\nPlease check again'); this.back(); return; }
-    this.g.net?.useMapleLife(this.field.value);
-    this.busy = true;
+    if (this.busy || this.step !== 3) return;
+    this.busy = true;                             // also covers the nameOk await: one check in flight
+    const name = this.field.value;                // frozen for finish(): what this check validates, not what the field may later hold
+    this.field.show(false);                       // no editing past the check
+    if (!(await this.nameOk(name))) { await this.mgr.notice(BAD_NAME); this.busy = false; this.back(); return; }
+    this.checkedName = name;
+    this.g.net?.useMapleLife(this.checkedName);
   }
   /** 4-12 letters and digits, fewer than four I / l, and (but for a GM) no forbidden or curse word in it. */
   async nameOk(name) {
     if (!/^[A-Za-z0-9]{4,12}$/.test(name) || (name.match(/[Il]/g) || []).length >= 4) return false;
     if (this.g.gm) return true;
-    this.bad ??= await Promise.all(['Etc/ForbiddenName.img', 'Etc/Curse.img'].map((p) => this.g.assets.json(p)))
+    this.bad ??= await Promise.all(['Etc/ForbiddenName.img', 'Etc/Curse.img'].map((p) => this.g.assets.json(p).catch(() => null)))
       .then((ls) => ls.flatMap((l) => Object.values(l || {})).filter((w) => typeof w === 'string' && w).map((w) => w.split(',')[0].toLowerCase()).filter(Boolean));
     const low = name.toLowerCase();
     return !this.bad.some((w) => low.includes(w));
   }
   finish() {
     if (this.busy) return;
-    if (!this.field.value) { this.mgr.notice('You cannot use this name. Please check again.'); return; }
+    const name = this.checkedName ?? this.field.value;
+    if (!name) { this.mgr.notice('You cannot use this name. Please check again.'); return; }
     const [face, hair, color, skin] = this.values();
-    this.g.net?.useCashItem(this.slot, this.itemId, (w) => w.string(this.field.value).int(face).int(hair).int(color).int(skin).int(this.gender).int(this.job).int(this.sp));
+    this.g.net?.useCashItem(this.slot, this.itemId, (w) => w.string(name).int(face).int(hair).int(color).int(skin).int(this.gender).int(this.job).int(this.sp));
     this.busy = true;
   }
   /** MAPLELIFE_RESULT: the name check (0 free, above 0 taken, below 0 an error). */
   onName(code) {
-    this.busy = false;
+    this.busy = false;                            // the round-trip is over wherever the user has ended up
+    if (this.step !== 3) return;                  // a reply after Back is dead: no re-check, no bounce
     if (code === 0) { this.bt.next.enabled = true; this.next(); return; }
     this.mgr.notice(code > 0 ? 'This name is currently being used.\r\nPlease check again.' : `Unknown Error (${code}).`);
     this.back();
@@ -137,7 +147,7 @@ export class MapleLifeWin extends Win {
       this.mgr.notice('Creation has completed successfully.');
       this.g.charCount = (this.g.charCount || 0) + 1;
       if ((this.g.charSlots || 0) < this.g.charCount) this.g.charSlots = this.g.charCount;
-    } else if (result === 0x36) this.mgr.notice('You can not use this name.\r\nPlease check again');
+    } else if (result === 0x36) this.mgr.notice(BAD_NAME);
     else this.mgr.notice(`Unknown Error (${code}).`);
   }
   rowName(r) {
@@ -146,7 +156,7 @@ export class MapleLifeWin extends Win {
     return String(this.names?.[g]?.[r]?.[v] ?? '');
   }
   rich(ctx, text, x, y, size, lineH) {
-    const key = `${text}|${size}`;
+    const key = `${text}|${size}|${lineH}`;
     if (this.richKey !== key) { this.richKey = key; this.richLayout = richText(scratch(), String(text || ''), 240, textRef(this.mgr), { size, lineH }); }
     drawRich(ctx, this.richLayout, x, y, { size });
   }
@@ -172,6 +182,7 @@ export class MapleLifeWin extends Win {
   }
   draw(ctx) {
     super.draw(ctx);
+    if (this.step !== 2 && this.step !== 3) return;   // the field is display:none on every other step
     this.field.rect.x = this.x + 230; this.field.rect.y = this.y + 150;
     this.field.layout({ left: 0, top: 0 }, this.g.canvas.clientWidth / UI_W);
   }
