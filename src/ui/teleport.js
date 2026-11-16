@@ -28,13 +28,12 @@ export class TeleportWin extends Win {
     this.field = new TextField(mgr.game.statusBar.layer, 0, 0, 120, 13, { max: 13, color: '#000' });
     this.field.el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') this.go(); else if (e.key === 'Escape') this.field.el.blur(); });
     this.field.show(this.vip);
-    mgr.assets.json('String/Map.img').then((s) => { this.strMap = s; });
+    mgr.assets.json('String/Map.img').then((s) => { this.strMap = s; this.mapNames = {}; for (const r of Object.values(s || {})) for (const [id, m] of Object.entries(r || {})) if (m && this.mapNames[id] === undefined) this.mapNames[id] = `${m.streetName ? `${m.streetName} : ` : ''}${m.mapName}`; });
   }
   get maps() { return (this.vip ? this.g.rocks?.vip : this.g.rocks?.regular) || []; }
   get picked() { const id = this.maps[this.sel]; return id && id !== EMPTY ? id : 0; }
   mapName(id) {
-    for (const r of Object.values(this.strMap || {})) if (r?.[id]) return `${r[id].streetName ? `${r[id].streetName} : ` : ''}${r[id].mapName}`;
-    return `Map ${id}`;
+    return this.mapNames?.[id] || `Map ${id}`;
   }
   async register() {
     const here = this.g.map?.id || 0, maps = this.maps;
@@ -58,6 +57,11 @@ export class TeleportWin extends Win {
     } else {
       if (!id) return;
       if (id === this.g.map?.id) { this.mgr.notice("It's the map you're currently on."); return; }
+      // the server refuses a cross-continent move with an ordinary rock (only VIP ones are exempt);
+      // check it here so the player knows before the rock is used up
+      if (!this.vip && Math.floor(id / 100000000) !== Math.floor((this.g.map?.id || 0) / 100000000)) {
+        this.mgr.notice('You cannot teleport between continents\r\nwith this teleport rock.'); return;
+      }
       if (!(await this.mgr.confirm(`Will you teleport to this map?\r\n[${this.mapName(id)}]`))) return;
     }
     if (Math.floor(this.itemId / 10000) === 232) {
