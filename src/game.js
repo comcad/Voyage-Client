@@ -3830,13 +3830,13 @@ export class Game {
       // a quest whose only requirement is talking to someone can be handed in as soon as it starts
       if (old === undefined && book.info[id] && book.canComplete(id, ctx)) this.questCompleteNotice(id);
       // a record (or the counter kept under an infoNumber) can make a quest ready to hand in
-      for (const q of Object.keys(book.started).map(Number)) {
+      for (const q of this.startedQuests()) {
         if ((Number(book.check[q]?.['1']?.infoNumber) || q) === id && book.info[q] && book.canComplete(q, ctx)) this.questCompleteNotice(q);
       }
     } else {
       alarm?.remove(id);
       if (status === 2) {
-        for (const q of Object.keys(book.started).map(Number)) {
+        for (const q of this.startedQuests()) {
           if (!book.requirements(q).quests.some((r) => r.id === id)) continue;
           alarm?.offer(q);
           if (book.canComplete(q, ctx)) this.questCompleteNotice(q);
@@ -3873,12 +3873,15 @@ export class Game {
     }
   }
 
+  /** Every started quest, as numbers, in the book's own order. */
+  startedQuests() { return Object.keys(this.quests.started).map(Number).filter((q) => this.quests.info[q]); }
+
   /** Mesos crossing a quest's endmeso. */
   questMesoChanged(was) {
     const book = this.quests, ctx = this.textCtx(), alarm = this.windows.wins.questalarm;
     if (!book || was === this.meso) return;
-    for (const q of Object.keys(book.started).map(Number)) {
-      const need = book.requirements(q).meso;
+    for (const q of this.startedQuests()) {
+      const need = Number(book.check[q]?.['1']?.endmeso) || 0;   // requirements(q) without building it
       if (!need) continue;
       if (alarm?.tracked(q)) alarm.touch(q); else if (this.meso > was) alarm?.offer(q);
       if (was < need && need <= this.meso && book.canComplete(q, ctx)) { alarm?.keep(q); this.questCompleteNotice(q); }
