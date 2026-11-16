@@ -2,7 +2,6 @@ import { uiText } from './wzui.js';
 import { Win, allCanvases, cutText } from './windows.js';
 import { richText, drawRich } from './richtext.js';
 import { UI_W, UI_H } from '../view.js';
-import { jobName } from '../data.js';
 
 /**
  * The Medal window (UIWindow.img/Title, 260x374; UI 0x1F, key 27). Its medals are the quests of the "Title" area
@@ -17,8 +16,7 @@ import { jobName } from '../data.js';
  *     white at (29, row + 4), and BtMin / BtMax at (10, row + 3) folding the group. VScr5 at (239, 48), 290 long.
  *   A medal row is 49px: backgrnd4 at (7, row), the medal's icon in the box at (15, row + 7), its name in bold #346e80
  *     at (55, row + 8) cut to 170px, and under it at (55, row + 27) in 11px #999999 the date it ended ("Ended at
- *     %d/%d/%d at %02d:00") or its level and job limits ("Over Level 15, Available to all"). Pointing at the icon shows
- *     the medal item.
+ *     %d/%d/%d at %02d:00") or its level limit ("Over Level 15"). Pointing at the icon shows the medal item.
  * Clicking a medal in a category opens its panel (backgrnd3 305x373), a window of its own behind this one: made at
  * the window's left edge, it slides out until it is 259 past it, 1px a millisecond; hidden, it slides back to 4 and
  * goes once it gets there (the selection with it). Dragging the window puts it 259 past its left edge. Choosing a
@@ -66,32 +64,30 @@ export class MedalWin extends Win {
     const [cats, chk, npc] = await Promise.all([a.json('Etc/QuestCategory.img'), a.json('Quest/Check.img'), a.json('String/Npc.img')]);
     this.area = Number(Object.keys(cats || {}).find((k) => cats[k] === 'Title') ?? -1);
     this.check = chk || {}; this.npcNames = npc || {};
+    const info = this.g.quests?.info || {};
+    this.medalIds = Object.keys(info).map(Number).sort((x, y) => x - y)
+      .filter((id) => { const it = info[id];
+        const cat = Number(it.medalCategory) || 0;   // NaN categories count as none, as before
+        return Number(it?.area) === this.area && Number(this.check[id]?.[0]?.npc) && cat >= 0 && cat <= 4; });
     a.json('Etc/NpcLocation.img').then((l) => { this.npcMaps = l || {}; });
     this.mgr.namesVersion++;
   }
-  /** Every medal quest: id, category, state, start NPC. */
+  /** Every medal quest: id, category, state, start NPC. Status is read fresh: quest state changes with no hook. */
   medals() {
-    const q = this.g.quests, info = q?.info || {};
-    if (!q || this.area === undefined) return [];
-    const out = [];
-    for (const id of Object.keys(info).map(Number).sort((x, y) => x - y)) {
-      const it = info[id];
-      if (Number(it?.area) !== this.area) continue;
-      const npc = Number(this.check[id]?.[0]?.npc) || 0, cat = Number(it.medalCategory) || 0;
-      if (!npc || cat < 0 || cat > 4) continue;
-      out.push({ id, cat, npc, state: q.status(id), item: Number(it.viewMedalItem) || 0, name: String(it.name ?? '') });
-    }
-    return out;
+    const q = this.g.quests, info = q?.info;
+    if (!q || !this.medalIds) return [];
+    return this.medalIds.map((id) => { const it = info[id], c = this.check[id]?.[0];
+      return { id, cat: Number(it.medalCategory) || 0, npc: Number(c.npc), state: q.status(id),
+               item: Number(it.viewMedalItem) || 0, name: String(it.name ?? '') }; });
   }
-  /** "Over Level n" (or "No limit"), and who may take it ("Available to all", or the jobs). */
+  /** "Over Level n" (or "No limit"), and who may take it ("Available to all"). */
   limits(id) {
     const c = this.check[id]?.[0];
     if (!c) return ['No limit', ''];
     let lv = '';
     if (Number(c.lvmin)) lv = `Over Level ${Number(c.lvmin)}`;
     if (Number(c.lvmax)) lv = `${lv} Under Level ${Number(c.lvmax)}`.trim();
-    const jobs = Object.values(c.job || {}).map(Number);
-    return [lv, jobs.length ? jobText(jobs) : 'Available to all'];
+    return [lv, 'Available to all'];
   }
   /** The rows of the current tab: medals, and in a category its group headers. */
   rows() {
@@ -355,23 +351,3 @@ function endedText(ft) {
   return `Ended at ${d.getUTCFullYear()}/${d.getUTCMonth() + 1}/${d.getUTCDate()} at ${String(d.getUTCHours()).padStart(2, '0')}:00`;
 }
 
-/**
- * The jobs a medal is for, as the client words them: Beginner (0), Noblesse (1000, unless every Cygnus job is listed),
- * Legend (2000, unless all four Aran jobs are), Evan0 (2001, unless all ten Evan jobs are); then each class: its name
- * when all ten of its jobs are listed (Aran: its four, Evan: its ten), else each job's name.
- */
-function jobText(jobs) {
-  const name = (j) => jobName(j);
-  const by = (c) => jobs.filter((j) => Math.floor(j / 100) === c);
-  const cygnus = jobs.filter((j) => Math.floor(j / 1000) === 1);
-  const out = [];
-  if (jobs.includes(0)) out.push('Beginner');
-  if (jobs.includes(1000) && cygnus.length !== 21) out.push('Noblesse');
-  if (jobs.includes(2000) && by(21).length !== 4) out.push('Legend');
-  if (jobs.includes(2001) && by(22).length !== 10) out.push('Evan0');
-  for (const [c, all, n] of [[1, 'Warrior', 10], [2, 'Magician', 10], [3, 'Bowman', 10], [4, 'Thief', 10], [5, 'Pirate', 10], [21, 'Aran', 4], [22, 'Evan', 10]]) {
-    const js = by(c);
-    if (js.length === n) out.push(all); else out.push(...js.map(name));
-  }
-  return out.join(', ');
-}
