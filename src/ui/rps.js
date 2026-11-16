@@ -110,8 +110,10 @@ export class RpsWin extends Win {
     else if (mode === 9 || mode === 12) this.round();
     else if (mode === 10) { this.interval = 0; this.npcSel = -1; this.result = -1; this.showResult(); }
     else if (mode === 11) { this.npcSel = d.hand; this.lostFirst = d.result < 0 && this.result === 0; this.result = d.result; }
-    else if (mode === 13) this.mgr.close(this);
+    else if (mode === 13) { this.closedByServer = true; this.mgr.close(this); }
   }
+  /** Leaving by the X tells the server; its own close (mode 13) must not echo an EXIT back. */
+  onClose() { if (!this.closedByServer) this.send(4); }
   showResult() {
     const R = this.R, now = performance.now();
     const img = this.result < 0 ? (this.npcSel < 0 ? R.timeover : R.lose) : this.mine === this.npcSel ? R.draw : R.win;

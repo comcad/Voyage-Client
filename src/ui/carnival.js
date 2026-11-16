@@ -83,11 +83,15 @@ export class CarnivalWin extends Win {
   /** MONSTER_CARNIVAL for the selected row. */
   send() {
     const g = this.g, now = performance.now();
+    // a decision the server never answers must not wedge the window: treat it as answered after 2s
+    if (this.pending && now - this.sentAt > 2000) this.pending = false;
     if (!this.sel || this.pending || !(g.stats?.hp > 0) || now - this.sentAt < 500) return;
     this.pending = true; this.sentAt = now;
     g.net?.carnival(this.tab, this.sel - 1);
   }
   answered() { this.pending = false; }
+  /** The X must take the side window with it, as a map change does (fieldmodes.js does the same). */
+  onClose() { if (this.side) { this.mgr.close(this.side); this.side = null; } }
   toggleSide() {
     if (this.side && this.mgr.order.includes(this.side)) { this.mgr.close(this.side); this.side = null; return; }
     this.side = this.mgr.show(new CarnivalSideWin(this.mgr, this), null);
