@@ -3044,8 +3044,7 @@ export class Game {
     this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
     this.windows.fit(this.windows.wins.minimap);
     this.bindUiPointer();
-    this.hud = new Hud(uiRoot, this);
-    this.hud.update(this.stats);
+    this.hud = new Hud(this);
     this.quests = new QuestBook(this.assets);
     this.quests.now = () => this.serverNow();
     this.questMsg = new QuestMessages(); this.questTimers = new Map();
@@ -4151,7 +4150,6 @@ export class Game {
     if (s.sp !== undefined || s.level !== undefined) this.skillWin?.render();
     if (this.stats.hp <= 0 && !this.dead) this.die();
     if (this.stats.hp > 0 && this.dead) this.revive();
-    this.hud.update(this.stats);
   }
 
   /**
@@ -4881,7 +4879,6 @@ export class Game {
     }
     this.petFlagCache = null;
     for (const p of this.myPets()) p.lootPauseAt = 0;
-    this.hud.renderInventory();
     this.questWin?.render();
     for (const [id, n] of was) this.questItemLines(id, n);
     for (const id of was.keys()) this.questAlert?.itemChanged(id, false);
