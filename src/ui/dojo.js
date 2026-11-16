@@ -68,9 +68,13 @@ export class DojoWindow {
     }
   }
 
-  /** The stage boss: the first boss monster on the map, cached until the map or its life list changes. */
+  /**
+   * The stage boss: the first boss monster on the map. Cached while the answer cannot have changed - a boss dying
+   * flips its `alive` getter without touching the life list, so whether any boss is still alive is part of the key.
+   */
   boss() {
-    const life = this.game.map?.life, key = `${this.game.map?.id ?? ''}:${life?.length ?? 0}`;
+    const life = this.game.map?.life;
+    const key = `${this.game.map?.id ?? ''}:${life?.length ?? 0}:${(life || []).some((e) => e.alive && e.kind === 'Mob') ? 1 : 0}`;
     if (this._bossKey === key) return this._boss;
     this._bossKey = key;
     for (const e of life || []) {
