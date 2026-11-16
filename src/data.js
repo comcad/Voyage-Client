@@ -158,21 +158,7 @@ export async function mesoIcon(assets, amount) {
   return s?.[id]?.iconRaw || null;
 }
 
-/** [swing, stab] damage multipliers where they differ. */
-const POSE_MULT = { 31: [4.4, 3.2], 32: [4.4, 3.2], 41: [4.8, 3.4], 42: [4.8, 3.4], 43: [3.0, 5.0], 44: [5.0, 3.0] };
 
-/** ItemInformationProvider.getWeaponType -> max damage multiplier (client/inventory/WeaponType). */
-export function weaponMultiplier(weaponId, pose = null) {
-  if (!weaponId) return 0;
-  const cat = Math.floor(weaponId / 10000) % 100;
-  const both = POSE_MULT[cat];
-  if (both && /^swing/.test(pose)) return both[0];
-  if (both && /^stab/.test(pose)) return both[1];
-  return cat >= 30 && cat <= 49 ? WEAPON_MULT[cat - 30] || 0 : 0;
-}
-
-// the per-category weapon speed multiplier for an ordinary swing (index is category - 30)
-const WEAPON_MULT = Object.freeze([4.0, 4.4, 4.4, 4.0, 0, 0, 0, 3.6, 3.6, 0, 4.6, 4.8, 4.8, 5.0, 5.0, 3.4, 3.6, 3.6, 4.8, 3.6]);
 // key categories a use-tab item can be bound to (set once rather than rebuilt per call)
 const KEY_CATS = new Set([200, 201, 202, 205, 221, 236, 238, 245, 212, 226, 227]);
 

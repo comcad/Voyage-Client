@@ -1,7 +1,7 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
 import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame, makeSprite, holdFrame } from './character.js';
-import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
+import { itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
 import { Hud } from './ui/hud.js';
 import { QuestBook, TITLE_AREA } from './quests.js';
@@ -4986,17 +4986,20 @@ export class Game {
     return w;
   }
 
-  /** Character.calculateMaxBaseDamage, so damage stays inside the server's sanity checks. */
+  /**
+   * The most a swing of the equipped weapon can do, from the same table that rolls its damage (weaponDamage): the
+   * main and secondary stats, the multiplier and the weapon category's own divisor. Reading a separate multiplier and
+   * a flat /100 put the ceiling 1.5x too high for a bow and 3.6x for a gun, which is exactly what a critical is
+   * detected against.
+   */
   maxDamage(pose = null) {
-    const s = this.stats, weapon = this.inventory?.equipped[-11];
-    const cat = Math.floor((weapon?.id || 0) / 10000) % 100, thiefDagger = cat === 33 && Math.floor(s.job / 100) === 4;
-    const mult = thiefDagger ? 3.6 : weaponMultiplier(weapon?.id, pose);   // a thief's dagger counts for less
-    if (!mult) return 1;
-    const str = this.totalStat('str'), dex = this.totalStat('dex'), luk = this.totalStat('luk');   // equipment counts
-    let main = str, sec = dex;
-    if (cat === 45 || cat === 46 || cat === 49) { main = dex; sec = str; }
-    else if (cat === 47 || thiefDagger) { main = luk; sec = dex + str; }
-    return Math.max(1, Math.ceil(((mult * main + sec) / 100) * this.watk()));
+    const weapon = this.inventory?.equipped[-11], wid = Math.floor((weapon?.id || 0) / 10000), cat = wid % 100;
+    const shot = RANGED_WEAPONS.has(wid);   // a bow, crossbow, claw and gun fire (the roll's own shot rule)
+    const d = weaponDamage(cat, shot, pose, 0, this.stats?.job || 0);
+    if (!d) return 1;
+    const main = this.totalStat(d.main), sec = d.sec.reduce((n, k) => n + this.totalStat(k), 0);   // equipment counts
+    // the roll's own attack figure, buffs and all: an unbuffed ceiling would sit under a buffed blow and read as a crit
+    return Math.max(1, Math.ceil(((d.mult * main + sec) / d.div) * this.attackWatk(0)));
   }
 
   useInventoryItem(tab, slot, it) {
