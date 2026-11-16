@@ -113,8 +113,8 @@ class Music {
     // Sound.wz may not be extracted: check first so a missing file doesn't spam errors
     const ok = await fetch(url, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
     if (this.current !== bgm) return;
+    if (!ok) { this.current = null; return; }   // nothing to switch to: let the old track play on, and a later play retry
     this.release(fadeOut);
-    if (!ok) return;
     const el = new Audio(url);
     el.loop = loop; el.muted = this.isMuted;
     const t = { el, k: fadeIn > 0 ? 0 : 1, timer: 0 };
@@ -200,11 +200,12 @@ class Sfx {
   async buffer(path) {
     const url = await this.resolve(path);
     if (!url) return null;
-    if (!this.buffers.has(url)) {
-      this.buffers.set(url, fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null))
-        .then((b) => (b && this.context() ? this.ctx.decodeAudioData(b) : null)).catch(() => null));
-    }
-    return this.buffers.get(url);
+    if (this.buffers.has(url)) return this.buffers.get(url);
+    const p = fetch(url).then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((b) => (b && this.context() ? this.ctx.decodeAudioData(b) : null)).catch(() => null)
+      .then((b) => { if (!b) this.buffers.delete(url); return b; });   // a miss is not cached: the next play retries it
+    this.buffers.set(url, p);
+    return p;
   }
 
   /** Resolves true when the sound exists (even if muted or not yet unlocked), false when it doesn't. */
@@ -229,7 +230,7 @@ class Sfx {
 
   start(buf, volume, loop = false) {
     const ctx = this.ctx;
-    if (!ctx || ctx.state !== 'running') return null;   // muted: the master gain holds it silent
+    if (!ctx || ctx.state !== 'running') return null;   // suspended (before the first gesture the context isn't running); mute is applied at master.gain
     const src = ctx.createBufferSource(), gain = ctx.createGain();
     src.buffer = buf; src.loop = loop; gain.gain.value = volume;
     src.connect(gain).connect(this.master);
