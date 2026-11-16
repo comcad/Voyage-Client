@@ -193,9 +193,7 @@ export class KeyCommands {
     const g = this.game;
     if (left !== undefined && g.player) g.player.facingRight = !left;
     g.skillKeyPressed = true;
-    const ok = g.useSkill(id);
-    g.skillKeyPressed = false;
-    return ok;
+    try { return g.useSkill(id); } finally { g.skillKeyPressed = false; }
   }
   /** The skill of a chain step after a polearm swing (`poses`), queued behind `after` otherwise. */
   chainStep(id, poses, after, item) {
@@ -205,7 +203,7 @@ export class KeyCommands {
     return true;
   }
 
-  dash(now) { const id = this.dashSkill(); if (this.learned(id)) this.cast(id); return true; }
+  dash(now) { const id = this.dashSkill(); return this.learned(id) && !!this.cast(id); }
   double(now) {
     const id = this.pick(DOUBLE_SWING, 0);
     if (!this.learned(id)) return false;
