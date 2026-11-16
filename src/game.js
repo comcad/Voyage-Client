@@ -882,8 +882,13 @@ export class Game {
     // windows sit above the bar: they see the event first, the bar only gets what they leave
     // in the Cash Shop only its windows take the mouse (the bar is hidden, and the shop may not cover the screen)
     // a finger is less exact than a mouse: a tap may move 12px and still be a tap (a click, 4px)
-    const route = (type, e) => { wm.touch = e.pointerType === 'touch'; wm.slop = wm.touch ? TOUCH_SLOP : 4; return this.uiLocked || (this.inCashShop ? (wm.pointer(type, ...at(e)), true)
-      : wm.pointer(type, ...at(e)) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...at(e))); };
+    const route = (type, e) => {
+      wm.touch = e.pointerType === 'touch'; wm.slop = wm.touch ? TOUCH_SLOP : 4;
+      if (this.uiLocked) return false;
+      const p = at(e);   // the canvas' rect, once per event
+      if (this.inCashShop) { wm.pointer(type, ...p); return true; }
+      return wm.pointer(type, ...p) ? (sb.pointer('move', -1, -1), true) : sb.pointer(type, ...p);
+    };
     c.addEventListener('pointermove', (e) => route('move', e));
     c.addEventListener('pointerdown', (e) => { if (route('down', e)) e.stopImmediatePropagation(); }, true);
     addEventListener('pointerup', (e) => route('up', e));
@@ -912,7 +917,7 @@ export class Game {
     addEventListener('pointerup', (e) => {
       const s = swipe;
       swipe = null;
-      if (!s || e.pointerType !== 'touch') return;
+      if (!s || e.pointerType !== 'touch') { lastTap = null; return; }   // a mouse click cannot pair with a touch tap
       const now = performance.now(), u = at(e);
       if (s.on || s.ui || wm.top(...u) || sb.contains(...u) || now - s.t > 500 || Math.hypot(e.clientX - s.cx, e.clientY - s.cy) > TAP_PX) { lastTap = null; return; }
       const prev = lastTap;
