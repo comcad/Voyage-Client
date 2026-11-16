@@ -164,7 +164,6 @@ function readQuests(r) {
   return { started, completed };
 }
 
-/** addCharacterInfo */
 /** A marriage record: id, groom, bride, status (1 engaged, 3 married), the two rings, the two names. */
 export function readMarriage(r) {
   const id = r.int(), husbandId = r.int(), wifeId = r.int(), status = r.short(), item = r.int(), wifeRing = r.int();
@@ -177,6 +176,7 @@ export function readNewYearCard(r) {
   return { id, senderId, sender, sent, receiverId, receiver, received, message: r.string() };
 }
 
+/** addCharacterInfo */
 export function readCharacterInfo(r) {
   r.long(); r.ubyte();
   const stats = readCharStats(r);

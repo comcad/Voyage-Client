@@ -1738,10 +1738,12 @@ export class ChannelSession {
     this.send(w);
   }
 
-  /** activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its id/level). */
   /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
   npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
-  /** `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else). */
+  /**
+   * activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its
+   * id/level). `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else).
+   */
   moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null) {
     // each monster counts its own moves
     const id = (((this.mobMoveIds ??= new Map()).get(oid) ?? 0) + 1) & 0x7fff;
@@ -1787,7 +1789,6 @@ export class ChannelSession {
     this.send(w);
   }
   closeRangeAttack(o) { this.attack('melee', o); }
-  /** A monster that seeks you out (firstAttack / pickUp): its object id and how far you are from it. */
   /** A monster ran into the escorted (friendly) one: the attacker, your character id and the friendly one. */
   mobDamageMobFriendly(attacker, charId, friendly) { this.send(new PacketWriter(C.MOB_DAMAGE_MOB_FRIENDLY).int(attacker).int(charId).int(friendly)); }
   /** A monster's attack struck another (one of them Hypnotized): attacker, you, the struck one, which attack, the damage. */
@@ -1855,9 +1856,9 @@ export class ChannelSession {
   aranComboCounter() { this.send(new PacketWriter(C.ARAN_COMBO_COUNTER)); }
   /** A monster that banishes on touch (info/ban/banType 1) touched you: its id; the server sends you to its banMap. */
   mobBanishPlayer(mobId) { this.send(new PacketWriter(C.MOB_BANISH_PLAYER).int(mobId)); }
-  /** Sit on a chair item (Install 0301xxxx). */
   /** Through a Mystic Door: its owner, and whether you are going from town out to the field. */
   useDoor(owner, fromTown) { this.send(new PacketWriter(C.USE_DOOR).int(owner).byte(fromTown ? 1 : 0)); }
+  /** Sit on a chair item (Install 0301xxxx). */
   useChair(itemId) { this.send(new PacketWriter(C.USE_CHAIR).int(itemId)); }
   /** Sit on the map's seat `id`, or -1 to stand up. */
   cancelChair(id) { this.send(new PacketWriter(C.CANCEL_CHAIR).short(id)); }
@@ -1896,9 +1897,9 @@ export class ChannelSession {
   leftKnockback() { this.send(new PacketWriter(C.LEFT_KNOCKBACK)); }
   /** COCONUT: your swing reached coconut `id`, landing after `delay` ms. */
   coconut(id, delay) { this.send(new PacketWriter(C.COCONUT).short(id).short(delay)); }
-  /** RPS_ACTION: 0 START, 1 a hand (0 rock, 1 paper, 2 scissors), 2 time up, 3 CONTINUE, 4 EXIT, 5 RETRY. */
   /** MONSTER_CARNIVAL: summon / use / call the row (from 0) of a tab (0 monsters, 1 skills, 2 guardians). */
   carnival(tab, index) { this.send(new PacketWriter(C.MONSTER_CARNIVAL).byte(tab).int(index)); }
+  /** RPS_ACTION: 0 START, 1 a hand (0 rock, 1 paper, 2 scissors), 2 time up, 3 CONTINUE, 4 EXIT, 5 RETRY. */
   rpsAction(mode, sel = 0) { const w = new PacketWriter(C.RPS_ACTION).byte(mode); if (mode === 1) w.byte(sel); this.send(w); }
   takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
     this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
@@ -2094,7 +2095,6 @@ export class ChannelSession {
   }
   /** SPOUSE_CHAT: to your husband or wife (the server finds them; the first string is ignored) */
   spouseChat(text) { this.send(new PacketWriter(C.SPOUSE_CHAT).string('').string(text)); }
-  /** DUEY_ACTION: 2 send (an item and / or mesos to a character), 4 take a parcel, 5 delete one, 7 close Duey */
   /** DUEY_ACTION 2: tab, slot, how many, mesos, to; then 0, or for a quick send 1, its message and the coupon's slot */
   dueySend({ tab = 0, slot = 0, qty = 0, mesos = 0, to, quick = false, message = '', ticket = 0 }) {
     const w = new PacketWriter(C.DUEY_ACTION).byte(2).byte(tab).short(slot).short(qty).int(mesos).string(to);
@@ -2109,11 +2109,11 @@ export class ChannelSession {
   /** A Chalkboard (537xxxx): its text; CLOSE_CHALKBOARD puts it away. */
   useChalkboard(slot, itemId, text) { this.useCashItem(slot, itemId, (w) => w.string(text)); }
   closeChalkboard() { this.send(new PacketWriter(C.CLOSE_CHALKBOARD)); }
-  /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
-  /** The Use-tab Teleport Rock (232xxxx): its slot, the item, 0 and the map picked, then the time. */
   /** The Maplemas Party Potion's Transform window: the time, the slot, the item and the name to look like. */
   transform(slot, itemId, name) { this.send(new PacketWriter(C.TRANSFORM).int(Date.now() | 0).short(slot).int(itemId).string(name)); }
+  /** The Use-tab Teleport Rock (232xxxx): its slot, the item, 0 and the map picked, then the time. */
   useTeleportRock(slot, itemId, mapId) { this.send(new PacketWriter(C.USE_TELEPORT_ROCK).short(slot).int(itemId).byte(0).int(mapId).int(Date.now() | 0)); }
+  /** TROCK_ADD_MAP: 1 save the map you are in, 0 delete one; for the VIP list or the regular one */
   rockSave(vip) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(1).byte(vip ? 1 : 0)); }
   rockDelete(vip, mapId) { this.send(new PacketWriter(C.TROCK_ADD_MAP).byte(0).byte(vip ? 1 : 0).int(mapId)); }
   /** USE_CASH_ITEM for a Teleport Rock (504xxxx): 0 then a map, or 1 then a character to chase (VIP rocks only) */
@@ -2332,9 +2332,9 @@ export class ChannelSession {
     for (const m of list) w.string(m.name || '').byte(m.shout ? 1 : 0).int(m.skills[0] || 0).int(m.skills[1] || 0).int(m.skills[2] || 0);
     this.send(w);
   }
-  /** MOVE_SUMMON: the summon's oid, where it started, the steps (only yours). */
   /** DAMAGE_SUMMON: a monster ran into your summon (the Puppet): oid, -1, the damage, the monster's id */
   damageSummon(oid, damage, mobId) { this.send(new PacketWriter(C.DAMAGE_SUMMON).int(oid).byte(-1).int(damage).int(Number(mobId) || 0)); }
+  /** MOVE_SUMMON: the summon's oid, where it started, the steps (only yours). */
   moveSummon(oid, start, moves) { const w = new PacketWriter(C.MOVE_SUMMON).int(oid).pos(start); writeMovement(w, moves); this.send(w); }
   /**
    * SUMMON_ATTACK (SummonDamageHandler): oid, tick, direction, count, the summon's / first mob's position, then per
@@ -2377,7 +2377,6 @@ export class ChannelSession {
   shopBuy(slot, id, qty, price) { this.send(new PacketWriter(C.NPC_SHOP).byte(0).short(slot).int(id).short(qty).int(price)); }
   shopSell(slot, id, qty) { this.send(new PacketWriter(C.NPC_SHOP).byte(1).short(slot).int(id).short(qty)); }
   shopClose() { this.send(new PacketWriter(C.NPC_SHOP).byte(3)); }
-  /** STORAGE: 4 take out (type, index), 5 store (slot, id, qty), 6 arrange, 7 mesos (+ out / - in), 8 close */
   /** pets: summon / send home toggles by cash-inventory slot; ids are the pet's unique id (low 32 bits) */
   spawnPet(slot, lead = false) { this.send(new PacketWriter(C.SPAWN_PET).int(Date.now() | 0).short(slot).byte(lead ? 1 : 0)); }
   movePet(sn, start, moves) { const w = new PacketWriter(C.MOVE_PET).long(sn).pos(start); writeMovement(w, moves); this.send(w); }
@@ -2393,6 +2392,7 @@ export class ChannelSession {
   /** The potion your pet drinks for HP (1) or MP (2); 0 clears it. */
   petPotion(mode, id) { this.send(new PacketWriter(C.CHANGE_KEYMAP).int(mode).int(id)); }
   dropMeso(v) { this.send(new PacketWriter(C.MESO_DROP).int(Date.now() | 0).int(v)); }
+  /** STORAGE: 4 take out (type, index), 5 store (slot, id, qty), 6 arrange, 7 mesos (+ out / - in), 8 close */
   storageTakeOut(type, slot) { this.send(new PacketWriter(C.STORAGE).byte(4).byte(type).byte(slot)); }
   storageStore(pos, id, qty) { this.send(new PacketWriter(C.STORAGE).byte(5).short(pos).int(id).short(qty)); }
   storageArrange() { this.send(new PacketWriter(C.STORAGE).byte(6)); }
