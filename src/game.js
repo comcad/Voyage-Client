@@ -6971,10 +6971,11 @@ export class Game {
     if (id === CHAKRA) return this.skillWentOff(this.castChakra(id, lv));
     // Assaulter needs a monster to go for and floor where it ends; Boomerang Step floor 150px ahead
     const ahead = (dx) => this.floorNear(this.player.x + (this.player.facingRight ? dx : -dx), this.player.y, 80);
-    if (id === ASSAULTER && (!ahead(-(sb.levelData(id)?.lt?.[0] || 200))
-      || !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length)) return false;
+    // the monsters a melee skill would strike from here, in the pose it is cast in
+    const meleeTarget = () => this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length;
+    if (id === ASSAULTER && (!ahead(-(sb.levelData(id)?.lt?.[0] || 200)) || !meleeTarget())) return false;
     // Barrage and Energy Drain only go off with a monster in reach
-    if (NEED_TARGET.has(id) && !this.findTargets('melee', id, lv, 1, sb.action(id) || this.look.attackAction()).length) return false;
+    if (NEED_TARGET.has(id) && !meleeTarget()) return false;
     if (id === BOOMERANG_STEP && (!ahead(-(sb.levelData(id)?.lt?.[0] || 300) / 2) || performance.now() < (this.boomerangLock || 0))) return false;
     if (HELD_SHOTS.has(id) || id === PIERCING_ARROW) return this.skillWentOff(this.holdKeydown(id, lv));
     // Panic and Coma need an orb, Enrage nine; without them the key does nothing
@@ -7349,7 +7350,7 @@ export class Game {
       if (k.s < 1 || k.left <= 0) this.shake = null;
     }
   }
-  /** Rush: dash ahead (see RUSH_DASH) and throw the monsters struck ahead of where you started. */
+  /** Rush: dash ahead (see RUSH_DASH) and throw the monsters struck ahead of where you started; its second step is a decaying tail (type 2, x0.8 per 30ms), not a pause. */
   startRush(ld, mobs) {
     const p = this.player, dir = p.facingRight ? 1 : -1, v = dir * Math.abs(Math.trunc((ld?.lt?.[0] || 0) / 8));
     this.rush = { steps: [{ type: 0, v, ms: 90 }, { type: 2, v, ms: 180 }], acc: 0 };
