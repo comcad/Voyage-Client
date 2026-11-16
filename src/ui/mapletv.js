@@ -43,16 +43,29 @@ export class MapleTVWin extends Win {
     this.sending = true;
     try {
       const g = this.g, to = this.toOn ? this.to?.value.trim() || '' : '', lines = this.lines.map((f) => f.value.trim());
-      if (!(await this.mgr.confirm(`This message will be sent to \r\nMaple TV in ${g.tvWait || 0} seconds. \r\n Do you want to proceed?`))) return;
+      // the checks come before the question: a Heart with no recipient or a sheet with no text is refused, not confirmed
       if (this.kind === 2 && !to) { this.mgr.notice("You didn't enter the recipient's name."); return; }
-      if (lines.join('\n') && (await Promise.all(lines.map((l) => g.cursed(l)))).some(Boolean)) { this.mgr.notice('Cursing is not allowed.'); return; }
+      if (!lines.join('')) { this.mgr.notice('Please enter the text.'); return; }
+      if (!(await this.mgr.confirm(`This message will be sent to \r\nMaple TV in ${g.tvWait || 0} seconds. \r\n Do you want to proceed?`))) return;
+      if ((await Promise.all(lines.map((l) => g.cursed(l)))).some(Boolean)) { this.mgr.notice('Cursing is not allowed.'); return; }
       // send first, close only if it went out: a refused gate must leave the fields up
       if (g.cashSend(() => g.net?.useMapleTV(this.slot, this.itemId, { kind: this.kind, mega: this.mega, ear: this.ear, to, lines }))) this.close();
     } finally { this.sending = false; }
   }
   close() { for (const f of this.fields) f.remove(); this.mgr.close(this); }
   onClose() { for (const f of this.fields) f.remove(); }
-  key(e) { if (e.key === 'Escape') this.close(); }
+  /**
+   * Enter and Escape reach the window, not its inputs: WindowManager's capture listener (windows.js) takes both and
+   * hands them here. Escape closes; Enter goes on to the focused line as the field's own handler would have.
+   */
+  key(e) {
+    if (e.key === 'Escape') { this.close(); return; }
+    if (e.key !== 'Enter') return;
+    const f = this.fields.find((x) => x.el === document.activeElement);
+    if (!f) return;
+    e.preventDefault();
+    this.next(f);
+  }
   draw(ctx) {
     super.draw(ctx);
     const scale = this.g.canvas.clientWidth / UI_W;
@@ -68,7 +81,11 @@ export class MapleTVWin extends Win {
   }
   down(lx, ly) {
     if (this.kind === 0 && lx >= 10 && lx < 24 && ly >= 66 && ly < 80) { this.toOn = !this.toOn; sfx.play('UI/BtMouseClick'); if (this.toOn) this.to.focus(); }
-    if (this.mega && lx >= 14 && lx < 174 && ly >= 196 && ly < 210) { this.ear = !this.ear; sfx.play('UI/BtMouseClick'); }
+    // the hit box is the checkbox art itself (Basic.img CheckBox, 12x12), as the megaphone family's is
+    if (this.mega) {
+      const box = this.mgr.image(this.mgr.B.CheckBox?.[0]), bw = box?._w || 12, bh = box?._h || 12;
+      if (lx >= 14 && lx < 14 + bw && ly >= 197 && ly < 197 + bh) { this.ear = !this.ear; sfx.play('UI/BtMouseClick'); }
+    }
   }
 }
 
