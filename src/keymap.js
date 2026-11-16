@@ -2,7 +2,8 @@
  * v83 key bindings. The server keeps 90 slots indexed by DirectInput scancode, each {type, action}:
  *   type 1 skill id, 2 item id, 3 facial expression item id, 4 window (0 equip, 1 items, 2 stats, 3 skills, 7 minimap,
  *   8 quests...), 5 basic action (50 pick up, 51 sit, 52 attack, 53 jump, 54 NPC chat), 6 face expression,
- *   7 effect item id.
+ *   7 effect item id, 8 skill-macro index.
+ *   Type 4's chat subset (actions 10, 11, 12, 13, 16, 18, 21, 24) is CHAT_KEYS in game.js, not the menu ladder.
  */
 export const CODE_TO_SC = {
   Escape: 1, Digit1: 2, Digit2: 3, Digit3: 4, Digit4: 5, Digit5: 6, Digit6: 7, Digit7: 8, Digit8: 9, Digit9: 10, Digit0: 11,

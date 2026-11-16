@@ -6,8 +6,8 @@ import { pad, frames } from './assets.js';
  * Skill.wz has no explicit "type", so skills are classified from their level data like other clients do:
  *   mad                      -> magic attack (MAGIC_ATTACK)
  *   damage/fixdamage/...     -> melee (CLOSE_RANGE_ATTACK) or ranged (RANGED_ATTACK) by weapon / ball / bulletCount
- *   anything else castable   -> SPECIAL_MOVE (buffs, heals on self, summons...)
- *   no cost and no effect    -> passive
+ *   mpCon, hpCon, time, n.action or cooltime -> SPECIAL_MOVE (buffs, heals on self, summons...)
+ *   anything else castable   -> passive
  */
 
 export const RANGED_WEAPONS = new Set([145, 146, 147, 149]); // bow, crossbow, claw, gun
@@ -59,6 +59,7 @@ const SKILL_WEAPONS = {
   15111003: [48, 39], 15111004: [48, 39], 5001001: [48, 49, 39], 15001001: [48, 49, 39],
   2111005: [37, 38], 2211005: [37, 38], 12101004: [37, 38], 12101005: [37, 38],
 };
+// % 100 then + 100: the full 1xx weapon category (claw -> 147, not 47), the space RANGED_WEAPONS lives in
 const weaponCat = (id) => (id ? Math.floor(id / 10000) % 100 + 100 : 0);
 
 /** Skill books for a job: 112 -> [0, 100, 110, 111, 112], 2112 -> [2000, 2100, 2110, 2111, 2112]; Evans start from 2001. */
@@ -204,6 +205,7 @@ export class SkillBook {
    */
   weaponOk(id, weaponId) {
     const w = this.node(id)?.weapon, cat = weaponId ? Math.floor(weaponId / 10000) % 100 : 0;
+    // the table overrides the WZ `weapon` field: `w` is never consulted for a tabled id
     if (SKILL_WEAPONS[id]) return SKILL_WEAPONS[id].includes(cat);
     if (!w && isBowman(id) && ['ranged', 'melee'].includes(this.kind(id, weaponId))) return cat === 45 || cat === 46;
     return !w || cat === w;
@@ -232,13 +234,6 @@ export class SkillBook {
 }
 
 /**
-<<<<<<< ours
- * Max damage per line, mirroring the server checks in AbstractDealDamageHandler.parseDamage
- * (client-side numbers must stay below calcDmgMax * 1.5 or the game server flags the character).
- */
-/**
-=======
->>>>>>> theirs
  * Your critical chance and extra damage (percentage points on top of the skill's own damage%), v83 style:
  * Critical Shot with a bow or crossbow, Critical Throw with a claw (their Cygnus copies), Critical Punch with a knuckle, plus Sharp Eyes
  * from yourself or a party member. A critical hit does (skill damage% + extra)% instead of the skill's damage%.
