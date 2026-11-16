@@ -8,8 +8,12 @@ import { wsTransport } from './net/connection.js';
 import { modal } from './ui/dom.js';
 import { setupTouchDevice } from './touchdevice.js';
 import { loadConfig } from './config.js';
+import { applyResolution } from './view.js';
 
 setupTouchDevice();
+// boot step: the view is sized before any game or UI code reads it. It used to happen on importing view.js, which
+// made the module unimportable outside a browser and leaned on ESM evaluation order to be right.
+applyResolution();
 
 const PRELOAD = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert',
   // every pose the attack tables can pick (character.js ATTACK_POSES / SHOOT_POSES), so the first stab or shot
@@ -31,11 +35,12 @@ addEventListener('keydown', (e) => {
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+const debug = params.has('debug');   // ?debug: expose the game on globalThis for the console
 const standalone = navigator.standalone
   || globalThis.matchMedia?.('(display-mode: standalone)').matches
   || globalThis.matchMedia?.('(display-mode: fullscreen)').matches;
 if (standalone) addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });
-const debug = params.has('debug');   // ?debug: expose the game on globalThis for the console// ?b=: the address the game comes back by after a disconnect, so the browser has to ask the server for the page
+// ?b=: the address the game comes back by after a disconnect, so the browser has to ask the server for the page
 // (Game.leave). It has done its work once the page is here: taken off the address again.
 if (params.has('b')) { params.delete('b'); history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : '') + location.hash); }
 

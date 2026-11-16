@@ -45,7 +45,11 @@ export const maxUiScale = () => {
   return Math.max(1, Math.floor(Math.min(VIEW_W / BASE_W, VIEW_H / minH) * 10 + 1e-9) / 10);
 };
 
-/** Sizes the view to the chosen resolution; the page keeps the canvas at that shape, fitted to the window. */
+/**
+ * Sizes the view to the chosen resolution; the page keeps the canvas at that shape, fitted to the window. Applied
+ * once as a boot step (main.js), then by Game.setResolution on every System Option change. Nothing may compute a
+ * module-level value from VIEW_W/VIEW_H/UI_W/UI_H/UI_SCALE: at import time these are still the defaults.
+ */
 export function applyResolution() {
   [VIEW_W, VIEW_H] = settings.fit ? fitSize() : RESOLUTIONS[resolutionIndex()];
   UI_SCALE = Math.min(maxUiScale(), Math.max(1, Math.round((Number(settings.uiScale) || 1) * 10) / 10));
@@ -53,4 +57,3 @@ export function applyResolution() {
   document.documentElement.style.setProperty('--view-ar', String(VIEW_W / VIEW_H));
   document.body?.classList.toggle('fit-screen', !!settings.fit && !portrait());   // System Option FIT TO SCREEN (4:3 upright)
 }
-applyResolution();
