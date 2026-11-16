@@ -16,8 +16,11 @@ function trackUrl(img, name) {
 
 /**
  * A volume slider (0-1) as the client hears it (Sound_DX8, openms docs/ingame-audiovisual.md): the slider is a
- * backend level 0-128, attenuated by 625 - 1280000/(15*level + 128) hundredths of a decibel, so each step sounds
- * like an even change instead of all the difference crowding into the quiet end.
+ * backend level 0-128, attenuated by 625 - 1280000/(15*level + 128) hundredths of a decibel. The curve compresses
+ * towards the loud end, so a level picked in equal increments does not give equal-sounding steps - see stepGain,
+ * which feeds it in a straight line anyway (measured drops run -19.1 dB at the first step down to -0.28 dB at the
+ * last). Whether the original client stored levels evenly per slider tick is not settled: the oracle doc the
+ * formula comes from is not in this repo, so the mapping below is left as it was and only this claim corrected.
  */
 export function sliderGain(v) {
   const level = Math.round(Math.max(0, Math.min(1, v)) * 128);
