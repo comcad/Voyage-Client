@@ -18,7 +18,9 @@ export function el(tag, attrs = {}, ...children) {
  * Modal with buttons; resolves with the clicked button index. A one-button modal (the error and connection notices)
  * can also be dismissed with Escape or a click on the backdrop, which answers its one button: a modal nothing can
  * dismiss is an await that never settles (the login retry loop, main.js's onError). A modal that offers a real choice
- * (e.g. the gender question, whose answer is sent to the server) ignores both and waits for a button.
+ * (e.g. the gender question, whose answer is sent to the server) ignores both and waits for a button. The first
+ * button is focused as the modal opens, so Enter answers that one: the keyboard default is the first button, chosen
+ * by position rather than by the caller.
  */
 export function modal({ title, body, buttons = ['OK'] }) {
   return new Promise((resolve) => {
