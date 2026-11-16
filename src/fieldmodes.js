@@ -159,7 +159,7 @@ export class SnowballField {
     if (first && extra) this.damage = extra;
   }
   place(b, pos, speed, now) {
-    if (pos < this.xMin || pos > this.xMax || !b.frame) return;
+    if (pos < this.xMin || pos > this.xMax || !b.frame) { b.speed = speed; return; }   // the speed is still the packet's
     if (!now) { b.owed = (pos - b.pos) * 3; b.speed = speed; return; }
     const d = pos - b.pos;
     b.owed = 0; b.acc = 0; b.pos = pos; b.speed = speed;
@@ -204,6 +204,7 @@ export class SnowballField {
       const x = Math.round(p.x), y = Math.round(p.y);
       const i = this.balls.findIndex((b) => inRect(b.rect, x, y));
       if (i >= 0 && this.state !== i + 2 && !g.hasDisease(STUN)) g.net.leftKnockback();
+      // the 1.5s HIT_PROTECTION that fieldHurt sets (game.js) is why this is not a per-tick damage firehose
       if (this.men.some((m) => inRect(m.rect, x, y)) && !(g.invincible > 0)) g.fieldHurt(30 + Math.floor(Math.random() * 11), 270, -270);
     }
     const now = performance.now();
@@ -348,6 +349,7 @@ export class CoconutField {
   }
 
   // ---------------------------------------------------------------- tick and board
+  /** Note: like AriantField.update, the dt handed in by game.js is not used: the board clock is wall time. */
   update() {
     const now = performance.now();
     if (now - this.shownAt > BOARD.every) this.refresh();
@@ -398,6 +400,8 @@ export class AriantField {
     const a = this.game.assets;
     this.art = await nodeAt(a, 'UI/UIWindow.img/AriantMatch');
     this.resultFrames = frames(this.art?.Result);
+    // the scroll's total duration, computed once (the frames never change)
+    this.resultTotal = this.resultFrames.reduce((n, f) => n + (Number(f.delay) || ARIANT.result.frameMs), 0);
     await a.preload([...frames(this.art?.characterIcon), ...this.resultFrames].filter(Boolean));
   }
   /** ARIANT_ARENA_USER_SCORE: [{ name, score }]. */
@@ -429,8 +433,7 @@ export class AriantField {
   update() {
     const r = this.result;
     if (!r || this.ranking) return;
-    const total = this.resultFrames.reduce((n, f) => n + (Number(f.delay) || ARIANT.result.frameMs), 0);
-    if (performance.now() - r.t0 >= total) this.ranking = { t0: performance.now(), rows: this.rankRows() };
+    if (performance.now() - r.t0 >= (this.resultTotal ?? 0)) this.ranking = { t0: performance.now(), rows: this.rankRows() };
   }
   /** The ranking as it stood when the scroll opened: a tie shares the place of its last member. */
   rankRows() {
@@ -455,9 +458,10 @@ export class AriantField {
     }
     const r = this.result;
     if (!r) return;
-    const fr = this.resultFrames;
-    let t = performance.now() - r.t0, f = fr[fr.length - 1];
-    for (const x of fr) { const d = Number(x.delay) || ARIANT.result.frameMs; if (t < d) { f = x; break; } t -= d; }
+    const fr = this.resultFrames, elapsed = performance.now() - r.t0;
+    let t = elapsed, f = fr[fr.length - 1];
+    // once the ranking shows, the scroll is at its last frame: no walk needed
+    if (!this.ranking) for (const x of fr) { const d = Number(x.delay) || ARIANT.result.frameMs; if (t < d) { f = x; break; } t -= d; }
     const img = im(f);
     if (img) ctx.drawImage(img, ARIANT.result.x - (f.origin?.[0] || 0), ARIANT.result.y - (f.origin?.[1] || 0));
     if (!this.ranking) return;
@@ -484,7 +488,8 @@ const CARNIVAL_RESULT = {
   10: "Despite the Overtime, the carnival ended in a draw. Please wait as you'll be transported out of here shortly.",
   11: "Monster Carnival has ended abruptly due to the opposing team leaving the game too early. Please wait as you'll be transported out of here shortly.",
 };
-const fill = (t, ...a) => a.reduce((s, v) => s.replace(/%[sd]/, v), t);   // each value into the next %s / %d
+// each value into the next %s / %d, in one pass so a value containing % cannot be re-substituted
+const fill = (t, ...a) => { let i = 0; return t.replace(/%[sd]/g, (m) => (i < a.length ? a[i++] : m)); };
 
 /** The waiting room (fieldType 11): MONSTER_CARNIVAL_START only gives your team; the result is said here too. */
 class CarnivalWaitField {
@@ -510,6 +515,7 @@ export class CarnivalField extends CarnivalWaitField {
     const g = this.game;
     if (this.win) { if (this.win.side) g.windows.close(this.win.side); g.windows.close(this.win); g.carnivalSaved = { x: this.win.x, y: this.win.y, tab: this.win.tab }; }
     this.win = null;
+    this.winOpening = null;   // a later openWindow must build a new window, not hand back this one's promise
   }
   /** The Carnival window with this field's three lists, made once: by MONSTER_CARNIVAL_START or a script's OPEN_UI 0x12. */
   async openWindow() {
@@ -548,7 +554,7 @@ export class CarnivalField extends CarnivalWaitField {
   carnivalDied(team, name, lost) {
     const tn = team === 0 ? TEAM_NAMES[0] : TEAM_NAMES[1];
     const t = lost ? fill('[%s] has become unable to fight and [%s]team has lost %d CP.', name, tn, lost)
-      : fill('\t\t[%s] has become unable to fight but [%s] has no CP so [%s] team did not lose any CP', name, name, tn);
+      : fill('\t\t[%s] has become unable to fight but [%s] has no CP so [%s] team did not lose any CP', name, tn, tn);
     this.game.hud?.message(t, CHAT_COLOR.grey);
   }
   carnivalLeave(code, team, name) {
