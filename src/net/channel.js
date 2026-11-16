@@ -201,7 +201,8 @@ function readRemoteStats(r, m1, m2) {
   }
   if (can(2)) r.skip(2);
   TWO_STATE_NAMES.forEach((name, k) => {
-    if (!bit(82 + k) || !can(13)) return;
+    // each two-state stat's own size (TWO_STATE_SIZES), not the smallest of them: k=4 is 20 bytes, past a 13-byte guard
+    if (!bit(82 + k) || !can(TWO_STATE_SIZES[k])) return;
     const t = { value: r.int(), reason: r.int() }; r.skip(5);
     if (k === 4) r.skip(5);
     if (k === 5) t.mob = can(4) ? r.int() : 0;
