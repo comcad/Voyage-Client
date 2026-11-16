@@ -8,8 +8,8 @@ import { UI_W } from '../view.js';
  * The Monster Book (UIWindow.img/MonsterBook, 475x349), laid out as openms recovered it.
  * Cards are Item/Consume/0238.img (info/mob); the nine categories are the card id's thousands digit
  * (238 0xxx .. 238 8xxx), String/MonsterBook.img/<mob> holds map (found in), reward (drops) and episode.
- *   Left page: LeftTabInfo (y 25) = the summary (infoPage at 40,30: level 145/30, total /81, special /114,
- *     normal /133, the cover monster's name at 81-181 / 171, icon/<level-1> at 117,43); LeftTab/0-8 (y 126 +
+ *   Left page: LeftTabInfo (y 25) = the summary (infoPage at 40,30: level /30, total /81, special /114,
+ *     normal /133, all four right-aligned at x 180, the cover monster's name at 81-181 / 171, icon/<level-1> at 117,43); LeftTab/0-8 (y 126 +
  *     20n, x -7 or -2 chosen) = cardSlot (40,25) and a 5x5 page of cards from (48,56) every 33 x 45, unowned
  *     ones faint, with ItemNo/<count> or fullMark at +1,+26, cover / select frames at -2,-2; page n / m at 89-163.
  *   Right page, for the chosen card: RightTab/0-3 at x 455 (439 chosen), y 25/64/101/138, opened by owning
@@ -89,11 +89,12 @@ export class MonsterBookWin extends Win {
     } else this.dpage = Math.max(0, Math.min(this.detailPages() - 1, this.dpage + d));
   }
   search() {
+    if (!this.cards) return;   // still loading: nothing to match against, and "no monster" would be a lie
     const q = (this.field?.value || '').replace(/ /g, '').toLowerCase();
     if (!q) return;
-    const hit = Object.values(this.cards || {}).find((c) => c.name.replace(/ /g, '').toLowerCase() === q)
-      || Object.values(this.cards || {}).find((c) => c.name.replace(/ /g, '').toLowerCase().includes(q));
-    if (hit) { this.field.el.blur(); this.choose(hit.id); } else this.mgr.notice('No monster with that name was found.');
+    const hit = Object.values(this.cards).find((c) => c.name.replace(/ /g, '').toLowerCase() === q)
+      || Object.values(this.cards).find((c) => c.name.replace(/ /g, '').toLowerCase().includes(q));
+    if (hit) { this.field.value = ''; this.field.el.blur(); this.choose(hit.id); } else this.mgr.notice('No monster with that name was found.');
   }
   async mobArt(mob) {
     const a = this.mgr.assets;
@@ -108,9 +109,9 @@ export class MonsterBookWin extends Win {
   /** Wraps episode text and groups map names under their streets into this card's pages. */
   layoutDetail() {
     const c = this.cards[this.sel], ctx = document.createElement('canvas').getContext('2d');
-    ctx.font = '12px Arial, sans-serif';
+    ctx.font = '12px Arial, "Segoe UI", sans-serif';   // the font uiText paints these lines in, so the wrap matches
     const lines = [];
-    for (const para of (c.episode || '').replace(/\\r\\n|\\n|\\r/g, '\n').split('\n')) {
+    for (const para of (c.episode || '').replace(/\\r\\n|\\n|\r\n|\r/g, '\n').split('\n')) {
       let line = '';
       for (const word of para.split(' ')) {
         const next = line ? `${line} ${word}` : word;
@@ -203,8 +204,8 @@ export class MonsterBookWin extends Win {
     const ids = this.cats[this.cat].slice(this.page * 25, this.page * 25 + 25);
     ids.forEach((id, i) => {
       const x = 48 + (i % 5) * 33, y = 56 + Math.floor(i / 5) * 45, n = this.count(id), c = this.cards[id], icon = im(c.icon);
-      if (icon) { ctx.globalAlpha = n ? 1 : 85 / 255; ctx.drawImage(icon, x - (c.icon.origin?.[0] || 0) + 0, y + 32 - (c.icon.origin?.[1] || 32)); ctx.globalAlpha = 1; }
-      const mark = n === 5 ? im(B.fullMark) : n ? im(m.B.ItemNo?.[n]) : null;
+      if (icon) { ctx.globalAlpha = n ? 1 : 85 / 255; ctx.drawImage(icon, x - (c.icon.origin?.[0] ?? 0), y + 32 - (c.icon.origin?.[1] ?? 32)); ctx.globalAlpha = 1; }
+      const mark = n >= 5 ? im(B.fullMark) : n ? im(m.B.ItemNo?.[Math.min(n, 4)]) : null;
       if (mark) ctx.drawImage(mark, x + 1, y + 26);
       if (this.book.cover === id) { const f = im(B.cover); if (f) ctx.drawImage(f, x - 2, y - 2); }
       if (this.sel === id) { const f = im(B.select); if (f) ctx.drawImage(f, x - 2, y - 2); }
@@ -279,7 +280,13 @@ export class MonsterBookWin extends Win {
     this.menu = { id, x: Math.min(lx, 386), y: Math.min(ly, 291), canReg: !!this.count(id) && this.book.cover !== id };
   }
   wheel(dy) { this.turn(this.mgr.mouse.x - this.x < 237 ? 'left' : 'right', Math.sign(dy)); }
-  key(e) { if (e.key === 'Escape') { if (this.menu) this.menu = null; else this.mgr.close(this); } }
+  key(e) {
+    if (e.key !== 'Escape') return;
+    // the manager's capture-phase hook reaches this first, and the field's own Escape→blur never runs (it stops
+    // propagation too): a search box Escape means "leave the box", not "close the book"
+    if (this.field?.el === document.activeElement) { this.field.el.blur(); return; }
+    if (this.menu) this.menu = null; else this.mgr.close(this);
+  }
   tooltip(lx, ly) {
     const id = this.cardAt(lx, ly);
     if (id) return { title: this.cards[id].name, lines: [`${this.count(id)} / 5`] };
