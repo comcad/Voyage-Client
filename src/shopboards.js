@@ -10,7 +10,12 @@ import { uiText, wrapText } from './ui/wzui.js';
  *  - A Hired Merchant: Item/Cash/0503.img/<item>: skin/backgrnd, the employee (stand), skin/shop in front
  *    and skin/signboard on top - 166x166 layers sharing one origin - with the title on the board, the same
  *    pill, and "<owner>'s Hired Merchant" under it. Double-clicking either goes in.
+ *
+ * The Hired Merchant skin layers are 166x166 sharing one origin, anchored top-left and stood with the stall's base on
+ * the ground (so the plate hangs 11px below the feet); the clickable part is inset 10px each side and stops at the base.
  */
+const MERCHANT_PLATE = 166, MERCHANT_HIT = { dx: 10, w: 146, h: 160 };
+
 export class ShopBoards {
   constructor(game) {
     this.g = game;
@@ -29,7 +34,10 @@ export class ShopBoards {
   async spawn(m) {
     this.merchants.set(m.owner, m);
     const node = (this.items || (await this.g.assets.json('Item/Cash/0503.img')))?.[pad(m.itemId, 8)];
-    if (!node) return;
+    if (!node) {
+      if (!(this.missing ??= new Set()).has(m.itemId)) { this.missing.add(m.itemId); console.warn(`shopboards: Item/Cash/0503.img has no ${pad(m.itemId, 8)}: its merchant draws nothing`); }
+      return;
+    }
     const parts = [node.skin?.backgrnd, node.skin?.shop, node.skin?.signboard, ...frames(node.employee?.stand)].filter(Boolean);
     await this.g.assets.preload(parts);
     m.art = node;
@@ -43,7 +51,7 @@ export class ShopBoards {
     if (!a) return;
     const x = Math.round(m.x - cam.x), y = Math.round(m.y - cam.y);
     // the skin layers' origin is their top-left anchor; the stall stands with its base on the ground
-    const sx = x - 83, sy = y - 155;
+    const sx = x - MERCHANT_PLATE / 2, sy = y - 155;
     const layer = (n) => { const i = im(n); if (i) ctx.drawImage(i, sx, sy); };
     layer(a.skin?.backgrnd);
     const emp = frames(a.employee?.stand)[0], ei = im(emp);
@@ -53,7 +61,7 @@ export class ShopBoards {
     this.boardText(ctx, m, sx + 22, sy + 21, 108);
     this.pill(ctx, m, sx + 63, sy + 52);
     nameTag(ctx, `${m.name}'s Hired Merchant`, x, y + 2, '#fff');
-    m.hit = { x: sx + 10 + cam.x, y: sy + cam.y, w: 146, h: 160 };
+    m.hit = { x: sx + MERCHANT_HIT.dx + cam.x, y: sy + cam.y, w: MERCHANT_HIT.w, h: MERCHANT_HIT.h };
   }
 
   // ---------------------------------------------------------------- player shops
@@ -145,7 +153,10 @@ export class ShopBoards {
     if (p) ctx.drawImage(p, x, y);
   }
 
-  /** The merchant or player shop at canvas point (x, y) in world terms. */
+  /**
+   * The Hired Merchant at canvas point (x, y) in world terms, from the hit box drawMerchant left there - player shops
+   * and game rooms are not here (their rects are signRect, written by their own draws).
+   */
   at(wx, wy) {
     for (const m of this.merchants.values()) {
       const r = m.hit;
