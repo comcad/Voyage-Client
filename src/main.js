@@ -32,7 +32,7 @@ const standalone = navigator.standalone
   || globalThis.matchMedia?.('(display-mode: standalone)').matches
   || globalThis.matchMedia?.('(display-mode: fullscreen)').matches;
 if (standalone) addEventListener('pageshow', (event) => { if (event.persisted) location.reload(); });
-// ?b=: the address the game comes back by after a disconnect, so the browser has to ask the server for the page
+const debug = params.has('debug');   // ?debug: expose the game on globalThis for the console// ?b=: the address the game comes back by after a disconnect, so the browser has to ask the server for the page
 // (Game.leave). It has done its work once the page is here: taken off the address again.
 if (params.has('b')) { params.delete('b'); history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : '') + location.hash); }
 
@@ -67,13 +67,13 @@ async function online(assets) {
 
   const game = new Game($('game-canvas'), assets, look, hooks, net);
   Object.assign(game, { server: pick.server, worldId: pick.world, channel: entered.channel ?? pick.channel, channelCount: pick.channels || 1, channelNames: pick.channelNames || [], gm: !!pick.gm, admin: pick.admin || 0, charSlots: pick.slots, charCount: pick.charCount, cafe: !!pick.cafe });
-  if (new URLSearchParams(location.search).has('debug')) globalThis.maple = game; // inspect from the console
+  if (debug) globalThis.maple = game;   // inspect from the console (?debug)
   await game.goOnline(entered, $('ui-root'));
   game.start();
   // closing the tab, reloading or going back while in game asks first (the browser's own prompt)
   if (!standalone) addEventListener('beforeunload', (e) => { if (!game.leaving) { e.preventDefault(); e.returnValue = ''; } });
   assets.preload(lookCanvases(look, look.actionList())); // every body action, for skills
-  window.game = game;
+  if (debug) globalThis.maple = game;   // the same handle on both boot paths, only with ?debug
 }
 
 async function offline(assets) {
@@ -95,7 +95,7 @@ async function offline(assets) {
     if (v) game.changeMap(v);
     $('map-input').blur();
   });
-  window.game = game;
+  if (debug) globalThis.maple = game;   // the same handle on both boot paths, only with ?debug
 }
 
 async function main() {
