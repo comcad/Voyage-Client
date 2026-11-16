@@ -35,12 +35,16 @@ export class ProposalWaitWin extends Win {
 const WAIT = 'Waiting for her response...';
 
 /**
- * A wedding invitation (UIWindow.img/Wedding/Invitation/Cathedral for type 2, Vegas otherwise; 234x250, centred):
- * the groom's name at (50, 105) and the bride's at (131, 105), Arial 12 black; BtOK at (87, 206), Enter or Esc close it.
+ * A wedding invitation (UIWindow.img/Wedding/Invitation/Cathedral or .../Vegas; 234x250, centred): the groom's name
+ * at (50, 105) and the bride's at (131, 105), Arial 12 black; BtOK at (87, 206), Enter or Esc close it.
+ *
+ * The type is the server's WeddingType: 1 CATHEDRAL, 2 VEGAS. Only 1 is ever sent today (Cosmic writes a short 1), so
+ * the Cathedral art is what shows in practice; anything that is not VEGAS draws it too, a Cathedral variant being the
+ * safer guess for a value the enum may grow.
  */
 export class InvitationWin extends Win {
   constructor(mgr, groom, bride, type) {
-    const I = mgr.W.Wedding.Invitation, bg = type === 2 ? I.Cathedral : I.Vegas;
+    const I = mgr.W.Wedding.Invitation, bg = type === 2 ? I.Vegas : I.Cathedral;
     super(mgr, bg, Math.round((UI_W - (bg?._w || 234)) / 2), Math.round((UI_H - (bg?._h || 250)) / 2));
     this.modal = true; this.closeBtn.visible = false;
     this.groom = groom; this.bride = bride;
