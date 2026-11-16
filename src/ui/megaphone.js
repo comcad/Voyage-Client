@@ -68,7 +68,7 @@ export class MegaphoneWin extends Win {
       }
       f.el.addEventListener('keydown', (e) => {
         e.stopPropagation();
-        if (e.key === 'Enter') { e.preventDefault(); const i = this.fields.indexOf(f); if (i < this.fields.length - 1) this.fields[i + 1].focus(); else this.send(); }
+        if (e.key === 'Enter') { e.preventDefault(); this.enter(f); }
         else if (e.key === 'Escape') this.close();
       });
       return f;
@@ -79,20 +79,24 @@ export class MegaphoneWin extends Win {
 
   /**
    * Triple Megaphone: BtEx opens the item's examples beside it (at its corner + (407, 30)); a pick puts
-   * Item/Cash/0507.img/<id>/sample/<n>/0-2 in the three lines. While the list is up it alone takes the clicks.
+   * Item/Cash/0507.img/<id>/sample/<n>/0-2 in the three lines. The list is modal, so while it is up it alone
+   * takes the clicks.
    */
   async examples() {
-    if (this.picking) return;
-    const d = (await this.g.assets.json('Item/Cash/0507.img'))?.[pad(this.itemId, 8)];
-    if (!d?.ui) return;
-    await this.g.assets.preload(allCanvases(d.ui));
-    const keep = { modal: this.modal, transient: this.transient };
-    this.modal = false; this.transient = false; this.picking = true;
-    this.mgr.show(new ExamplePicker(this.mgr, d.ui, this.x + 407, this.y + 30, (i) => {
-      Object.assign(this, keep); this.picking = false;
-      const s = i === null ? null : d.sample?.[i];
-      if (s) this.fields.forEach((f, k) => { f.value = String(s[k] ?? ''); });
-    }));
+    if (this.picking) return;   // armed before the awaits, so a second click while they run is a no-op
+    this.picking = true;
+    try {
+      const d = (await this.g.assets.json('Item/Cash/0507.img'))?.[pad(this.itemId, 8)];
+      if (!d?.ui) return;
+      await this.g.assets.preload(allCanvases(d.ui));
+      const keep = { modal: this.modal, transient: this.transient };   // the picker is transient: this one must not be, or its click closes it
+      this.modal = false; this.transient = false;
+      this.mgr.show(new ExamplePicker(this.mgr, d.ui, this.x + 407, this.y + 30, (i) => {
+        Object.assign(this, keep);
+        const s = i === null ? null : d.sample?.[i];
+        if (s) this.fields.forEach((f, k) => { f.value = String(s[k] ?? ''); });
+      }));
+    } finally { this.picking = false; }
   }
   /** Triple Megaphone: how it will look, in your chat only. */
   preview() {
@@ -107,32 +111,39 @@ export class MegaphoneWin extends Win {
       const g = this.g, box = this.spec.box;
       const lines = box ? Array.from({ length: box }, (_, i) => (wrapLines(this.fields[0].value, this.spec.fields[0][2] - 2 * BOX_PAD)[i] || '').trim())
         : this.fields.map((f) => f.value.trim());
+      // every gate runs before close(), so a refused send leaves the draft in place
       if (this.kind === 7) {
+        if (!lines.some(Boolean)) { this.mgr.notice('Please enter the text.'); return; }   // nothing to confirm: it would only refuse after
         if (lines.some((l) => !l) && !(await this.mgr.confirm('One of the lines has not been applied.\r\nWould you still like to use it?'))) return;
-        this.close();
-        if (!lines.some(Boolean)) return;
         // the shared gate carries the curse and level-10 checks the Triple Megaphone used to skip;
         // blank lines were confirmed above, so only filled ones go through it
         for (const l of lines) if (l && !(await g.megaphoneTextOk(l))) return;
       } else if (this.kind === 'avatar') {
-        this.close();
         if (!lines.join('')) { this.mgr.notice('Please enter the text.'); return; }
         if (await g.cursed(lines.join(''))) { this.mgr.notice('Cursing is not allowed.'); return; }
       } else if (this.kind === 6) {
         if (!lines[0]) return;
         if (!this.item && !(await this.mgr.confirm('You have not selected an item.\r\nAre you sure you still want to use the item?'))) return;
-        this.close();
-      } else {
-        this.close();
-        if (!(await g.megaphoneTextOk(lines[0]))) return;
-      }
+        // the packet carries the slot, not the item: refuse if what is in that slot is no longer what was dropped
+        if (this.item && g.inventory?.[this.item.tab]?.[this.item.slot]?.id !== this.item.id) {
+          this.item = null;
+          this.mgr.notice('The item you have chosen is no longer there.');
+          return;
+        }
+      } else if (!(await g.megaphoneTextOk(lines[0]))) return;
+      this.close();
       g.cashSend(() => g.net?.useMegaphone(this.slot, this.itemId, { text: lines[0], lines, ear: this.ear, item: this.item, look: g.myLookData() }));
     } finally { this.sending = false; }
   }
   close() { for (const f of this.fields) f.remove(); this.mgr.close(this); }
   onClose() { for (const f of this.fields) f.remove(); }
-  key(e) { if (e.key === 'Escape') this.close(); }
-
+  /** Enter in a field goes on to the next one and sends from the last; the modal kinds reach it through key(). */
+  enter(f = this.fields.find((x) => x.el === document.activeElement)) {
+    const i = this.fields.indexOf(f);
+    if (i < 0) return;
+    if (i < this.fields.length - 1) this.fields[i + 1].focus(); else this.send();
+  }
+  key(e) { if (e.key === 'Escape') this.close(); else if (e.key === 'Enter') this.enter(); }
   draw(ctx) {
     super.draw(ctx);
     const scale = this.g.canvas.clientWidth / UI_W;
