@@ -4415,6 +4415,7 @@ export class Game {
       if (this.owlResult) this.windows.close(this.owlResult);
       this.witchTower = this.witchTowerLoad = null; this.guildBoss = null;
       if (this.carnivalWin) { this.windows.close(this.carnivalWin); this.carnivalWin = null; }   // an OPEN_UI Carnival window goes with the map, as the field one does
+      this.purgeNpcDialogs();   // an NPC talk or its shop belongs to the map you left
       if (Number(map.info?.fieldType) === 8 && (map.data?.healer || map.data?.pulley)) {
         const gb = new GuildBossField(this, map);
         gb.load().then(() => { if (this.map === map) this.guildBoss = gb; });
@@ -6207,10 +6208,22 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ NPC dialog
-  /** NPC_TALK: the canvas UtilDlgEx dialog, then NPC_TALK_MORE with the answer. */
+  /**
+   * NPC_TALK: the canvas UtilDlgEx dialog, then NPC_TALK_MORE with the answer. A warp takes the dialog with it, so the
+   * answer is marked as the no-reply one (action -1) and nothing is sent: the NPC is not there to hear it.
+   */
   async showNpcDialog(d) {
     const r = await npcTalk(this.windows, d);
+    if (r.cancelled) return;
     this.net.npcReply(d.wire ?? d.type, r.action, r.sel);
+  }
+  /** Closes a dialog a warp stranded (see showNpcDialog): the same shape its own Cancel produces, flagged as cancelled. */
+  purgeNpcDialogs() {
+    for (const w of [...this.windows.order]) {
+      if (w instanceof NpcDialog) w.reply(-1, undefined, true);
+      else if (w instanceof SlideMenu) { w.purged = true; w.finish(false); }
+      else if (w instanceof ShopWin) w.close();
+    }
   }
 
   // ------------------------------------------------------------------ loop
