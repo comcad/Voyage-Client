@@ -1492,10 +1492,18 @@ export class Game {
    * FIELD_SET_VARIABLE (party raids): Red_Stage / Blue_Stage as your team's stage and the other's (by PRaid_Team), and
    * Bamboo_Used. Kept for the party-raid field, which Voyage doesn't draw yet.
    */
+  /** Divide the buffered red/blue stages into yours and the other team's, once PRaid_Team says which you are on. */
+  resolvePraidStages() {
+    this.praidStage = this.praidTeam === 0 ? this.praidRed : this.praidTeam === 1 ? this.praidBlue : undefined;
+    this.praidOtherStage = this.praidTeam === 0 ? this.praidBlue : this.praidTeam === 1 ? this.praidRed : undefined;
+  }
+
   fieldVariable(key, value) {
     const n = parseInt(value, 10) || 0;
-    if (key === 'Red_Stage') { if (this.praidTeam === 0) this.praidStage = n; else if (this.praidTeam === 1) this.praidOtherStage = n; }
-    else if (key === 'Blue_Stage') { if (this.praidTeam === 1) this.praidStage = n; else if (this.praidTeam === 0) this.praidOtherStage = n; }
+    // kept raw: the stage keys and the team key are separate packets and may arrive in either order, so a value
+    // that lands before PRaid_Team is buffered and resolved when the team says which stage is yours
+    if (key === 'Red_Stage') { this.praidRed = n; this.resolvePraidStages(); }
+    else if (key === 'Blue_Stage') { this.praidBlue = n; this.resolvePraidStages(); }
     else if (key === 'Bamboo_Used') this.bambooUsed = n;
   }
   /**
@@ -1549,7 +1557,7 @@ export class Game {
     if (!line) return;
     if (!this.speakClear(m)) line = line.replace(/[^ \t\n.,!'"]+/g, (w) => 'x'.repeat(Math.ceil(w.length / 2)));
     m.chat = { text: line, t: life, fade, style: Number(m.src?.info?.speak?.chatBalloon) || 0 };
-    const name = this.windows.strings.mob?.[Number(m.spawn?.id)]?.name || '';
+    const name = m.name || this.windows.strings.mob?.[Number(m.spawn?.id)]?.name || '';   // the mob's own name, the table, or nothing to say
     this.hud.message(`${name} : ${line}`, '#ffff00');
   }
   /** WITCH_TOWER_SCORE: only on a Witch Tower map (fieldType 21); the first one opens the key count. */
@@ -9671,7 +9679,7 @@ export class Game {
     } else if (key === 'massacre_skill') {
       if (n > m.skill && p) this.vfx.play('GetParao', p);
       m.skill = n;
-    } else if (key === 'PRaid_Team') this.praidTeam = value === 'redTeam' ? 0 : value === 'blueTeam' ? 1 : 0xff;
+    } else if (key === 'PRaid_Team') { this.praidTeam = value === 'redTeam' ? 0 : value === 'blueTeam' ? 1 : 0xff; this.resolvePraidStages(); }
   }
   /**
    * Mu Lung Dojo (fieldType 14) with full energy (10000): Ctrl and Alt pressed one after the other casts a Dojo skill
@@ -9835,7 +9843,7 @@ export class Game {
     const p = this.player;
     this.net.takeObstacleDamage(d, disease);
     this.petHitPots(null, d, -2);
-    this.vfx?.damage(p, [d], 'violet');
+    this.net?.takeObstacleDamage(d, disease);   // the packet sends around a field obstacle all use ?.    this.vfx?.damage(p, [d], 'violet');
     setExpression(p, 1, HIT_FACE_TIME);
     this.standUp();
     if ((vx || vy) && !this.holdsStance()) {
