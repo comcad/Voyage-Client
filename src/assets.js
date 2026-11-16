@@ -117,9 +117,14 @@ export class Assets {
     let e = this.imgCache.get(node._canvas);
     const retry = e?.err && e.tries < RETRY_ATTEMPTS && performance.now() - e.failedAt > RETRY_AFTER_MS;
     if (!e || retry) {
-      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}${node._canvas.startsWith('_sheets/') ? '' : pictureVersion(node._canvas)}`, pri: this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };
-      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}`, pri: e?.pri ?? this.waiting.length, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };      e.promise = new Promise((res) => { e.settle = res; });
+      // a retry must go back in line: the failed entry left the queue with e.pri already at its band,
+      // so carrying it would read as "this band's own place is taken" and never re-queue it
+      const rePri = retry ? pri : (e?.pri ?? this.waiting.length);
+      const queued = retry && e.pri !== undefined;
+      e = { img: null, ready: false, tries: e?.tries || 0, src: `${this.base}/${node._canvas}${node._canvas.startsWith('_sheets/') ? '' : pictureVersion(node._canvas)}`, pri: rePri, started: false, sheet: node._canvas.startsWith('_sheets/') ? node : null };
+      e.promise = new Promise((res) => { e.settle = res; });
       this.imgCache.set(node._canvas, e);
+      if (queued) { this.waiting[rePri].push(e); this._pump(); }
     }
     // asked for sooner than it was waiting for: it moves up (and is passed over where it waited before)
     if (!e.started && pri < e.pri) { e.pri = pri; this.waiting[pri].push(e); this._pump(); }
