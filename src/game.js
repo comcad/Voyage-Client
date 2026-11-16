@@ -4564,7 +4564,10 @@ export class Game {
       // in case a shot never arrives; one timer per monster, not one per packet that names it
       if (!e.killTimer) {
         e.killTimer = true;
-        this.after(1500, () => { e.killTimer = false; if (e.queuedKill && e.pendingHits > 0) this.finishKill(e); });
+        this.after(1500, () => {
+          e.killTimer = false;
+          if (e.pendingHits > 0) { if (e.queuedKill) this.finishKill(e); else this.releaseDrops(e); }
+        });
       }
       return;
     }
@@ -4708,7 +4711,9 @@ export class Game {
     // a shot of Hurricane or Rapid Fire held down leaves them in the pose they hold
     const holding = !!rp && HELD_SHOTS.has(a.skill) && rp.charge?.id === a.skill;
     if (holding) {
-      rp.charge.until = performance.now() + 2000;
+      // never shorten it: a keydown skill's charge is Infinity until the explicit cancel, and a held shot's replay
+      // must not turn it into a deadline that expires mid-hold
+      rp.charge.until = Math.max(rp.charge.until, performance.now() + 2000);
       if (rp.charge.pose) delay = rp.look.attackDelay(rp.charge.pose) * this.attackScale(Math.max(2, Math.min(10, a.speed ?? 6)));
     }
     // (an Energy Charge blow plays no action, skill art or shake on its maker)
@@ -4763,7 +4768,7 @@ export class Game {
         if (planned) this.after(delay + planned.delay, land);
         else if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
       }
-    });
+    }).catch(() => {});   // a skill that failed to load leaves the swing artless rather than as an unhandled rejection
   }
 
   onPlayerDamaged(d) {
