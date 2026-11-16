@@ -6391,11 +6391,6 @@ export class Game {
       const sc = COMMAND_SC[e.k] ?? CODE_TO_SC[e.k];
       if (sc !== undefined && this.commands.key(sc, e.down) && e.down) inp.pressed.delete(e.k);
     }
-    // Seduce: your movement keys do nothing; you walk, look down and jump the way its value says
-    const sd = this.seduceInput(), held = (k) => (sd ? (k === 'down' ? sd.y > 0 : k === 'up' ? sd.y < 0 : false) : inp.is(k));
-    const jumpHit = () => (sd ? sd.jump : this.hitAction(ACTION.JUMP)), jumpHeld = () => (sd ? sd.jump : this.holdAction(ACTION.JUMP));
-    let dir = sd ? sd.x : (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
-    if (!sd && this.hasDisease(REVERSE)) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
       const hw = this.pressedSkill();   // Hero's Will still goes
@@ -6406,6 +6401,11 @@ export class Game {
       this.advanceFrame(p.fh ? look.standAction() : this.airAction(), dt);
       return;
     }
+    // Seduce: your movement keys do nothing; you walk, look down and jump the way its value says
+    const sd = this.seduceInput(), held = (k) => (sd ? (k === 'down' ? sd.y > 0 : k === 'up' ? sd.y < 0 : false) : inp.is(k));
+    const jumpHit = () => (sd ? sd.jump : this.hitAction(ACTION.JUMP)), jumpHeld = () => (sd ? sd.jump : this.holdAction(ACTION.JUMP));
+    let dir = sd ? sd.x : (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
+    if (!sd && this.hasDisease(REVERSE)) dir = -dir;
     const ms = this.moveStats(), JUMP = PHYS.jump * ms.jump;   // air steering stays unscaled
     const swim = map.swimming(p.x, p.y), WALK = PHYS.walk * ms.speed * (swim ? PHYS.swimDec : 1);
     const inY = (held('down') ? 1 : 0) - (held('up') ? 1 : 0);
