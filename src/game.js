@@ -723,7 +723,11 @@ function mesoTiming(node, amount) {
 // monster curses (Skill/MobSkill.img ids), as the server sends them
 const SEAL = 120, WEAKEN = 122, STUN = 123, SLOW = 126, SEDUCE = 128, REVERSE = 132;
 const MOB_DOOM = 0x10000;   // MonsterStatus.DOOM
-// what a curse says in the chat log as it takes you
+/**
+ * What a curse says as it lands (Curse of EXP etc. all have one in the client). SLOW (126) and REVERSE (132) are
+ * the two that take you and say nothing here: the client's own strings for them were not recovered, so they are
+ * silent rather than shown a made-up line.
+ */
 const CURSE_TEXT = {
   120: 'You skill has been sealed up, making you unable to use it.',
   121: 'You are in a state of darkness, so your accuracy will be decreased.',
@@ -3655,7 +3659,13 @@ export class Game {
       shopResult: (code, extra) => this.shopWin?.result(code, extra),
       // Fredrick: his store bank opens (one single window at a time), its results, or "not available"
       fredrick: (e) => {
-        if (e.op === 'open') { if (!this.tradeOpen()) this.showSingle(new FredrickWin(this.windows, e)).then((w) => { this.fredrickWin = w; }); }
+        if (e.op === 'open') {
+          if (this.tradeOpen()) return;
+          // set before the preload: a result packet that lands while the art loads still finds it, and the
+          // order test below sees it only once it is shown, as before
+          this.fredrickWin = new FredrickWin(this.windows, e);
+          this.showSingle(this.fredrickWin);
+        }
         else if (e.op === 'result') { if (this.fredrickWin && this.windows.order.includes(this.fredrickWin)) this.fredrickWin.result(e.code); }
         else if (e.op === 'unavailable') this.windows.notice('This is currently unavailable.\r\nPlease try again later');
         // the storing fee: only while GET ALL is waiting in his open window
