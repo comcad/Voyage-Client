@@ -82,6 +82,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings, saveSettings } from './settings.js';
+import { gameOptions, optionOn } from './gameopt.js';
 import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale, PIXEL_SCALE } from './view.js';
 import { config, refreshPublished } from './config.js';
 import { frameMaker } from './framemaker.js';
@@ -5774,15 +5775,12 @@ export class Game {
   }
   /** The Game Option switches for buddy, guild and alliance chat. */
   chatAllowed(mode) {
-    let allow = {};
-    try { allow = JSON.parse(localStorage.getItem('maple.gameopt') || '{}'); } catch { allow = {}; }
     // (the Game Option row stored as allianceTournament is the alliance chat switch)
-    return !(mode === 0 && allow.friends === false) && !(mode === 2 && allow.guildChat === false) && !(mode === 3 && allow.allianceTournament === false);
+    return !(mode === 0 && gameOptions().friends === false) && !(mode === 2 && gameOptions().guildChat === false)
+      && !(mode === 3 && gameOptions().allianceTournament === false);
   }
   /** A Game Option switch (on unless turned off). */
-  optionAllowed(key) {
-    try { return JSON.parse(localStorage.getItem('maple.gameopt') || '{}')[key] !== false; } catch { return true; }
-  }
+  optionAllowed(key) { return optionOn(key); }
   sendChat(text) {
     // /fps: the performance meter on or off (a Voyage tool, kept with the System Option choices)
     if (/^\/fps$/i.test(text.trim())) {
