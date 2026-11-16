@@ -146,10 +146,14 @@ export class MegaphoneWin extends Win {
   key(e) { if (e.key === 'Escape') this.close(); else if (e.key === 'Enter') this.enter(); }
   draw(ctx) {
     super.draw(ctx);
-    const scale = this.g.canvas.clientWidth / UI_W;
-    for (const f of this.fields) {
-      f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale);
-      if (this.spec.box) f.el.style.lineHeight = `${parseFloat(f.el.style.height) / this.spec.box}px`;
+    // relayout only when the scale or the window's place changed: the fields' styles do not depend on the frame
+    const scale = this.g.canvas.clientWidth / UI_W, sy = scale * TextField.stretchY;
+    if (scale !== this.laidScale || sy !== this.laidSy || this.x !== this.laidX || this.y !== this.laidY) {
+      this.laidScale = scale; this.laidSy = sy; this.laidX = this.x; this.laidY = this.y;
+      for (const f of this.fields) {
+        f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.rect.y0; f.layout({ left: 0, top: 0 }, scale, sy);
+        if (this.spec.box) f.el.style.lineHeight = `${parseFloat(f.el.style.height) / this.spec.box}px`;
+      }
     }
   }
   body(ctx) {
@@ -171,23 +175,26 @@ export class MegaphoneWin extends Win {
   }
   /** An item from your inventory onto the Item Megaphone (any tab, any item). */
   drop(lx, ly, c) {
-    if (this.kind !== 6 || c.kind !== 'item' || typeof c.tab !== 'number') return;
-    this.item = { tab: c.tab, slot: c.slot };
+    if (this.kind !== 6 || c.kind !== 'item' || typeof c.tab !== 'number' || typeof c.slot !== 'number' ||
+        lx < 104 || lx >= 136 || ly < 62 || ly >= 94) return;
+    // the id goes with the slot: the packet carries the slot, and send() refuses a slot that changed under it
+    this.item = { tab: c.tab, slot: c.slot, id: c.id };
   }
 }
 
 /**
  * The Triple Megaphone's examples (Item/Cash/0507.img/<id>/ui), 100 wide and (n + 2) * 15 tall (n: its children but
  * t, c and s): t, a c row every 15px from y 23, then s; ui/<i> at (9, 24 + 15i). It opens where asked, kept on an
- * 800x600 screen (x 700 at most, the bottom at 600). done(i) with the pick, or null for a click outside it or on its
- * title (11-77, 10-22).
+ * 800x600 screen (x 700 at most, the bottom at 600). done(i) with the pick, or null for a
+ * click outside it, Escape, or the 2px strip under the title frames (11-77, 20-22); the rest of
+ * the title band (ly 10 to < 20) starts a drag.
  */
 class ExamplePicker extends Win {
   constructor(mgr, ui, x, y, done) {
     super(mgr, null, 0, 0);
-    this.buttons = [];
-    this.ui = ui; this.done = done; this.transient = true;
-    this.n = Math.max(0, Object.keys(ui).filter((k) => k !== '_order').length - 3);
+    this.closeBtn.visible = false;   // Escape, a click outside, or the strip under the title cancels
+    this.ui = ui; this.done = done; this.transient = true; this.modal = true;   // it alone takes the clicks
+    this.n = Object.keys(ui).filter((k) => /^\d+$/.test(k)).length;   // the ui/<i> rows, not t, c, s or metadata
     this.w = 100; this.h = (this.n + 2) * 15;
     this.x = x + 100 > UI_W ? UI_W - 100 : x; this.y = y + this.h > UI_H ? UI_H - this.h : y;
     for (let i = 0; i < this.n; i++) this.button(ui[i], 9, 24 + i * 15, () => this.finish(i));
@@ -195,6 +202,7 @@ class ExamplePicker extends Win {
   frames() { return allCanvases(this.ui); }
   finish(i) { if (this.answered) return; this.answered = true; this.mgr.close(this); this.done(i); }
   onClose() { if (!this.answered) { this.answered = true; this.done(null); } }
+  key(e) { if (e.key === 'Escape') this.finish(null); }
   down(lx, ly) { if (lx >= 11 && lx < 77 && ly >= 10 && ly < 22) this.finish(null); }
   body(ctx) {
     const im = (n) => this.mgr.image(n), t = im(this.ui.t), c = im(this.ui.c), s = im(this.ui.s);
