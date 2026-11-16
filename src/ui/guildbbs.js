@@ -46,7 +46,8 @@ const p2 = (n) => String(n).padStart(2, '0');
 /** The list and reply date: H:MM for today, else MM/DD. */
 function shortDate(ft) {
   const d = ftDate(ft), now = new Date();
-  const today = d.getUTCFullYear() === now.getFullYear() && d.getUTCMonth() === now.getMonth() && d.getUTCDate() === now.getDate();
+  // both sides on UTC: the date is rendered from the UTC fields here and in longDate
+  const today = d.getUTCFullYear() === now.getUTCFullYear() && d.getUTCMonth() === now.getUTCMonth() && d.getUTCDate() === now.getUTCDate();
   return today ? `${d.getUTCHours()}:${p2(d.getUTCMinutes())}` : `${p2(d.getUTCMonth() + 1)}/${p2(d.getUTCDate())}`;
 }
 const longDate = (ft) => { const d = ftDate(ft); return `${d.getUTCFullYear()}/${p2(d.getUTCMonth() + 1)}/${p2(d.getUTCDate())} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`; };
@@ -108,7 +109,8 @@ export class GuildBBSWin extends Win {
     this.ready.then(() => { if (this.mgr.isOpen('guildbbs')) this.g.net?.bbsList(this.page); });
   }
   onClose() { for (const f of this.fields) { f.show(false); f.el.blur(); } }
-  key(e) { if (e.key === 'Escape') this.mgr.close(this); }
+  /** Escape leaves the editor the way CANCEL does (the draft is deliberately not posted), and closes otherwise. */
+  key(e) { if (e.key !== 'Escape') return; if (this.writing) this.cancel(); else this.mgr.close(this); }
 
   get rank() { return this.g.guild?.members?.find((m) => m.id === this.g.player?.id)?.rank ?? 6; }
   memberName(id) { return this.g.guild?.members?.find((m) => m.id === id)?.name || ''; }
@@ -157,11 +159,14 @@ export class GuildBBSWin extends Win {
     if (!title) { this.mgr.notice(MSG.title); return; }
     if (!body) { this.mgr.notice(MSG.text); return; }
     if (await this.g.cursed(title) || await this.g.cursed(body)) { this.mgr.notice(MSG.curse); return; }
+    if (w.edit && !this.thread) { this.mgr.notice(MSG.gone); this.rebuild(); return; }   // the thread went while editing: no id 0 post
     this.g.net?.bbsPost(w.edit, w.edit ? this.thread?.id ?? 0 : 0, w.notice, title, body.replace(/\r?\n/g, '\r\n'), this.emoIcon);
     this.page = 0;
     this.g.net?.bbsList(0);
+    this.rebuild();   // the editor closes as the list lands, as CANCEL would have done
   }
-  cancel() { this.rebuild(); this.show(this.shownId); }
+  /** CANCEL: the editor goes. Re-open the thread only if one was ever opened (shownId 0 is the notice's slot). */
+  cancel() { const id = this.shownId; this.rebuild(); if (id) this.show(id); }
   async deleteThread() {
     const t = this.thread;
     if (!t || !(await this.mgr.confirm(MSG.del))) return;
@@ -177,7 +182,9 @@ export class GuildBBSWin extends Win {
     if (!text) { this.mgr.notice(MSG.text); return; }
     if (await this.g.cursed(text)) { this.mgr.notice(MSG.curse); return; }
     this.g.net?.bbsReply(t.id, text);
+    this.g.net?.bbsShow(t.id);   // the reply rows come from the thread packet, not the list
     this.g.net?.bbsList(this.page);
+    this.replyF.value = '';
   }
   /** The reply is picked again once the question is answered, from where the list then stands. */
   async deleteReply(k) {
@@ -185,16 +192,20 @@ export class GuildBBSWin extends Win {
     const t = this.thread, r = t?.replies[this.replyFirst + k];
     if (!r) return;
     this.g.net?.bbsReplyDelete(t.id, r.id);
+    this.g.net?.bbsShow(t.id);   // the rows are redrawn from the thread packet
     this.g.net?.bbsList(this.page);
   }
+  /** The arrows move the highlight and pick with it, so what REGISTER posts is the glyph the Select box shows. */
   moveEmo(d) {
     if (d < 0) { if (this.emoSel >= 1) this.emoSel -= 1; } else if (this.emoSel < this.owned.length + 2) this.emoSel += 1;
+    this.emoIcon = this.emoSel < 3 ? this.emoSel : this.owned[this.emoSel - 3] ?? 0;
   }
 
   // ---------------------------------------------------------------- mouse
   pages(ctx) {
     const n = Math.trunc((this.total - 1) / PER_PAGE) + 1, first = Math.floor(this.page / PER_PAGE) * PER_PAGE;
-    const labels = []; for (let i = first; i < Math.min(n, first + PER_PAGE); i++) labels.push(i);
+    const labels = [];
+    if (this.total > 0) for (let i = first; i < Math.min(n, first + PER_PAGE); i++) labels.push(i);   // none on an empty board
     const widths = labels.map((i) => this.width(ctx, String(i + 1)));
     let x = Math.round(PAGE_X - (widths.reduce((a, b) => a + b, 0) + PAGE_GAP * (labels.length - 1)) / 2);
     return labels.map((i, k) => { const r = { i, x, w: widths[k] }; x += widths[k] + PAGE_GAP; return r; });
@@ -278,9 +289,14 @@ export class GuildBBSWin extends Win {
     this.scrollbar(ctx, REPLY_BAR.x, REPLY_BAR.y, REPLY_BAR.h, this.replyFirst, this.thread?.replies.length || 0, REPLY_ROWS, this.mgr.B.VScr4);
   }
   row(ctx, t, y, put) {
-    const ty = y + 8, subject = `${t.id ? t.id : ''} ${t.title}`;
+    const ty = y + 8;
+    // the subject is cut to the column the writer's centred name starts in, so a long title cannot run into it
+    ctx.save(); ctx.font = FONT;
+    const full = `${t.id ? t.id : ''} ${t.title}`, subject = cutText(ctx, full, LIST_R - 26 - (t.replies ? 24 : 0));
+    const w = Math.round(ctx.measureText(subject).width);
+    ctx.restore();
     this.text(ctx, subject, 26, ty, F1);
-    if (t.replies) this.text(ctx, `[${t.replies}]`, 28 + this.width(ctx, subject), ty, F5);
+    if (t.replies) this.text(ctx, `[${t.replies}]`, 28 + w, ty, F5);
     const name = this.memberName(t.writer);
     if (name) {
       ctx.save(); ctx.font = FONT; const n = cutText(ctx, name, 70); ctx.restore();
