@@ -54,8 +54,6 @@ const DELETE_NOTICE = {
 };
 // map point (28, stepY - 8) is the screen centre
 const VIEW_X = 372, VIEW_Y = 308;
-/** Screen position of a map point while the camera is on stepY. */
-const mapAt = (mx, my, stepY) => ({ x: mx + VIEW_X, y: my - stepY + VIEW_Y });
 // world tags (filled or empty) hanging from the world select rod: 15 of them, one under each of its strings (27px apart)
 const WORLD_TAGS = 15, TAG_STEP = 27;
 
@@ -214,7 +212,7 @@ export class LoginScene {
     }
     // inputs only show once the camera has arrived (the client fades them in the same way)
     const settled = this.camY === this.camTarget;
-    for (const f of this.fields) f.show(settled && !f.hidden);
+    for (const f of this.fields) f.show(settled);
   }
 
   draw() {
@@ -563,38 +561,6 @@ export class LoginScene {
     return '';
   }
 
-  /** Pincode-style prompt with one input line. Resolves with the text or null. */
-  async prompt(label, { password = true, pattern = null, max = 16 } = {}) {
-    const P = this.L.Pincode;
-    const x = (W - 362) / 2, y = (H - 219) / 2;
-    let onOk = () => {}, onCancel = () => {};
-    const d = {
-      sprites: [new WzSprite(P.backgrnd[0], x, y)],
-      // Pincode BtYes / BtNo, as v83's PIN window places them: Cancel at (196, 150), OK mirrored at (90, 150) so the
-      // pair is centred on the 362-wide window
-      buttons: [this.button(P.BtYes, x + 90, y + 150, () => onOk()), this.button(P.BtNo, x + 196, y + 150, () => onCancel())],
-    };
-    await this.assets.preload([...d.sprites, ...d.buttons].flatMap((p) => p.frames()));
-    return new Promise((resolve) => {
-      const keep = [...this.fields];
-      // the input only appears together with its dialog, so Enter can't reach the screen behind
-      const f = this.field(x + 114, y + 112, 200, 20, { password, max, color: '#000' });
-      let bad = false;
-      d.drawFront = (ctx) => {
-        wrapText(ctx, label, 210).slice(0, 4).forEach((ln, i) => uiText(ctx, ln, x + 114, y + 40 + i * 15, { color: '#5a3200', bold: i === 0 }));
-        ctx.fillStyle = bad ? 'rgba(255,90,90,0.35)' : 'rgba(255,255,255,0.75)';
-        ctx.fillRect(x + 112, y + 110, 204, 24);
-        ctx.strokeStyle = '#a8763c'; ctx.strokeRect(x + 112.5, y + 110.5, 203, 23);
-      };
-      const close = (v) => { this.dialogs.splice(this.dialogs.indexOf(d), 1); this.clearFields(keep); this.hover(); resolve(v); };
-      const ok = () => { if (pattern && !pattern.test(f.value)) { bad = true; f.focus(); return; } close(f.value); };
-      onOk = ok; onCancel = () => close(null);
-      d.onEnter = ok; d.onEscape = onCancel;
-      this.dialogs.push(d); this.hover();
-      setTimeout(() => f.focus(), 50);
-    });
-  }
-
   /**
    * The gender question (Login.img/Gender), at (355, 200) with no backdrop of its own: scroll/0 unrolls (350 ms) and
    * stays, then text/0 at (22, 25) (the welcome words, with the Gender box drawn in), StatusBar's chatTarget at (157, 99)
@@ -729,7 +695,9 @@ export class LoginScene {
     // the license agreement is accepted without being shown
     if (!res.ok && res.reason === 23) res = await this.s.acceptTos();
     if (!res.ok) { await this.loginFailed(res); return null; }
-    if (res.regStatus === 2 || res.regStatus === 3) { await this.notice(31, 'yesno'); return null; }
+    // both answers end the same way (this branch returns null either way), so the notice offers only OK: OK / Cancel
+    // would promise a choice it doesn't act on
+    if (res.regStatus === 2 || res.regStatus === 3) { await this.notice(31, 'info'); return null; }
     if (res.regStatus > 3) { await this.notice(NOTICE.LAUNCHER); return null; }
     let account = res.account;
     if (account.gender === 10) {
@@ -800,8 +768,9 @@ export class LoginScene {
    * (backgrnd/1, the crossed-out mushroom, after an error); text/<n> at (119, 21); the box at (130, 103), 150x15,
    * starred, 8 long. Buttons: mode 0 NO (107, 150) and YES; mode 1 YES and NO (196, 150); mode 2 YES alone; mode 3
    * CHANGE PIN (47, 150), LOGIN and NO (212, 150). The YES / LOGIN places were lost: (189, 150), (114, 150), (196, 150)
-   * and (130, 150) (unverified). Enter is OK and Esc cancels; any other key in modes 1 and 3 opens the soft keyboard,
-   * which types for you. Resolves with { code: 1 OK, 0 cancel, -1 mode 1's NO, 2 CHANGE PIN; value: the box }.
+   * and (130, 150) (unverified). Enter is OK, except on the mode 0 question where it answers NO; Esc cancels; any
+   * other key in modes 1 and 3 opens the soft keyboard, which types for you. Resolves with { code: 1 OK, 0 cancel,
+   * -1 mode 1's NO, 2 CHANGE PIN; value: the box }.
    */
   async pinBox(mode, text) {
     const P = this.L.Pincode, { x, y } = NOTICE_AT;
@@ -822,7 +791,9 @@ export class LoginScene {
       else if (mode === 1) { b(P.BtYes, 114, () => close(1)); b(P.BtNo, 196, () => close(-1)); }
       else if (mode === 2) b(P.BtYes, 196, () => close(1));
       else { b(P.BtChgPin, 47, () => close(2)); b(P.BtLogin, 130, () => close(1)); b(P.BtNo, 212, () => close(0)); }
-      d.onEnter = () => close(1); d.onEscape = () => close(0);
+      // the yes / no question answers NO to Enter: a stray Enter must not abandon the registration (it is asking
+      // "cancel registering your PIN?"), and NO is the safe answer. Esc cancels in every mode.
+      d.onEnter = () => close(mode === 0 ? 0 : 1); d.onEscape = () => close(0);
       if (f) {
         f.el.addEventListener('keydown', (e) => {
           if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') return;
@@ -851,7 +822,7 @@ export class LoginScene {
       [66, [58, 81, 104, 127, 150, 173, 196, 219, 242]], [89, [74, 97, 120, 143, 166, 189, 212]]];
     const pos = ROWS.flatMap(([yy, xs]) => xs.map((xx) => ({ x: xx, y: yy })));
     const slot = Array.from({ length: 36 }, (_, i) => i);
-    const shuffle = () => { for (let i = 0; i < 36; i++) { const j = Math.floor(Math.random() * 36); [slot[i], slot[j]] = [slot[j], slot[i]]; } };
+    const shuffle = () => { for (let i = 35; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [slot[i], slot[j]] = [slot[j], slot[i]]; } };
     shuffle();
     const enabled = (id) => f.value.length < 4 && id < 10;
     const inBox = (rx, ry, bx, by, bw, bh) => rx >= bx && rx < bx + bw && ry >= by && ry < by + bh;
@@ -1181,7 +1152,7 @@ export class LoginScene {
       // the character last played on this world is selected, else none
       const lastKey = `maple.lastchar.${world.id}`;
       let sel = list.chars.findIndex((c) => String(c.stats.id) === store.get(lastKey));
-      const perPage = 3, pages = Math.floor((Math.max(1, list.slots) - 1) / perPage) + 1;
+      const perPage = 3, pages = Math.max(1, Math.ceil(list.chars.length / perPage));   // slots only draw the ghosts
       let page = sel >= 0 ? Math.floor(sel / perPage) : 0;
       // three places 125px apart, feet on the bridge
       const placeX = (c) => 252 + 125 * c, footY = 370;
@@ -1420,8 +1391,8 @@ export class LoginScene {
     return new Promise((resolve, reject) => {
       const VW = { x: 122, y: 38 }, P = { x: 520, y: 198 };
       let sel = 0, top = 0, busy = false, done = false;
-      // fewer than 10 characters don't scroll; otherwise n / 3 - 2 rows (a partial last row can't be reached)
-      const maxTop = chars.length < 10 ? 0 : Math.floor(chars.length / 3) - 2;
+      // three rows of three per page: the last stop shows the last row, so rows (n / 3) - 3, and 17 at the 60 cap
+      const maxTop = Math.max(0, Math.ceil(chars.length / 3) - 3);
       // the scrollbar: its create call lost its arguments. A VScr7 (the style of the login's other scrollbar) centred in
       // the art's track beside the grid, whose inside is x 372-393, y 64-413 (350 tall) (unverified). The wheel works
       // over the bar and up to 350px left of it (its +0x34 is 0x15e), so over the grid.
