@@ -3480,9 +3480,11 @@ export class Game {
       consumeEffect: later((id, item) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) this.setConsumeEffect(ent, item); }),
       playerHearts: later((id, n) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) this.setHearts(ent, n); }),
       scrollEffect: later((e) => this.onScrollEffect(e)),
-      bookCard: later((id, count) => {
+      bookCard: later((id, count, fresh) => {
         const b = this.monsterBook;
-        if (count > (b.cards[id] || 0)) { b.cards[id] = count; sfx.play('Game/mCardGet'); this.hud.message(`You have obtained a card: ${this.windows.itemName(id)} (${count}/5)`, '#9fe07a'); this.vfx?.play('MonsterBook', this.player); }
+        // the packet's own "gained, not full" bit decides, so a count that merely went down (a desync) stays quiet
+        if (fresh && count > (b.cards[id] || 0)) { b.cards[id] = count; sfx.play('Game/mCardGet'); this.hud.message(`You have obtained a card: ${this.windows.itemName(id)} (${count}/5)`, '#9fe07a'); this.vfx?.play('MonsterBook', this.player); }
+        else if (!fresh) b.cards[id] = count;
         else this.hud.message('That card is already full in your Monster Book.', '#fff');
       }),
       bookCover: later((id) => { this.monsterBook.cover = id; }),
