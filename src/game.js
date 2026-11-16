@@ -8752,7 +8752,11 @@ export class Game {
     }
     return best && { x: Math.round(best.x), y: Math.round(best.y) };
   }
-  /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
+  /**
+   * Monsters that can be struck: a Mob that is still standing (alive), not one already playing its death (dying), not
+   * one the server has killed while our blows were on their way (queuedKill), one that has been given its id (a spawn
+   * puts it in life before its body is known) with its body art loaded, and not the other team's Carnival monster.
+   */
   liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !this.carnivalAlly(m)); }
   /** A monster within a ranged weapon's swing, so a held shot gives way to the swing (never with Combat.NoWhack). */
   swingsClose() { return !config.noWhack && this.findTargets('melee', 0, 0, 1, this.look.attackAction(), CLOSE_REACH).length > 0; }
@@ -9302,26 +9306,28 @@ export class Game {
   }
 
   /**
-   * A skill's hit effect on what it struck, as the client does it (HeavenClient Mob::show_effect): on the
-   * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
-   * faces. Without a head point, the middle of its body.
-   */
-  /**
    * One damage line's sound: the skill's Hit, or the monster's Damage when there is none (a miss: Hit only).
    * A cash star or bullet (cash) has its own Hit instead, on the first line that hurt; Avenger keeps the skill's.
    */
   hitSound(id, mob, d, line, cash = 0) {
     const volume = mob ? this.volumeAt(mob.x, mob.y) : 1;
     const damage = () => { if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`, { volume }); };
+    // the promise is returned so a caller can wait for the line's sound, as playHitEffect does
     const hitOr = (path) => sfx.has(path).then((found) => (found ? sfx.play(path, { volume }) : damage()));
     if (cash && !AVENGERS.has(id)) {
-      if (line > 0 || !(d > 0)) damage(); else hitOr(`CashEffect/${pad(cash, 8)}/Hit`);
-      return;
+      if (line > 0 || !(d > 0)) { damage(); return undefined; }
+      return hitOr(`CashEffect/${pad(cash, 8)}/Hit`);
     }
     const hit = id && !(FIRST_HIT_ONLY.has(id) && (line > 0 || (id === 3101005 && !(d > 0))));
-    if (hit) hitOr(`Skill/${pad(id, 7)}/Hit`); // 7-digit keys (0001000); Cygnus/Aran ids are 8
-    else damage();
+    if (hit) return hitOr(`Skill/${pad(id, 7)}/Hit`); // 7-digit keys (0001000); Cygnus/Aran ids are 8
+    damage();
+    return undefined;
   }
+  /**
+   * A skill's hit effect on what it struck, as the client does it (HeavenClient Mob::show_effect): on the
+   * monster's head point (its frame's head vector, mirrored with the monster) and facing the way the attacker
+   * faces. Without a head point, the middle of its body.
+   */
   async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0, at = null) {
     const node = id ? this.byCharLevel(await this.skills?.ensure(id), by) : null;
     const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
