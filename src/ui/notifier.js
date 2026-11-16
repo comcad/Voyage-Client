@@ -1,6 +1,6 @@
 import { sfx } from '../audio.js';
 import { uiText } from './wzui.js';
-import { Win } from './windows.js';
+import { Win, cutText } from './windows.js';
 import { UI_W, UI_H } from '../view.js';
 
 /**
@@ -38,7 +38,7 @@ const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, LOGIN_HOLD = 6000, 
 class Balloon extends Win {
   constructor(mgr, kind, art, done, hold) {
     super(mgr, mgr.W.FadeYesNo[art], 464, 0);
-    Object.assign(this, { kind, done, hold, seq: ++balloonSeq, born: performance.now(), deadline: performance.now() + hold, shownAt: null, closing: null, clicked: null, n: 1 });
+    Object.assign(this, { kind, done, hold, seq: ++balloonSeq, deadline: performance.now() + hold, shownAt: null, closing: null, clicked: null, n: 1 });
     this.fixed = true; this.keepOnEscape = true; this.closeBtn.visible = false; this.closeSound = null;
   }
   get F() { return this.mgr.W.FadeYesNo; }
@@ -177,9 +177,7 @@ export class QuestNotice extends Balloon {
     this.icon(ctx, this.F.icon7);
     uiText(ctx, this.title, 27, 7, { color: '#fff', size: 12 });
     ctx.font = '12px Arial, sans-serif';
-    let n = this.name || '';
-    if (ctx.measureText(n).width > NAME_W) { while (n.length > 1 && ctx.measureText(`${n}..`).width > NAME_W) n = n.slice(0, -1); n = `${n}..`; }
-    uiText(ctx, n, 27, 20, { color: '#fff', size: 12 });
+    uiText(ctx, cutText(ctx, this.name || '', NAME_W), 27, 20, { color: '#fff', size: 12 });
   }
 }
 
@@ -200,16 +198,16 @@ class PartyQuestNotice extends Balloon {
     if (i) ctx.drawImage(i, 4, 4);
     uiText(ctx, 'Party Quest', 47, 9, { color: '#fff', size: 12 });
     ctx.font = '12px Arial, sans-serif';
-    let n = this.name || '';
-    if (ctx.measureText(n).width > 80) { while (n.length > 1 && ctx.measureText(`${n}..`).width > 80) n = n.slice(0, -1); n = `${n}..`; }
-    uiText(ctx, n, 47, 26, { color: '#fff', size: 12 });
+    uiText(ctx, cutText(ctx, this.name || '', 80), 47, 26, { color: '#fff', size: 12 });
   }
 }
 /** A party-quest invitation; several stack. open(qid) is called on O. */
 export function pqNotice(mgr, qid, mark, name, open) { add(mgr, new PartyQuestNotice(mgr, qid, mark, name, open), () => false); }
 
 const balloonsOf = (mgr) => mgr.order.filter((w) => w instanceof Balloon);
-/** Add a balloon: the first of its kind goes at once (no fade, no decline), unless the kind stacks. */
+/** Add a balloon: the first of its kind goes at once (no fade, no decline), unless the kind stacks. A lock (setUiLock) keeps
+ * every balloon (holdOnLock) and none is drawn while it holds (draw's `!uiLocked` gate); one that is up comes back with its
+ * hold restarted from the unlock, so an invitation that arrived during the lock also gets its full time. */
 function add(mgr, b, same) {
   const old = balloonsOf(mgr).find((w) => w.kind === b.kind && same(w));
   if (old) old.remove();
