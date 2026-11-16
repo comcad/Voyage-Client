@@ -170,7 +170,7 @@ export class MessengerWin extends Win {
   say(text, color = NOTICE) {
     const dropped = this.lines.length >= 100;
     if (dropped && this.first !== null) this.first = Math.max(0, this.first - 1);   // the window's top line went away
-    this.lines.push({ text, color });
+    this.lines.push({ text, color, rows: null });   // `rows` caches the wrap; chat's `ctx.font` never changes between frames
     if (dropped) this.lines.shift();
   }
   /** Something came while the window is at its smallest: its blink starts (unless it is going). */
@@ -289,7 +289,7 @@ export class MessengerWin extends Win {
     // chat, newest at the bottom unless scrolled up
     const S = this.S;
     ctx.save(); ctx.font = '12px Arial, sans-serif';
-    const rows = this.lines.flatMap((l) => wrapLine(ctx, l.text).map((text) => ({ text, color: l.color })));
+    const rows = this.lines.flatMap((l) => (l.rows ??= wrapLine(ctx, l.text)).map((text) => ({ text, color: l.color })));
     const who = this.members.map((m, p) => (m && this.typing[p] ? m.name : null)).filter(Boolean);
     const typingLine = who.length ? cutText(ctx, `${who.join(',')} is typing.`, 262) : '';
     ctx.restore();
