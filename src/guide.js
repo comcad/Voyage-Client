@@ -82,7 +82,9 @@ export class Guide {
       this.frameT += ms;
       while (this.frameT >= (fr[this.frame]?.delay || 100)) {
         this.frameT -= fr[this.frame]?.delay || 100;
-        if (++this.frame >= fr.length) { this.frame = 0; if (this.special) { this.special = null; break; } }
+        // the one-shot is over: it is a third place the action changes, so the frame cache goes with it (without this
+        // the cached one-shot frames keep looping as the base, since anim() only rebuilds when _frames is null)
+        if (++this.frame >= fr.length) { this.frame = 0; if (this.special) { this.special = null; this._frames = null; break; } }
       }
     }
     if (this.talk) {
