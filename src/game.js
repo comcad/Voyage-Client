@@ -97,7 +97,6 @@ import { BUILD } from './build.js';
 /** ENABLE_TV's error codes. */
 const TV_ERRORS = { 1: 'Non-GM character tried to send GM message.', 2: "You've entered the wrong user name.", 3: 'The waiting line is longer than an hour. \r\nPlease try using it at a later time.' };
 
-// Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan
 // the camera's vertical slack (px you may rise / sink from its focus), its drift back to you (per second)
 // and how long it takes to glide to a new focus height (s)
 const CAM_LIFT = 50, CAM_DEADBAND = 28, CAM_DAMPING = 100;   // the original camera filter
@@ -155,6 +154,7 @@ const NEW_YEAR_CARD_ERRORS = { 0x0f: 'You cannot send a card to yourself !', 0x1
   0x14: 'Incoherent Data !', 0x15: 'An error occured during DB operation.', 0x16: 'An unknown error occured !' };
 // windows of which only one may be open, and none with a shop-type window
 const SINGLE_WINS = [DueyWin, ProposalWaitWin, NewYearCardWin, NewYearCardViewWin, IncubatorWin, RemoteGachaponWin, KarmaWin, HammerWin, VegaWin, MapleLifeWin, OwlResultWin, MinigameRoomWin];
+/** Teleport: F/P, I/L, Cleric, Blaze Wizard, Evan. */
 const TELEPORTS = new Set([2101002, 2201002, 2301001, 12101003, 22101001]);
 /** Teleport can be used again this long after it lands (ms), and this long after Meteor Shower, Blizzard or Genesis. */
 const TELEPORT_DELAY = 600, TELEPORT_AFTER_ULTIMATE = 3000;
@@ -205,6 +205,7 @@ class Input {
       this.down.add(k);
       this.events.push({ k, down: 1 });
     });
+    // keyup only tells the filter (no veto): a key held back on the way down must not stick
     addEventListener('keyup', (e) => { const k = map(e); if (k) { this.filter?.(k, 0); this.down.delete(k); this.events.push({ k, down: 0 }); } });
     addEventListener('blur', () => this.down.clear());
     // NPCs open on a double-click, as in the client
