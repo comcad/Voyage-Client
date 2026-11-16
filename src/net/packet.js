@@ -1,5 +1,6 @@
 /** Little-endian packet reader/writer matching the game server's InPacket/OutPacket. Strings are u16-length latin1. */
-
+/** Little-endian packet reader/writer matching Cosmic's InPacket/OutPacket. Strings are u16-length latin1.
+ *  Scalar writes wrap silently (`& 0xff`, `| 0`, Int16/Int32 coercion); only `long()` throws on a non-integer. */
 export class PacketReader {
   constructor(bytes) {
     this.b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -64,5 +65,3 @@ export class PacketWriter {
   }
   toBytes() { return this.buf.slice(0, this.len); }
 }
-
-export const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join(' ');
