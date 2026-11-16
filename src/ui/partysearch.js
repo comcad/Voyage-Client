@@ -9,14 +9,11 @@ import { UI_W } from '../view.js';
  *   Find Party Member (a party leader looks for people): PartyMember/party0 header, party1 note, party2 the
  *   LEVEL [min] ABOVE [max] UNDER  PARTY MEMBER [n] PPL row (boxes at x 45 / 105 / 231 of it), party3 ALL JOBS,
  *   party4 the job boxes (287x187: two small boxes on the left, two tall ones, three below).
- *   START sends the search (PARTY_SEARCH_START: min, max, members, job bits); PAUSE / STOP end it
- *   (PARTY_SEARCH_UPDATE). The server then invites matching players near you, and they see "PS: <you>".
+ *   START sends the search (PARTY_SEARCH_START: min, max, members, job bits); STOP ends it
+ *   (PARTY_SEARCH_UPDATE). The game server has no pause or resume, so the window offers only STOP.
  *   Find Party: Party/party0..3. The game server takes no registration - anyone without a party can be invited.
  * Job bits follow the game server's PartySearchCoordinator table.
- *   START sends the search (PARTY_SEARCH_START: min, max, members, job bits); STOP ends it
- *   (PARTY_SEARCH_UPDATE). The server has no pause or resume, so the window offers only STOP.
- *   Find Party: Party/party0..3. Cosmic takes no registration - anyone without a party can be invited.
- * Job bits follow Cosmic's PartySearchCoordinator table. */
+ */
 const GROUPS = [
   // [box x, box y, width, title, [[job bit, name]...]] inside party4
   [0, 0, 80, 'Beginner', [[1, 'Beginner']]],
@@ -85,7 +82,7 @@ export class PartySearchWin extends Win {
     this.state = state;
   }
   /** The party changed: a search only lives while you lead a party. */
-  partyChanged() { if (this.state !== 'idle' && !this.leader) this.state = 'idle'; }
+  partyChanged() { if (this.state !== 'idle' && !this.leader) this.stop('idle'); }   // losing the lead also tells the server
 
   // ---------------------------------------------------------------- frame
   /** Re-place the level/member boxes over the canvas, only when the window or the canvas' width moved. */
@@ -152,13 +149,13 @@ export class PartySearchWin extends Win {
       return;
     }
     if (this.tab !== 1) return;
-    const hit = (x, y) => lx >= x - 2 && lx < x + 80 && ly >= y - 2 && ly < y + 13;
+    const hit = (x, y, w = 80) => lx >= x - 2 && lx < x + w && ly >= y - 2 && ly < y + 13;
     const flip = (bits, on) => { for (const b of bits) { if (on) this.bits.add(b); else this.bits.delete(b); } sfx.play('UI/BtMouseClick'); };
     if (hit(18, 152)) { flip(ALL_BITS, this.bits.size !== ALL_BITS.length); return; }
-    for (const [bx, by, , , jobs] of GROUPS) {
+    for (const [bx, by, bw, , jobs] of GROUPS) {
       const x = JOBS.x + bx, y = JOBS.y + by;
-      if (hit(x + 4, y + 3)) { flip(jobs.map(([b]) => b), !jobs.every(([b]) => this.bits.has(b))); return; }
-      for (let i = 0; i < jobs.length; i++) if (hit(x + 4, y + 21 + i * ROW)) { flip([jobs[i][0]], !this.bits.has(jobs[i][0])); return; }
+      if (hit(x + 4, y + 3, bw - 4)) { flip(jobs.map(([b]) => b), !jobs.every(([b]) => this.bits.has(b))); return; }
+      for (let i = 0; i < jobs.length; i++) if (hit(x + 4, y + 21 + i * ROW, bw - 4)) { flip([jobs[i][0]], !this.bits.has(jobs[i][0])); return; }
     }
   }
 }
