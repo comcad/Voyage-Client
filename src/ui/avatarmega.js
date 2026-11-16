@@ -27,7 +27,10 @@ export class AvatarBanner {
     await as.preload([...frames(art), ...allCanvases(helper?.AvatarMegaphone?.name), ...lookCanvases(look, [look.standAction()])]);
     if (seq !== this.seq) return;
     const name = EMOTES[(Number(info.emotion) || 0) - 1];
-    this.cur = { ...a, art: frames(art), look, expr: name ? { name, frame: 0, t: 0 } : null, names: helper?.AvatarMegaphone?.name, at: performance.now(), out: null };
+    // compose() and the name width do not change while the banner is up, so build them once here
+    const expr = name ? { name, frame: 0, t: 0 } : null;
+    const parts = look.compose(look.standAction(), 0, expr);
+    this.cur = { ...a, art: frames(art), look, expr, parts, nameW: null, names: helper?.AvatarMegaphone?.name, at: performance.now(), out: null };
   }
   /** Slides the one shown out, and drops one still loading. */
   clear() { this.seq = (this.seq || 0) + 1; if (this.cur && !this.cur.out) this.cur.out = performance.now(); }
@@ -42,11 +45,9 @@ export class AvatarBanner {
     const x = Math.round(UI_W - W * inK + W * outK), y = 0;
     const f = frameAt(c.art, now - c.at), bg = f && as.image(f);
     if (bg) ctx.drawImage(bg, x, y);
-    drawParts(ctx, as, c.look.compose(c.look.standAction(), 0, c.expr), x + 82, y + 85, false);
-    ctx.save(); ctx.font = '12px Arial, sans-serif';
-    const nw = ctx.measureText(c.name).width;
-    ctx.restore();
-    const wide = nw > 69, tag = as.image(c.names?.[wide ? 1 : 0]);
+    drawParts(ctx, as, c.parts, x + 82, y + 85, false);
+    if (c.nameW == null) { ctx.save(); ctx.font = '12px Arial, sans-serif'; c.nameW = ctx.measureText(c.name).width; ctx.restore(); }
+    const wide = c.nameW > 69, tag = as.image(c.names?.[wide ? 1 : 0]);
     if (tag) ctx.drawImage(tag, x + (wide ? 3 : 48), y + 84);
     uiText(ctx, c.name, x + 78, y + 85, { color: '#fff', size: 12, align: 'center' });
     c.lines.forEach((l, k) => uiText(ctx, l || '', x + 124, y + 14 + k * 18, { color: '#000', size: 12 }));
