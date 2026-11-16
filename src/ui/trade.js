@@ -40,17 +40,17 @@ export class TradeWin extends Win {
     this.button(mgr.W.Messenger.BtEnter, 490, 244, () => this.sendChat());
     this.button(mgr.B.BtClaim, 537, 242, () => {});
     this.chat = new TextField(mgr.game.statusBar.layer, 0, 0, 190, 14, { max: 70, color: '#000' });
+    this.field = this.chat;   // textFields(): a question box over the room hides it and takes the keyboard
     this.chat.el.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter') this.sendChat();
       else if (e.key === 'Escape') this.chat.el.blur();
     });
   }
-  frames() { return [...super.frames()]; }
   /** The line, if any, goes through the chat checks; the box is cleared. */
   sendChat() {
     const t = this.chat.value;
-    if (!t) return;
+    if (!t.trim()) return;   // a line of spaces is not a line
     this.chat.value = '';
     this.g.roomChat?.(t);
     this.chat.el.focus();
@@ -64,13 +64,21 @@ export class TradeWin extends Win {
   partnerConfirmed() { this.confirmed[1] = true; this.say(`${this.partner?.name || 'Your partner'} has confirmed the trade.`, '#0047b3'); }
   say(text, color = '#000') { this.lines.push({ text, color }); if (this.lines.length > 60) this.lines.shift(); }
   ended(result) {
-    this.chat.remove();
+    this.over = true;   // the room is finished: a close from here must not send another EXIT
     this.mgr.close(this);
-    this.g.tradeWin = null;
     const t = RESULTS[result] || 'The trade has ended.';
     const ok = result === 7 || result === 1;
     this.g.hud.message(t, ok ? '#9fe07a' : '#ff9e9e');
     if (!ok && result !== 2) this.mgr.notice(t);
+  }
+  /**
+   * Any close that did not come through `ended` (the Cash Shop's SET_CASH_SHOP closes every window with a plain
+   * `close(w)`): drop the chat element, let go of the game's handle, and tell the server the room is over.
+   */
+  onClose() {
+    this.chat.remove();
+    if (this.g.tradeWin === this) this.g.tradeWin = null;
+    if (!this.over) this.g.net?.tradeExit();
   }
 
   // ---------------------------------------------------------------- your actions
@@ -78,7 +86,8 @@ export class TradeWin extends Win {
   async offer(tab, pos) {
     const it = this.g.inventory?.[tab]?.[pos];
     const slot = this.nextSlot();
-    if (!it || !slot || this.confirmed[0]) return;
+    if (!it || this.confirmed[0]) return;
+    if (!slot) { this.mgr.notice("The trade window's slots are full."); return; }   // nine offers placed: say so
     if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
     let qty = 1;
     if (tab !== 1 && it.quantity > 1) {
@@ -91,7 +100,7 @@ export class TradeWin extends Win {
     if (this.confirmed[0]) return;
     const max = this.g.meso || 0;
     const v = await this.mgr.askNumber(`How many mesos will you offer?\n(0 ~ ${max.toLocaleString('en-US')})`, 0, 0, max);
-    if (v !== null) this.g.net?.tradeMeso(v);
+    if (v) this.g.net?.tradeMeso(v);   // 0 is not an offer: asking one out would echo an unchanged state
   }
   confirm() {
     if (this.confirmed[0] || !this.partner) return;
