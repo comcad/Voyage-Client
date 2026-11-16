@@ -110,9 +110,14 @@ export class MedalWin extends Win {
     const first = t > 0 && this.rows().find((r) => r.kind === 'medal');   // a category picks its first medal
     if (first) this.pick(first);
   }
-  /** Picks a medal: the panel there shows it, or one slides out with it. */
+  /**
+   * Picks a medal: the panel there shows it, or one slides out with it. A pick while the panel is sliding away
+   * brings it back - without this the close's countdown finishes in draw(), nulls the fresh selection and the
+   * medal unpicks itself (draw's `dLeft < 0` teardown keeps `did`, not `sel`).
+   */
   pick(m) {
     this.sel = m.id;
+    if (this.dAlive && !this.dOpen) this.slidePanel();
     if (this.dAlive) this.fill(); else this.showPanel(true);
   }
   fill() { this.did = this.sel; this.dfirst = 0; this.desc = null; }
