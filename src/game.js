@@ -3013,7 +3013,7 @@ export class Game {
       return { speed: Math.min(190, speed) / 100, jump: Math.min(123, jump) / 100 };
     }
     // a map that holds your speed / jump sets them in place of 100 plus your equipment's, and may lower the speed cap
-    const pct = (k, max) => Math.max(80, Math.min(max, (this.forced(k) || 100 + this.equipStat(k)) + buff(k))) / 100, top = this.forced('speedMax') || 140;
+    const pct = (k, max) => Math.max(80, Math.min(max, this.forced(k, 100 + this.equipStat(k)) + buff(k))) / 100, top = this.forced('speedMax', 140);
     const slow = (this.diseases || []).find((d) => d.skill === SLOW);   // Slow: down to its x%
     return { speed: slow ? Math.min(pct('speed', top), (slow.x || 80) / 100) : pct('speed', top), jump: pct('jump', 123) };
   }
@@ -4987,7 +4987,8 @@ export class Game {
   }
 
   watk() {
-    if (this.forced('watk')) return this.forced('watk');
+    const forcedWatk = this.forced('watk', null);
+    if (forcedWatk !== null) return forcedWatk;
     let w = 0;
     for (const it of Object.values(this.inventory?.equipped || {})) w += it.watk || 0;
     return w;
@@ -8417,13 +8418,14 @@ export class Game {
   totalStat(k) {
     const base = this.stats?.[k] || 0, now = Date.now();
     const mw = Math.max(0, ...(this.buffs || []).filter((b) => b.mapleWarrior && b.until > now).map((b) => b.mapleWarrior));
-    return (this.forced(k) || base + this.equipStat(k)) + Math.floor((base * mw) / 100);
+    return this.forced(k, base + this.equipStat(k)) + Math.floor((base * mw) / 100);
   }
   /** A stat the map holds you to (FORCED_STAT_SET), or 0. */
-  forced(k) { return this.forcedStats?.[k] || 0; }
+  /** A stat the map holds you to, or `d` when it holds none. A held 0 is a value, not the absence of one. */
+  forced(k, d = 0) { const v = this.forcedStats?.[k]; return v === undefined ? d : v; }
   /** While the map holds your stats, AP and equipment can't change: the refusal, shown, or false. */
   forcedRefusal(what) {
-    if (!this.forcedStats || !Object.values(this.forcedStats).some((v) => v)) return false;
+    if (!this.forcedStats || !Object.keys(this.forcedStats).length) return false;   // held at 0 is still held
     this.windows.notice(`You cannot change your ${what} on this map.`);
     return true;
   }
@@ -8447,13 +8449,13 @@ export class Game {
     const ms = masterySkills(Math.floor(this.weaponId() / 10000) % 100, ranged, 0, job);
     const mastery = (ms?.first || []).map((id) => this.passive(id, 'x')).find((v) => v) || 0;
     const passives = [3000000, ...Game.BEGINNER_PASSIVES].reduce((a, id) => a + this.passive(id, 'x'), 0);
-    return this.forced('acc') || base + this.equipStat('acc') + this.passive(this.blessingId(), 'z') + mastery + passives;
+    return this.forced('acc', base + this.equipStat('acc') + this.passive(this.blessingId(), 'z') + mastery + passives);
   }
   /** Avoid without buffs: LUK / 2 + DEX / 4 (Brawlers DEX x 1.5, Gunslingers DEX / 8), the equipment's, Blessing's z, the beginner passives' y. */
   avoidability() {
     const job = this.stats?.job || 0, dex = this.totalStat('dex'), luk = this.totalStat('luk'), branch = Math.floor(job / 10);
     const base = Math.trunc(luk / 2) + (branch === 51 ? Math.floor(dex * 1.5) : Math.trunc(dex / (branch === 52 ? 8 : 4)));
-    return this.forced('avoid') || base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0);
+    return this.forced('avoid', base + this.equipStat('avoid') + this.passive(this.blessingId(), 'z') + Game.BEGINNER_PASSIVES.reduce((a, id) => a + this.passive(id, 'y'), 0));
   }
   /** A stat request (AP): one at a time, 500ms apart, while alive; false when it can't go yet. */
   sendStatRequest(send) {
@@ -8474,12 +8476,12 @@ export class Game {
     const shield = this.inventory?.equipped?.[-10], shieldMastery = [1110001, 1210001, 4210000].map((id) => this.passive(id, 'x')).find((v) => v) || 100;
     const wdef = eq('wdef') - (shield?.wdef || 0) + Math.trunc(((shield?.wdef || 0) * shieldMastery) / 100);
     const blessing = (k) => this.passive(this.blessingId(), k), int = this.totalStat('int');
-    const { speed, jump } = this.statSpeedJump(), f = (k) => this.forced(k);
+    const { speed, jump } = this.statSpeedJump(), f = (k, d) => this.forced(k, d);
     return {
       attack: this.statAttack(),
-      wdef: [cap(f('wdef') || wdef, 1999), this.buffValue('wdef')],
-      matk: [cap(f('matk') || int + eq('matk') + blessing('y'), 1999), this.buffValue('matk')],
-      mdef: [cap(f('mdef') || int + eq('mdef'), 1999), this.buffValue('mdef')],
+      wdef: [cap(f('wdef', wdef), 1999), this.buffValue('wdef')],
+      matk: [cap(f('matk', int + eq('matk') + blessing('y')), 1999), this.buffValue('matk')],
+      mdef: [cap(f('mdef', int + eq('mdef')), 1999), this.buffValue('mdef')],
       acc: [cap(this.accuracy(), 999), this.buffValue('acc')],
       avoid: [cap(this.avoidability(), 999), this.buffValue('avoid')],
       hands: [this.totalStat('dex') + this.totalStat('luk') + int + eq('hands'), this.buffValue('hands')],
@@ -8507,7 +8509,7 @@ export class Game {
    * a negative Speed buff counts as it is); Slow sets the speed outright.
    */
   statSpeedJump() {
-    const now = Date.now(), live = (this.buffs || []).filter((b) => b.until > now), top = this.forced('speedMax') || 140;
+    const now = Date.now(), live = (this.buffs || []).filter((b) => b.until > now), top = this.forced('speedMax', 140);
     const mb = live.find((b) => b.morph), morph = mb && this.morphInfo(mb.morph);
     if (morph && (!morph.superman || morph.hide)) return { speed: Math.min(Math.max(morph.speed, 80), top), jump: Math.min(Math.max(morph.jump, 100), 123) };
     const worn = this.inventory?.equipped || {}, info = (s) => this.windows?.info?.(worn[s]?.id) || {};
@@ -8522,8 +8524,8 @@ export class Game {
     const riding = !!this.riding, job = this.stats?.job || 0;
     const equip = (k) => Object.entries(worn).reduce((t, [slot, it]) => t + ([-18, -19, -20].includes(Number(slot)) && !riding ? 0 : PET_WEAR_PARTS.includes(-slot % 100) ? 0 : it[k] || 0), 0);
     const thrust = [311, 312].includes(job) ? 3110000 : [321, 322].includes(job) ? 3210000 : job >= 1310 && job <= 1312 ? 13100004 : 0;
-    const baseSpeed = Math.min(Math.max(this.forced('speed') || 100 + equip('speed') + (thrust ? this.passive(thrust, 'speed') : 0), 100), top);
-    const baseJump = Math.max(100, Math.min(123, this.forced('jump') || 100 + equip('jump')));
+    const baseSpeed = Math.min(Math.max(this.forced('speed', 100 + equip('speed') + (thrust ? this.passive(thrust, 'speed') : 0)), 100), top);
+    const baseJump = Math.max(100, Math.min(123, this.forced('jump', 100 + equip('jump'))));
     const sb0 = live.findLast((b) => b.speed)?.speed || 0, sb = sb0 < 0 ? sb0 : Math.max(dash.speed, sb0);
     const jb = Math.max(dash.jump, ...live.filter((b) => b.jump).map((b) => b.jump), 0);
     const slow = (this.diseases || []).find((d) => d.skill === SLOW);
