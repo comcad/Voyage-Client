@@ -79,9 +79,12 @@ export class ChannelWin extends Win {
 /**
  * GameOpt backgrnd 158x284: 12 rows (WHISPER .. FAMILY INVITE) whose ALLOW column is x 88-150,
  * row centres every 18.2px from y 40. Each row gets a Basic.img/CheckBox at its right end.
- * The choices are kept in this browser; they take effect as those features are added. A click applies at once;
- * OK (Basic.img/BtOK2 at 34, 262) keeps them, Cancel (BtCancel2 at 84, 262) or Escape puts back what they were
- * when the window opened.
+ * The choices are kept in this browser. A click applies at once; OK (Basic.img/BtOK2 at 34, 262) keeps them,
+ * Cancel (BtCancel2 at 84, 262) or Escape puts back what they were when the window opened.
+ * Every switch but GAME INVITE has a reader: WHISPER, CHAT INVITE, TRADE REQUEST, PARTY INVITE, PARTY SEARCH,
+ * GUILD INVITE, ALLIANCE INVITE and FAMILY INVITE are enforced through game.optionAllowed, and the three group-chat
+ * rows — FRIENDS (buddy chat), GUILD CHAT and ALLIANCE (stored as allianceTournament) — through game.chatAllowed.
+ * GAME INVITE is kept without a reader until game invites exist.
  */
 const GAME_ROWS = ['whisper', 'friends', 'chatInvite', 'tradeRequest', 'partyInvite', 'partySearch', 'gameInvite',
   'guildChat', 'guildInvite', 'allianceTournament', 'allianceInvite', 'familyInvite'];
@@ -126,7 +129,7 @@ export class GameOptWin extends Win {
  * SysOpt backgrnd 299x366: ten rows every 30px, centres from y 46, each with its label box at x 9-60:
  *   PICTURE QUALITY  slider NORMAL .. BEST          SCREEN SHOT   where pictures go (ScrLk / PrtSc take one)
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
- *   HP / MP ALERT    slider of 20 steps, DO NOT ALERT and then 5% .. 95%    SHAKE UP      check box
+ *   HP / MP ALERT    slider DO NOT ALERT .. 100%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
  * Five rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
  * under them: SCREEN SIZE (the game's resolution, a combo box), FRAME RATE (a combo box: VSync draws a frame on every
@@ -138,6 +141,8 @@ export class GameOptWin extends Win {
  * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
  * the art, 150px lower with the added rows.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
+ * SCREEN SHOT is informational: its list holds only the one entry the save path already uses (the browser's
+ * Downloads folder, through an anchor click), so the row has no choice to make.
  */
 const ROW_Y = (i) => 46 + i * 30;
 const SLIDERS = {
@@ -185,8 +190,12 @@ export class SysOptWin extends Win {
     this.drag = null; this.open = null; this.hover = -1;
     this.button(mgr.B.BtOK2, 194, WIN_H - 24, () => mgr.close(this));
     this.button(mgr.B.BtCancel2, 244, WIN_H - 24, () => { this.revert(); mgr.close(this); });
-    // ScrLk (as the art says) or PrtSc saves a picture of the game
-    addEventListener('keyup', (e) => { if (e.code === 'ScrollLock' || e.code === 'PrintScreen') screenshot(this.g); });
+    // ScrLk (as the art says) or PrtSc saves a picture of the game. The listener is deliberately document-level and
+    // never removed: this window is built once at boot and lives for the session, and the keys are outside the game's
+    // keyboard pipeline (src/game.js), so no window state gates them. The handler is kept on the instance so it could
+    // be removed if that ever changes.
+    this.onHotkey = (e) => { if (e.code === 'ScrollLock' || e.code === 'PrintScreen') screenshot(this.g); };
+    addEventListener('keyup', this.onHotkey);
   }
   frames() {
     const B = this.mgr.B;
@@ -216,7 +225,6 @@ export class SysOptWin extends Win {
     if (k === 'mouse') return 0.5;
     if (k === 'uiScale') { const max = maxUiScale(); return max > 1 ? ((this.pendingScale ?? UI_SCALE) - 1) / (max - 1) : 0; }
     if (k === 'zoom') return ((Number(settings.zoom) || 1) - 1) / (ZOOM_MAX - 1);
-    if (k === 'hpAlert' || k === 'mpAlert') return Math.min(1, (Number(settings[k]) || 0) / 0.95);   // step 19 at the right end
     return settings[k];
   }
   off(k) { return SLIDERS[k].disabled || this.muted(k) || (k === 'uiScale' && maxUiScale() <= 1); }
@@ -225,7 +233,6 @@ export class SysOptWin extends Win {
     else if (k === 'zoom') { settings.zoom = Math.round((1 + v * (ZOOM_MAX - 1)) * 10) / 10; saveSettings(); }
     else if (k === 'bgm') music.setVolume(v);
     else if (k === 'sound') sfx.setVolume(v);
-    else if (k === 'hpAlert' || k === 'mpAlert') { settings[k] = (Math.round(v * 19) * 5) / 100; saveSettings(); }
     else { settings[k] = k === 'quality' ? v : Math.round(v * 20) / 20; saveSettings(); }
   }
   muted(k) { return k === 'bgm' ? music.muted : k === 'sound' ? sfx.muted : false; }
@@ -386,7 +393,7 @@ export class SysOptWin extends Win {
 }
 
 /** A PNG of the game as it is on screen, saved like the client's own screenshots (MapleYYYYMMDD_HHMMSS). */
-export function screenshot(game) {
+function screenshot(game) {
   const c = game?.canvas;
   if (!c) return;
   const d = new Date(), p = (n) => String(n).padStart(2, '0');
