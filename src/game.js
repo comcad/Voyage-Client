@@ -8539,14 +8539,16 @@ export class Game {
     const seen = ent._orbs || (ent._orbs = { n: 0, born: [] });
     for (let i = seen.n + 1; i <= orbs; i++) seen.born[i] = now;
     seen.n = orbs;
-    if (!orbs) return;
-    if (!this.orbArt) {
-      this.orbArt = 'loading';
+    // the combo is spent: forget when each orb was born, so the next build starts its fade from the start
+    if (!orbs) { if (seen.born.length) seen.born.length = 0; return; }
+    if (!this.orbArt && !this.orbLoading) {
+      // one load at a time; a load that fails leaves the art undefined, so the next drawn orb retries it
+      this.orbLoading = true;
       Promise.all([this.assets.json('Skill/111.img'), this.assets.json('Skill/112.img')]).then(async ([a, b]) => {
         const art = [a?.skill?.['1111002']?.state, b?.skill?.['1120003']?.state];
         await this.assets.preload(art.flatMap((st) => [1, 2, 3, 4, 5].map((k) => st?.[k]).filter(Boolean)));
         this.orbArt = art;
-      });
+      }).catch(() => {}).finally(() => { this.orbLoading = false; });
     }
     if (!Array.isArray(this.orbArt)) return;
     const turn = (-2 * Math.PI * (now % ORB_TURN_MS)) / ORB_TURN_MS, cx = sx, cy = sy - 35;
@@ -9687,7 +9689,9 @@ export class Game {
   }
   /** 3s after the last count, an Aran's combo ends: back to 0 and CANCEL_BUFF for Combo Ability (the tutorial's at 2000). */
   updateAranCombo(dt) {
-    for (const p of [...(this.comboArt?.parts || []), ...(this.comboCommands || [])]) p.anim.update(dt * 1000);
+    // both lists, without building a throwaway array of them every frame
+    for (const p of this.comboArt?.parts || []) p.anim.update(dt * 1000);
+    for (const p of this.comboCommands || []) p.anim.update(dt * 1000);
     if (!(this.aranCombo > 0) || performance.now() - (this.aranComboAt ?? 0) <= 3000) return;
     const skill = (this.stats?.job || 0) === 2000 ? 20000017 : 21000000;
     if (!((this.skills?.levels?.[skill]?.level || 0) > 0)) return;
