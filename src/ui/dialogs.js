@@ -587,7 +587,9 @@ export class UtilBox extends Win {
     if (this.kind === 'whisper' || this.kind === 'text') { const v = this.field.value.trim(); this.done(ok && (v || this.opts.empty) ? v : null); return; }
     if (this.kind === 'buddy') { const v = this.field.value.trim(); this.done(ok && v ? { name: v, group: this.group } : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
-    const v = Math.floor(Number(this.field.value));
+    const raw = this.field.value.trim();
+    if (!/^\d+$/.test(raw)) { this.done(null); return; }   // an empty field is not a quantity (Number('') is 0)
+    const v = Math.floor(Number(raw));
     this.done(ok && Number.isFinite(v) ? Math.max(this.opts.min ?? 1, Math.min(this.opts.max ?? v, v)) : null);
   }
   key(e) { if (e.key === 'Enter') this.finish(true); else if (e.key === 'Escape') this.finish(false); }
