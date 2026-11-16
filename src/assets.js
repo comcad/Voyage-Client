@@ -15,10 +15,14 @@ export const pad = (n, len) => String(n).padStart(len, '0');
 export const isCanvas = (v) => v !== null && typeof v === 'object' && typeof v._canvas === 'string';
 
 /** Numeric children of a node in order ("0", "1", ...). */
+const FRAMES = new WeakMap();   // a node's frame list never changes, and these are read every frame
 export function frames(node) {
   if (!node || typeof node !== 'object') return [];
-  const out = [];
+  let out = FRAMES.get(node);
+  if (out) return out;
+  out = [];
   for (let i = 0; node[i] !== undefined; i++) out.push(node[i]);
+  FRAMES.set(node, out);
   return out;
 }
 
