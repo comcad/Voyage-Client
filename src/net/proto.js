@@ -239,6 +239,8 @@ export function readMovement(r) {
 }
 
 export function writeMovement(w, moves) {
+  // the count is one byte: a longer list would be silently truncated to its low 8 bits and the rest lost
+  if (moves.length > 255) throw new RangeError(`movement list of ${moves.length} exceeds the one-byte count`);
   w.byte(moves.length);
   for (const m of moves) {
     w.byte(m.cmd);
@@ -252,6 +254,8 @@ export function writeMovement(w, moves) {
       case 15:
         w.short(m.x).short(m.y).short(m.vx).short(m.vy).short(m.fh).short(m.ofh).byte(m.stance).short(m.duration); break;
       case 10: w.byte(m.equip); break;
+      case 14: w.zero(9); break;   // the reader skips 9 here: emit them, or every later move is misread
+      case 21: w.zero(3); break;
       default: break;
     }
   }
