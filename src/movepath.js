@@ -7,8 +7,8 @@
  * and the next path curves on from there at that element's speed.
  */
 
-/** Round half away from zero, as the client rounds a drawn position. */
-export const roundAway = (v) => (v >= 0 ? Math.trunc(v + 0.5) : Math.trunc(v - 0.499999999));
+/** Round half up, as the client draws a drawn position (Math.round by another name: kept for the name at the call sites). */
+export const roundAway = Math.round;
 /**
  * The same onto a grid of 1/grid px: the canvas's own pixels (view.js PIXEL_SCALE), whole game pixels at scale 1 and
  * finer above it, the steps the camera and your own character move in. On whole game pixels, someone walking beside
@@ -24,7 +24,7 @@ export function pathKeys(moves, from) {
   const keys = [];
   let px = from.x, py = from.y;
   for (const m of moves) {
-    if (m.cmd === 10 || m.cmd === 14 || m.cmd === 21) continue;
+    if (m.cmd === 10) continue;   // an equip change: no position of its own (14 and 21 are gone before this: never elements)
     const abs = m.x !== undefined;
     const k = { type: m.cmd, x: abs ? m.x : px, y: abs ? m.y : py, vx: (abs ? m.vx : m.rx) || 0, vy: (abs ? m.vy : m.ry) || 0, stance: m.stance, fh: m.fh || 0, dur: Math.max(0, m.duration || 0) };
     keys.push(k); px = k.x; py = k.y;
@@ -104,7 +104,7 @@ export class CharPath {
   }
   /**
    * Plays dt seconds on the 30ms clock, a tick ahead of the screen, and returns where to draw: between the last two
-   * ticks, rounded half away from zero onto a 1/grid px grid (roundTo).
+   * ticks, rounded half up onto a 1/grid px grid (roundTo).
    */
   play(dt, pose, grid = 1) {
     this.acc += dt * 1000;
