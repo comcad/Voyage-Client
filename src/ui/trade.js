@@ -59,8 +59,9 @@ export class TradeWin extends Win {
   // ---------------------------------------------------------------- server events
   // the look comes with the trade packet, so a hidden GM partner still shows up in the room
   partnerJoined(name, look) { this.partner = { name, look }; this.say(`${name} has entered the trade.`, '#555'); }
-  setItem(side, slot, item) { this.items[side][slot] = item; this.confirmed = [false, false]; }
-  setMeso(side, meso) { this.meso[side] = meso; this.confirmed = [false, false]; }
+  // (an offer changing leaves both confirm marks as they are: once confirmed, your own offer can't change)
+  setItem(side, slot, item) { this.items[side][slot] = item; }
+  setMeso(side, meso) { this.meso[side] = meso; }
   partnerConfirmed() { this.confirmed[1] = true; this.say(`${this.partner?.name || 'Your partner'} has confirmed the trade.`, '#0047b3'); }
   say(text, color = '#000') { this.lines.push({ text, color }); if (this.lines.length > 60) this.lines.shift(); }
   ended(result) {
