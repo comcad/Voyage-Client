@@ -7,7 +7,8 @@
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - bottom left, over the bar's height: the last chat lines, fading out when the chat is quiet (they take no touches,
- *     so the touch stick under them still works), and a chat button that opens a line to type on, with the chat
+ *     so the touch stick under them still works); a little up-arrow tab out of the status line's top opens a line to
+ *     type on, with the chat
  *     target beside it, centred right over the status line, with the whole log over it.
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
  * Game.toggleMenu, so nothing behaves differently from the bar; only the look and the place differ.
@@ -44,7 +45,7 @@ const ICON = {
   star: svg('<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.5 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>'),
   scroll: svg('<path d="M7 4h11v13a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-1h11v1a3 3 0 0 0 3 3"/><path d="M7 4a2 2 0 0 0-2 2v10M10 9h5M10 12h5"/>'),
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
-  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M4 5h16v10H9l-5 4z"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
 };
 
@@ -100,7 +101,15 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-chat { position: absolute; left: 4px; bottom: calc(38px + env(safe-area-inset-bottom));
   width: min(34%, 280px); display: flex; align-items: flex-end; gap: 5px; }
 .mhud.mh-saying .mh-chat { left: 50%; transform: translateX(-50%); bottom: calc(64px + env(safe-area-inset-bottom)); width: var(--mh-line-w, min(64%, 540px)); }
-.mhud.mh-saying .mh-chat .mh-chatbtn { display: none; }
+/* the chat's handle: a little tab with an up arrow standing out of the status line's top, in its middle */
+.mhud .mh-st-tab { position: absolute; left: 50%; top: -15px; transform: translateX(-50%); width: 40px; height: 15px; display: grid; place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.13); border-bottom: 0; border-radius: 10px 10px 0 0; color: #e9eefb; cursor: pointer;
+  background: linear-gradient(180deg, rgba(30, 41, 70, 0.8), rgba(18, 25, 46, 0.72)); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.22); transition: transform 0.15s ease; }
+.mhud .mh-st-tab::before { content: ''; position: absolute; inset: -12px -12px 0; }   /* a finger-sized place to tap */
+.mhud .mh-st-tab svg { width: 12px; height: 12px; margin-top: 1px; pointer-events: none; }
+.mhud .mh-st-tab:active { transform: translateX(-50%) translateY(-2px); color: #ffd978; }
+.mhud.mh-saying .mh-st-tab, .mhud.mh-sheeting .mh-st-tab { display: none; }
 .mhud .mh-log { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; max-height: 5.6em;
   overflow: hidden; font-size: 10px; line-height: 1.25; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
 .mhud .mh-log.mh-quiet { opacity: 0; pointer-events: none; }
@@ -108,8 +117,6 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
   opacity: 1; pointer-events: auto; -webkit-overflow-scrolling: touch; }
 .mhud .mh-log div { overflow-wrap: anywhere; }
 .mhud .mh-log div.mh-tag { padding: 0 5px; border-radius: 4px; text-shadow: none; }
-.mhud .mh-chat .mh-btn { flex: none; pointer-events: auto; width: 26px; height: 26px; }
-.mhud .mh-chat .mh-btn svg { width: 14px; height: 14px; }
 .mhud .mh-say { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(34px + env(safe-area-inset-bottom));
   width: var(--mh-line-w, min(64%, 540px)); display: none; align-items: center; gap: 5px; padding: 3px 4px; border-radius: 14px; pointer-events: auto; }
 .mhud .mh-say.mh-open { display: flex; }
@@ -141,6 +148,7 @@ export class MobileHud {
     el.style.pointerEvents = 'none';   // only its panels take touches; the rest falls through to the game
     el.innerHTML = `
       <div class="mh-st mh-glass">
+        <div class="mh-st-tab" title="Chat">${ICON.up}</div>
         <div class="mh-id"><span class="mh-lv">Lv. 1</span><span class="mh-nm"></span><span class="mh-jb"></span></div>
         <div class="mh-bar mh-hp"><i></i><span><b>HP</b><em></em></span></div>
         <div class="mh-bar mh-mp"><i></i><span><b>MP</b><em></em></span></div>
@@ -148,7 +156,7 @@ export class MobileHud {
       </div>
       <div class="mh-act mh-glass"></div>
       <div class="mh-menu mh-glass" data-scroll="y"></div>
-      <div class="mh-chat"><div class="mh-btn mh-glass mh-chatbtn" title="Chat">${ICON.chat}</div><div class="mh-log mh-quiet" data-scroll="y"></div></div>
+      <div class="mh-chat"><div class="mh-log mh-quiet" data-scroll="y"></div></div>
       <div class="mh-tlist mh-glass"></div>
       <div class="mh-say mh-glass"><span class="mh-tgt"></span><input type="text" maxlength="70" enterkeyhint="send" autocomplete="off" autocapitalize="off"
         spellcheck="false"><button class="mh-send" type="button">Send</button><div class="mh-btn mh-closebtn" title="Close">${ICON.close}</div></div>`;
@@ -181,7 +189,7 @@ export class MobileHud {
       P.menu.append(row);
     }
     // chat
-    this.tap(el.querySelector('.mh-chatbtn'), () => this.openSay());
+    this.tap(el.querySelector('.mh-st-tab'), () => this.openSay());
     this.tap(P.tgt, () => this.toggleTargets());
     this.tap(el.querySelector('.mh-send'), () => this.send());
     this.tap(el.querySelector('.mh-closebtn'), () => this.closeSay());
