@@ -12,11 +12,11 @@ const STAY = 0, FOLLOW = 1;
 /** Ranger / Sniper / Wind Archer Puppet: monsters near it go after it instead of you. */
 export const PUPPETS = new Set([3111002, 3211002, 13111004]);
 export const PUPPET_RANGE = 421;     // the game server hands you the monsters within this of your puppet (distanceSq < 177777)
-const ATTACK_EVERY = 1.6;     // seconds between a summon's attacks (at least its attack animation)
+const ATTACK_EVERY = 3;     // seconds from a summon appearing, or from its last attack, to its next
 const SYNC_EVERY = 0.4;
 /** Octopus, Wrath of the Octopi and Gaviota: the summons that still attack while you are on a ladder or rope. */
 const LADDER_ATTACKERS = new Set([5211001, 5220002, 5211002]);
-/** Seconds from one attack to the next for the Octopus (3) and for Gaviota and Wrath of the Octopi (1.5). */
+/** The pirates' summons (their damage is worked out apart), with their own gaps: Gaviota and Wrath of the Octopi 1.5s. */
 const PIRATE_EVERY = { 5211001: 3, 5211002: 1.5, 5220002: 1.5 };
 /** Wrath of the Octopi picks attack1 or attack2 at random each time. */
 const WRATH = 5220002;
@@ -33,7 +33,7 @@ export class Summon {
     this.hitT = 0;
     this.facingRight = !(d.stance & 1);
     this.state = d.animated ? 'summoned' : 'idle';
-    this.frame = 0; this.frameT = 0; this.attackT = ATTACK_EVERY / 2; this.sendT = 0; this.lastSent = null;
+    this.frame = 0; this.frameT = 0; this.attackT = PIRATE_EVERY[d.skill] ?? ATTACK_EVERY; this.sendT = 0; this.lastSent = null;
     this.phase = Math.random() * Math.PI * 2; this.path = null; this.dying = false;
     this.node = null;
     game.skills?.ensure(d.skill).then(async (n) => {
@@ -174,9 +174,8 @@ export class Summon {
     const which = this.skill === WRATH && this.node.attack2 && Math.random() < 0.5 ? 'attack2' : 'attack1';
     const info = this.node[which].info, ld = this.g.skills.levelData(this.skill, this.level) || {};
     const mobs = this.targets(info, info?.mobCount || ld.mobCount || 1);   // the attack's own mobCount (Gaviota 3)
-    if (!mobs.length) { this.attackT = 0.25; return; }
-    const len = this.anim(which).reduce((t, f) => t + (f.delay || 100), 0) / 1000;
-    this.attackT = PIRATE_EVERY[this.skill] ?? Math.max(ATTACK_EVERY, len + 0.3);
+    if (!mobs.length) { this.attackT = 0; return; }   // looked for again every frame until one is in range
+    this.attackT = PIRATE_EVERY[this.skill] ?? ATTACK_EVERY;
     this.facingRight = mobs[0].x > this.x;
     this.play(which);
     const max = this.g.summonMaxDamage(this.skill, this.level);
