@@ -6,10 +6,9 @@
  *   - top left: the mini map (ui/mobileminimap.js);
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
- *   - bottom left, over the bar's height: the last chat lines, fading out when the chat is quiet (they take no touches,
- *     so the touch stick under them still works); a little up-arrow tab out of the status line's top opens a line to
- *     type on, with the chat
- *     target beside it, centred right over the status line, with the whole log over it.
+ *   - the chat, only while it is open: a little up-arrow tab out of the status line's top opens a line to type on,
+ *     with the chat target beside it, centred right over the status line, and the log over it; closed, nothing of the
+ *     chat shows but a gold dot on the tab when lines came in meanwhile.
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
  * Game.toggleMenu, so nothing behaves differently from the bar; only the look and the place differ.
  */
@@ -110,6 +109,11 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-st-tab svg { width: 12px; height: 12px; margin-top: 1px; pointer-events: none; }
 .mhud .mh-st-tab:active { transform: translateX(-50%) translateY(-2px); color: #ffd978; }
 .mhud.mh-saying .mh-st-tab, .mhud.mh-sheeting .mh-st-tab { display: none; }
+/* new lines while the chat is closed: a gold dot on the tab */
+.mhud .mh-st-tab.mh-unread::after { content: ''; position: absolute; top: 2px; right: 7px; width: 6px; height: 6px; border-radius: 50%;
+  background: #ffd25e; box-shadow: 0 0 6px rgba(255, 210, 94, 0.85); }
+/* the chat shows only while it is open */
+.mhud:not(.mh-saying) .mh-chat { display: none; }
 .mhud .mh-log { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; max-height: 5.6em;
   overflow: hidden; font-size: 10px; line-height: 1.25; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
 .mhud .mh-log.mh-quiet { opacity: 0; pointer-events: none; }
@@ -189,7 +193,8 @@ export class MobileHud {
       P.menu.append(row);
     }
     // chat
-    this.tap(el.querySelector('.mh-st-tab'), () => this.openSay());
+    this.tab = el.querySelector('.mh-st-tab');
+    this.tap(this.tab, () => this.openSay());
     this.tap(P.tgt, () => this.toggleTargets());
     this.tap(el.querySelector('.mh-send'), () => this.send());
     this.tap(el.querySelector('.mh-closebtn'), () => this.closeSay());
@@ -260,7 +265,10 @@ export class MobileHud {
     this.gauge(P.bars.ex, s.exp / need, `${((s.exp / need) * 100).toFixed(2)}%`, false);
     // the chat: new lines show it again; it fades CHAT_SHOW s after the last
     const lines = this.g.statusBar?.lines || [], last = lines[lines.length - 1] || null;
-    if (last !== this.seen) { this.seen = last; this.lastLineAt = performance.now(); this.drawLog(lines); }
+    if (last !== this.seen) {
+      this.seen = last; this.lastLineAt = performance.now(); this.drawLog(lines);
+      if (last && !P.say.classList.contains('mh-open')) this.tab.classList.add('mh-unread');
+    }
     const quiet = !this.logOpen && performance.now() - this.lastLineAt > CHAT_SHOW * 1000;
     P.log.classList.toggle('mh-quiet', quiet);
     // the chat target, as the bar's box names it (whispering: who to)
@@ -306,6 +314,7 @@ export class MobileHud {
   openSay(prefix = '') {
     const P = this.parts;
     P.say.classList.add('mh-open');
+    this.tab.classList.remove('mh-unread');
     this.el.classList.add('mh-saying');
     this.matchLine();
     if (!this.logOpen) this.toggleLog();
