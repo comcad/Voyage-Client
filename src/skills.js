@@ -39,6 +39,8 @@ const MAGIC_SKILLS = new Set([2201004, 2121006, 2111003, 12111005]);
 const isBowman = (id) => Math.floor(id / 1000000) % 10 === 3;
 const BOW_SWINGS = new Set([3101003, 3201003]);
 const SNIPE = 3221007;
+/** An Aran's hidden swings (Full Swing's and Over Swing's Double / Triple), by the skill whose level they take. */
+const HIDDEN_SWING_OF = { 21110007: 21110002, 21110008: 21110002, 21120009: 21120002, 21120010: 21120002 };
 /** Shots that need no ammo: Soul Blade, Shark Wave, Taunt, Shadow Meso, Vampire, Energy Orb. */
 export const NO_AMMO_SHOTS = new Set([11101004, 15111007, 4121003, 4221003, 4111004, 14101006, 5121002]);
 /**
@@ -120,7 +122,8 @@ export class SkillBook {
   }
   async ensure(id) { await this.book(Math.floor(id / 10000)); return this.node(id); }
 
-  level(id) { return this.levels[id]?.level || 0; }
+  /** (an Aran's hidden swings are at Full / Over Swing's level) */
+  level(id) { return HIDDEN_SWING_OF[id] ? this.level(HIDDEN_SWING_OF[id]) : this.levels[id]?.level || 0; }
   /** Only your own job's books (and the GM books, which only a GM has levels in) can be used. */
   owns(id) {
     const b = Math.floor(id / 10000);

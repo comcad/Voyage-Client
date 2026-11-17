@@ -608,6 +608,11 @@ const HEROS_WILLS = new Set([1121011, 1221012, 1321010, 2121008, 2221008, 232100
  */
 const SKILL_SWAPS = { 5001003: 5210000, 5211001: 5220002, 5211006: 5220011 }, SWAPPED_IN = new Set(Object.values(SKILL_SWAPS));
 /**
+ * Double and Triple Swing strike as Over Swing's hidden swings once it is learned, else Full Swing's: their own
+ * damage, reach, cost and poses, at Over / Full Swing's level.
+ */
+const ARAN_SWINGS = { 21000002: [[21120002, 21120009], [21110002, 21110007]], 21100001: [[21120002, 21120010], [21110002, 21110008]] };
+/**
  * How long after an attack's pose ends it can be used again (ms): Double Uppercut and Dragon Strike only after
  * striking something; Grenade from when it is thrown.
  */
@@ -6849,6 +6854,7 @@ export class Game {
   useSkill(id) {
     if (SWAPPED_IN.has(id)) return false;
     if (SKILL_SWAPS[id] && this.skills?.level(SKILL_SWAPS[id])) id = SKILL_SWAPS[id];
+    if (ARAN_SWINGS[id]) id = ARAN_SWINGS[id].find(([by]) => this.skills?.level(by) > 0)?.[1] ?? id;
     if (this.hasDisease(SEAL) && !HEROS_WILLS.has(id)) return false;   // sealed by a monster: only Hero's Will
     // morphed: a potion morph or the Oak Barrel (going in or out too) uses no skill; a transformation not these
     const mt = this.morphTpl();
