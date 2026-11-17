@@ -110,8 +110,12 @@ export class MapleCipher {
   /** @param version 83 for the client's send cipher, 0xFFFF-83 for the server's */
   constructor(iv, version) {
     this.iv = Uint8Array.from(iv);
+    this.raw = version & 0xffff;
     this.version = ((version >> 8) & 0xff) | ((version << 8) & 0xff00);
   }
+
+  /** Whether a received header is this cipher's: its first word with the IV's top half gives the version back. */
+  ownsHeader(h) { return (((this.iv[2] ^ h[0]) | ((this.iv[3] ^ h[1]) << 8)) & 0xffff) === this.raw; }
 
   header(length) {
     let iiv = this.iv[3] | (this.iv[2] << 8);

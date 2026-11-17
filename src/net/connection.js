@@ -73,6 +73,9 @@ export class Connection {
           continue;
         }
         if (left < 4) break;
+        // a header that isn't the server's for this IV (out of step, or not the server at all): the client drops
+        // the connection, and so does this
+        if (!this.recv.ownsHeader(buf.subarray(at, at + 4))) { at = buf.length; this.close(); break; }
         const len = MapleCipher.length(buf.subarray(at, at + 4));
         if (left < 4 + len) break;
         const body = buf.slice(at + 4, at + 4 + len);
