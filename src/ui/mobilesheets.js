@@ -33,7 +33,8 @@ const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', ski
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
 const CSS = `
-.mhud .mh-sheet { position: absolute; right: calc(6px + env(safe-area-inset-right)); top: 50px; bottom: calc(6px + env(safe-area-inset-bottom));
+/* under the buttons, at the screen's very right edge as they are */
+.mhud .mh-sheet { position: absolute; right: 4px; top: 50px; bottom: calc(6px + env(safe-area-inset-bottom));
   width: min(400px, 62%); display: none; flex-direction: column; pointer-events: auto; overflow: hidden; }
 .mhud .mh-sheet.mh-open { display: flex; }
 .mhud.mh-sheeting .mh-chat { display: none; }
@@ -97,8 +98,8 @@ const CSS = `
 .mhud .mh-li .mh-li-name { font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mhud .mh-li .mh-li-sub { font-size: 10px; color: rgba(225, 232, 248, 0.6); }
 .mhud .mh-li.mh-off .mh-li-name { color: rgba(225, 232, 248, 0.45); }
-.mhud .mh-qd { position: absolute; top: 50px; bottom: calc(6px + env(safe-area-inset-bottom)); right: calc(12px + env(safe-area-inset-right) + min(400px, 62%));
-  width: min(330px, calc(100% - min(400px, 62%) - 24px - env(safe-area-inset-left) - env(safe-area-inset-right))); display: flex; flex-direction: column;
+.mhud .mh-qd { position: absolute; top: 50px; bottom: calc(6px + env(safe-area-inset-bottom)); right: calc(10px + min(400px, 62%));
+  width: min(330px, calc(100% - min(400px, 62%) - 18px - env(safe-area-inset-left))); display: flex; flex-direction: column;
   opacity: 0; transform: translateX(56px) scale(0.98); transform-origin: right center; pointer-events: none;
   transition: transform 0.32s cubic-bezier(0.2, 0.85, 0.25, 1), opacity 0.22s ease; }
 .mhud .mh-qd.mh-open { opacity: 1; transform: none; pointer-events: auto; }

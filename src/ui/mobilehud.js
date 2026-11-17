@@ -68,7 +68,7 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-id { flex: none; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 /* a sheet open: up in the top-left strip beside the buttons, where the sheet leaves room for it whole */
 .mhud.mh-sheeting .mh-st { left: calc(6px + env(safe-area-inset-left)); top: 6px; bottom: auto; transform: none;
-  max-width: calc(100% - 262px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
+  max-width: calc(100% - 262px - env(safe-area-inset-left)); }
 .mhud.mh-sheeting .mh-st .mh-bar { width: clamp(62px, 9vw, 96px); }
 .mhud.mh-sheeting .mh-st .mh-jb { max-width: 80px; }
 .mhud .mh-lv { flex: none; font-weight: 800; font-size: 9.5px; color: #3a2400; background: linear-gradient(180deg, #ffe892, #f0b22e);

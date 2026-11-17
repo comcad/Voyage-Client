@@ -132,7 +132,7 @@ const CSS = `
 
 /* a trade */
 .mhud .mh-tr { position: absolute; left: calc(6px + env(safe-area-inset-left)); top: 6px; bottom: calc(6px + env(safe-area-inset-bottom)); z-index: 1;
-  width: min(340px, calc(100% - min(400px, 62%) - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)));
+  width: min(340px, calc(100% - min(400px, 62%) - 18px - env(safe-area-inset-left)));
   display: flex; flex-direction: column; gap: 6px; padding: 8px; pointer-events: auto; animation: mh-fade 0.2s ease; }
 .mhud.mh-trading .mh-mm, .mhud.mh-trading .mh-st { display: none; }
 .mhud .mh-tr-head { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 4px; }
