@@ -3763,6 +3763,7 @@ export class Game {
       }),
       direction: (path) => this.playDirection(path),
       lockUi: (on) => this.setUiLock(on),
+      warpUp: (free, idx) => this.warpUp(free, idx),
       objectStates: later((list) => { for (const { name, state } of list) this.setObjectState(name, state); }),
       energyCharge: (v) => { this.energy = v; this.energyOrb(); this.windows?.wins.energybar?.set(v); },
       aranCombo: (n) => this.setAranCombo(n),
@@ -6655,28 +6656,41 @@ export class Game {
       return;
     }
     sfx.play('Game/Portal');
-    if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) {
-      this.portalCooldown = 0.6;
-      const p = this.player, from = { x: Math.round(p.x), y: Math.round(p.y) };
-      const t = map.spawnPortal(portal.tn);
-      this.playTeleportEffect(from.x, from.y);
-      // for those watching: the portal (4), a tick there, then the jump (3) to 10px over the other one, which you
-      // fall from as after any move
-      const fhId = p.fh?.id || 0, stance = this.currentStance();
-      this.moveBuf.push({ cmd: 4, ...from, fh: fhId, stance, duration: 0 }, { cmd: 0, ...from, vx: 0, vy: 0, fh: fhId, stance, duration: 30 });
-      p.x = t.x; p.y = t.y - 10; p.vx = 0; p.vy = 0; p.fh = null; p.ladder = null; p.seat = null;
-      this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance, duration: 0 });
-      this.moveTotal += 30; this.movePos = { x: p.x, y: p.y }; this.wasAirborne = true; this.downOfh = 0;
-      this.touchedBoxPortal = map.boxPortalAt(p.x, p.y, 3) || null;
-      this.playTeleportEffect(p.x, p.y);
-      this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
-      return;
-    }
+    if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) { this.innerTeleport(portal, map.spawnPortal(portal.tn)); return; }
     this.portalCooldown = 0.5;
     this.fadeOut();
     this.after(3000, () => { if (this.fade?.dir === 'out' && !this.loading && this.map === map) this.fade = { dir: 'in', t0: performance.now() }; });
     if (!this.net) this.changeMap(portal.tm, { portal: portal.tn });
     else this.net.enterPortal(portal.pn);   // the server runs a portal's script, if it has one, from here too
+  }
+  /**
+   * The server moving you through a portal of this map (Mu Lung Dojo's way up, a stage cleared): the portal by its
+   * place among the map's portals, type 6 ones not counted, to the one it names as a portal within the map takes you
+   * (nothing when there is no such portal); a non-zero `free` also lets go of the wait on your last request.
+   */
+  warpUp(free, idx) {
+    if (free) this.releaseExclusive();
+    const map = this.map, portal = map?.portals.filter((p) => p.pt !== 6)[idx];
+    const t = portal && map.portals.find((p) => p.pn === portal.tn);
+    if (!t) return;
+    this.flushMovement();
+    this.innerTeleport(portal, t);
+  }
+  /** Through `portal` to `t` within the map: moved at once, sparkling at both ends, and can go again after 600ms. */
+  innerTeleport(portal, t) {
+    this.portalCooldown = 0.6;
+    const map = this.map, p = this.player, from = { x: Math.round(p.x), y: Math.round(p.y) };
+    this.playTeleportEffect(from.x, from.y);
+    // for those watching: the portal (4), a tick there, then the jump (3) to 10px over the other one, which you
+    // fall from as after any move
+    const fhId = p.fh?.id || 0, stance = this.currentStance();
+    this.moveBuf.push({ cmd: 4, ...from, fh: fhId, stance, duration: 0 }, { cmd: 0, ...from, vx: 0, vy: 0, fh: fhId, stance, duration: 30 });
+    p.x = t.x; p.y = t.y - 10; p.vx = 0; p.vy = 0; p.fh = null; p.ladder = null; p.seat = null;
+    this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance, duration: 0 });
+    this.moveTotal += 30; this.movePos = { x: p.x, y: p.y }; this.wasAirborne = true; this.downOfh = 0;
+    this.touchedBoxPortal = map.boxPortalAt(p.x, p.y, 3) || null;
+    this.playTeleportEffect(p.x, p.y);
+    this.net?.innerPortal(portal.pn, from, { x: t.x, y: t.y });
   }
   /**
    * Touch portals (type 3) take you as soon as you are inside their hRange x vRange box: on a floor, in the air or on

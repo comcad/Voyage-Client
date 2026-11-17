@@ -1724,6 +1724,9 @@ export class ChannelSession {
     on(S.PYRAMID_SCORE, (r) => this.emit('pyramidScore', r.byte(), r.int()));
     on(S.LOCK_UI, (r) => this.emit('lockUi', r.bool()));
     on(S.DISABLE_UI, (r) => this.emit('disableUi', r.bool()));
+    // Mu Lung Dojo, a stage cleared: through one of the map's portals, by its place among them (a non-zero first byte
+    // also lets go of the wait on your last request)
+    on(S.DOJO_WARP_UP, (r) => { const free = r.byte() !== 0; this.emit('warpUp', free, r.ubyte()); });
     on(S.CHANGE_CHANNEL, (r) => { r.ubyte(); const ip = Array.from(r.bytes(4)).join('.'); this.emit('changeChannel', { ip, port: r.ushort() }); });
   }
 
