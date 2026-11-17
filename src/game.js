@@ -6952,6 +6952,33 @@ export class Game {
     this.notice(kind === 190 ? 'Not available while riding on the tamed monster.' : 'Not available during the ride.');
     return null;
   }
+  /**
+   * Monster Rider's checks before getting on, in the client's order, each refusal with its notice: a tamed monster
+   * (-18) and a saddle (-19) worn; a cash tamed monster (-118) only with a cash saddle (-119) made for it, and a cash
+   * saddle only with one; a monster that can be ridden (info/tamingMob); the saddle's and the -20 gear's reqLevel no
+   * higher than yours; not on a map that forbids riding (fieldLimit 0x200).
+   */
+  async rideChecks() {
+    const worn = this.inventory?.equipped || {}, [mob, saddle, gear, cashMob, cashSaddle] = [-18, -19, -20, -118, -119].map((s) => worn[s]?.id || 0);
+    if (!mob || !saddle) { this.notice('This skill requires a tamed monster and a saddle.'); return false; }
+    if (cashMob ? !cashSaddle || !(await this.saddleFits(cashSaddle, cashMob)) : cashSaddle) {
+      this.notice('You can ride the tamed cash monster when it is equipped with a Cash Saddle.');
+      return false;
+    }
+    const [mi, si, gi] = await Promise.all([mob, saddle, gear].map((x) => (x ? itemInfo(this.assets, x) : null)));
+    const lvl = this.stats?.level || 0, req = (i) => Number(i?.reqLevel) || 0;
+    if (!Number(mi?.tamingMob) || req(si) > lvl || (gear && req(gi) > lvl) || (this.map?.info?.fieldLimit || 0) & 0x200) {
+      this.notice('You cannot ride on this tamed monster.');
+      return false;
+    }
+    return true;
+  }
+  /** A saddle (191) fits a tamed monster (190) when its art has a part for one with the same last two digits (under 64). */
+  async saddleFits(saddle, mob) {
+    if (Math.floor(saddle / 10000) !== 191 || Math.floor(mob / 10000) !== 190 || mob % 100 >= 64) return false;
+    const img = await this.assets.json(`Character/TamingMob/${pad(saddle, 8)}.img`);
+    return Object.keys(img || {}).some((k) => /^\d+$/.test(k) && Number(k) % 100 === mob % 100);
+  }
 
   /**
    * Basic attack (skillId 0) or skill. kind: melee | ranged | magic | special.
@@ -7812,9 +7839,11 @@ export class Game {
     return 0;
   }
   /** Buffs and other SPECIAL_MOVE skills. */
-  castSpecial(id, lv) {
+  castSpecial(id, lv, checked = false) {
     if (TELEPORTS.has(id)) return this.teleport(id, lv);
     if (id === HEAL) return this.castHeal(id, lv);
+    // Monster Rider getting on: the client's checks first (the gear's data may still be loading)
+    if (MONSTER_RIDERS.has(id) && !this.riding && !checked) { this.rideChecks().then((ok) => { if (ok) this.castSpecial(id, lv, true); }); return true; }
     // Shadow Stars takes its bulletConsume of one kind of star, the first in the Use tab that has enough
     const star = id === SHADOW_STARS ? this.shadowStarsPick(lv) : 0;
     if (id === SHADOW_STARS && !star) { this.hud.message('You do not have enough throwing stars to use this skill.', CHAT_COLOR.error); return false; }
