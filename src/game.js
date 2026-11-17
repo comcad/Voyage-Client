@@ -14,7 +14,8 @@ import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
 import { SkillBook, skillMaxDamage, critical, RANGED_WEAPONS, NO_AMMO_SHOTS } from './skills.js';
 import { CODE_TO_SC, defaultKeymap, ACTION, MENU, DEFAULT_QUICKSLOTS, DEFAULT_QUICKSLOTS2, loadQuickKeys2 } from './keymap.js';
-import { loadControls } from './controls.js';
+import { loadControls, saveControls } from './controls.js';
+import { MobileHud } from './ui/mobilehud.js';
 import { PadInput } from './gamepad.js';
 import { TouchControls } from './ui/touch.js';
 import { WorldFx, EquipEffect, lineDelay } from './effects.js';
@@ -3096,6 +3097,7 @@ export class Game {
     this.touch = new TouchControls(this, uiRoot);
     this.statusBar.layout(UI_W, UI_H);
     await this.statusBar.load();
+    this.mobileHud = new MobileHud(this, uiRoot);   // System Option MOBILE UI's interface, in place of the bar
     this.windows = new WindowManager(this, this.statusBar);
     this.warmAmmoInfo();   // your ammo's attack counts from the first shot
     await this.windows.load();
@@ -3122,7 +3124,7 @@ export class Game {
     this.buddies = []; this.party = null; this.guild = null;
     this.assets.json('UI/GuildMark.img').then((m) => { this.guildMarks = m; });
     this.maskCurses('');   // loads the word list for incoming lines
-    this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window
+    if (!settings.mobileUi) this.windows.order.push(this.windows.wins.minimap); // the minimap starts open, under every window (MOBILE UI: its menu opens it)
     this.windows.fit(this.windows.wins.minimap);
     this.bindUiPointer();
     this.hud = new Hud(uiRoot, this);
@@ -10756,6 +10758,22 @@ export class Game {
   }
 
   /** System Option SCREEN SIZE / UI SIZE: the view, the bar and the open windows follow the new size. */
+  /**
+   * System Option MOBILE UI on or off: the HTML interface (ui/mobilehud.js) in place of the status bar, or the bar
+   * again. On, it also shows the touch controls on a touch screen when they were off (Key Setting's AUTO) and puts the
+   * minimap away (it sits where the interface's gauges go; the menu opens it); off, it puts both back as they were.
+   */
+  setMobileUi(on) {
+    settings.mobileUi = !!on; saveSettings();
+    const t = this.controls?.touch, wm = this.windows, mini = wm?.wins.minimap;
+    if (t && on && t.show === 'off') { t.show = 'auto'; t.byMobileUi = true; saveControls(this.controls); }
+    else if (t && !on && t.byMobileUi) { if (t.show === 'auto') t.show = 'off'; delete t.byMobileUi; saveControls(this.controls); }
+    if (mini && on && wm.isOpen('minimap')) { wm.close(mini); this.miniByMobileUi = true; }
+    else if (mini && !on && this.miniByMobileUi) { if (!wm.isOpen('minimap')) { wm.order.unshift(mini); wm.fit(mini); } this.miniByMobileUi = false; }
+    this.statusBar?.showInput();
+    this.touch?.render();
+    this.mobileHud?.refresh();
+  }
   setResolution() {
     applyResolution();
     this.cam.w = VIEW_W; this.cam.h = VIEW_H;

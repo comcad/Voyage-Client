@@ -28,6 +28,21 @@ export class WzSprite {
   }
 }
 
+/** MOBILE UI: how far (interface pixels) outside its art a button still takes a tap. */
+export const TAP_PAD = 6;
+/** The visible button whose art is nearest (x, y), within pad of it, or null (taps on small buttons with a finger). */
+export function nearButton(buttons, x, y, pad = TAP_PAD) {
+  let best = null, bd = pad + 1;
+  for (const b of buttons) {
+    if (!b?.visible) continue;
+    const r = b.rect();
+    if (!r.w || !r.h) continue;
+    const d = Math.max(r.x - x, 0, x - (r.x + r.w - 1), r.y - y, y - (r.y + r.h - 1));
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best;
+}
+
 export class WzButton {
   constructor(node, x, y, onClick) {
     this.node = node; this.x = x; this.y = y; this.onClick = onClick;

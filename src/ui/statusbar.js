@@ -173,6 +173,7 @@ export class StatusBar {
   /** Opens the input: minimized, the log's line moves up a row for it (state 2). */
   focusChat(prefix = '') {
     if (this.hidden) return;
+    if (settings.mobileUi) { this.game.mobileHud?.openSay(prefix); return; }   // MOBILE UI's own chat line
     if (this.chatState === 1) this.setChatState(2);
     if (prefix && !this.chat.value) this.chat.value = prefix;
     this.chat.focus();
@@ -183,7 +184,7 @@ export class StatusBar {
   }
   /** Gone while a scene locks the UI. */
   setHidden(on) { this.hidden = on; this.showInput(); if (on) this.chat.el.blur(); }
-  showInput() { this.chat?.show(!this.hidden && this.chatState !== 1); }
+  showInput() { this.chat?.show(!this.hidden && !settings.mobileUi && this.chatState !== 1); }
   get typing() { return document.activeElement === this.chat?.el; }
 
   // ------------------------------------------------------------------ chat log
@@ -457,6 +458,7 @@ export class StatusBar {
   }
   /** The tooltip for the quick slot under the mouse: the item's, or the skill's. */
   quickTip(x, y) {
+    if (settings.mobileUi) return null;
     x -= this.ox;
     // the buttons' hints (String/ToolTipHelp.img/Game/Button): Cash Shop, Menu, Key Config., Show / Hide Quick Slot
     const bt = this.allButtons().find((b) => !this.menu?.buttons.includes(b) && b.hit(x, y));
@@ -504,6 +506,7 @@ export class StatusBar {
 
   /** A skill, or a Use item, dropped from a window onto a quick slot binds it to that key. */
   dropOnQuickSlot(x, y, c) {
+    if (settings.mobileUi) return;
     x -= this.ox;
     if (!this.quickOpen || this.inMenu(x, y)) return;
     const i = this.slotAt(x, y);
@@ -534,6 +537,7 @@ export class StatusBar {
   // ------------------------------------------------------------------ input
   /** Canvas-space pointer events from Game. Returns true when the UI took the event. */
   pointer(type, x, y) {
+    if (settings.mobileUi) return false;   // hidden for MOBILE UI
     x -= this.ox;
     this.mouse = { x, y };
     // an open pop-up menu sits on top: what's under it doesn't take the mouse
@@ -619,7 +623,7 @@ export class StatusBar {
     return !!m && x >= m.x && x < m.x + m.bg._w && y >= m.y && y < m.y + m.bg._h;
   }
 
-  contains(x, y) { return this.hit(x - this.ox, y); }
+  contains(x, y) { return !settings.mobileUi && this.hit(x - this.ox, y); }
   hit(x, y) {
     if (y >= this.y && x >= 0 && x < BAR_W) return true;
     // the open log (and the line over the bar while typing) takes clicks; above it they reach the map
@@ -648,7 +652,7 @@ export class StatusBar {
 
   draw(ctx) {
     const s = this.game.stats, S = this.S;
-    if (!s || !S) return;
+    if (!s || !S || settings.mobileUi) return;   // MOBILE UI draws its own (ui/mobilehud.js)
     const img = (n) => this.assets.image(n);
     const y = this.y;
     this.restoreChat();

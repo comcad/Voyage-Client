@@ -127,28 +127,29 @@ export class GameOptWin extends Win {
  *   BGM / SOUND      slider SOFT .. LOUD, MUTE box  MOUSE CURSOR  slider (the browser keeps the pointer's speed)
  *   HP / MP ALERT    slider of 20 steps, DO NOT ALERT and then 5% .. 95%    SHAKE UP      check box
  *   MONSTER INFO     combo box                      VIEWING MODE  WINDOW / FULL SCREEN check boxes
- * Five rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
- * under them: SCREEN SIZE (the game's resolution, a combo box), FRAME RATE (a combo box: VSync draws a frame on every
+ * Six rows are added under them, each the art's MONSTER INFO row with a new label, the OK / CANCEL band moved down
+ * under them: MOBILE UI (a check box: an HTML interface for phones in place of the status bar, see ui/mobilehud.js),
+ * SCREEN SIZE (the game's resolution, a combo box), FRAME RATE (a combo box: VSync draws a frame on every
  * screen refresh, 60 FPS / 30 FPS hold it to that many a second), UI SIZE (a slider from 100% to as large as the
  * screen size allows, in 10% steps, its value beside it; it takes effect when let go), ZOOM (a slider from 100% to
  * 200% in 10% steps, its value beside it: the view closes in on your character as you drag, the interface keeping
  * its size) and FIT TO SCREEN (a check box: the game takes the window's own size, nothing stretched and no black
  * bars; SCREEN SIZE is greyed out then, showing the size in use).
  * Controls are Basic.img Slider / CheckBox / ComboBox; Basic.img BtOK2 / BtCancel2 sit at (194, 342) and (244, 342) in
- * the art, 150px lower with the added rows.
+ * the art, 180px lower with the added rows.
  * Changes apply as you make them; CANCEL puts back what was there when the window opened.
  */
 const ROW_Y = (i) => 46 + i * 30;
 const SLIDERS = {
   quality: { row: 0, x0: 104, x1: 238 }, bgm: { row: 1, x0: 92, x1: 208 }, sound: { row: 2, x0: 92, x1: 208 },
   mouse: { row: 4, x0: 96, x1: 238, disabled: true }, hpAlert: { row: 5, x0: 100, x1: 244 }, mpAlert: { row: 6, x0: 100, x1: 244 },
-  uiScale: { row: 12, x0: 100, x1: 236 }, zoom: { row: 13, x0: 100, x1: 236 },
+  uiScale: { row: 13, x0: 100, x1: 236 }, zoom: { row: 14, x0: 100, x1: 236 },
 };
 /** ZOOM's range: 100% .. 200%. */
 const ZOOM_MAX = 2;
 const MUTE_X = 246, COMBO = { x: 66, w: 172 }, CHECK_X = 64, VIEW_X = 61;   // WINDOW / FULL SCREEN start further left
 const SHOT_PLACES = ['Downloads Folder'];
-const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, SIZE_ROW = 10, FIT_ROW = 14, FPS_ROW = 11, ADDED = 5, WIN_H = ART_H + ADDED * 30;
+const ART_H = 366, ROWS_END = 332, EXTRA_ROW = 8, MOBILE_ROW = 10, SIZE_ROW = 11, FPS_ROW = 12, FIT_ROW = 15, ADDED = 6, WIN_H = ART_H + ADDED * 30;
 // the labels' 5x7 letters (white on a dark outline) and the rows' digits (navy, as the art's 100%)
 const GLYPHS = {
   F: ['#####', '#....', '#....', '####.', '#....', '#....', '#....'], T: ['#####', '..#..', '..#..', '..#..', '..#..', '..#..', '..#..'],
@@ -164,6 +165,7 @@ const GLYPHS = {
   R: ['####.', '#...#', '#...#', '####.', '#.#..', '#..#.', '#...#'], E: ['#####', '#....', '#....', '####.', '#....', '#....', '#####'],
   N: ['#...#', '#...#', '##..#', '#.#.#', '#..##', '#...#', '#...#'], I: ['#', '#', '#', '#', '#', '#', '#'],
   M: ['#...#', '##.##', '#.#.#', '#.#.#', '#...#', '#...#', '#...#'],
+  B: ['####.', '#...#', '#...#', '####.', '#...#', '#...#', '####.'], L: ['#....', '#....', '#....', '#....', '#....', '#....', '#####'],
   Z: ['#####', '....#', '...#.', '..#..', '.#...', '#....', '#####'],
 };
 // the rows' own 4px-wide letters, as in SHAKE UP THE SCREEN WHEN USING SKILLS
@@ -176,6 +178,8 @@ const SMALL = {
   W: ['#..#..#', '#..#..#', '#..#..#', '#..#..#', '#..#..#', '#..#..#', '.##.##.'], N: ['#..#', '#..#', '##.#', '#.##', '#..#', '#..#', '#..#'],
   U: ['#..#', '#..#', '#..#', '#..#', '#..#', '#..#', '.##.'], Z: ['####', '...#', '..#.', '..#.', '.#..', '#...', '####'],
   D: ['###.', '#..#', '#..#', '#..#', '#..#', '#..#', '###.'], ' ': ['..', '..', '..', '..', '..', '..', '..'],
+  A: ['.##.', '#..#', '#..#', '####', '#..#', '#..#', '#..#'], B: ['###.', '#..#', '#..#', '###.', '#..#', '#..#', '###.'],
+  P: ['###.', '#..#', '#..#', '###.', '#...', '#...', '#...'],
 };
 export class SysOptWin extends Win {
   constructor(mgr) {
@@ -194,14 +198,17 @@ export class SysOptWin extends Win {
   onOpen() {
     this.before = { ...settings, bgm: music.volume, sound: sfx.volume, bgmMute: music.muted, soundMute: sfx.muted };
     this.open = null;
+    // taller than the screen (a phone's): it opens at the top, so as many rows as fit show (MOBILE UI's among them)
+    if (this.h > UI_H) this.y = 0;
   }
   revert() {
     const b = this.before;
     if (!b) return;
-    const size = settings.resolution, scale = settings.uiScale, fit = settings.fit;
+    const size = settings.resolution, scale = settings.uiScale, fit = settings.fit, mobile = settings.mobileUi;
     for (const k of Object.keys(settings)) settings[k] = b[k];
     saveSettings();
-    if (settings.resolution !== size || settings.uiScale !== scale || settings.fit !== fit) this.g.setResolution?.();
+    if (settings.mobileUi !== mobile) this.g.setMobileUi?.(settings.mobileUi);
+    else if (settings.resolution !== size || settings.uiScale !== scale || settings.fit !== fit) this.g.setResolution?.();
     music.setVolume(b.bgm); sfx.setVolume(b.sound);
     if (music.muted !== b.bgmMute) music.setMuted(b.bgmMute);
     if (sfx.muted !== b.soundMute) sfx.setMuted(b.soundMute);
@@ -258,11 +265,13 @@ export class SysOptWin extends Win {
     if (!this.letters) {
       const c = this.letters = document.createElement('canvas'), lc = c.getContext('2d');
       c.width = 299; c.height = ADDED * 30;
-      this.label(lc, 'SCREEN', 32, 6); this.label(lc, 'SIZE', 32, 16);
-      this.label(lc, 'FRAME', 32, 36); this.label(lc, 'RATE', 32, 46);
-      this.label(lc, 'UI SIZE', 32, 71);
-      this.label(lc, 'ZOOM', 32, 101);
-      this.label(lc, 'FIT TO', 32, 126); this.label(lc, 'SCREEN', 32, 136);
+      this.label(lc, 'MOBILE', 32, 6); this.label(lc, 'UI', 32, 16);
+      this.label(lc, 'FOR PHONES AND TABLETS', CHECK_X + 16, ROW_Y(MOBILE_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
+      this.label(lc, 'SCREEN', 32, 36); this.label(lc, 'SIZE', 32, 46);
+      this.label(lc, 'FRAME', 32, 66); this.label(lc, 'RATE', 32, 76);
+      this.label(lc, 'UI SIZE', 32, 101);
+      this.label(lc, 'ZOOM', 32, 131);
+      this.label(lc, 'FIT TO', 32, 156); this.label(lc, 'SCREEN', 32, 166);
       this.label(lc, 'USE THE WINDOW SIZE', CHECK_X + 16, ROW_Y(FIT_ROW) - 3 - ROWS_END, '#224466', null, SMALL, false);
     }
     ctx.drawImage(this.letters, 0, ROWS_END);
@@ -299,6 +308,7 @@ export class SysOptWin extends Win {
     }
     this.check(ctx, CHECK_X, ROW_Y(7), settings.shake);
     this.check(ctx, CHECK_X, ROW_Y(FIT_ROW), !!settings.fit);
+    this.check(ctx, CHECK_X, ROW_Y(MOBILE_ROW), !!settings.mobileUi);
     const full = !!document.fullscreenElement;
     this.check(ctx, VIEW_X, ROW_Y(9) - 7, !full);
     this.check(ctx, VIEW_X, ROW_Y(9) + 7, full);
@@ -352,6 +362,7 @@ export class SysOptWin extends Win {
     const row = Math.round((ly - 46) / 30), cy = ROW_Y(row);
     if (row === 7 && lx >= CHECK_X - 2 && lx < 290 && Math.abs(ly - cy) <= 8) { settings.shake = !settings.shake; saveSettings(); return; }
     if (row === FIT_ROW && lx >= CHECK_X - 2 && lx < 290 && Math.abs(ly - cy) <= 8) { settings.fit = !settings.fit; saveSettings(); this.g.setResolution?.(); return; }
+    if (row === MOBILE_ROW && lx >= CHECK_X - 2 && lx < 290 && Math.abs(ly - cy) <= 8) { sfx.play('UI/BtMouseClick'); this.g.setMobileUi?.(!settings.mobileUi); return; }
     if (row === 9 && lx >= VIEW_X - 2 && lx < 290) {
       const full = ly > cy;
       if (full && !document.fullscreenElement) document.documentElement.requestFullscreen?.().catch(() => {});

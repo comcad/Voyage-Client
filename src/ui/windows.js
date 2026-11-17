@@ -3,7 +3,8 @@ import { ControlTabs } from './keyconfig-tabs.js';
 import { cloneControls, saveControls } from '../controls.js';
 import { EXP, jobName, itemIcon, itemName, itemInfo, invType, isScroll, itemKeyType } from '../data.js';
 import { sfx } from '../audio.js';
-import { WzButton, TextField, uiText, wrapText } from './wzui.js';
+import { WzButton, TextField, uiText, wrapText, nearButton } from './wzui.js';
+import { settings } from '../settings.js';
 import { richText, drawRich, QUEST_STATES } from './richtext.js';
 import { isPartyQuest, questSort, TITLE_AREA } from '../quests.js';
 import { UI_W, UI_H } from '../view.js';
@@ -59,6 +60,10 @@ export class WindowManager {
     if (!w) return;
     const into = (v, size, view) => Math.round(size <= view ? Math.max(0, Math.min(view - size, v)) : Math.max(0, Math.min(view - 40, v)));
     w.x = into(w.x, w.w, UI_W); w.y = into(w.y, w.h, UI_H);
+    // MOBILE UI: a window opening under its top panels (your gauges, the buttons) goes down below them, as far as it fits
+    for (const r of this.game?.mobileHud?.reserved?.() || []) {
+      if (w.x < r.x + r.w && w.x + w.w > r.x && w.y < r.y + r.h && w.y + w.h > r.y) w.y = Math.max(w.y, Math.min(Math.ceil(r.y + r.h + 2), Math.max(0, UI_H - w.h)));
+    }
   }
   close(w) {
     // a window may ask first (Key Setting's "Save changes?"); it closes once that is answered
@@ -204,7 +209,8 @@ export class WindowManager {
     for (const o of this.order) for (const b of o.buttons) b.hover = false;
     let over = null;
     if (w) {
-      over = w.buttons.find((b) => b.visible && b.hit(x - w.x, y - w.y)) || null;
+      // (MOBILE UI: a tap just off a button's art still takes the nearest one)
+      over = w.buttons.find((b) => b.visible && b.hit(x - w.x, y - w.y)) || (settings.mobileUi ? nearButton(w.buttons, x - w.x, y - w.y) : null) || null;
       if (over) over.hover = true;
       if (over && over !== this.hovered && over.enabled && !over.down) sfx.play('UI/BtMouseOver');   // not a disabled or held one
     }
