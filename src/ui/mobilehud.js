@@ -2,7 +2,7 @@
  * MOBILE UI (System Option): a small HTML interface over the game for phones, in place of the status bar (which is
  * hidden then). It keeps to the edges so the field stays clear:
  *   - bottom middle: one slim bar with your level, name and job and the HP / MP / EXP gauges (a tap opens the Stat
- *     window); while a sheet is open it moves up to the top left, beside the buttons;
+ *     window); it goes while a sheet is open;
  *   - top left: the mini map (ui/mobileminimap.js);
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
@@ -66,11 +66,8 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
   align-items: center; gap: 8px; padding: 5px 10px; border-radius: 14px; pointer-events: auto; white-space: nowrap;
   max-width: calc(100% - 12px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
 .mhud .mh-id { flex: none; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
-/* a sheet open: up in the top-left strip beside the buttons, where the sheet leaves room for it whole */
-.mhud.mh-sheeting .mh-st { left: calc(6px + env(safe-area-inset-left)); top: 6px; bottom: auto; transform: none;
-  max-width: calc(100% - 262px - env(safe-area-inset-left)); }
-.mhud.mh-sheeting .mh-st .mh-bar { width: clamp(62px, 9vw, 96px); }
-.mhud.mh-sheeting .mh-st .mh-jb { max-width: 80px; }
+/* a sheet open: out of the way until it closes */
+.mhud.mh-sheeting .mh-st { display: none; }
 .mhud .mh-lv { flex: none; font-weight: 800; font-size: 9.5px; color: #3a2400; background: linear-gradient(180deg, #ffe892, #f0b22e);
   border-radius: 6px; padding: 1px 5px; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18); }
 .mhud .mh-nm { font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
@@ -112,7 +109,7 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-st-tab::before { content: ''; position: absolute; inset: -12px -12px 0; }   /* a finger-sized place to tap */
 .mhud .mh-st-tab svg { width: 12px; height: 12px; margin-top: 1px; pointer-events: none; }
 .mhud .mh-st-tab:active { transform: translateX(-50%) translateY(-2px); color: #ffd978; }
-.mhud.mh-saying .mh-st-tab, .mhud.mh-sheeting .mh-st-tab { display: none; }
+.mhud.mh-saying .mh-st-tab { display: none; }
 /* new lines while the chat is closed: a gold dot on the tab */
 .mhud .mh-st-tab.mh-unread::after { content: ''; position: absolute; top: 2px; right: 7px; width: 6px; height: 6px; border-radius: 50%;
   background: #ffd25e; box-shadow: 0 0 6px rgba(255, 210, 94, 0.85); }

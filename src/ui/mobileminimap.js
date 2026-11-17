@@ -4,7 +4,7 @@
  * edges (at most 210 x 112, as the window's view); and its markers (you, other players, party, guild, buddies and
  * spouse, portals, hired merchants, NPCs with their quest marks). A map that hides its mini map shows the name bar
  * alone. A tap on the picture opens the World Map; the fold button keeps just the name bar (remembered on this
- * device). It steps aside while a sheet is open (the status line takes the top left then).
+ * device). It steps aside while a sheet is open.
  */
 const KEY = 'voyage.mobileMinimap';
 const FOLD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12"/></svg>';
