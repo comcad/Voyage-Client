@@ -9819,9 +9819,9 @@ export class Game {
    * accuracy is no more than a roll between a tenth of your avoid and all of it.
    * Physical: attack x 0.80-0.85 x attack / 100, less (s x 0.00125 + 0.28) x your defence and a share of how far your
    * defence is above or below the standard for your class and level (Base/StandardPDD.img), s being a mix of your stats
-   * ((LUK + DEX) / 4 + INT / 9 + STR x 2/7 for a warrior, LUK / 4 + INT / 9 + DEX x 2/7 + STR x 0.4 for the rest);
-   * nothing left is a MISS. Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 +
-   * magic defence) x 0.3 (a magician's) or 0.25, at least 1.
+   * ((LUK + DEX) / 4 + INT / 9 + STR x 2/7 for a warrior, LUK / 4 + INT / 9 + DEX x 2/7 + STR x 0.4 for the rest).
+   * Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 + magic defence) x 0.3 (a
+   * magician's) or 0.25. Either is held to 1-199999: a blow that isn't dodged does at least 1.
    */
   damageTaken(m, power, magic) {
     const info = m.src?.info || {}, s = this.stats || {}, lv = s.level || 1, cls = Math.floor(((s.job || 0) % 1000) / 100);
@@ -9834,8 +9834,8 @@ export class Game {
     if (magic) {
       if (acc <= rand(avoid * 0.1, avoid)) return 0;
       const mad = clamp(info.MADamage ?? power, 0, 1999), mdd = clamp(this.equipStat('mdef') + buff('mdef'), 0, 1999);
-      const d = Math.trunc(rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (T('dex') / 6 + T('str') / 7 + T('luk') / 5 + mdd) * (cls === 2 ? 0.3 : 0.25));
-      return d === 0 ? 0 : Math.max(1, d);
+      const d = rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (T('dex') / 6 + T('str') / 7 + T('luk') / 5 + mdd) * (cls === 2 ? 0.3 : 0.25);
+      return Math.trunc(clamp(d, 1, 199999));
     }
     const chance = (avoid / (acc * 4.5)) * 100;
     if (Math.random() * 100 < (cls === 4 ? clamp(chance, 5, 95) : clamp(chance, 2, 80))) return 0;
@@ -9845,7 +9845,7 @@ export class Game {
     if (pdd >= std) d -= (pdd - std) * (k / 900 + lv / 1300 + 0.28) * 0.7;
     else if (mobLv <= lv) d -= ((pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 13) / (lv - mobLv + 13);
     else d -= (pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 1.3;
-    return Math.max(0, Math.trunc(d));
+    return Math.trunc(clamp(d, 1, 199999));
   }
   /** The standard weapon defence for a class (0 beginner .. 5 pirate) at a level, from Base/StandardPDD.img (gaps take the last value). */
   standardPdd(cls, lv) {
