@@ -2,7 +2,8 @@
  * MOBILE UI (System Option): a small HTML interface over the game for phones, in place of the status bar (which is
  * hidden then). It keeps to the edges so the field stays clear:
  *   - top left: your level, name and job, and slim HP / MP / EXP bars (a tap opens the Stat window);
- *   - top right: round buttons for the windows used most, and a menu for the rest;
+ *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
+ *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - bottom middle (between the touch stick and buttons): the last chat lines, fading out when the chat is quiet,
  *     and a chat button that opens a line to type on, with the chat target beside it.
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
@@ -13,6 +14,7 @@ import { MENU } from '../keymap.js';
 import { settings } from '../settings.js';
 import { CHAT_TARGETS } from './statusbar.js';
 import { UI_W } from '../view.js';
+import { MobileSheets } from './mobilesheets.js';
 
 /** Seconds the chat lines stay after the last new one before they fade. */
 const CHAT_SHOW = 8;
@@ -32,7 +34,8 @@ const MENU_ROWS = [
 
 const svg = (d, w = 1.9) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const ICON = {
-  bag: svg('<path d="M6 8h12l1 12H5z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>'),
+  // a backpack: its rounded body, the carry handle on top, the flap with its buckle, and the front pocket
+  bag: svg('<rect x="5" y="6.5" width="14" height="14.5" rx="4"/><path d="M9.5 6.5V5a2.5 2.5 0 0 1 5 0v1.5"/><path d="M5 11.5h14M12 11.5v2"/><path d="M8.5 21v-3.5a1.5 1.5 0 0 1 1.5-1.5h4a1.5 1.5 0 0 1 1.5 1.5V21"/>', 1.8),
   armor: svg('<path d="M8 3l4 2 4-2 4 4-3 3v10H7V10L4 7z"/>'),
   star: svg('<path d="M12 3l2.6 5.6 6 .7-4.5 4.1 1.2 6L12 16.5 6.7 19.4l1.2-6L3.4 9.3l6-.7z"/>'),
   scroll: svg('<path d="M7 4h11v13a3 3 0 0 1-3 3H6a3 3 0 0 1-3-3v-1h11v1a3 3 0 0 0 3 3"/><path d="M7 4a2 2 0 0 0-2 2v10M10 9h5M10 12h5"/>'),
@@ -135,9 +138,11 @@ export class MobileHud {
     const P = this.parts;
     this.tap(P.st, () => this.g.toggleMenu(MENU.STATS));
     // the buttons along the top, then the menu's
+    this.actionBtns = [];
     for (const [m, title, icon] of ACTIONS) {
       const b = document.createElement('div');
       b.className = 'mh-btn'; b.title = title; b.innerHTML = ICON[icon];
+      this.actionBtns.push([b, MobileSheets.kindOf(m, MENU)]);
       this.tap(b, () => { this.closeMenu(); this.g.toggleMenu(m); });
       P.act.append(b);
     }
@@ -171,6 +176,9 @@ export class MobileHud {
       if (e.key === 'Enter') { e.preventDefault(); this.send(); } else if (e.key === 'Escape') this.closeSay();
     });
     for (const t of ['keyup', 'keypress']) P.input.addEventListener(t, (e) => e.stopPropagation());
+    // the windows' sheets, under the menu and the chat line
+    this.sheets = new MobileSheets(this, el);
+    el.append(P.menu, P.tlist, P.say);
     this.seen = null; this.lastLineAt = -Infinity; this.logOpen = false;
     this.timer = setInterval(() => this.update(), 150);
     this.update();
@@ -196,7 +204,16 @@ export class MobileHud {
   refresh() {
     const on = this.shown;
     this.el.style.display = on ? '' : 'none';
-    if (!on) { this.closeMenu(); this.closeTargets(); if (this.parts.say.classList.contains('mh-open')) this.closeSay(); }
+    if (!on) { this.closeMenu(); this.closeTargets(); this.sheets?.close(); if (this.parts.say.classList.contains('mh-open')) this.closeSay(); }
+  }
+  /** A window function (MENU id) whose window it has a sheet for: that sheet opens or closes; false for the others. */
+  sheet(m) {
+    const kind = MobileSheets.kindOf(m, MENU);
+    if (!kind || !this.shown) return false;
+    this.closeMenu();
+    this.sheets.toggle(kind);
+    this.update();
+    return true;
   }
 
   update() {
@@ -220,6 +237,7 @@ export class MobileHud {
     const sb = this.g.statusBar, key = sb?.chatTarget || 'all';
     set(P.tgt, key === 'whisper' && sb?.whisperTo ? sb.whisperTo : CHAT_TARGETS.find((t) => t.key === key)?.label || 'To All');
     for (const b of P.tlist.children) b.classList.toggle('mh-on', b.dataset.key === key);
+    for (const [b, kind] of this.actionBtns) b.classList.toggle('mh-on', this.sheets.kind === kind);
   }
   gauge(bar, ratio, text, low) {
     const w = `${Math.max(0, Math.min(1, ratio || 0)) * 100}%`, fill = bar.firstElementChild, em = bar.querySelector('em');

@@ -1133,8 +1133,10 @@ class SkillWin extends Win {
    * A + click: one request at a time; past the first job, the SP already in that job step's skills must be
    * under 3 x level - 89 (2nd), 3 x level - 209 (3rd) or 3 x (level - 119) (4th).
    */
-  raise(i) {
-    const g = this.g, sb = g.skills, id = this.list[this.first + i];
+  raise(i) { this.raiseId(this.list[this.first + i]); }
+  /** The same for a skill by its id (MOBILE UI's skill sheet). */
+  raiseId(id) {
+    const g = this.g, sb = g.skills;
     if (!id || !this.canRaise(id)) return;
     const book = Math.floor(id / 10000), step = book % 10, L = g.stats.level;
     if (book % 100 !== 0 && book !== 2001 && step <= 2) {
