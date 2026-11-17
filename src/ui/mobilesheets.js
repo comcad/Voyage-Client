@@ -12,14 +12,20 @@
  *     does: the quest giver standing (its own frames), the level line, a chain's parts, the text in its own names for
  *     NPCs, items and monsters, the summary and rewards, the time left, and its buttons (give up, Quest Helper, Mark NPC);
  *   - System Options: the System Option window's rows (sound, screen, game) as sliders, switches and choices, applied
- *     as they change through the window's own code; Cancel puts back what was there when it opened.
+ *     as they change through the window's own code; Cancel puts back what was there when it opened;
+ *   - Game Options: its rows as switches; Change Channel: the channels to tap (yours marked);
+ *   - Key Setting: its Touch and Controller tabs (no keyboard part here): the touch controls on a little screen to
+ *     drag about, the controller's buttons, and for the one picked what it does, from the functions, skills or items.
  * Item and skill icons are the game's own.
  */
-import { EXP, jobName, itemDesc, isScroll } from '../data.js';
+import { EXP, jobName, itemDesc, isScroll, itemKeyType } from '../data.js';
 import { richText, LIGHT_COLORS } from './richtext.js';
 import { settings, saveSettings } from '../settings.js';
 import { music, sfx } from '../audio.js';
-import { UI_SCALE, VIEW_W, VIEW_H, maxUiScale } from '../view.js';
+import { UI_SCALE, UI_W, UI_H, VIEW_W, VIEW_H, maxUiScale } from '../view.js';
+import { FUNCTIONS } from './windows.js';
+import { BUTTON, STICK } from './keyconfig-tabs.js';
+import { bindingLabel, PAD_BUTTONS, TOUCH_MAX_BUTTONS } from '../controls.js';
 
 const INV_TABS = [[1, 'Equip'], [2, 'Use'], [3, 'Set-up'], [4, 'Etc'], [5, 'Cash']];
 const EQ_STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK'], ['hp', 'MaxHP'], ['mp', 'MaxMP'], ['watk', 'Weapon Attack'],
@@ -34,7 +40,16 @@ const EQUIP_GRID = {
 const STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK']];
 const STARTERS = [0, 1000, 2000, 2001];
 const QUEST_TABS = [[0, 'Available'], [1, 'In Progress'], [2, 'Completed']];
-const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', skills: 'Skills', quests: 'Quests', sysopt: 'System Options' };
+const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', skills: 'Skills', quests: 'Quests', sysopt: 'System Options',
+  keys: 'Key Setting', gameopt: 'Game Options', channel: 'Change Channel' };
+/** Sheets standing for a window with its own open / close (what Cancel goes back to, the touch controls held): its name. */
+const WINDOW_OF = { sysopt: 'sysopt', keys: 'keyconfig', gameopt: 'gameopt', channel: 'channel' };
+/** Game Option's rows (its keys, as the window keeps them) and the names on its art. */
+const GAME_OPTS = [['whisper', 'Whisper'], ['friends', 'Friends'], ['chatInvite', 'Chat Invite'], ['tradeRequest', 'Trade Request'],
+  ['partyInvite', 'Party Invite'], ['partySearch', 'Party Search'], ['gameInvite', 'Game Invite'], ['guildChat', 'Guild Chat'],
+  ['guildInvite', 'Guild Invite'], ['allianceTournament', 'Alliance Tournament'], ['allianceInvite', 'Alliance Invite'], ['familyInvite', 'Family Invite']];
+const KEY_SOURCES = [['fn', 'Functions'], ['skill', 'Skills'], ['item', 'Items']];
+const sameBinding = (a, b) => !!a && !!b && a.type === b.type && a.action === b.action;
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
 const CSS = `
@@ -159,6 +174,38 @@ html.touch-device .mhud .mh-sheet .mh-sl, .mhud .mh-sheet .mh-sl { touch-action:
   color: #f2f5fb; font: 600 12px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; }
 .mhud .mh-select:disabled { opacity: 0.45; }
 .mhud .mh-sh-detail .mh-ctas.mh-end { justify-content: flex-end; margin: 0; }
+/* Change Channel */
+.mhud .mh-ch-world { display: flex; justify-content: center; padding: 2px 0 8px; }
+.mhud .mh-ch-world img { image-rendering: pixelated; }
+.mhud .mh-ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; }
+.mhud .mh-ch { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 52px; border-radius: 10px; cursor: pointer;
+  background: rgba(0, 0, 0, 0.3); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.mhud .mh-ch b { font-size: 17px; font-weight: 800; line-height: 1.1; }
+.mhud .mh-ch span { font-size: 8.5px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: rgba(225, 232, 248, 0.55); }
+.mhud .mh-ch.mh-cur { background: rgba(122, 170, 255, 0.18); box-shadow: inset 0 0 0 1px rgba(160, 196, 255, 0.45); }
+.mhud .mh-ch.mh-cur span { color: #9fc6ff; }
+.mhud .mh-ch.mh-sel { box-shadow: inset 0 0 0 2px #ffd25e, 0 0 8px rgba(255, 210, 94, 0.45); }
+/* Game Options: the names take the row, the switch at its end */
+.mhud .mh-opt.mh-wide span { width: auto; flex: 1; }
+.mhud .mh-opt.mh-wide em { flex: none; }
+/* Key Setting: the screen with the touch controls on it, the controller's buttons, what a button does */
+.mhud .mh-tp { position: relative; width: 100%; margin: 4px 0 8px; border-radius: 10px; overflow: hidden;
+  background: linear-gradient(180deg, rgba(90, 110, 140, 0.45), rgba(40, 52, 72, 0.55)); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+html.touch-device .mhud .mh-sheet .mh-tp, html.touch-device .mhud .mh-sheet .mh-tp *, .mhud .mh-sheet .mh-tp * { touch-action: none; }
+.mhud .mh-tp-stick, .mhud .mh-tp-btn { position: absolute; aspect-ratio: 1; transform: translate(-50%, -50%); border-radius: 50%; display: grid; place-items: center;
+  background: rgba(0, 0, 64, 0.63); box-shadow: 0 0 0 1.5px #fff; cursor: grab; }
+/* (small on the little screen: a finger takes them from a little way off) */
+.mhud .mh-tp-stick::before, .mhud .mh-tp-btn::before { content: ''; position: absolute; inset: -9px; border-radius: 50%; }
+.mhud .mh-tp-stick::after { content: ''; width: 42%; aspect-ratio: 1; border-radius: 50%; background: #fff; }
+.mhud .mh-tp-btn.mh-sel { box-shadow: 0 0 0 2px #ffd25e, 0 0 10px rgba(255, 210, 94, 0.8); }
+.mhud .mh-tp-btn img { width: 72%; height: 72%; object-fit: contain; image-rendering: pixelated; pointer-events: none; }
+.mhud .mh-tp-btn small { font-size: 7px; font-weight: 800; line-height: 1; text-align: center; padding: 0 1px; pointer-events: none; }
+.mhud .mh-tp-hint { margin: -2px 0 8px; font-size: 10px; color: rgba(225, 232, 248, 0.55); }
+.mhud .mh-pad { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; margin: 4px 0 8px; }
+.mhud .mh-padb small { position: absolute; left: 4px; top: 2px; font-size: 8.5px; font-weight: 800; color: rgba(255, 210, 94, 0.95); text-shadow: 0 0 2px #000; }
+.mhud .mh-kp { padding: 6px 8px; margin: 2px 0 6px; border-radius: 9px; background: rgba(0, 0, 0, 0.22); }
+.mhud .mh-kp > div:nth-child(2) { flex: 1; min-width: 0; }
+.mhud .mh-kp .mh-cta { height: 26px; padding: 0 11px; }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -188,9 +235,11 @@ export class MobileSheets {
     hud.tap(q.querySelector('.mh-qd-x'), () => { this.sel = null; this.render(); });
     const $ = (s) => n.querySelector(s);
     this.p = { title: $('.mh-sh-title'), extra: $('.mh-sh-extra'), tabs: $('.mh-sh-tabs'), banner: $('.mh-sh-banner'), body: $('.mh-sh-body'), detail: $('.mh-sh-detail') };
-    hud.tap($('.mh-sh-x'), () => this.close());
+    hud.tap($('.mh-sh-x'), () => this.closeAsked());
     this.kind = null; this.sig = '';
-    this.tab = { items: 1, equip: 'worn', quests: 1 }; this.book = null;
+    this.tab = { items: 1, equip: 'worn', quests: 1, keys: 'touch' }; this.book = null;
+    this.kpick = null;   // Key Setting: the touch button's id or controller button picked
+    this.ksrc = 'fn';    // Key Setting: what the bindings to choose from are (functions, skills, items)
     this.sel = null;     // the item slot, equipment slot, skill or quest picked
     this.move = null;    // an item being moved: the next slot tapped takes it
     this.pick = null;    // a scroll being put on: the next thing worn tapped takes it
@@ -202,19 +251,31 @@ export class MobileSheets {
   get wm() { return this.g.windows; }
   /** MENU ids the sheets stand in for. */
   static kindOf(m, MENU) {
-    return { [MENU.ITEMS]: 'items', [MENU.EQUIP]: 'equip', [MENU.STATS]: 'stats', [MENU.SKILLS]: 'skills', [MENU.QUESTS]: 'quests' }[m] || null;
+    return { [MENU.ITEMS]: 'items', [MENU.EQUIP]: 'equip', [MENU.STATS]: 'stats', [MENU.SKILLS]: 'skills', [MENU.QUESTS]: 'quests', [MENU.KEYS]: 'keys' }[m] || null;
   }
   /** keep: System Options carries on from the window it takes over from (what CANCEL puts back stays that window's). */
   toggle(kind, keep = false) { if (this.kind === kind) this.close(); else this.show(kind, keep); }
   show(kind, keep = false) {
-    if (kind === 'sysopt' && this.kind !== kind && !keep) this.wm.wins.sysopt?.onOpen();   // what CANCEL goes back to
-    if (this.kind !== kind) { this.sel = null; this.move = null; if (kind !== 'equip') this.pick = null; this.p.body.scrollTop = 0; }
+    if (this.kind !== kind) {
+      this.leaving();
+      if (!keep) this.wm.wins[WINDOW_OF[kind]]?.onOpen?.();   // as its window opens: what CANCEL goes back to, and the like
+      this.sel = null; this.move = null; this.kpick = null; if (kind !== 'equip') this.pick = null; this.p.body.scrollTop = 0;
+    }
     this.kind = kind;
     this.el.classList.add('mh-open'); this.hud.el.classList.add('mh-sheeting');
     this.render();
   }
+  /** Leaving Key Setting: its window's own close (the touch controls back, quick slots not kept put back). */
+  leaving() { if (this.kind === 'keys') this.wm.wins.keyconfig?.onClose?.(); }
+  /** The X: as the window's, Key Setting with changes asks whether to save them first; it closes either way. */
+  async closeAsked() {
+    const w = this.wm.wins.keyconfig;
+    if (this.kind === 'keys' && w?.changed() && await this.wm.confirm('Save the changes you made?')) w.apply();
+    this.close();
+  }
   close() {
-    this.kind = null; this.sel = null; this.move = null; this.pick = null;
+    this.leaving();
+    this.kind = null; this.sel = null; this.move = null; this.pick = null; this.kpick = null;
     this.el.classList.remove('mh-open'); this.hud.el.classList.remove('mh-sheeting');
     this.showQuest(false);
   }
@@ -240,6 +301,12 @@ export class MobileSheets {
     if (this.kind === 'sysopt') {
       return `${base}|${JSON.stringify([settings, music.volume, music.muted, sfx.volume, sfx.muted, !!document.fullscreenElement, UI_SCALE, maxUiScale(), VIEW_W, VIEW_H])}`;
     }
+    if (this.kind === 'keys') {
+      const inv = [2, 3, 4, 5].map((t) => Object.values(g.inventory?.[t] || {}).map((it) => it?.id).join(',')).join('/');
+      return `${base}|${this.tab.keys}|${this.kpick}|${this.ksrc}|${JSON.stringify(this.wm.wins.keyconfig?.ctlDraft)}|${Object.keys(g.skills?.levels || {}).length}|${inv}|${UI_W}x${UI_H}`;
+    }
+    if (this.kind === 'gameopt') return `${base}|${JSON.stringify(this.wm.wins.gameopt?.allow)}`;
+    if (this.kind === 'channel') { const w = this.wm.wins.channel; return `${base}|${w?.pick}|${g.channel}|${w?.count}`; }
     return base;
   }
   render() {
@@ -563,6 +630,208 @@ export class MobileSheets {
     for (const t of ['pointerdown', 'keydown', 'keyup']) s.addEventListener(t, (e) => e.stopPropagation());
     s.addEventListener('change', () => { sfx.play('UI/BtMouseClick'); c.set(Number(s.value)); this.render(); });
     return s;
+  }
+
+  // ---------------------------------------------------------------- Change Channel
+  /** The Change Channel window's channels (its pick and its go): yours marked, the picked one lit; a second tap goes. */
+  channel() {
+    const g = this.g, w = this.wm.wins.channel, out = el('div');
+    if (!w) return out;
+    const world = w.C?.world?.[g.worldId ?? 0];
+    if (world?._canvas) { const b = el('div', 'mh-ch-world'); b.append(this.img(world)); out.append(b); }
+    const grid = el('div', 'mh-ch-grid');
+    for (let i = 0; i < w.count; i++) {
+      const c = el('div', `mh-ch${i === w.pick ? ' mh-sel' : ''}${i === g.channel ? ' mh-cur' : ''}`);
+      c.append(el('b', null, String(i + 1)), el('span', null, i === g.channel ? 'Here' : 'Channel'));
+      this.hud.tap(c, () => {
+        if (w.pick === i && i !== g.channel) { this.close(); w.go(); return; }
+        w.pick = i; this.render();
+      });
+      grid.append(c);
+    }
+    out.append(grid);
+    const a = el('div', 'mh-ctas mh-end'), go = this.button('Change Channel', () => { this.close(); w.go(); }, 'mh-main');
+    go.disabled = w.pick === g.channel;   // (on your own channel it does nothing, as the window's)
+    a.append(this.button('Cancel', () => this.close()), go);
+    this.p.detail.append(a);
+    return out;
+  }
+
+  // ---------------------------------------------------------------- Game Options
+  /** Game Option's rows as switches, kept as the window keeps them; Cancel puts back what they were when it opened. */
+  gameopt() {
+    const w = this.wm.wins.gameopt, out = el('div');
+    if (!w) return out;
+    out.append(el('div', 'mh-sec', 'Allow'));
+    for (const [k, label] of GAME_OPTS) {
+      const r = el('div', 'mh-kv mh-opt mh-wide'), e = el('em');
+      e.append(this.switch(w.allow[k] !== false, () => {
+        w.allow[k] = w.allow[k] === false;
+        try { localStorage.setItem('maple.gameopt', JSON.stringify(w.allow)); } catch { /* storage off */ }
+      }));
+      r.append(el('span', null, label), e);
+      out.append(r);
+    }
+    const a = el('div', 'mh-ctas mh-end');
+    a.append(this.button('Cancel', () => { this.close(); w.cancel(); }), this.button('OK', () => this.close(), 'mh-main'));
+    this.p.detail.append(a);
+    return out;
+  }
+
+  // ---------------------------------------------------------------- Key Setting
+  /**
+   * Key Setting's Touch and Controller tabs (MOBILE UI has no keyboard part), on the window's own draft: tap a button
+   * (on the touch screen, where buttons are also dragged to move them, or the controller's) and then what it is to do
+   * from the functions, your skills or your items. OK keeps the changes; Cancel drops them.
+   */
+  keys() {
+    const g = this.g, w = this.wm.wins.keyconfig, out = el('div');
+    if (!w) return out;
+    const tab = this.tab.keys, d = w.ctlDraft, t = d.touch;
+    this.tabs([['touch', 'Touch'], ['controller', 'Controller']], tab, (k) => { this.tab.keys = k; this.kpick = null; });
+    const row = (label, ...right) => { const r = el('div', 'mh-kv mh-opt'), e = el('em'); r.append(el('span', null, label)); e.append(...right); out.append(r); r.append(e); };
+    let slot = null;   // the picked button: { name, b, set(b), remove? }
+    if (tab === 'touch') {
+      for (const [label, opts, cur, set] of w.tabs.rows()) {
+        row(label, this.choice({ items: opts.map(([, name]) => name), value: opts.findIndex(([v]) => v === cur), set: (i) => set(opts[i][0]) }));
+      }
+      out.append(this.touchScreen(w), el('div', 'mh-tp-hint', 'Drag a button or the stick to move it; tap a button to choose what it does.'));
+      const add = this.button(t.buttons.length >= TOUCH_MAX_BUTTONS ? 'Button limit reached' : '+ Add a button', () => {
+        if (t.buttons.length >= TOUCH_MAX_BUTTONS) return;
+        const id = Math.max(0, ...t.buttons.map((b) => b.id)) + 1;
+        t.buttons.push({ id, x: 0.5, y: 0.6, b: null });
+        this.kpick = id; this.render();
+      });
+      add.disabled = t.buttons.length >= TOUCH_MAX_BUTTONS;
+      const ctas = el('div', 'mh-ctas'); ctas.append(add); out.append(ctas);
+      const btn = t.buttons.find((b) => b.id === this.kpick);
+      if (btn) {
+        slot = { name: 'Touch button', b: btn.b, remove: () => { t.buttons = t.buttons.filter((b) => b.id !== btn.id); this.kpick = null; },
+          set: (b) => { for (const o of t.buttons) if (o.id !== btn.id && sameBinding(o.b, b)) o.b = null; btn.b = b ? { ...b } : null; } };
+      }
+    } else {
+      row('Move with', this.choice({ items: ['Left stick', 'D-pad'], value: d.padMove === 'dpad' ? 1 : 0, set: (i) => { d.padMove = i ? 'dpad' : 'ls'; } }));
+      const grid = el('div', 'mh-pad');
+      for (const p of PAD_BUTTONS) {
+        if (p.i >= 12 && d.padMove === 'dpad') continue;   // the D-pad moves then: its arms take no bindings
+        const b = d.pad[p.i], c = el('div', `mh-cell mh-padb${this.kpick === p.i ? ' mh-sel' : ''}`);
+        if (b) c.append(this.img(g.bindingIcon(b)));
+        c.append(el('small', null, p.label));
+        this.hud.tap(c, () => { this.kpick = this.kpick === p.i ? null : p.i; this.render(); });
+        grid.append(c);
+      }
+      out.append(grid);
+      const p = PAD_BUTTONS.find((x) => x.i === this.kpick);
+      if (p) {
+        slot = { name: `${p.label} button`, b: d.pad[p.i],
+          set: (b) => { for (const [k, v] of Object.entries(d.pad)) if (Number(k) !== p.i && sameBinding(v, b)) delete d.pad[k]; if (b) d.pad[p.i] = { ...b }; else delete d.pad[p.i]; } };
+      }
+    }
+    if (!slot) out.append(el('div', 'mh-empty', tab === 'touch' ? 'Tap a button on the screen above to choose what it does.' : 'Tap a button above to choose what it does.'));
+    else this.bindPicker(out, slot);
+    // Default / Clear All (asked first, as the window's), then Cancel and OK
+    const a = el('div', 'mh-ctas');
+    const ask = (q, fn) => this.wm.confirm(q).then((ok) => { if (ok) { fn(); this.kpick = null; this.render(); } });
+    const which = tab === 'touch' ? 'touch controls' : 'controller';
+    a.append(this.button('Default', () => ask(`Put the ${which} back to the defaults?`, () => w.tabs.reset(tab))),
+      this.button('Clear All', () => ask(`Clear what every button of the ${which} does?`, () => w.tabs.clear(tab))), el('span', 'mh-sp'),
+      this.button('Cancel', () => this.close()), this.button('OK', () => { w.apply(); this.close(); }, 'mh-main'));
+    this.p.detail.append(a);
+    return out;
+  }
+  /** A binding's name: the function's, a face's number, the skill's or the item's. */
+  bindingName(b) {
+    if (!b) return 'Nothing yet';
+    if (b.type === 1) return this.g.skills?.name(b.action) || 'Skill';
+    if (b.type === 2 || b.type === 3 || b.type === 7) return this.wm.itemName(b.action) || 'Item';
+    if (b.type === 6) return `Face ${b.action - 99}`;
+    return bindingLabel(b) || 'Function';
+  }
+  /** What can go on a button: the functions with their icons, the skills you have that go on a key, your key items. */
+  bindables(src) {
+    const g = this.g;
+    if (src === 'skill') {
+      return Object.entries(g.skills?.levels || {}).filter(([id, s]) => (s?.level || 0) > 0 && ![0, 9].includes(Math.floor(id / 1000) % 10))
+        .map(([id]) => ({ type: 1, action: Number(id) }));
+    }
+    if (src === 'item') {
+      const out = [], seen = new Set();
+      for (const tab of [2, 3, 4, 5]) {
+        for (const it of Object.values(g.inventory?.[tab] || {})) {
+          const type = it && itemKeyType(tab, it.id);
+          if (type && !seen.has(it.id)) { seen.add(it.id); out.push({ type, action: it.id }); }
+        }
+      }
+      return out;
+    }
+    return FUNCTIONS.filter(([, a]) => this.wm.W.KeyConfig?.icon?.[a]).map(([type, action]) => ({ type, action }));
+  }
+  /** The picked button: what it does now (Clear, and Remove for a touch button), then what it can do instead. */
+  bindPicker(out, slot) {
+    const head = el('div', 'mh-dt-head mh-kp'), txt = el('div');
+    head.append(this.img(slot.b ? this.g.bindingIcon(slot.b) : null));
+    txt.append(el('div', 'mh-dt-name', this.bindingName(slot.b)), el('div', 'mh-dt-sub', slot.name));
+    head.append(txt);
+    if (slot.b) head.append(this.button('Clear', () => { slot.set(null); this.render(); }));
+    if (slot.remove) head.append(this.button('Remove', () => { slot.remove(); this.render(); }, 'mh-warn'));
+    out.append(head, this.choice({ items: KEY_SOURCES.map(([, name]) => name), value: KEY_SOURCES.findIndex(([k]) => k === this.ksrc), set: (i) => { this.ksrc = KEY_SOURCES[i][0]; } }));
+    const list = this.bindables(this.ksrc), grid = el('div', 'mh-grid');
+    grid.style.marginTop = '6px';
+    if (!list.length) out.append(el('div', 'mh-empty', this.ksrc === 'skill' ? 'No skills that go on a button yet.' : 'No items that go on a button.'));
+    for (const b of list) {
+      const c = el('div', `mh-cell${sameBinding(b, slot.b) ? ' mh-sel' : ''}`);
+      c.title = this.bindingName(b);
+      c.append(this.img(this.g.bindingIcon(b)));
+      if (b.type === 2) c.append(el('b', null, String(this.g.itemCount?.(b.action) || 0)));
+      this.hud.tap(c, () => { sfx.play('UI/BtMouseClick'); slot.set(b); this.render(); });
+      grid.append(c);
+    }
+    out.append(grid);
+  }
+  /** The screen with the touch controls where they sit (their size and opacity), to drag about and pick. */
+  touchScreen(w) {
+    const t = w.ctlDraft.touch, box = el('div', 'mh-tp');
+    box.style.aspectRatio = `${UI_W} / ${UI_H}`;
+    const put = (n, at, px) => {
+      n.style.left = `${at.x * 100}%`; n.style.top = `${at.y * 100}%`;
+      n.style.width = `${((px * (t.size || 1)) / UI_W) * 100}%`; n.style.opacity = String(t.opacity ?? 0.8);
+    };
+    const stick = el('div', 'mh-tp-stick');
+    put(stick, t.stick, STICK);
+    this.dragOnScreen(stick, t.stick, box, null);
+    box.append(stick);
+    for (const b of t.buttons) {
+      const n = el('div', `mh-tp-btn${this.kpick === b.id ? ' mh-sel' : ''}`), label = bindingLabel(b.b);
+      put(n, b, BUTTON);
+      if (label) n.append(el('small', null, label.length > 8 ? label.split(' ')[0] : label));
+      else if (b.b) n.append(this.img(this.g.bindingIcon(b.b)));
+      this.dragOnScreen(n, b, box, () => { this.kpick = b.id; this.render(); });
+      box.append(n);
+    }
+    return box;
+  }
+  /** A touch control on the screen: dragged, it moves there (kept 3% in from the edges); tapped, onTap. */
+  dragOnScreen(n, at, box, onTap) {
+    n.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      n.setPointerCapture?.(e.pointerId);
+      this.sliding = 'touch';
+      const x0 = e.clientX, y0 = e.clientY;
+      let moved = false;
+      const move = (ev) => {
+        if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+        moved = true;
+        const r = box.getBoundingClientRect(), fit = (v) => Math.min(0.97, Math.max(0.03, v));
+        at.x = fit((ev.clientX - r.left) / r.width); at.y = fit((ev.clientY - r.top) / r.height);
+        n.style.left = `${at.x * 100}%`; n.style.top = `${at.y * 100}%`;
+      };
+      const up = () => {
+        n.removeEventListener('pointermove', move); n.removeEventListener('pointerup', up); n.removeEventListener('pointercancel', up);
+        this.sliding = null;
+        if (!moved) onTap?.();
+      };
+      n.addEventListener('pointermove', move); n.addEventListener('pointerup', up); n.addEventListener('pointercancel', up);
+    });
   }
 
   // ---------------------------------------------------------------- Quests

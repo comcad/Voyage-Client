@@ -1942,7 +1942,7 @@ const KEYCAPS = {
 const KEY_TWIN = { 54: 42, 89: 29, 90: 56 };
 const keyOf = (sc) => KEY_TWIN[sc] ?? sc;
 const PALETTE = { x: 9, y: 267, step: 34, cols: 18 };
-const FUNCTIONS = [...Array.from({ length: 28 }, (_, i) => [4, i]), ...[50, 51, 52, 53, 54].map((a) => [5, a]), ...[100, 101, 102, 103, 104, 105, 106].map((a) => [6, a])];
+export const FUNCTIONS = [...Array.from({ length: 28 }, (_, i) => [4, i]), ...[50, 51, 52, 53, 54].map((a) => [5, a]), ...[100, 101, 102, 103, 104, 105, 106].map((a) => [6, a])];
 const MACRO_TIP = 'Register the frequently-used skills for a quick access with a single button.';
 
 /**

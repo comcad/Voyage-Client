@@ -162,7 +162,7 @@ const preview = () => ({ x: 330, y: 30, w: 268, h: Math.min(201, Math.round((268
 const SHOW = [['auto', 'Auto'], ['on', 'On'], ['off', 'Off']];
 const SIZES = [[0.8, 'Small'], [1, 'Medium'], [1.25, 'Large'], [1.5, 'X-Large'], [1.8, 'Huge']];
 const OPACITY = [[0.5, '50%'], [0.75, '75%'], [1, '100%']];
-const BUTTON = 58, STICK = 120;
+export const BUTTON = 58, STICK = 120;
 /** How far past its edge (interface px) a finger still takes a control in the preview: they are small there. */
 const TOUCH_GRAB = 16;
 

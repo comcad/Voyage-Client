@@ -424,7 +424,7 @@ export class StatusBar {
       case 'BtComm': g.windows.toggle('userlist'); break;
       case 'BtMobbook': g.windows.toggle('monsterbook'); break;
       case 'BtMessenger': g.windows.toggle('messenger'); break;
-      case 'BtGameOpt': g.windows.toggle('gameopt'); break;
+      case 'BtGameOpt': if (!g.mobileHud?.openSheet('gameopt')) g.windows.toggle('gameopt'); break;   // MOBILE UI: its own sheet
       case 'BtSysOpt': if (!g.mobileHud?.openSheet('sysopt')) g.windows.toggle('sysopt'); break;   // MOBILE UI: its own sheet
       case 'BtQuit': g.windows.confirm('Are you sure you want to quit the game?').then((ok) => { if (ok) g.leave(); }); break;
       default: g.notice('This feature is not available yet.');

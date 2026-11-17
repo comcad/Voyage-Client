@@ -1011,7 +1011,9 @@ export class Game {
   }
   /** The status bar's Channel button: its window, except where the map forbids changing channel (fieldLimit 0x10). */
   channelMenu() {
-    if (!this.windows.isOpen('channel') && (this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
+    const open = this.windows.isOpen('channel') || this.mobileHud?.sheets?.kind === 'channel';
+    if (!open && (this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
+    if (this.mobileHud?.openSheet('channel')) return;   // MOBILE UI: its own sheet
     this.windows.toggle('channel');
   }
   /**
@@ -2467,7 +2469,7 @@ export class Game {
     if (!this.hud) return;
     const chatKey = CHAT_KEYS[m];
     if (chatKey) { if (chatKey === 'toggle') this.statusBar?.toggleChat(); else this.statusBar?.openChat(chatKey); return; }
-    if (settings.mobileUi && this.mobileHud?.sheet(m)) return;   // MOBILE UI: the Item, Equipment, Stat, Skill and Quest windows as its sheets
+    if (settings.mobileUi && this.mobileHud?.sheet(m)) return;   // MOBILE UI: the Item, Equipment, Stat, Skill, Quest and Key Setting windows as its sheets
     if (m === MENU.ITEMS) this.windows.toggle('inventory');
     else if (m === MENU.EQUIP) this.windows.toggle('equip');
     else if (m === MENU.STATS) this.windows.toggle('stat');

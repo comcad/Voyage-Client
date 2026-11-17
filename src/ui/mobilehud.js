@@ -5,7 +5,8 @@
  *     window); it goes while a sheet is open;
  *   - top left: the mini map (ui/mobileminimap.js);
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
- *     and Quest windows and System Options open as its own sheets, made for a phone (ui/mobilesheets.js);
+ *     and Quest windows, System Options, Game Options, Key Setting and Change Channel open as its own sheets, made for
+ *     a phone (ui/mobilesheets.js);
  *   - the chat, only while it is open: a little up-arrow tab out of the status line's top opens a line to type on,
  *     with the chat target beside it, centred right over the status line, and the log over it; closed, nothing of the
  *     chat shows but a gold dot on the tab when lines came in meanwhile;
