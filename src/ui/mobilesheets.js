@@ -8,8 +8,9 @@
  *   - equipment: taking something off (Game.unequip);
  *   - stats: AP one at a time or AUTO (StatWin.raise / autoAssign);
  *   - skills: SP (SkillWin.canRaise / raiseId);
- *   - quests: the Quest window's lists, its text (its own names for NPCs, items and monsters) and its buttons (give
- *     up, Quest Helper, Mark NPC).
+ *   - quests: the Quest window's lists; a picked quest slides out a panel to the left, as the window's detail panel
+ *     does: the quest giver standing (its own frames), the level line, a chain's parts, the text in its own names for
+ *     NPCs, items and monsters, the summary and rewards, the time left, and its buttons (give up, Quest Helper, Mark NPC).
  * Item and skill icons are the game's own.
  */
 import { EXP, jobName, itemDesc, isScroll } from '../data.js';
@@ -33,7 +34,7 @@ const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strok
 
 const CSS = `
 .mhud .mh-sheet { position: absolute; right: calc(6px + env(safe-area-inset-right)); top: 50px; bottom: calc(6px + env(safe-area-inset-bottom));
-  width: min(400px, 62vw); display: none; flex-direction: column; pointer-events: auto; overflow: hidden; }
+  width: min(400px, 62%); display: none; flex-direction: column; pointer-events: auto; overflow: hidden; }
 .mhud .mh-sheet.mh-open { display: flex; }
 .mhud.mh-sheeting .mh-chat { display: none; }
 .mhud .mh-sh-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 8px 5px 12px; }
@@ -96,6 +97,35 @@ const CSS = `
 .mhud .mh-li .mh-li-name { font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mhud .mh-li .mh-li-sub { font-size: 10px; color: rgba(225, 232, 248, 0.6); }
 .mhud .mh-li.mh-off .mh-li-name { color: rgba(225, 232, 248, 0.45); }
+.mhud .mh-qd { position: absolute; top: 74px; bottom: calc(6px + env(safe-area-inset-bottom)); right: calc(12px + env(safe-area-inset-right) + min(400px, 62%));
+  width: min(330px, calc(100% - min(400px, 62%) - 24px - env(safe-area-inset-left) - env(safe-area-inset-right))); display: flex; flex-direction: column;
+  opacity: 0; transform: translateX(56px) scale(0.98); transform-origin: right center; pointer-events: none;
+  transition: transform 0.32s cubic-bezier(0.2, 0.85, 0.25, 1), opacity 0.22s ease; }
+.mhud .mh-qd.mh-open { opacity: 1; transform: none; pointer-events: auto; }
+.mhud .mh-qd-head { flex: none; display: flex; align-items: center; gap: 7px; padding: 8px 8px 0 12px; }
+.mhud .mh-qd-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #4dbb2b; box-shadow: 0 0 0 2px rgba(217, 247, 198, 0.55), 0 0 8px rgba(77, 187, 43, 0.6); }
+.mhud .mh-qd-dot.mh-q1 { background: #f0b22e; box-shadow: 0 0 0 2px rgba(255, 232, 146, 0.5), 0 0 8px rgba(240, 178, 46, 0.6); }
+.mhud .mh-qd-dot.mh-q2 { background: #8a94a8; box-shadow: 0 0 0 2px rgba(200, 208, 225, 0.35); }
+.mhud .mh-qd-title { flex: 1; min-width: 0; font-size: 13px; font-weight: 800; line-height: 1.2; }
+.mhud .mh-qd-x { width: 26px; height: 26px; flex: none; }
+.mhud .mh-qd-x svg { width: 14px; height: 14px; }
+.mhud .mh-qd-lv { flex: none; padding: 1px 12px 0 27px; font-size: 10.5px; color: rgba(225, 232, 248, 0.65); }
+.mhud .mh-qd-top { flex: none; display: flex; gap: 10px; align-items: flex-end; padding: 8px 12px 0; }
+.mhud .mh-qd-stage { position: relative; flex: none; width: 92px; height: 96px; border-radius: 10px;
+  background: radial-gradient(ellipse 60% 22% at 50% 88%, rgba(0, 0, 0, 0.45), transparent 70%),
+    radial-gradient(ellipse at 50% 70%, rgba(255, 226, 150, 0.2), transparent 65%), linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.22));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.mhud .mh-qd-stage img { position: absolute; image-rendering: pixelated; pointer-events: none; }
+.mhud .mh-qd-npc { flex: 1; min-width: 0; padding-bottom: 4px; }
+.mhud .mh-qd-npc b { display: block; font-size: 12px; color: #ffd978; }
+.mhud .mh-qd-npc span { display: block; font-size: 10px; color: rgba(225, 232, 248, 0.6); }
+.mhud .mh-qd-gauge { margin-top: 6px; height: 6px; border-radius: 3px; background: rgba(0, 0, 0, 0.45); overflow: hidden; }
+.mhud .mh-qd-gauge i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #7be35c, #3fae26); }
+.mhud .mh-qd-npc small { display: block; margin-top: 2px; font-size: 9.5px; color: rgba(225, 232, 248, 0.6); }
+.mhud .mh-qd .mh-ctas { flex: none; padding: 0 12px; }
+.mhud .mh-qd-body { flex: 1; min-height: 0; overflow-y: auto; margin-top: 4px; padding: 6px 12px 10px; border-top: 1px solid rgba(255, 255, 255, 0.08);
+  -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.mhud .mh-qd-time { margin-top: 8px; font-size: 11px; font-weight: 800; color: #ff7a7a; }
 .mhud .mh-empty { padding: 18px 6px; text-align: center; color: rgba(225, 232, 248, 0.5); font-size: 11.5px; }
 `;
 
@@ -116,6 +146,14 @@ export class MobileSheets {
     n.innerHTML = `<div class="mh-sh-head"><span class="mh-sh-title"></span><span class="mh-sh-extra"></span><div class="mh-btn mh-sh-x">${X_ICON}</div></div>
       <div class="mh-sh-tabs"></div><div class="mh-sh-banner"></div><div class="mh-sh-body"></div><div class="mh-sh-detail"></div>`;
     root.append(n);
+    // the picked quest's panel, sliding out to the left of the sheet (from behind it)
+    const q = this.qd = el('div', 'mh-qd mh-glass');
+    q.innerHTML = `<div class="mh-qd-head"><span class="mh-qd-dot"></span><div class="mh-qd-title"></div><div class="mh-btn mh-qd-x" title="Close">${X_ICON}</div></div>
+      <div class="mh-qd-lv"></div><div class="mh-qd-top"><div class="mh-qd-stage"></div><div class="mh-qd-npc"></div></div><div class="mh-ctas"></div><div class="mh-qd-body"></div>`;
+    root.insertBefore(q, n);
+    this.qp = { dot: q.querySelector('.mh-qd-dot'), title: q.querySelector('.mh-qd-title'), lv: q.querySelector('.mh-qd-lv'), stage: q.querySelector('.mh-qd-stage'),
+      npc: q.querySelector('.mh-qd-npc'), acts: q.querySelector('.mh-ctas'), body: q.querySelector('.mh-qd-body') };
+    hud.tap(q.querySelector('.mh-qd-x'), () => { this.sel = null; this.render(); });
     const $ = (s) => n.querySelector(s);
     this.p = { title: $('.mh-sh-title'), extra: $('.mh-sh-extra'), tabs: $('.mh-sh-tabs'), banner: $('.mh-sh-banner'), body: $('.mh-sh-body'), detail: $('.mh-sh-detail') };
     hud.tap($('.mh-sh-x'), () => this.close());
@@ -144,6 +182,7 @@ export class MobileSheets {
   close() {
     this.kind = null; this.sel = null; this.move = null; this.pick = null;
     this.el.classList.remove('mh-open'); this.hud.el.classList.remove('mh-sheeting');
+    this.showQuest(false);
   }
 
   /** Drawn again when what it shows changes (an item moved, a level gained, an icon or name loaded). */
@@ -158,7 +197,12 @@ export class MobileSheets {
     if (this.kind === 'equip') return `${base}|${this.tab.equip}|${Object.entries(g.inventory?.equipped || {}).map(([k, it]) => `${k}:${it?.id}`).join(',')}`;
     if (this.kind === 'stats') return `${base}|${JSON.stringify([s.level, s.job, s.hp, s.mp, s.exp, s.fame, s.ap, s.str, s.dex, s.int, s.luk, g.maxHpShown(), g.maxMpShown(), g.guild?.name, g.statWindow?.()])}`;
     if (this.kind === 'skills') { const w = this.wm?.wins.skill; this.book ??= w?.books?.[w.books.length - 1]; if (w && this.book) w.book = this.book; return `${base}|${this.book}|${s.sp}|${(w?.list || []).map((id) => g.skills.level(id)).join(',')}|${!!g.skills?.strings}`; }
-    if (this.kind === 'quests') { const w = this.wm?.wins.quest; if (!w) return base; return `${base}|${this.tab.quests}|${this.questEntries(w, this.tab.quests).map((e) => e.id).join(',')}`; }
+    if (this.kind === 'quests') {
+      const w = this.wm?.wins.quest;
+      if (!w) return base;
+      const npc = this.sel ? w.questNpc(this.sel) : 0;
+      return `${base}|${this.tab.quests}|${this.questEntries(w, this.tab.quests).map((e) => e.id).join(',')}|${w.portraits?.get(npc)?.length || 0}|${!!w.str}|${!!g.questTimers?.get(this.sel)}`;
+    }
     return base;
   }
   render() {
@@ -167,7 +211,9 @@ export class MobileSheets {
     const p = this.p, keep = p.body.scrollTop;
     p.title.textContent = TITLES[this.kind];
     p.extra.replaceChildren(); p.tabs.replaceChildren(); p.banner.replaceChildren(); p.detail.replaceChildren();
+    this.questShown = false;
     const body = this[this.kind]();
+    this.showQuest(this.questShown);
     p.body.replaceChildren(body);
     p.body.scrollTop = keep;
     p.detail.classList.toggle('mh-open', p.detail.childElementCount > 0);
@@ -405,7 +451,7 @@ export class MobileSheets {
       }
     }
     const e = this.sel && entries.find((x) => x.id === this.sel);
-    if (e) this.questDetail(w, e, tab);
+    if (e) this.questPanel(w, e, tab);
     return list;
   }
   /** The Quest window's list for a tab, worked out at most every 2s (Available checks every quest). */
@@ -417,40 +463,103 @@ export class MobileSheets {
     this.qCache = { tab, at: now, list };
     return list;
   }
-  /** A quest's text as the Quest window lays it out (its names for NPCs, items, monsters and maps), in light colours. */
-  questDetail(w, e, tab) {
-    const g = this.g, book = g.quests, id = e.chain ? e.current || e.id : e.id, info = book.info[id] || {}, d = this.p.detail;
+  /** The picked quest's panel shown or put away (sliding), its animations stopped when it goes. */
+  showQuest(on) {
+    this.qd.classList.toggle('mh-open', !!on);
+    if (!on) { clearTimeout(this.npcTimer); clearInterval(this.timeTimer); this.stageNpc = null; }
+  }
+  /** Quest text (its #codes) as the Quest window resolves it, in light colours, into a box. */
+  rich(box, text, ref) {
+    const ctx = (this.measure ??= document.createElement('canvas').getContext('2d'));
+    const { lines } = richText(ctx, String(text), 100000, ref, { base: '#e8edf8', colors: LIGHT_COLORS, size: 11 });
+    lines.forEach((l, i) => {
+      if (i) box.append('\n');
+      for (const r of l.runs) {
+        if (r.icon) { const im = this.img(r.icon); im.style.verticalAlign = 'middle'; box.append(im); continue; }
+        if (r.t === undefined) continue;
+        const sp = el('span', null, r.t);
+        if (r.color) sp.style.color = r.color;
+        if (r.bold) sp.style.fontWeight = '800';
+        box.append(sp);
+      }
+    });
+    return box;
+  }
+  /**
+   * The quest's panel, as the Quest window's detail panel: the quest giver standing on its little stage (its own
+   * frames, animated by their delays; a tall one rises over it), the level line, a chain's parts done, the text in the
+   * window's own names, then (under way) the summary, what it asks for and the rewards, and the time left.
+   */
+  questPanel(w, e, tab) {
+    const g = this.g, book = g.quests, id = e.chain ? e.current || e.id : e.id, info = book.info[id] || {}, q = this.qp, ref = w.ref();
     w.sel = e.id; w.did = e.id; w.dtab = tab; w.selEntry = e;
-    d.append(el('div', 'mh-dt-name', e.name || book.name(e.id)));
-    const a = el('div', 'mh-ctas');
-    d.append(a);
-    const text = e.chain ? e.texts.map(([n, t]) => (t ? `${n}\n${t}` : n)).join('\n') : String(info[String(tab)] ?? '');
-    const sum = tab === 1 ? [info.summary, info.demandSummary, info.rewardSummary].filter(Boolean).join('\n') : '';
-    const ctx = document.createElement('canvas').getContext('2d'), ref = w.ref();
-    for (const t of [text, sum].filter(Boolean)) {
-      const box = el('div', 'mh-dt-text');
-      const { lines } = richText(ctx, t, 100000, ref, { base: '#e8edf8', colors: LIGHT_COLORS, size: 11 });
-      lines.forEach((l, i) => {
-        if (i) box.append('\n');
-        for (const r of l.runs) {
-          if (r.icon) { const im = this.img(r.icon); im.style.verticalAlign = 'middle'; box.append(im); continue; }
-          const s = el('span', null, r.t);
-          if (r.color) s.style.color = r.color;
-          if (r.bold) s.style.fontWeight = '800';
-          box.append(s);
-        }
-      });
-      d.append(box);
+    this.questShown = true;
+    q.dot.className = `mh-qd-dot mh-q${tab}`;
+    q.title.textContent = e.name || book.name(e.id);
+    const lv = w.levelLine(e);
+    q.lv.textContent = lv || ''; q.lv.style.display = lv ? '' : 'none';
+    // who gives it, where, and a chain's progress
+    const npcId = w.questNpc(e.id);
+    q.npc.replaceChildren(el('b', null, ref.npc(npcId)), el('span', null, w.areaName(e.area)));
+    if (e.chain && e.count > 1) {
+      const gauge = el('div', 'mh-qd-gauge'), fill = el('i');
+      fill.style.width = `${Math.round(((e.done || 0) / e.count) * 100)}%`;
+      gauge.append(fill);
+      q.npc.append(gauge, el('small', null, `${e.done || 0} of ${e.count} parts done`));
     }
-    a.append(this.button('Find NPC', () => w.findNpc()));
+    this.npcStage(w, npcId);
+    // its buttons
+    q.acts.replaceChildren(this.button('Find NPC', () => w.findNpc()));
     if (tab === 1) {
-      a.append(this.button('Quest Helper', () => this.wm.wins.questalarm?.track(e.id), 'mh-main'));
-      a.append(this.button('Give up', () => this.wm.confirm('Are you sure you want to quit?').then((ok) => {
+      q.acts.append(this.button('Quest Helper', () => this.wm.wins.questalarm?.track(e.id), 'mh-main'));
+      q.acts.append(this.button('Give up', () => this.wm.confirm('Are you sure you want to quit?').then((ok) => {
         if (!ok || book.status(e.id) !== 1) return;
         this.wm.wins.questalarm?.remove(e.id);
         g.net?.questAction(3, e.id);
-        this.sel = null; this.qCache = null;
+        this.sel = null; this.qCache = null; this.render();
       }), 'mh-warn'));
     }
+    // the text, then what is left to do and what it gives
+    const keep = this.qShownId === e.id ? q.body.scrollTop : 0;
+    q.body.replaceChildren();
+    const text = e.chain ? e.texts.map(([n, t]) => (t ? `${n}\n${t}` : n)).join('\n') : String(info[String(tab)] ?? '');
+    if (text) q.body.append(this.rich(el('div', 'mh-dt-text'), text, ref));
+    if (tab === 1) {
+      for (const [head, t] of [['Summary', info.summary], ['To do', info.demandSummary], ['Rewards', info.rewardSummary]]) {
+        if (!t) continue;
+        q.body.append(el('div', 'mh-sec', head), this.rich(el('div', 'mh-dt-text'), t, ref));
+      }
+    }
+    clearInterval(this.timeTimer);
+    const t = tab === 1 && g.questTimers?.get(e.id);
+    if (t) {
+      const line = el('div', 'mh-qd-time');
+      const tickTime = () => { const left = Math.max(0, Math.round((t.end - performance.now()) / 1000)); line.textContent = `Time Left ${Math.floor(left / 3600)}:${String(Math.floor(left / 60) % 60).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`; };
+      tickTime(); this.timeTimer = setInterval(tickTime, 1000);
+      q.body.append(line);
+    }
+    q.body.scrollTop = keep; this.qShownId = e.id;
+  }
+  /** The quest giver on its stage: its frames (loaded by the Quest window), feet on the stage's floor, animated. */
+  npcStage(w, npcId) {
+    const stage = this.qp.stage;
+    w.portrait(npcId);
+    const frames = w.portraits.get(npcId);
+    if (this.stageNpc === npcId && stage.firstChild && frames?.length) return;   // already up and moving
+    clearTimeout(this.npcTimer);
+    stage.replaceChildren();
+    this.stageNpc = frames?.length ? npcId : null;
+    if (!frames?.length) return;
+    const img = el('img'); img.alt = ''; img.draggable = false;
+    stage.append(img);
+    let i = 0;
+    const show = () => {
+      const f = frames[i % frames.length], o = f.origin || [(f._w || 0) / 2, f._h || 0];
+      img.src = `${this.g.assets.base}/${f._canvas}`;
+      img.style.left = `${46 - o[0]}px`; img.style.top = `${88 - o[1]}px`;
+      i++;
+      if (frames.length > 1) this.npcTimer = setTimeout(show, Number(f.delay) || 120);
+    };
+    show();
   }
 }
