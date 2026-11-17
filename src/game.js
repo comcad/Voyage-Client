@@ -365,7 +365,7 @@ const CORKSCREWS = new Set([5101004, 15101003]), CHARGE_BLOWS = new Set([...CORK
  */
 const GRENADE_SPEED = 0.6, GRENADE_REUSE = 1000, GRENADE_LIFE = 3000, GRENADE_HIT = 120;
 /** Heal heals the party and strikes the undead in its box. */
-const HEAL = 2301002;
+const HEAL = 2301002, RESURRECTION = 2321006;
 /** Attack spells need the ground (or water), except Heal and Explosion. */
 const AIR_SPELLS = new Set([HEAL, EXPLOSION]);
 /**
@@ -7808,6 +7808,15 @@ export class Game {
     const p = this.player, node = this.skills.node(id);
     const action = p.ladder ? (p.ladder.l ? 'ladder2' : 'rope2') : this.skills.action(id) || 'alert2';
     if (this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
+    if (id === RESURRECTION) {
+      // the members it brings back; in a party with nobody to bring back you cast, but nothing goes out (no MP, no
+      // cooldown)
+      const mask = this.partyMask(id, lv);
+      if (!mask) return true;
+      this.playSkillEffect(id, p);
+      this.net?.partyMove(id, lv, mask);
+      return true;
+    }
     this.playSkillEffect(id, p);
     const needsPos = node?.summon || id === 2311002; // summons and Mystic Door are placed at the caster
     this.net?.specialMove(id, lv, needsPos ? { x: Math.round(p.x), y: Math.round(p.y) } : null, star);
@@ -7858,13 +7867,13 @@ export class Game {
     if (this.net && this.skills.cooling(id)) { this.notice('You may not use the skill yet.'); return false; }
     if (this.net && !this.skillCostOk(id, this.skills.levelData(id, lv))) return false;
     this.playSkillEffect(id, this.player);
-    this.net?.heal(id, lv, this.partyMask(id, lv));
+    this.net?.partyMove(id, lv, this.partyMask(id, lv));
     return this.attack(id, 'magic', { heal: true });
   }
 
   /**
-   * The party members a skill reaches, one bit per party slot, the first slot highest: you always, the others when
-   * they stand in its box. 0x80 when you aren't in a party.
+   * The party members a skill reaches, one bit per party slot, the first slot highest: you always, the others alive in
+   * its box (Resurrection: not you, only the dead in its box). 0x80 when you aren't in a party.
    */
   partyMask(id, lv) {
     const members = this.party?.members;
@@ -7877,7 +7886,8 @@ export class Game {
       const m = members[i];
       if (!m) continue;
       const rp = this.others.get(m.id);
-      if (m.id === p.id || (rp && rp.state !== 'dead' && rp.x >= x1 && rp.x < x2 && rp.y >= p.y + r.lt[1] && rp.y < p.y + r.rb[1])) mask |= 1;
+      const revive = id === RESURRECTION, inBox = rp && rp.x >= x1 && rp.x < x2 && rp.y >= p.y + r.lt[1] && rp.y < p.y + r.rb[1];
+      if (m.id === p.id ? !revive : inBox && (rp.state === 'dead') === revive) mask |= 1;
     }
     return mask;
   }

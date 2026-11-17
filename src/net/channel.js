@@ -1833,8 +1833,8 @@ export class ChannelSession {
     if (skillId % 10000000 === 1004) w.short(0);
     this.send(w);
   }
-  /** Heal: which party members it reaches (one bit per party slot), then a delay. */
-  heal(skillId, level, mask) {
+  /** A party skill (Heal, Resurrection): which party members it reaches (one bit per party slot), then a delay. */
+  partyMove(skillId, level, mask) {
     this.send(new PacketWriter(C.SPECIAL_MOVE).int(Date.now() | 0).int(skillId).byte(level).byte(mask).short(0));
   }
   /** A skill starting to charge or wind up (Monster Magnet, Big Bang, Explosion...): its pose, which way you face, speed. */
