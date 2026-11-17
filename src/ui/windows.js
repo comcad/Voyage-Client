@@ -462,7 +462,10 @@ class InventoryWin extends Win {
     const max = Math.min(50000, this.g.meso || 0);
     if (max < 10) { this.g.notice('You need at least 10 mesos to drop.'); return; }
     const v = await this.mgr.askNumber(`How many mesos will you drop?\n(10 ~ ${max.toLocaleString('en-US')})`, 10, 10, max);
-    if (v) this.g.net?.dropMeso(v);
+    if (!v) return;
+    // a map that forbids dropping refuses mesos too, as they go (the server would take them and leave nothing)
+    if ((this.g.map?.info?.fieldLimit || 0) & 0x400000) { this.g.notice('You cannot drop the item here.'); return; }
+    this.g.net?.dropMeso(v);
   }
   frames() {
     const W = this.W;
@@ -565,12 +568,17 @@ class InventoryWin extends Win {
         : 'Dropping this item will break your engagement.\r\nDo you still wish to drop this item?')) this.g.net?.breakEngagement(it.id);
       return;
     }
+    // a cash item, one carrying a cash serial, and the 4220xxx items can't be dropped (the server would delete them)
+    const cashSerial = it.cash && BigInt(it.cashId ?? 0) !== 0n;
+    if (cashSerial || Math.floor(it.id / 1000) === 4220 || Number((await itemInfo(this.g.assets, it.id))?.cash)) { this.mgr.notice("You can't drop this item."); return; }
     let qty = 1;
     // throwing stars and bullets always go as a whole stack (the server drops them that way)
     if (c.tab !== 1 && it.quantity > 1 && ![207, 233].includes(Math.floor(it.id / 10000))) {
       qty = await this.mgr.askNumber(`How many will you drop?\n(1 ~ ${it.quantity})`, it.quantity, 1, it.quantity);
       if (!qty) return;
     }
+    // a map that forbids dropping refuses as the item goes (the server would delete it)
+    if ((this.g.map?.info?.fieldLimit || 0) & 0x400000) { this.g.notice('You cannot drop the item here.'); return; }
     if (this.g.inventory?.[c.tab]?.[c.slot] === it) this.g.net?.moveItem(c.tab, c.slot, 0, qty);
   }
   wheel(dy) { if (!this.full) this.first = Math.max(0, Math.min(this.rows - 6, this.first + Math.sign(dy))); }
