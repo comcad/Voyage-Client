@@ -533,13 +533,14 @@ export class DeathNotice extends Win {
  * the lines as given (leading spaces kept), left-aligned at x 19 from y 24.
  * 'quantity': the prompt at the top left and a white 226x15 field 73px off the bottom.
  * 'text': the same field for a name or a line. 'whisper': the same with a ComboBox whose list holds the names you whispered.
+ * 'group': the ComboBox alone, its list the buddy groups (To Group).
  */
 export class UtilBox extends Win {
   constructor(mgr, kind, text, done, opts = {}) {
     super(mgr, null, 0, 0);
     this.buttons = [];
     this.modal = true; this.kind = kind; this.done = done; this.opts = opts;
-    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text' || kind === 'buddy';
+    const field = kind === 'quantity' || kind === 'whisper' || kind === 'text' || kind === 'buddy' || kind === 'group';
     // centred lines take item names (#t), colours and \r\n breaks; each is trimmed so it centres on its words
     this.centred = !field && kind !== 'okcancelLeft';
     this.lines = kind === 'okcancelLeft' ? text.split('\n')
@@ -574,6 +575,7 @@ export class UtilBox extends Win {
       this.field.rect.h = 15; this.field.value = '';
       this.names = opts.groups || []; this.group = this.names[0] ?? ''; this.listOpen = false;
     }
+    if (kind === 'group') { this.names = opts.groups || []; this.group = opts.def ?? this.names[0] ?? ''; this.listOpen = false; }
   }
   frames() { return [...allCanvases(this.mgr.B.YesNo3), ...allCanvases(this.mgr.B.ComboBox?.normal), ...super.frames()]; }
   finish(ok) {
@@ -584,6 +586,7 @@ export class UtilBox extends Win {
       return;
     }
     this.answered = true; this.field?.remove(); this.mgr.close(this);
+    if (this.kind === 'group') { this.done(ok && this.group ? this.group : null); return; }
     if (this.kind === 'whisper' || this.kind === 'text') { const v = this.field.value.trim(); this.done(ok && (v || this.opts.empty) ? v : null); return; }
     if (this.kind === 'buddy') { const v = this.field.value.trim(); this.done(ok && v ? { name: v, group: this.group } : null); return; }
     if (this.kind !== 'quantity') { this.done(ok); return; }
@@ -617,11 +620,12 @@ export class UtilBox extends Win {
     }
     this.lines.forEach((l, i) => line(l, 19, 28 + i * 14, 'left'));
     const fy = this.h - 73;
-    if (this.kind === 'whisper' || this.kind === 'buddy') this.drawCombo(ctx);
+    if (this.kind === 'whisper' || this.kind === 'buddy' || this.kind === 'group') this.drawCombo(ctx);
     else {
       ctx.fillStyle = '#000'; ctx.fillRect(18, fy - 1, 228, 17);
       ctx.fillStyle = '#fff'; ctx.fillRect(19, fy, 226, 15);
     }
+    if (!this.field) return;
     placeField(m, this.field, this.x + (this.kind === 'whisper' || this.kind === 'buddy' ? 21 : 19), this.y + fy + (this.kind === 'buddy' ? 3 : 0));
     if (!this.focused) { this.focused = true; setTimeout(() => { this.field.focus(); this.field.el.select(); }, 0); }
   }
@@ -636,6 +640,7 @@ UtilBox.prototype.drawCombo = function drawCombo(ctx) {
   else { ctx.fillStyle = '#fff'; ctx.fillRect(r.x, r.y, r.w, r.h); }
   // Add Buddy: the group picked, at the box's right end before its arrow
   if (this.kind === 'buddy' && this.group) uiText(ctx, this.group, r.x + r.w - 22, r.y + 2, { color: '#555', size: 12, align: 'right' });
+  if (this.kind === 'group' && this.group) uiText(ctx, this.group, r.x + 4, r.y + 2, { color: '#000', size: 12 });
   if (!this.listOpen || !this.names.length) return;
   const hover = this.rowAt(m.mouse.x - this.x, m.mouse.y - this.y);
   this.names.forEach((n, i) => {
@@ -650,10 +655,12 @@ UtilBox.prototype.rowAt = function rowAt(lx, ly) {
   return this.listOpen && lx >= r.x && lx < r.x + r.w && i >= 0 && i < this.names.length ? i : -1;
 };
 UtilBox.prototype.down = function down(lx, ly) {
-  if (this.kind !== 'whisper' && this.kind !== 'buddy') return;
+  if (this.kind !== 'whisper' && this.kind !== 'buddy' && this.kind !== 'group') return;
   const r = this.comboRect(), row = this.rowAt(lx, ly);
-  if (row >= 0) { if (this.kind === 'buddy') this.group = this.names[row]; else this.field.value = this.names[row]; this.listOpen = false; this.field.focus(); return; }
-  this.listOpen = lx >= r.x + r.w - 18 && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h ? !this.listOpen : false;
+  if (row >= 0) { if (this.kind === 'whisper') this.field.value = this.names[row]; else this.group = this.names[row]; this.listOpen = false; this.field?.focus(); return; }
+  // (the group box has no field to type in: anywhere on it opens its list)
+  const from = this.kind === 'group' ? r.x : r.x + r.w - 18;
+  this.listOpen = lx >= from && lx < r.x + r.w && ly >= r.y && ly < r.y + r.h ? !this.listOpen : false;
 };
 
 // ==================================================================== shop

@@ -2765,18 +2765,24 @@ export class Game {
     pet.react(type, action, text, balloon);
     if (pet.mine && type !== 3 && this.net) this.net.petChat(pet.sn, type, action >= 9 ? action : 0, text);
   }
-  /** /pet <text>: pets that know slang answer it (level 15 on); the others repeat it (over level 14). */
-  petTalk(text) {
-    if (typeof this.petDialog !== 'object' || !this.petDialog) return;
+  /**
+   * /pet <text>: each pet of level 15 or more repeats a clean line; a line with a word from Etc/Curse.img in it (looked
+   * for with spaces and _-:^.,*\/;!'"`+ taken out) gets each one's slang answer instead (one not busy acting, with a
+   * slang entry for its level), never the line itself.
+   */
+  async petTalk(text) {
+    await this.maskCurses('');
+    const bare = text.replace(/[ _\-:\t^.,*\/;!'"`+]/g, '').toLowerCase();
+    const curse = (this.curses || []).some((w) => bare.includes(w));
     for (const pet of this.myPets()) {
       const lv = this.petLevel(pet);
       if (!pet.data || lv < 15) continue;
-      if (pet.data.slang) {
-        if (pet.forced) continue;
-        const e = Object.values(pet.data.slang).find((s) => s && lv >= s.l0 && lv <= s.l1);
-        const { act, text: line } = pickReaction(e ? { 0: e } : null, this.petDialog, pet.id);
-        if (act || line) this.petSay(pet, 2, act ? pet.actionIndex(act) : -1, line);
-      } else this.petSay(pet, 2, -1, text);
+      if (!curse) { this.petSay(pet, 2, -1, text); continue; }
+      if (pet.forced || typeof this.petDialog !== 'object' || !this.petDialog) continue;
+      const e = Object.values(pet.data.slang || {}).find((s) => s && lv >= s.l0 && lv <= s.l1);
+      if (!e) continue;
+      const { act, text: line } = pickReaction({ 0: e }, this.petDialog, pet.id);
+      if (act || line) this.petSay(pet, 2, act ? pet.actionIndex(act) : -1, line);
     }
   }
   /** Standing about: an idle line from randAction (whatever its level). */
@@ -3076,6 +3082,7 @@ export class Game {
     wm.confirm = (text) => new Promise((r) => wm.show(new UtilBox(wm, 'okcancel', text, r)));
     wm.okCancel = (text, kind = 'okcancel') => new Promise((r) => wm.show(new UtilBox(wm, kind, text, r)));
     wm.askWhisper = (def, names) => new Promise((r) => wm.show(new UtilBox(wm, 'whisper', 'Please enter the person you want to whisper to.', r, { def, names }), null));
+    wm.askGroup = (groups, def) => new Promise((r) => wm.show(new UtilBox(wm, 'group', 'Please select a group to whisper.', r, { groups, def }), null));
     wm.selectPet = (text, pets) => new Promise((r) => { const b = new PetSelectDialog(wm, text, pets, r); this.assets.preload(b.frames()).then(() => wm.show(b)); });
     // an amount: the same box with a number field (item names spelled out)
     wm.askNumber = (text, def, min, max) => new Promise((r) => wm.show(new UtilBox(wm, 'quantity', text.replace(/#t(\d+)#/g, (_, id) => wm.itemName(Number(id)) || ''), r, { def, min, max }), null));

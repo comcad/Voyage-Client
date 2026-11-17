@@ -325,9 +325,9 @@ export class StatusBar {
     const keys = CHAT_TARGETS.map((t) => t.key).filter((k) => k !== 'group' && (k !== 'whisper' || this.whisperTo));
     this.chatTarget = keys[(keys.indexOf(this.chatTarget) + 1) % keys.length];
   }
-  /** A keymap chat key: the input opens with that target (Whisper asks who to). */
+  /** A keymap chat key: the input opens with that target (Whisper asks who to, To Group which group). */
   openChat(target) {
-    if (target === 'whisper') { this.chooseTarget('whisper'); return; }
+    if (target === 'whisper' || target === 'group') { this.chooseTarget(target); return; }
     this.chatTarget = target;
     this.focusChat();
   }
@@ -575,9 +575,18 @@ export class StatusBar {
     if (x < TMENU.x || x >= TMENU.x + TMENU.w || y < top || y >= top + CHAT_TARGETS.length * TMENU.row) return -1;
     return Math.floor((y - top) / TMENU.row);
   }
-  /** A target from the list; Whisper first asks who to (keeping the old target if you cancel). */
+  /**
+   * A target from the list; Whisper first asks who to, To Group which buddy group ("Default Group", then the others
+   * by name), each keeping the old target if you cancel.
+   */
   async chooseTarget(key) {
     sfx.play('UI/BtMouseClick');
+    if (key === 'group') {
+      const names = [...new Set((this.game.buddies || []).map((b) => b.group || 'Default Group'))].filter((n) => n !== 'Default Group').sort();
+      const group = await this.game.windows.askGroup(['Default Group', ...names], this.chatGroup);
+      if (!group) return;
+      this.whisperTo = ''; this.chatGroup = group;
+    }
     if (key === 'whisper') {
       const w = this.game.windows, name = (await w.askWhisper(this.whisperTo || '', this.whisperNames || []))?.trim();
       if (!name) return;
