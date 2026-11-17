@@ -167,7 +167,7 @@ export class CharacterLook {
     return t;
   }
   /** A frame's delay: a negative one counts as its length, a missing one is the client's 150ms. */
-  delay(action, frame) { return Math.abs(this.bodyFrames(action)?.[frame]?.delay ?? 150) || 150; }
+  delay(action, frame) { const d = this.bodyFrames(action)?.[frame]?.delay; return d === undefined ? 150 : Math.abs(d); }
   /**
    * The frame after `frame`. The client plays stand1, stand2 and alert forward and back (0,1,2,1,0...), so standing
    * breathes smoothly; every other action loops. `back` is which way a back-and-forth one is going; `wrapped`
