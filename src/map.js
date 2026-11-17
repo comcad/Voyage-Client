@@ -122,11 +122,10 @@ export class GameMap {
     this.fh.fs = Number(data.info?.fs) || 1;   // the map's drag (1 when unset)
     this.ladders = Object.entries(data.ladderRope || {}).map(([id, l]) => ({ ...l, id: Number(id) }));   // the id goes in movement
 
-    // Bounds: VR* when present, else derived from footholds.
-    const i = this.info;
-    this.bounds = i.VRLeft !== undefined
-      ? { left: i.VRLeft, right: i.VRRight, top: i.VRTop, bottom: i.VRBottom }
-      : { left: this.fh.left + 10, right: this.fh.right - 10, top: this.fh.top - 360, bottom: this.fh.bottom + 110 };
+    // The view's limits: each VR* the map has, and for each one it hasn't, the client's own fallback: the ground's
+    // extent (the footholds' left + 30, right - 30, top - 75 and bottom + 10) widened by 20, 20, 60 and 100.
+    const i = this.info, f = this.fh;
+    this.bounds = { left: i.VRLeft ?? f.left + 10, right: i.VRRight ?? f.right - 10, top: i.VRTop ?? f.top - 135, bottom: i.VRBottom ?? f.bottom + 110 };
 
     const [strMap, strNpc, strMob, helper] = await Promise.all([
       a.json('String/Map.img'), a.json('String/Npc.img'), a.json('String/Mob.img'), a.json('Map/MapHelper.img'),
