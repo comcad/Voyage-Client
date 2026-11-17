@@ -96,19 +96,21 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-row:active { background: rgba(122, 170, 255, 0.3); }
 .mhud .mh-head { padding: 7px 8px 3px; font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: rgba(240, 190, 80, 0.85); }
 .mhud .mh-head:not(:first-child) { margin-top: 3px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-.mhud .mh-chat { position: absolute; left: calc(6px + env(safe-area-inset-left)); bottom: calc(38px + env(safe-area-inset-bottom));
-  width: min(44%, 380px); display: flex; align-items: flex-end; gap: 6px; }
-.mhud.mh-saying .mh-chat { bottom: calc(46px + env(safe-area-inset-bottom)); width: min(62%, 540px); }
+/* the chat keeps to the screen's very left edge (an iPhone's side inset is for its camera, higher up) */
+.mhud .mh-chat { position: absolute; left: 4px; bottom: calc(38px + env(safe-area-inset-bottom));
+  width: min(34%, 280px); display: flex; align-items: flex-end; gap: 5px; }
+.mhud.mh-saying .mh-chat { bottom: calc(46px + env(safe-area-inset-bottom)); width: min(60%, 500px); }
 .mhud.mh-saying .mh-chat .mh-chatbtn { display: none; }
 .mhud .mh-log { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; max-height: 5.6em;
-  overflow: hidden; font-size: 11px; line-height: 1.3; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
+  overflow: hidden; font-size: 10px; line-height: 1.25; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
 .mhud .mh-log.mh-quiet { opacity: 0; pointer-events: none; }
 .mhud .mh-log.mh-open { max-height: 52vh; overflow-y: auto; padding: 6px 8px; border-radius: 10px; background: rgba(8, 12, 24, 0.6);
   opacity: 1; pointer-events: auto; -webkit-overflow-scrolling: touch; }
 .mhud .mh-log div { overflow-wrap: anywhere; }
 .mhud .mh-log div.mh-tag { padding: 0 5px; border-radius: 4px; text-shadow: none; }
-.mhud .mh-chat .mh-btn { flex: none; pointer-events: auto; }
-.mhud .mh-say { position: absolute; left: calc(6px + env(safe-area-inset-left)); bottom: calc(6px + env(safe-area-inset-bottom));
+.mhud .mh-chat .mh-btn { flex: none; pointer-events: auto; width: 26px; height: 26px; }
+.mhud .mh-chat .mh-btn svg { width: 14px; height: 14px; }
+.mhud .mh-say { position: absolute; left: 4px; bottom: calc(6px + env(safe-area-inset-bottom));
   width: min(66%, 540px); display: none; align-items: center; gap: 6px; padding: 4px; border-radius: 20px; pointer-events: auto; }
 .mhud .mh-say.mh-open { display: flex; }
 .mhud .mh-tgt { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 6px 10px; border-radius: 14px; white-space: nowrap;
@@ -117,7 +119,7 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
   background: rgba(0, 0, 0, 0.38); color: #fff; font: 14px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; -webkit-user-select: text; user-select: text; }
 .mhud .mh-send { flex: none; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; cursor: pointer; font-weight: 800; font-size: 12px;
   color: #3a2400; background: linear-gradient(180deg, #ffe07a, #f0aa2c); }
-.mhud .mh-tlist { position: absolute; bottom: calc(46px + env(safe-area-inset-bottom)); left: calc(6px + env(safe-area-inset-left));
+.mhud .mh-tlist { position: absolute; bottom: calc(46px + env(safe-area-inset-bottom)); left: 4px;
   width: min(66%, 540px); display: none; flex-wrap: wrap; gap: 5px; padding: 6px; pointer-events: auto; }
 .mhud .mh-tlist.mh-open { display: flex; }
 .mhud .mh-tlist .mh-tgt.mh-on { background: rgba(122, 170, 255, 0.45); }
