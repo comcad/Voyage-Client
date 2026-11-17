@@ -12,7 +12,16 @@ import { UI_W, UI_H } from '../view.js';
  * Everything is drawn at centre + spot (or centre - origin). Right-click goes back up a level.
  */
 const BX = 7, BY = 33, W = 654, H = 521;
-const CUR_FRAME_MS = 150;
+/** The frame of an animation (its numbered frames, each held for its delay: 100ms when it has none) at `now`. */
+function animFrame(anim, now) {
+  const frames = [];
+  for (let i = 0; anim?.[i]; i++) frames.push(anim[i]);
+  const total = frames.reduce((t, f) => t + (Number(f.delay) || 100), 0);
+  if (!total) return null;
+  let t = now % total;
+  for (const f of frames) { t -= Number(f.delay) || 100; if (t < 0) return f; }
+  return frames[frames.length - 1];
+}
 
 export class WorldMapWin extends Win {
   constructor(mgr) {
@@ -100,7 +109,7 @@ export class WorldMapWin extends Win {
     for (const s of Object.values(d.MapList || {})) if (s?.spot) draw(H2.mapImage?.[s.type], cx + s.spot[0], cy + s.spot[1]);
     // one mark per spot (each bobs through 4 frames): curPos where you are; else partyPos or lovePos, whichever of
     // your party members elsewhere on this channel and your spouse (NOTIFY_MARRIED_PARTNER_MAP_TRANSFER) comes last
-    const f = Math.floor(performance.now() / CUR_FRAME_MS) % 4;
+    const now = performance.now();
     const marks = [{ map: this.g.map?.id, kind: 'curPos' }];
     for (const pm of this.g.party?.members || []) if (pm.id !== this.g.player.id && pm.channel === this.g.channel) marks.push({ map: pm.map, kind: 'partyPos' });
     if (this.g.spouseMap) marks.push({ map: this.g.spouseMap, kind: 'lovePos' });
@@ -108,13 +117,12 @@ export class WorldMapWin extends Win {
       if (!s?.spot) continue;
       let kind = null;
       for (const no of Object.values(s.mapNo || {})) for (const m of marks) if (m.map === no && kind !== 'curPos') kind = m.kind;
-      if (kind) draw(H2[kind]?.[f], cx + s.spot[0], cy + s.spot[1]);
+      if (kind) draw(animFrame(H2[kind], now), cx + s.spot[0], cy + s.spot[1]);
     }
-    // the NPC being looked for: 7 frames, 20ms each
+    // the NPC being looked for
     if (this.npcMaps) {
-      const n = Math.floor(performance.now() / 20) % 7;
       for (const s of Object.values(d.MapList || {})) {
-        if (s?.spot && Object.values(s.mapNo || {}).some((no) => this.npcMaps.has(no))) draw(H2[`npcPos${s.type ?? 0}`]?.[n], cx + s.spot[0], cy + s.spot[1]);
+        if (s?.spot && Object.values(s.mapNo || {}).some((no) => this.npcMaps.has(no))) draw(animFrame(H2[`npcPos${s.type ?? 0}`], now), cx + s.spot[0], cy + s.spot[1]);
       }
     }
   }
