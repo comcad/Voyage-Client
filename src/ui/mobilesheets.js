@@ -97,7 +97,7 @@ const CSS = `
 .mhud .mh-li .mh-li-name { font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mhud .mh-li .mh-li-sub { font-size: 10px; color: rgba(225, 232, 248, 0.6); }
 .mhud .mh-li.mh-off .mh-li-name { color: rgba(225, 232, 248, 0.45); }
-.mhud .mh-qd { position: absolute; top: 74px; bottom: calc(6px + env(safe-area-inset-bottom)); right: calc(12px + env(safe-area-inset-right) + min(400px, 62%));
+.mhud .mh-qd { position: absolute; top: 50px; bottom: calc(6px + env(safe-area-inset-bottom)); right: calc(12px + env(safe-area-inset-right) + min(400px, 62%));
   width: min(330px, calc(100% - min(400px, 62%) - 24px - env(safe-area-inset-left) - env(safe-area-inset-right))); display: flex; flex-direction: column;
   opacity: 0; transform: translateX(56px) scale(0.98); transform-origin: right center; pointer-events: none;
   transition: transform 0.32s cubic-bezier(0.2, 0.85, 0.25, 1), opacity 0.22s ease; }

@@ -1,11 +1,13 @@
 /**
  * MOBILE UI (System Option): a small HTML interface over the game for phones, in place of the status bar (which is
  * hidden then). It keeps to the edges so the field stays clear:
- *   - top left: your level, name and job, and slim HP / MP / EXP bars (a tap opens the Stat window);
+ *   - bottom middle: one slim bar with your level, name and job and the HP / MP / EXP gauges (a tap opens the Stat
+ *     window); while a sheet is open it moves up to the top left, beside the buttons;
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
- *   - bottom middle (between the touch stick and buttons): the last chat lines, fading out when the chat is quiet,
- *     and a chat button that opens a line to type on, with the chat target beside it.
+ *   - bottom left, over the bar's height: the last chat lines, fading out when the chat is quiet (they take no touches,
+ *     so the touch stick under them still works), and a chat button that opens a line to type on, with the chat
+ *     target beside it and the whole log over it.
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
  * Game.toggleMenu, so nothing behaves differently from the bar; only the look and the place differ.
  */
@@ -55,15 +57,22 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-glass { background: linear-gradient(180deg, rgba(24, 33, 58, 0.66), rgba(11, 16, 31, 0.66));
   border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 12px; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
-.mhud .mh-st { position: absolute; left: calc(6px + env(safe-area-inset-left)); top: 6px; width: 172px; padding: 5px 8px 7px; pointer-events: auto; }
-.mhud .mh-id { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.mhud .mh-st { position: absolute; left: 50%; bottom: calc(6px + env(safe-area-inset-bottom)); transform: translateX(-50%); display: flex;
+  align-items: center; gap: 8px; padding: 5px 10px; border-radius: 14px; pointer-events: auto; white-space: nowrap;
+  max-width: calc(100% - 12px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
+.mhud .mh-id { flex: none; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+/* a sheet open: up in the top-left strip beside the buttons, where the sheet leaves room for it whole */
+.mhud.mh-sheeting .mh-st { left: calc(6px + env(safe-area-inset-left)); top: 6px; bottom: auto; transform: none;
+  max-width: calc(100% - 262px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
+.mhud.mh-sheeting .mh-st .mh-bar { width: clamp(62px, 9vw, 96px); }
+.mhud.mh-sheeting .mh-st .mh-jb { max-width: 80px; }
 .mhud .mh-lv { flex: none; font-weight: 800; font-size: 9.5px; color: #3a2400; background: linear-gradient(180deg, #ffe892, #f0b22e);
   border-radius: 6px; padding: 1px 5px; box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.18); }
 .mhud .mh-nm { font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
-.mhud .mh-jb { color: rgba(214, 224, 245, 0.62); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; }
-.mhud .mh-bar { position: relative; height: 10px; margin-top: 4px; border-radius: 5px; background: rgba(0, 0, 0, 0.5);
+.mhud .mh-jb { max-width: 96px; color: rgba(214, 224, 245, 0.62); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; }
+.mhud .mh-bar { flex: none; position: relative; width: clamp(64px, 13vw, 124px); height: 12px; border-radius: 6px; background: rgba(0, 0, 0, 0.5);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); overflow: hidden; }
-.mhud .mh-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; transition: width 0.35s ease; }
+.mhud .mh-bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 6px; transition: width 0.35s ease; }
 .mhud .mh-bar.mh-hp i { background: linear-gradient(180deg, #ff8a8a, #d42a3c); }
 .mhud .mh-bar.mh-mp i { background: linear-gradient(180deg, #8cc2ff, #2862d8); }
 .mhud .mh-bar.mh-ex i { background: linear-gradient(180deg, #f9f191, #c4ac1c); }
@@ -85,17 +94,19 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-row:active { background: rgba(122, 170, 255, 0.3); }
 .mhud .mh-head { padding: 7px 8px 3px; font-size: 9px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: rgba(240, 190, 80, 0.85); }
 .mhud .mh-head:not(:first-child) { margin-top: 3px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-.mhud .mh-chat { position: absolute; left: 50%; bottom: calc(6px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+.mhud .mh-chat { position: absolute; left: calc(6px + env(safe-area-inset-left)); bottom: calc(38px + env(safe-area-inset-bottom));
   width: min(44%, 380px); display: flex; align-items: flex-end; gap: 6px; }
+.mhud.mh-saying .mh-chat { bottom: calc(46px + env(safe-area-inset-bottom)); width: min(62%, 540px); }
+.mhud.mh-saying .mh-chat .mh-chatbtn { display: none; }
 .mhud .mh-log { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; max-height: 5.6em;
-  overflow: hidden; font-size: 11px; line-height: 1.3; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: auto; }
+  overflow: hidden; font-size: 11px; line-height: 1.3; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
 .mhud .mh-log.mh-quiet { opacity: 0; pointer-events: none; }
 .mhud .mh-log.mh-open { max-height: 52vh; overflow-y: auto; padding: 6px 8px; border-radius: 10px; background: rgba(8, 12, 24, 0.6);
   opacity: 1; pointer-events: auto; -webkit-overflow-scrolling: touch; }
 .mhud .mh-log div { overflow-wrap: anywhere; }
 .mhud .mh-log div.mh-tag { padding: 0 5px; border-radius: 4px; text-shadow: none; }
 .mhud .mh-chat .mh-btn { flex: none; pointer-events: auto; }
-.mhud .mh-say { position: absolute; left: 50%; bottom: calc(6px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+.mhud .mh-say { position: absolute; left: calc(6px + env(safe-area-inset-left)); bottom: calc(6px + env(safe-area-inset-bottom));
   width: min(66%, 540px); display: none; align-items: center; gap: 6px; padding: 4px; border-radius: 20px; pointer-events: auto; }
 .mhud .mh-say.mh-open { display: flex; }
 .mhud .mh-tgt { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 6px 10px; border-radius: 14px; white-space: nowrap;
@@ -104,7 +115,7 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
   background: rgba(0, 0, 0, 0.38); color: #fff; font: 14px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; -webkit-user-select: text; user-select: text; }
 .mhud .mh-send { flex: none; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; cursor: pointer; font-weight: 800; font-size: 12px;
   color: #3a2400; background: linear-gradient(180deg, #ffe07a, #f0aa2c); }
-.mhud .mh-tlist { position: absolute; bottom: calc(46px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+.mhud .mh-tlist { position: absolute; bottom: calc(46px + env(safe-area-inset-bottom)); left: calc(6px + env(safe-area-inset-left));
   width: min(66%, 540px); display: none; flex-wrap: wrap; gap: 5px; padding: 6px; pointer-events: auto; }
 .mhud .mh-tlist.mh-open { display: flex; }
 .mhud .mh-tlist .mh-tgt.mh-on { background: rgba(122, 170, 255, 0.45); }
@@ -164,7 +175,6 @@ export class MobileHud {
     }
     // chat
     this.tap(el.querySelector('.mh-chatbtn'), () => this.openSay());
-    this.tap(P.log, () => this.toggleLog());
     this.tap(P.tgt, () => this.toggleTargets());
     this.tap(el.querySelector('.mh-send'), () => this.send());
     this.tap(el.querySelector('.mh-closebtn'), () => this.closeSay());
@@ -194,11 +204,11 @@ export class MobileHud {
     node.addEventListener('click', (e) => { e.stopPropagation(); fn(e); });
   }
 
-  /** Its top panels (your gauges, the buttons) in interface pixels: a window opening under them is moved down (WindowManager.fit). */
+  /** Its top buttons in interface pixels: a window opening under them is moved down (WindowManager.fit). */
   reserved() {
     if (!this.shown) return [];
     const c = this.g.canvas.getBoundingClientRect(), k = UI_W / (c.width || 1);
-    return [this.parts.st, this.parts.act].map((n) => {
+    return [this.parts.act].map((n) => {
       const r = n.getBoundingClientRect();
       return { x: (r.left - c.left) * k, y: (r.top - c.top) * k, w: r.width * k, h: r.height * k };
     });
@@ -279,7 +289,8 @@ export class MobileHud {
   openSay(prefix = '') {
     const P = this.parts;
     P.say.classList.add('mh-open');
-    P.chat.style.visibility = 'hidden';
+    this.el.classList.add('mh-saying');
+    if (!this.logOpen) this.toggleLog();
     if (prefix && !P.input.value) P.input.value = prefix;
     P.input.focus();
   }
@@ -287,7 +298,8 @@ export class MobileHud {
     const P = this.parts;
     P.input.blur();
     P.say.classList.remove('mh-open');
-    P.chat.style.visibility = '';
+    this.el.classList.remove('mh-saying');
+    if (this.logOpen) this.toggleLog();
     this.closeTargets();
   }
   /** Sent as the bar's own line is: kept in its history, then said through its checks (repeats, too fast). */
