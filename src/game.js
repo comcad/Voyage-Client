@@ -590,7 +590,9 @@ const RIDE_SHIP_SKILLS = new Set([5201002, 5201003, 5211001, 5211002, 5211004, 5
   14111006, 21121008, 22171004]);
 /** A tired mount: tiredness at least (level / 3) x 10 + 95 (checked on SET_TAMING_MOB_INFO / SPAWN_PLAYER). */
 const mountTired = (level, tired) => tired >= Math.floor(level / 3) * 10 + 95;
-const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004;
+const FLASH_JUMPS = new Set([4111006, 14101004]), FLASH_JUMPS_NW = 14101004, SOUL_RUSH = 11101005, COMBAT_STEP = 21001001;
+/** Soul Rush's and Combat Step's time (ms) from one use to the next. */
+const SOUL_RUSH_REUSE = 1500, COMBAT_STEP_REUSE = 1000;
 /** Shadow Shifter by job (Night Lord, Shadower); Meso Guard; Chakra. */
 /** How much movement (ms) gathers before it goes to the server, as the client does. */
 const MOVE_FLUSH = 500;
@@ -6482,7 +6484,8 @@ export class Game {
 
     if (p.attack) {
       action = p.attack;
-      if (p.fh) p.vx = 0; else this.playerFall(dt, 0, 0, ms);
+      // (Combat Step's pose slides on with its push)
+      if (p.fh) { if (action === this.skills?.action(COMBAT_STEP)) this.coast(dt); else p.vx = 0; } else this.playerFall(dt, 0, 0, ms);
       if (this.advanceFrame(action, dt)) p.attack = null;
       return;
     }
@@ -6564,8 +6567,10 @@ export class Game {
         }
       } else {
         // walking speeds up and slows down rather than starting and stopping dead (moved by the step's average speed)
+        // (faster than walking, as after a push, you slow to the walk the way a stop does, holding that way or not)
         const v0 = p.vx || 0;
-        p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel * (swim ? PHYS.swimDec : 1), WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
+        if (dir && dir * v0 > WALK) p.vx = approach(v0, dir * WALK, PHYS.walkBrake * dt);
+        else p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel * (swim ? PHYS.swimDec : 1), WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
         const dx = ((v0 + p.vx) / 2) * dt;
         if (dx) { const r = fh.walk(p, dx); if (r === 'edge') p.vy = 0; else if (r === 'wall') p.vx = 0; }
         if (held('down') && !dir) action = 'prone';
@@ -6880,6 +6885,8 @@ export class Game {
     }
     if (MONSTER_MAGNETS.has(id) || BIG_BANGS.has(id) || id === EXPLOSION || CHARGE_BLOWS.has(id)) return this.skillWentOff(this.holdCharge(id, lv));
     if (FLASH_JUMPS.has(id)) return this.skillWentOff(this.flashJump(id, lv));
+    if (id === SOUL_RUSH) return this.skillWentOff(this.soulRush(id, lv));
+    if (id === COMBAT_STEP) return this.skillWentOff(this.combatStep(id, lv));
     if (id === CHAKRA) return this.skillWentOff(this.castChakra(id, lv));
     // Assaulter needs a monster to go for and floor where it ends; Boomerang Step floor 150px ahead
     const ahead = (dx) => this.floorNear(this.player.x + (this.player.facingRight ? dx : -dx), this.player.y, 80);
@@ -8332,6 +8339,46 @@ export class Game {
     this.playSkillEffect(id, p);
     this.playBasicEff(id === FLASH_JUMPS_NW ? 'Flying1' : 'Flying', p.x, p.y, p.facingRight);
     this.net?.specialMove(id, lv, null);
+    return true;
+  }
+  /**
+   * Soul Rush: a Flash Jump at twice its level, but from the floor: not on a map that forbids movement skills, nor on
+   * a ladder or rope, mid-attack or straight after a Flash Jump. Thrown forward 350 + 40 and up 250 + 20 for every 4
+   * of that, with BasicEff's SoulRush where you were; 1.5s before the next.
+   */
+  soulRush(id, lv) {
+    const p = this.player;
+    if (!this.skillKeyPressed) return false;
+    if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
+    if (!p.fh || p.ladder || p.attack || this.fjUsed) return false;
+    if (this.net && !this.skillCostOk(id, this.skills.levelData(id, lv))) return false;
+    this.net?.specialMove(id, lv, null);
+    this.fjUsed = true;
+    const n = Math.floor((lv * 2) / 4), dir = p.facingRight ? 1 : -1;
+    const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    p.y = Math.floor(p.y - 1); p.fh = null;
+    p.vx = impact(p.vx || 0, dir * (350 + 40 * n)); p.vy = impact(p.vy || 0, -(250 + 20 * n));
+    this.playBasicEff('SoulRush', p.x, p.y, p.facingRight);
+    this.reuseAt = { ...this.reuseAt, [id]: performance.now() + SOUL_RUSH_REUSE };
+    return true;
+  }
+  /**
+   * Combat Step: from the floor, not on a map that forbids movement skills (silently), nor standing in a spring portal
+   * (types 12, 13). Pushed the way you face at its x (650 at level 1), sliding to a stop through its pose; 1s before
+   * the next.
+   */
+  combatStep(id, lv) {
+    const p = this.player, map = this.map, ld = this.skills.levelData(id, lv);
+    if ((map?.info?.fieldLimit || 0) & 2) return false;
+    if (!p.fh || p.ladder || p.attack) return false;
+    if (map.boxPortalAt(p.x, p.y, 12) || map.boxPortalAt(p.x, p.y, 13)) return false;
+    if (this.net && !this.skillCostOk(id, ld)) return false;
+    this.net?.specialMove(id, lv, null);
+    const k = (p.facingRight ? 1 : -1) * (ld?.x || 0), v = p.vx || 0;
+    p.vx = k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v);
+    const action = this.skills.action(id);
+    if (action && this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
+    this.reuseAt = { ...this.reuseAt, [id]: performance.now() + COMBAT_STEP_REUSE };
     return true;
   }
   /**
