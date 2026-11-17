@@ -352,6 +352,29 @@ const DRAGON_ROAR = 1311006;
 const MONSTER_MAGNETS = new Set([1121001, 1221001, 1321001]), CHARGE_HOLD = 1;
 /** Big Bang: held up to 1s; its box is centred on you and grows with the charge. */
 const BIG_BANGS = new Set([2121001, 2221001, 2321001]);
+/** What /? and /Help print. */
+const SLASH_HELP = [
+  "----------------- HELP -----------------",
+  "/partyinfo : Show the current party information.",
+  "/makeparty : create a new party",
+  "/leaveparty : If you are a member of the party, it'll let you leave..",
+  "/partyinvite character-name : invite to our party (only for the party leader)",
+  "/partyexpel character-name: Expel someone from the party (only for the party leader)",
+  "/guildinfo : Give information about the guild",
+  "/leaveguild : Quit the guild",
+  "/guildinvite : Invite the user to the guild (only available to the master)",
+  "/guildexpel : Expel the user from the guild (only available to the master)",
+  "/find CharacterName : Give information about the chracter whether he or she is on-line or not.",
+  "/gametrade charactername: Request to trade game items.",
+  "/tradecash Charactername: Request to trade cash items.",
+  "/buddy: Talk to your buddy.",
+  "/party: Talk to party members.",
+  "/guild: Talk to your guild members.",
+  "/whisper charactername: Send a whisper (if no name is written, it'll be directed to your last contact).",
+  "/all: Regular chat, not a whisper.",
+  "* Open up the chat window and press tab, or close the chat window and",
+  "press 1, 2, or 3 to change the group you'd like to talk to.",
+];
 /** Spells: an Evan's charged ones (held up to 1s), Element Amplification by job line, Element Composition, an Evan's passives. */
 const EVAN_CHARGES = new Set([22121000, 22151001]), AMPLIFIERS = [2110001, 2210001, 12110001, 22150000];
 const FP_COMPOSITION = 2111006, IL_COMPOSITION = 2211006, DRAGON_SOUL = 22000000, EVAN_MAGIC_MASTERY = 22170001, CRITICAL_MAGIC = 22140000;
@@ -5847,6 +5870,114 @@ export class Game {
   optionAllowed(key) {
     try { return JSON.parse(localStorage.getItem('maple.gameopt') || '{}')[key] !== false; } catch { return true; }
   }
+  /**
+   * A chat line starting with '/', as the client reads it (case doesn't matter; a command with a name takes the rest
+   * of the line after one space). The commands are those /? lists, plus /petcome, /pet, /couple, /alliance and
+   * /partysearch; /petcome, /pet and anything else then go on to the expression items (/<an expression item's name>
+   * makes that face when you have it), and a line that is no command is dropped without a word (a GM's goes out as
+   * chat, as typed).
+   */
+  slashCommand(t) {
+    const l = t.toLowerCase(), is = (...cs) => cs.includes(l), say = (m) => this.notice(m);
+    const arg = (c) => (l.startsWith(`${c} `) && t.length > c.length + 1 ? t.slice(c.length + 1) : null);
+    const me = this.player.name, sb = this.statusBar, party = this.party, guild = this.guild;
+    let a;
+    if (is('/?', '/help')) { for (const line of SLASH_HELP) this.hud.message(line, CHAT_COLORS.notice); return; }
+    if (is('/petcome')) {
+      // the pets with that skill come to you, each with PetEff's teleport (the server isn't told)
+      const p = this.player;
+      for (const pet of this.myPets()) {
+        if (!((this.petItem(pet)?.pet?.skill || 0) & 0x80)) continue;
+        pet.x = p.x; pet.y = p.y; pet.vx = 0; pet.vy = 0; pet.fh = null; pet.ladder = null;
+        pet.event(3); pet.event(4);
+        this.petEffect(pet, 1);
+      }
+    } else if (is('/whisper')) {
+      // your last contact, if any
+      const name = sb?.whisperNames?.[0] || '';
+      if (sb) { sb.whisperTo = name; if (name) sb.chatTarget = 'whisper'; }
+      return;
+    } else if ((a = arg('/whisper')) !== null) {
+      if (a.toLowerCase() === me.toLowerCase()) { say("You can't whisper to yourself."); return; }
+      // 4-12 letters and digits, with no more than three of I and l between them
+      if (!/^[A-Za-z0-9]{4,12}$/.test(a) || (a.match(/[Il]/g) || []).length >= 4) { say('Incorrect ID.'); return; }
+      if (sb) { sb.whisperNames = [a, ...(sb.whisperNames || []).filter((n) => n !== a)].slice(0, 10); sb.whisperTo = a; sb.chatTarget = 'whisper'; }
+      return;
+    } else if (is('/buddy', '/party', '/guild', '/alliance', '/couple', '/all')) {
+      if (sb) { sb.chatTarget = { '/buddy': 'buddy', '/party': 'party', '/guild': 'guild', '/alliance': 'alliance', '/couple': 'spouse', '/all': 'all' }[l]; sb.whisperTo = ''; }
+      return;
+    } else if ((a = arg('/find')) !== null) {
+      if (a !== me) this.net.find(a);
+      return;
+    } else if ((a = arg('/trade') ?? arg('/game trade')) !== null) {
+      if (this.player.morph) { this.transformRefusal(); return; }
+      if (this.gm) { say('Not available with an Admin account.'); return; }
+      const rp = [...this.others.values()].find((o) => o.name?.toLowerCase() === a.toLowerCase());
+      if (!rp) { say('Unable to find the character.'); return; }
+      this.net.tradeStart(rp.id);
+      return;
+    } else if (is('/partyinfo')) {
+      if (!party) { say('You have yet to join a party.'); return; }
+      say(`Party member:${Array.from({ length: 6 }, (_, i) => ` ${party.members[i]?.name || ''}`).join('')}`);
+      if (party.leader === this.player.id) say("You're the leader of the party.");
+      return;
+    } else if (is('/makeparty')) {
+      if (party) { say('Already have joined a party.'); return; }
+      if ([0, 1000, 2000, 2001].includes(this.stats?.job ?? 0) && (this.stats?.level ?? 0) < 10) { say('Characters whose level is below Lv. 10, such as Beginners, Noblesses, and Legends cannot form a party.'); return; }
+      this.net.partyOp(1);
+      return;
+    } else if (is('/leaveparty')) {
+      if (!party) { say('You have yet to join a party.'); return; }
+      this.net.partyLeave();
+      return;
+    } else if ((a = arg('/partyinvite')) !== null) {
+      this.partyInvite(a);
+      return;
+    } else if ((a = arg('/partyexpel')) !== null) {
+      if (!party || party.leader !== this.player.id) { say('You are not the master of the party.'); return; }
+      const m = party.members.find((x) => x?.name === a);
+      if (!m) { say(`'${a}'is not a member of your party.`); return; }
+      this.net.partyOp(5, m.id);
+      return;
+    } else if (is('/partysearch')) {
+      this.windows.toggle('partysearch');
+      return;
+    } else if (is('/guildinfo')) {
+      if (!guild) { say('You are not in the guild.'); return; }
+      say(`Guild Member:${guild.members.map((x) => ` ${x.name}`).join('')}`);
+      if (guild.members[0]?.id === this.player.id) say('You are the guild master.');
+      return;
+    } else if (is('/leaveguild')) {
+      if (!guild) { say('You are not in the guild.'); return; }
+      if (guild.members[0]?.id === this.player.id) { say('You cannot quit the guild, since you are the master of the guild.'); return; }
+      this.windows.confirm('Would you like to quit the guild?').then((ok) => { if (ok) this.net?.guildOp(7, this.player.id, me); });
+      return;
+    } else if ((a = arg('/guildinvite')) !== null) {
+      if (a === me) { say('You cannot invite yourself to the guild.'); return; }
+      if (!guild) { say('You are not in the guild.'); return; }
+      const mine = guild.members.find((x) => x.id === this.player.id);
+      if (guild.members[0]?.id !== this.player.id && mine?.rank !== 2) { say('You are not the master of the guild.'); return; }
+      if (guild.members.length >= guild.capacity) { say('You cannot invite more people to the guild.'); return; }
+      this.net.guildOp(5, a);
+      return;
+    } else if ((a = arg('/guildexpel')) !== null) {
+      if (!guild) { say('You are not in the guild.'); return; }
+      const m = guild.members.find((x) => x.name === a), mine = guild.members.find((x) => x.id === this.player.id);
+      if (!m) { say(`'${a}' is not the member of the guild.`); return; }
+      if (mine?.rank === 2 && m.rank === 2) { say('Only Guild Master can expel Jr.Masters.'); return; }
+      if (m.rank === 1) { say('You may not ban the Guild Master.'); return; }
+      this.windows.confirm(`Expel '${a}' from the guild?`).then((ok) => { if (ok) this.net?.guildOp(8, m.id, a); });
+      return;
+    } else if ((a = arg('/pet')) !== null) {
+      this.petTalk(a);
+    }
+    // an expression item's name after the slash: that face, when you have the item
+    if (t.length > 1) {
+      const name = l.slice(1);
+      for (let id = 5160000; id <= 5160014; id++) if ((this.windows.itemName(id) || '').toLowerCase() === name && this.itemCount(id) > 0) { this.useFaceItem(id); break; }
+    }
+    if (this.gm) this.net.chat(t);
+  }
   sendChat(text) {
     // /fps: the performance meter on or off (a Voyage tool, kept with the System Option choices)
     if (/^\/fps$/i.test(text.trim())) {
@@ -5899,14 +6030,7 @@ export class Game {
       return;
     }
     if (!this.net) { this.player.chat = { text, t: 5 }; return; }
-    let m = text.match(/^\/(?:w|whisper)\s+(\S+)\s+(.+)$/i);
-    if (m) { this.whisperTo(m[1], m[2]); return; }
-    m = text.match(/^\/r\s+(.+)$/i);
-    if (m) { if (this.lastWhisperFrom) this.whisperTo(this.lastWhisperFrom, m[1]); else this.hud.message('There is no whisper to reply to.', CHAT_COLORS.notice); return; }
-    m = text.match(/^\/find\s+(\S+)$/i);
-    if (m) { this.net.find(m[1]); return; }
-    m = text.match(/^\/pet\s+(.+)$/i);
-    if (m) { this.petTalk(m[1]); return; }
+    if (text.trim().startsWith('/')) { this.slashCommand(text.trim()); return; }
     if (!text.startsWith('/')) { this.petCommandWord(text); this.chatFace(text); }   // your pets hear every line
     // the chat target from the drop-up list beside the chat line
     const target = this.statusBar?.chatTarget || 'all', note = (t) => this.hud.message(t, CHAT_COLORS.notice);
@@ -6144,7 +6268,9 @@ export class Game {
   onWhisper(w) {
     // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so
     if (!this.optionAllowed('whisper') || this.windows.wins.userlist?.blacklisted(w.from)) { this.net?.whisperBlock(w.from); return; }
-    this.lastWhisperFrom = w.from;
+    // who whispered you is your latest contact (what /whisper alone goes to, and first in the Whisper box's list)
+    const sb = this.statusBar;
+    if (sb) sb.whisperNames = [w.from, ...(sb.whisperNames || []).filter((n) => n !== w.from)].slice(0, 10);
     const ch = w.channel === this.channel ? '' : `[${this.channelNames?.[w.channel] || `Ch. ${w.channel + 1}`}]`;
     this.hud.message(`${w.from}${ch}>> ${this.masked(w.text)}`, CHAT_COLORS.whisper);
   }
