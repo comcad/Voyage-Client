@@ -352,6 +352,9 @@ const DRAGON_ROAR = 1311006;
 const MONSTER_MAGNETS = new Set([1121001, 1221001, 1321001]), CHARGE_HOLD = 1;
 /** Big Bang: held up to 1s; its box is centred on you and grows with the charge. */
 const BIG_BANGS = new Set([2121001, 2221001, 2321001]);
+/** Spells: an Evan's charged ones (held up to 1s), Element Amplification by job line, Element Composition, an Evan's passives. */
+const EVAN_CHARGES = new Set([22121000, 22151001]), AMPLIFIERS = [2110001, 2210001, 12110001, 22150000];
+const FP_COMPOSITION = 2111006, IL_COMPOSITION = 2211006, DRAGON_SOUL = 22000000, EVAN_MAGIC_MASTERY = 22170001, CRITICAL_MAGIC = 22140000;
 /** Explosion winds up in its prepare pose before it goes off. */
 const EXPLOSION = 2111002;
 /**
@@ -7189,9 +7192,13 @@ export class Game {
         if (mx) { dmg.push(...mx.damage(m)); crits.push(...dmg.map(() => false)); break; }
         if (phys) { const h = this.physicalHit(m, wcat % 100, skillId, cbLd || ld, kind === 'ranged', pose, ammo, crit, opts.charge, i); dmg.push(h.d); crits.push(h.c); continue; }
         if (fixedPhys) { dmg.push(this.fixedMiss(m) ? 0 : ld.fixdamage); crits.push(false); continue; }
-        if (kind === 'magic' && !ld?.fixdamage && guarded(m)) { dmg.push(0); crits.push(false); continue; }
-        if (kind === 'magic' && !ld?.fixdamage && immuneTo(m, MAGIC_IMMUNE)) { dmg.push(1); crits.push(false); continue; }
-        if (kind === 'magic' && !ld?.fixdamage && m.status?.second & HARD_SKIN) { dmg.push(0); crits.push(false); continue; }
+        // a spell: its own formula; the monster's fixedDamage then stands in for any damage it does
+        if (kind === 'magic' && this.net) {
+          const h = this.magicHit(m, skillId, ld, opts.charge || 0, targets.length + (opts.healMembers || 0));
+          const fixed = Number(m.src?.info?.fixedDamage) || 0;
+          dmg.push(h.d > 0 && fixed > 0 ? fixed : h.d); crits.push(h.c);
+          continue;
+        }
         const c = skillId === SNIPE || (!!crit && Math.random() * 100 < crit.rate);
         let d = roll();
         if (kind === 'magic' && !ld?.fixdamage && takenPct(m)) d = Math.trunc((d * (takenPct(m) + 100)) / 100);
@@ -7955,8 +7962,11 @@ export class Game {
     if (this.net && this.skills.cooling(id)) { this.notice('You may not use the skill yet.'); return false; }
     if (this.net && !this.skillCostOk(id, this.skills.levelData(id, lv))) return false;
     this.playSkillEffect(id, this.player);
-    this.net?.partyMove(id, lv, this.partyMask(id, lv));
-    return this.attack(id, 'magic', { heal: true });
+    const mask = this.partyMask(id, lv);
+    this.net?.partyMove(id, lv, mask);
+    let members = 0;
+    for (let v = mask; v; v &= v - 1) members++;
+    return this.attack(id, 'magic', { heal: true, healMembers: members });
   }
 
   /**
@@ -8842,6 +8852,66 @@ export class Game {
     // Bullseye: x% more on the monster Homing Beacon marked, once it is learned
     if (m === this.beaconMob && this.skills.level(BULLSEYE)) d = (d * ((Number(this.skills.levelData(BULLSEYE)?.x) || 0) + 100)) / 100;
     return { d: Math.min(199999, Math.max(1, Math.trunc(d))), c };
+  }
+  /**
+   * One damage line of a spell on monster m:
+   *  - a guard stops it, magic immunity lets 1 through; a fixed-damage spell then misses by level alone (fixedMiss);
+   *  - otherwise it misses when a roll of 50-120% of your magic accuracy, (INT / 10 + LUK / 10) x 5 x 100 / (255 + 10
+   *    per level the monster has over you), is under the monster's avoid;
+   *  - your magic is INT plus your gear's (and Dragon Soul's), to 1999, plus the magic buff, to 1999;
+   *  - Heal: (the members and monsters it reaches x 0.3 + 1) x its hp% x (1.5 x a roll of 20-80% of INT + LUK) x
+   *    magic x 0.005, shared among them; any other spell: (3.3 x a roll of magic x mastery to magic + (0.058 x
+   *    magic)^2 + INT / 2) x its mad%, mastery being (the skill's, or an Evan's Magic Mastery's, x 5 + 10) x 0.9%;
+   *  - Element Amplification's y%; the monster's element (weak x1.5, strong x0.5, immune x0; Element Composition half
+   *    and half of its two); less 50-60% of its magic defence;
+   *  - a critical (Sharp Eyes, an Evan's Critical Magic) x (1 + its extra %); a Weakness passive's damage % on its own
+   *    monster; a charge (Big Bang) x (held ms x 90 / its longest + 10)%; Hard Skin stops all but criticals; Bullseye
+   *    x% more; the weapon's elemental magic % (incRMA*, else elemDefault); the monster's damage-taken buff;
+   *  - held to 1-199999.
+   */
+  magicHit(m, skillId, ld, charge = 0, reached = 1) {
+    const info = m.src?.info || {}, now = Date.now(), job = this.stats?.job || 0, sb = this.skills;
+    const rand = (a, b) => { const lo = Math.min(a, b), hi = Math.max(a, b); return lo + Math.random() * (hi - lo); };
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), num = (v) => Number(v) || 0;
+    const buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k]));
+    if (guarded(m)) return { d: 0, c: false };
+    if (immuneTo(m, MAGIC_IMMUNE)) return { d: 1, c: false };
+    if (ld?.fixdamage) return { d: this.fixedMiss(m) ? 0 : ld.fixdamage, c: false };
+    const INT = this.totalStat('int'), LUK = this.totalStat('luk'), lv = this.stats?.level || 1;
+    const over = Math.max(0, (info.level || 0) - lv), acc = ((Math.floor(INT / 10) + Math.floor(LUK / 10)) * 5 * 100) / (over * 10 + 255);
+    if (rand(acc * 0.5, acc * 1.2) < clamp(info.eva || 0, 0, 999)) return { d: 0, c: false };
+    const soul = sb.level(DRAGON_SOUL) ? num(sb.levelData(DRAGON_SOUL)?.mad) : 0;
+    const MAD = clamp(clamp(INT + this.equipStat('matk') + soul, 0, 1999) + buff('matk'), 0, 1999);
+    const k = (num(sb.level(EVAN_MAGIC_MASTERY) ? sb.levelData(EVAN_MAGIC_MASTERY)?.mastery : ld?.mastery) * 5 + 10) * 0.009;
+    let d = skillId === HEAL
+      ? ((reached * 0.3 + 1) * num(ld?.hp) * 0.01 * (1.5 * rand(INT * 0.2, INT * 0.8) + LUK) * MAD * 0.005) / reached
+      : (3.3 * rand(MAD * k, MAD) + (0.058 * MAD) ** 2 + INT * 0.5) * num(ld?.mad) * 0.01;
+    // Element Amplification: its job's own (the first for 211, 212; a later job of the same line takes it too)
+    const amp = AMPLIFIERS.find((id) => { const req = Math.floor(id / 10000); return Math.floor(job / 10) === Math.floor(req / 10) && job % 10 >= req % 10 && sb.level(id); });
+    d = ((amp ? num(sb.levelData(amp)?.y) : 100) * d) * 0.01;
+    const digit = (e) => num(new RegExp(`${e}(\\d)`).exec(info.elemAttr || '')?.[1]);
+    const vs = (v, a) => (a === 1 ? 0 : a === 2 ? v * 0.5 : a === 3 ? Math.min(Math.max(v, v * 1.5), 199999) : v);
+    const elem = String(sb.node(skillId)?.elemAttr || 'p').toUpperCase();
+    if (skillId === FP_COMPOSITION) d = vs(d / 2, digit('F')) + vs(d / 2, digit('S'));
+    else if (skillId === IL_COMPOSITION) d = vs(d / 2, digit('L')) + vs(d / 2, digit('I'));
+    else d = vs(d, digit(elem));
+    const mdd = clamp(info.MDDamage || 0, 0, 1999);
+    d -= rand(mdd * 0.5, mdd * 0.6);
+    const se = (this.buffs || []).find((b) => b.sharpEyes && b.until > now)?.sharpEyes;
+    let rate = clamp(se?.rate || 0, 0, 100), cdmg = se?.dmg || 0;
+    if ((Math.floor(job / 100) === 22 || job === 2001) && sb.level(CRITICAL_MAGIC)) { const cm = sb.levelData(CRITICAL_MAGIC); rate += num(cm?.prop); cdmg += num(cm?.damage); }
+    const c = rate > 0 && cdmg > 0 && Math.random() * 100 < rate;
+    if (c) d *= 1 + (cdmg - (cdmg <= 200 ? 100 : 200)) * 0.01;
+    // Pig's, Stump's and Slime's Weakness (your line's own): their damage % on their monster
+    const line = Math.floor(job / 100) === 22 || job === 2001 ? 2001 : Math.floor(job / 1000) * 1000;
+    for (const id of [9000, 9001, 9002].map((x) => line * 10000 + x)) if (sb.level(id) && num(sb.node(id)?.mobCode) === m.spawn?.id) d *= num(sb.levelData(id)?.damage) * 0.01;
+    if (charge) d *= (Math.floor((charge * 90) / (BIG_BANGS.has(skillId) || EVAN_CHARGES.has(skillId) ? 1000 : 2000)) + 10) * 0.01;
+    if (!c && m.status?.second & HARD_SKIN) return { d: 0, c: false };
+    if (m === this.beaconMob && sb.level(BULLSEYE)) d *= (num(sb.levelData(BULLSEYE)?.x) + 100) * 0.01;
+    const wi = this.windows?.info?.(this.weaponId()), key = { I: 'incRMAI', F: 'incRMAF', L: 'incRMAL', S: 'incRMAS', H: 'incRMAH' }[elem];
+    if (wi && key) { const w = Number(wi[key] ?? wi.elemDefault ?? 100); d *= (w > 0 ? w : 0) * 0.01; }
+    if (takenPct(m)) d *= (takenPct(m) + 100) * 0.01;
+    return { d: Math.trunc(clamp(d, 1, 199999)), c };
   }
   /** Your accuracy x 100 / (255 + 10 a level the monster has over you), x 0.7-1.3, under its avoid: a miss. */
   accuracyMiss(info, over) {
