@@ -8,7 +8,7 @@
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - bottom left, over the bar's height: the last chat lines, fading out when the chat is quiet (they take no touches,
  *     so the touch stick under them still works), and a chat button that opens a line to type on, with the chat
- *     target beside it and the whole log over it.
+ *     target beside it, centred right over the status line, with the whole log over it.
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
  * Game.toggleMenu, so nothing behaves differently from the bar; only the look and the place differ.
  */
@@ -99,7 +99,7 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 /* the chat keeps to the screen's very left edge (an iPhone's side inset is for its camera, higher up) */
 .mhud .mh-chat { position: absolute; left: 4px; bottom: calc(38px + env(safe-area-inset-bottom));
   width: min(34%, 280px); display: flex; align-items: flex-end; gap: 5px; }
-.mhud.mh-saying .mh-chat { bottom: calc(46px + env(safe-area-inset-bottom)); width: min(60%, 500px); }
+.mhud.mh-saying .mh-chat { left: 50%; transform: translateX(-50%); bottom: calc(80px + env(safe-area-inset-bottom)); width: min(64%, 540px); }
 .mhud.mh-saying .mh-chat .mh-chatbtn { display: none; }
 .mhud .mh-log { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; max-height: 5.6em;
   overflow: hidden; font-size: 10px; line-height: 1.25; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
@@ -110,8 +110,8 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-log div.mh-tag { padding: 0 5px; border-radius: 4px; text-shadow: none; }
 .mhud .mh-chat .mh-btn { flex: none; pointer-events: auto; width: 26px; height: 26px; }
 .mhud .mh-chat .mh-btn svg { width: 14px; height: 14px; }
-.mhud .mh-say { position: absolute; left: 4px; bottom: calc(6px + env(safe-area-inset-bottom));
-  width: min(66%, 540px); display: none; align-items: center; gap: 6px; padding: 4px; border-radius: 20px; pointer-events: auto; }
+.mhud .mh-say { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(38px + env(safe-area-inset-bottom));
+  width: min(64%, 540px); display: none; align-items: center; gap: 6px; padding: 4px; border-radius: 20px; pointer-events: auto; }
 .mhud .mh-say.mh-open { display: flex; }
 .mhud .mh-tgt { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 6px 10px; border-radius: 14px; white-space: nowrap;
   font-size: 11px; font-weight: 700; background: rgba(255, 255, 255, 0.1); cursor: pointer; }
@@ -119,8 +119,8 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
   background: rgba(0, 0, 0, 0.38); color: #fff; font: 14px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; -webkit-user-select: text; user-select: text; }
 .mhud .mh-send { flex: none; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; cursor: pointer; font-weight: 800; font-size: 12px;
   color: #3a2400; background: linear-gradient(180deg, #ffe07a, #f0aa2c); }
-.mhud .mh-tlist { position: absolute; bottom: calc(46px + env(safe-area-inset-bottom)); left: 4px;
-  width: min(66%, 540px); display: none; flex-wrap: wrap; gap: 5px; padding: 6px; pointer-events: auto; }
+.mhud .mh-tlist { position: absolute; bottom: calc(80px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  width: min(64%, 540px); display: none; flex-wrap: wrap; gap: 5px; padding: 6px; pointer-events: auto; }
 .mhud .mh-tlist.mh-open { display: flex; }
 .mhud .mh-tlist .mh-tgt.mh-on { background: rgba(122, 170, 255, 0.45); }
 `;
