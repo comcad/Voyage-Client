@@ -11,7 +11,8 @@ const FOLD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 const OPEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 12h12M12 6v12"/></svg>';
 
 const CSS = `
-.mhud .mh-mm { position: absolute; left: calc(6px + env(safe-area-inset-left)); top: 6px; padding: 5px 6px 6px; pointer-events: auto; max-width: 240px; }
+/* at the screen's very left edge, as the chat (not held in by a phone's side inset) */
+.mhud .mh-mm { position: absolute; left: 4px; top: 6px; padding: 5px 6px 6px; pointer-events: auto; max-width: 240px; }
 .mhud.mh-sheeting .mh-mm { display: none; }
 .mhud .mh-mm-head { display: flex; align-items: center; gap: 6px; padding: 0 1px 5px 2px; min-width: 120px; }
 .mhud .mh-mm.mh-folded .mh-mm-head, .mhud .mh-mm.mh-none .mh-mm-head { padding-bottom: 0; }
