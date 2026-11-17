@@ -301,7 +301,7 @@ With [Voyage-Editor](https://github.com/comcad/Voyage-Editor). Publishing writes
 
 ## 💬 Community
 
-Questions, feedback, or want to help test? Come hang out on Discord.
+Questions, feedback, or want to help test? Come hang out on Discord. Before opening a pull request, please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 [![Discord](https://img.shields.io/badge/Discord-discord.gg%2FSCVxm6tB4g-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/SCVxm6tB4g)
 
