@@ -144,12 +144,12 @@ export class MobileSheets {
     }
     const n = this.el = el('div', 'mh-sheet mh-glass');
     n.innerHTML = `<div class="mh-sh-head"><span class="mh-sh-title"></span><span class="mh-sh-extra"></span><div class="mh-btn mh-sh-x">${X_ICON}</div></div>
-      <div class="mh-sh-tabs"></div><div class="mh-sh-banner"></div><div class="mh-sh-body"></div><div class="mh-sh-detail"></div>`;
+      <div class="mh-sh-tabs" data-scroll="x"></div><div class="mh-sh-banner"></div><div class="mh-sh-body" data-scroll="y"></div><div class="mh-sh-detail" data-scroll="y"></div>`;
     root.append(n);
     // the picked quest's panel, sliding out to the left of the sheet (from behind it)
     const q = this.qd = el('div', 'mh-qd mh-glass');
     q.innerHTML = `<div class="mh-qd-head"><span class="mh-qd-dot"></span><div class="mh-qd-title"></div><div class="mh-btn mh-qd-x" title="Close">${X_ICON}</div></div>
-      <div class="mh-qd-lv"></div><div class="mh-qd-top"><div class="mh-qd-stage"></div><div class="mh-qd-npc"></div></div><div class="mh-ctas"></div><div class="mh-qd-body"></div>`;
+      <div class="mh-qd-lv"></div><div class="mh-qd-top"><div class="mh-qd-stage"></div><div class="mh-qd-npc"></div></div><div class="mh-ctas"></div><div class="mh-qd-body" data-scroll="y"></div>`;
     root.insertBefore(q, n);
     this.qp = { dot: q.querySelector('.mh-qd-dot'), title: q.querySelector('.mh-qd-title'), lv: q.querySelector('.mh-qd-lv'), stage: q.querySelector('.mh-qd-stage'),
       npc: q.querySelector('.mh-qd-npc'), acts: q.querySelector('.mh-ctas'), body: q.querySelector('.mh-qd-body') };

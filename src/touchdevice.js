@@ -24,7 +24,8 @@ export function setupTouchDevice() {
   for (const t of ['gesturestart', 'gesturechange', 'gestureend']) window.addEventListener(t, stop, opts);
   // a second finger never starts a pinch; one finger never scrolls the page (unless it is in a text box)
   window.addEventListener('touchstart', (e) => { if (e.touches.length > 1) stop(e); }, opts);
-  window.addEventListener('touchmove', (e) => { if (e.touches.length > 1 || !typing(e.target)) stop(e); }, opts);
+  // (MOBILE UI's scrolling lists, marked data-scroll, still slide)
+  window.addEventListener('touchmove', (e) => { if (e.touches.length > 1 || (!typing(e.target) && !e.target?.closest?.('[data-scroll]'))) stop(e); }, opts);
   // a touch screen laptop pinches with ctrl + wheel
   window.addEventListener('wheel', (e) => { if (e.ctrlKey) stop(e); }, opts);
   // no long-press menu (copy / save image) over the game

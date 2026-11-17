@@ -48,6 +48,10 @@ const CSS = `
 .mhud { position: absolute; inset: 0; z-index: 6; font: 500 11px/1.25 -apple-system, "Segoe UI", system-ui, Arial, sans-serif;
   color: #f2f5fb; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
 .mhud * { box-sizing: border-box; }
+/* on a touch screen every finger goes to the game (touchdevice.js); its scrolling lists (data-scroll) slide again, held in */
+html.touch-device .mhud [data-scroll="y"], html.touch-device .mhud [data-scroll="y"] * { touch-action: pan-y; }
+html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll="x"] * { touch-action: pan-x; }
+.mhud [data-scroll] { overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .mhud .mh-glass { background: linear-gradient(180deg, rgba(24, 33, 58, 0.66), rgba(11, 16, 31, 0.66));
   border: 1px solid rgba(255, 255, 255, 0.13); border-radius: 12px; box-shadow: 0 3px 12px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.07);
   -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
@@ -125,8 +129,8 @@ export class MobileHud {
         <div class="mh-bar mh-ex"><i></i><span><b>EXP</b><em></em></span></div>
       </div>
       <div class="mh-act mh-glass"></div>
-      <div class="mh-menu mh-glass"></div>
-      <div class="mh-chat"><div class="mh-btn mh-glass mh-chatbtn" title="Chat">${ICON.chat}</div><div class="mh-log mh-quiet"></div></div>
+      <div class="mh-menu mh-glass" data-scroll="y"></div>
+      <div class="mh-chat"><div class="mh-btn mh-glass mh-chatbtn" title="Chat">${ICON.chat}</div><div class="mh-log mh-quiet" data-scroll="y"></div></div>
       <div class="mh-tlist mh-glass"></div>
       <div class="mh-say mh-glass"><span class="mh-tgt"></span><input type="text" maxlength="70" enterkeyhint="send" autocomplete="off" autocapitalize="off"
         spellcheck="false"><button class="mh-send" type="button">Send</button><div class="mh-btn mh-closebtn" title="Close">${ICON.close}</div></div>`;
