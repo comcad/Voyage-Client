@@ -575,8 +575,22 @@ export class CashShopWin extends Win {
     if (warn && !(await this.alert(warn, true))) return;
     const wallet = await this.dialog({ mode: 0, items: [c], text: 'Are you sure you want to buy this item?', wallets: mask });
     if (!wallet) return;
+    const life = this.mapleLifeRefusal(c.ItemId);
+    if (life) { this.alert(life); return; }
     if (this.tab === WISH) this.wishAfterBuy = c.SN;
     this.sendBuy({ c, wallet });
+  }
+  /**
+   * Why Maple Life (5431000 A-type / 5432000 B-type) can't be bought, or null: below level 30; with every character
+   * slot taken, the A-type (the B-type brings its own slot) while there are fewer than 15, and both from then on.
+   */
+  mapleLifeRefusal(id) {
+    if (id !== 5431000 && id !== 5432000) return null;
+    if ((this.stats.level || 0) < 30) return 'You must be over Level 30\r\nto purchase this item';
+    const slots = this.g.charSlots ?? 15;
+    if (slots - (this.g.charCount ?? 0) > 0) return null;
+    if (slots >= 15) return 'You cannot create a new character\r\nin this world as all 12 slots are full.';
+    return id === 5431000 ? 'You do not have any empty character slots\r\nThe Maple life(B-Type) will create\r\na new character slot upon purchase.' : null;
   }
   /** Your pets out, by the character's pet slots up to the first empty one: their item ids and their own names. */
   petsOut() {

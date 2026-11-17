@@ -2226,14 +2226,14 @@ export class ChannelSession {
   checkCash() { this.send(new PacketWriter(C.CHECK_CASH)); }
   /**
    * CASHSHOP_OPERATION buys (wallet 1 NX credit / 2 maple points / 4 prepaid, each led by a "paid with Maple Points"
-   * byte): 3 an item, 0x1E a package (910xxxx), 6 / 7 an inventory / storage slot item (911xxxx), 8 a character
-   * slot (543xxxx); 0x20 a meso item (SN 8xxxxxxx). Then 5 wish list, 0xD take out, 0xE put in.
+   * byte): 3 an item (Maple Life too), 0x1E a package (910xxxx), 6 / 7 an inventory / storage slot item (911xxxx), 8
+   * a character slot (5430xxx); 0x20 a meso item (SN 8xxxxxxx). Then 5 wish list, 0xD take out, 0xE put in.
    */
   csBuy(wallet, sn, itemId) {
     const k = Math.floor(itemId / 10000), mp = wallet === 2 ? 1 : 0, w = new PacketWriter(C.CASHSHOP_OPERATION);
     if (Math.floor(sn / 10000000) === 8) w.byte(0x20).int(sn);
     else if (k === 911) w.byte(Math.floor(itemId / 1000) === 9110 ? 7 : 6).byte(mp).int(wallet).byte(1).int(sn);
-    else if (k === 543) w.byte(8).byte(mp).int(wallet).int(sn);
+    else if (Math.floor(itemId / 1000) === 5430) w.byte(8).byte(mp).int(wallet).int(sn);
     else if (k === 910) w.byte(0x1E).byte(mp).int(wallet).int(sn);
     else w.byte(3).byte(mp).int(wallet).int(sn).int(0);
     this.send(w);
