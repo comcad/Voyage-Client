@@ -104,13 +104,19 @@ export class WindowManager {
     if (e.key === 'Escape' && this.carry?.sticky) { e.preventDefault(); e.stopImmediatePropagation(); this.carry = null; return; }
     const top = this.modal || (this.order[this.order.length - 1]?.key && e.key === 'Escape' ? this.order[this.order.length - 1] : null);
     if (!top) return;
+    if (this.skin?.(top) && e.target?.closest?.('.mhud')) return;   // MOBILE UI's own boxes take their keys
     const typing = e.target instanceof HTMLInputElement;
     if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); top.key?.(e); return; }
     if (!typing && top === this.modal && top.keys?.(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }   // a dialog's own keys (arrows, Tab)
     if (!typing && this.modal) e.stopImmediatePropagation();   // no walking or attacking under a dialog
   }
   raise(w) { const i = this.order.indexOf(w); if (i >= 0 && i !== this.order.length - 1) { this.order.splice(i, 1); this.order.push(w); } }
-  top(x, y) { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].contains(x, y)) return this.order[i]; return null; }
+  top(x, y) { for (let i = this.order.length - 1; i >= 0; i--) if (!this.skin?.(this.order[i]) && this.order[i].contains(x, y)) return this.order[i]; return null; }
+  /**
+   * MOBILE UI shows some windows as its own HTML (ui/mobileskins.js sets skin(w) to say which): they stay open and do
+   * all their work, but aren't drawn here nor take the pointer; a dialog among them still holds the rest back.
+   */
+  skin = null;
 
   // ---------------------------------------------------------------- shared helpers
   /** Item icon node, loaded on first use (null until ready). */
@@ -280,6 +286,7 @@ export class WindowManager {
 
   draw(ctx) {
     for (const w of this.order) {
+      if (this.skin?.(w)) continue;   // shown by MOBILE UI instead
       try { w.draw(ctx); } catch (e) {
         // a window that throws mid-draw would leave saves / clips open and blank everything after it:
         // report it once, put the canvas back and go on with the rest

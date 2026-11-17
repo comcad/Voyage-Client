@@ -8,7 +8,9 @@
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - the chat, only while it is open: a little up-arrow tab out of the status line's top opens a line to type on,
  *     with the chat target beside it, centred right over the status line, and the log over it; closed, nothing of the
- *     chat shows but a gold dot on the tab when lines came in meanwhile.
+ *     chat shows but a gold dot on the tab when lines came in meanwhile;
+ *   - NPC and quest conversations, message boxes, NPC shops, trades and invitations / notices in the same style
+ *     (ui/mobileskins.js).
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
  * Game.toggleMenu, so nothing behaves differently from the bar; only the look and the place differ.
  */
@@ -19,6 +21,7 @@ import { CHAT_TARGETS } from './statusbar.js';
 import { UI_W } from '../view.js';
 import { MobileSheets } from './mobilesheets.js';
 import { MobileMiniMap } from './mobileminimap.js';
+import { MobileSkins } from './mobileskins.js';
 
 /** Seconds the chat lines stay after the last new one before they fade. */
 const CHAT_SHOW = 8;
@@ -214,6 +217,8 @@ export class MobileHud {
     this.mini = new MobileMiniMap(this, el);
     this.sheets = new MobileSheets(this, el);
     el.append(P.menu, P.tlist, P.say);
+    // over all of it: the conversations, boxes, shop, trade and notices standing in for the client's windows
+    this.skins = new MobileSkins(this);
     this.seen = null; this.lastLineAt = -Infinity; this.logOpen = false;
     this.timer = setInterval(() => this.update(), 150);
     this.update();

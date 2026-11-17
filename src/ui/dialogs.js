@@ -687,7 +687,7 @@ const commas = (n) => n.toLocaleString('en-US');
  * A potion's discounted price (SET_POTION_DISCOUNT_RATE), for 200xxxx-202xxxx items: (100 - rate)% of the price,
  * rounded half up; 0 for no discount.
  */
-function potionPrice(g, price, id) {
+export function potionPrice(g, price, id) {
   const rate = g?.potionRate || 0, k = Math.floor(id / 10000);
   if (!rate || k < 200 || k > 202) return 0;
   let x = (100 - rate) * price * 0.01;

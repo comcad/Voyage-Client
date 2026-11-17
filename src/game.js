@@ -3291,7 +3291,7 @@ export class Game {
         const w = this.tradeWin = this.windows.show(new TradeWin(this.windows), null);
         w.slot = t.slot;
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
-        this.windows.open('inventory');
+        if (!this.mobileHud?.shown) this.windows.open('inventory');   // (MOBILE UI opens its own beside the trade)
       },
       // a guild alliance's invitation: refused at once with alliance invitations off in the Game Option or while
       // another is up; O takes it

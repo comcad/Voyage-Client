@@ -35,7 +35,7 @@ let balloonSeq = 0;
 const TAIL_X = 603, TAIL_IN = 13;
 const FADE = 1000, INVITE_HOLD = 180000, QUEST_HOLD = 30000, LOGIN_HOLD = 6000, NAME_W = 100;
 
-class Balloon extends Win {
+export class Balloon extends Win {
   constructor(mgr, kind, art, done, hold) {
     super(mgr, mgr.W.FadeYesNo[art], 464, 0);
     Object.assign(this, { kind, done, hold, seq: ++balloonSeq, born: performance.now(), deadline: performance.now() + hold, shownAt: null, closing: null, clicked: null, n: 1 });
@@ -48,6 +48,8 @@ class Balloon extends Win {
    * waiting with its time starting over from now; once unlocked, it fades in again. One that came meanwhile waits too.
    */
   holdOnLock() { if (!this.closing && this.shownAt !== null) { this.shownAt = null; this.deadline = performance.now() + this.hold; } }
+  /** What MOBILE UI shows for it: an icon node, its lines, and its O / X as labelled actions (null where it has none). */
+  summary() { return { icon: null, lines: [], ok: null, x: { label: 'Close', fn: () => this.press(false) } }; }
   /** O / X: taken once the fade in is over; only the first counts. */
   press(ok) { if (!this.clicked && !this.closing) this.clicked = ok ? 'ok' : 'x'; }
   update(now) {
@@ -101,6 +103,10 @@ class Invite extends Balloon {
     this.icon(ctx, this.F[`icon${this.k.icon}`]);
     for (const [t, x, y] of this.k.lines(this.name)) uiText(ctx, t, x, y, { color: '#fff', size: 12 });
   }
+  summary() {
+    return { icon: this.F[`icon${this.k.icon}`], lines: this.k.lines(this.name).map(([t]) => t),
+      ok: { label: 'Accept', fn: () => this.press(true) }, x: { label: 'Decline', fn: () => this.press(false) } };
+  }
 }
 
 /**
@@ -122,6 +128,11 @@ class ParcelNote extends Balloon {
     const [a, b] = !s ? ['\tQuick delivey/Package', '\tArrived!'] : [this.quick ? 'The Quick Delivery has arrived!' : 'Package\r\nReceived.', `[${s}]`];
     uiText(ctx, a, 27, 7, w); uiText(ctx, b, 27, 20, w);
   }
+  summary() {
+    const s = this.sender, lines = !s && !this.quick ? ['Package Received.'] : !s ? ['Quick delivery/Package', 'Arrived!']
+      : [this.quick ? 'The Quick Delivery has arrived!' : 'Package Received.', `[${s}]`];
+    return { icon: this.mgr.B.icon?.delivery, lines, ok: this.quick ? { label: 'Open', fn: () => this.press(true) } : null, x: { label: 'Close', fn: () => this.press(false) } };
+  }
 }
 /** A parcel came (sender, or '' at login): resolves true when a quick one's O is pressed. */
 export function notifyParcel(mgr, sender, quick) {
@@ -138,6 +149,7 @@ class NoteNotice extends Balloon {
     this.button(this.F.BtOK, ...NARROW.ok, () => this.press(true));
     this.button(this.F.BtCancel, ...NARROW.x, () => this.press(false));
   }
+  summary() { return { icon: null, lines: ['You have a new note.'], ok: { label: 'Open', fn: () => this.press(true) }, x: { label: 'Later', fn: () => this.press(false) } }; }
 }
 /** The new-note balloon, unless one is up already: resolves true for O. */
 export function notifyNote(mgr) {
@@ -159,6 +171,10 @@ class LoginNote extends Balloon {
     uiText(ctx, a, 25, 7, { color: '#fff', size: 11 });
     uiText(ctx, b, 25, 20, { color: '#fff', size: 11 });
   }
+  summary() {
+    const lines = this.same ? ["You're on the same ch.", `with ${this.name}.`] : [`${this.name} is`, 'logged in.'];
+    return { icon: this.same ? this.F.icon4 : this.F.icon3, lines, ok: null, x: { label: 'Close', fn: () => this.press(false) } };
+  }
 }
 
 /** "Quest Complete!" / "You got a title!" (the quest's name under it, cut to 100px), or "New Quest!" for quest 0. */
@@ -172,6 +188,10 @@ export class QuestNotice extends Balloon {
   frames() { return [...super.frames(), this.F.icon6, this.F.icon7].filter(Boolean); }
   /** The body opens the quest too. */
   down() { if (!this.closing) { this.press(true); this.open(this.qid, false); } }
+  summary() {
+    return { icon: this.qid ? this.F.icon7 : this.F.icon6, lines: this.qid ? [this.title, this.name || ''] : [this.title],
+      ok: { label: 'Open', fn: () => { this.press(true); this.open(this.qid, true); } }, x: { label: 'Close', fn: () => this.press(false) } };
+  }
   body(ctx) {
     if (!this.qid) { this.icon(ctx, this.F.icon6); uiText(ctx, this.title, 27, 14, { color: '#fff', size: 12 }); return; }
     this.icon(ctx, this.F.icon7);
@@ -195,6 +215,7 @@ class PartyQuestNotice extends Balloon {
     this.button(this.F.BtCancel, ...NARROW.x, () => this.press(false));
   }
   frames() { return [...super.frames(), this.mark].filter(Boolean); }
+  summary() { return { icon: this.mark, lines: ['Party Quest', this.name || ''], ok: { label: 'Open', fn: () => this.press(true) }, x: { label: 'Close', fn: () => this.press(false) } }; }
   body(ctx) {
     const i = this.mgr.image(this.mark);
     if (i) ctx.drawImage(i, 4, 4);
