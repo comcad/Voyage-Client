@@ -969,10 +969,30 @@ export class Game {
    * CHANGE_CHANNEL: the server answers with the new channel's address; the client then drops this
    * connection and logs the same character in there (PLAYER_LOGGEDIN), keeping its handlers.
    */
+  /**
+   * First the client's checks: no request waiting on its answer (alive, 500ms since the last), not out of breath (a
+   * GM aside), not where the map forbids it (fieldLimit 0x10). The request holds the request lock, and the server
+   * turning it down (actions enabled again) just ends the wait.
+   */
   async switchChannel(ch) {
-    if (ch === this.channel) return;
-    await this.hop((net) => net.changeChannel(ch), 'Changing channel...', 'You cannot change channels right now.');
+    if (ch === this.channel || this.switching || !this.net) return;
+    if (!this.canExclusive(500)) return;
+    if (!this.gm && this.outOfBreath()) { this.windows.notice("You can't do it right now.\r\nCatch your breath and then try again."); return; }
+    if ((this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
+    this.lockExclusive();
+    await this.hop((net) => net.changeChannel(ch), 'Changing channel...', null);
   }
+  /** The status bar's Channel button: its window, except where the map forbids changing channel (fieldLimit 0x10). */
+  channelMenu() {
+    if (!this.windows.isOpen('channel') && (this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
+    this.windows.toggle('channel');
+  }
+  /**
+   * Out of breath: for 5s after a blow that did damage, a Hurricane or Rapid Fire shot, or a skill starting to charge
+   * or wind up, the channel and the Cash Shop / MTS can't be changed to.
+   */
+  catchBreath() { this.breathUntil = performance.now() + 5000; }
+  outOfBreath() { return performance.now() < (this.breathUntil || 0); }
   /** Leaving the Cash Shop is the same hop: the server sends the channel's address and we log back in there. */
   async leaveCashShop() {
     if (!this.inCashShop) return;
@@ -1066,13 +1086,27 @@ export class Game {
     to.searchParams.set('b', Date.now().toString(36));
     location.replace(to);
   }
-  enterCashShop() { if (this.net && !this.inCashShop) this.net.enterCashShop(); }
   /**
-   * The status bar's MTS button: ENTER_MTS, one request at a time (500ms apart, none waiting for its answer), and not
-   * where the map forbids it (fieldLimit 0x10). The game server with the MTS off answers with enableActions.
+   * The Cash Shop button: not out of breath (GMs neither), no request waiting on its answer (500ms since the last),
+   * not where the map forbids it (fieldLimit 0x10); the request holds the request lock until it's answered.
+   */
+  enterCashShop() {
+    if (!this.net || this.inCashShop) return;
+    if (this.outOfBreath()) { this.windows.notice("You can't do it right now.\r\nCatch your breath and then try again."); return; }
+    if (!this.canExclusive(500, true)) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
+    this.net.enterCashShop();
+    this.lockExclusive();
+  }
+  /**
+   * The status bar's MTS button: ENTER_MTS, not out of breath, one request at a time (500ms apart, none waiting for its
+   * answer), and not where the map forbids it (fieldLimit 0x10). The game server with the MTS off answers with
+   * enableActions.
    */
   enterMTS() {
-    if (!this.net || this.inCashShop || !this.canExclusive(500, true)) return;
+    if (!this.net || this.inCashShop) return;
+    if (this.outOfBreath()) { this.windows.notice("You can't do it right now.\r\nCatch your breath and then try again."); return; }
+    if (!this.canExclusive(500, true)) return;
     if ((this.map?.info?.fieldLimit || 0) & 0x10) { this.windows.notice("You can't do it here in this map."); return; }
     this.net.enterMTS();
     this.lockExclusive();
@@ -1080,6 +1114,7 @@ export class Game {
   /** SET_CASH_SHOP: the server took us off the map; swap the world for the shop screen. */
   openCashShop(d) {
     this.inCashShop = true;
+    this.releaseExclusive();   // the answer to the request
     const info = d.info;
     if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
     this.others.clear(); this.clearDrops(); this.pets.clear(); this.lifeByOid.clear(); this.summons.clear(); this.dragons.clear(); this.boards.clear(); this.kites.clear(); this.jukebox = null; clearTimeout(this.jukeboxTimer); this.reactors?.clear();
@@ -1104,11 +1139,12 @@ export class Game {
     try {
       const addr = await new Promise((resolve) => {
         old.h.changeChannel = resolve;
+        this.hopRefused = () => resolve(null);   // turned down: the server enables actions again
         request(old);
         setTimeout(() => resolve(null), 8000);
       });
-      old.h.changeChannel = null;
-      if (!addr) { await this.windows.notice(refused); return; }
+      old.h.changeChannel = null; this.hopRefused = null;
+      if (!addr) { if (refused) await this.windows.notice(refused); return; }
       const h = old.h;
       old.h = {};                       // the old connection closes quietly
       old.close();
@@ -3120,7 +3156,7 @@ export class Game {
       status: (s) => this.hud.status(s),
       notice: (n) => this.hud.notice(n),
       fame: (f) => this.onFame(f),
-      exclusiveAnswered: () => { this.releaseExclusive(); this.fieldMode?.win?.answered?.(); },
+      exclusiveAnswered: () => { this.releaseExclusive(); this.hopRefused?.(); this.fieldMode?.win?.answered?.(); },
       skillBookResult: (d) => this.onSkillBookResult(d),
       inventoryGrow: (type, limit) => { if (this.inventory) this.inventory.limits[type] = limit; },
       sortResult: (inv, mode) => this.windows?.wins.inventory?.setSortMode(inv, mode),
@@ -7201,6 +7237,7 @@ export class Game {
     else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, clip && { ...clip, point: true }, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
+    if (HELD_SHOTS.has(skillId)) this.catchBreath();
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
@@ -7559,6 +7596,7 @@ export class Game {
     const prepare = id === EXPLOSION ? (this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale) / 1000 : 0;
     this.charging = { id, lv, t: 0, pose, prepare };
     if (GRENADES.has(id)) this.reuseAt = { ...this.reuseAt, [id]: performance.now() + GRENADE_REUSES[id] };
+    this.catchBreath();
     this.net?.skillEffect(id, lv, known ? this.actionId(pose) : 0x7fff, !p.facingRight, this.attackSpeed());
     if (node?.keydown) this.loopSkillEffect(id, p, 'keydown', () => this.charging?.id === id);
     if (frames(node?.prepare).length) this.playSkillEffect(id, p, false, 'prepare');
@@ -7747,6 +7785,7 @@ export class Game {
     const start = performance.now(), last = id === RAPID_FIRE && this.rapidFireAt ? this.rapidFireAt - start : -Infinity;
     this.keydown = { id, lv, t: 0, tick: 0, last, start, pose };
     p.frame = 0; p.frameT = 0;
+    this.catchBreath();
     this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
     if (LOOP_HOLDS.has(id)) this.holdLoop(id); else sfx.play(`Skill/${pad(id, 7)}/Use`);
     this.keydownArt(this.keydown);
@@ -8428,6 +8467,7 @@ export class Game {
     const action = this.skills.node(id)?.prepare?.action, pose = action && this.look.has(action) ? action : 'alert';
     p.attack = pose; p.action = pose; p.frame = 0; p.frameT = 0; p.attackScale = this.attackScale();
     this.chakra = { x: ld?.x || 100 };
+    this.catchBreath();
     this.net?.skillEffect(id, lv, this.actionId(pose), !p.facingRight, this.attackSpeed());
     this.playSkillEffect(id, p, false, 'prepare');
     this.after(this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale, () => {
@@ -9998,6 +10038,7 @@ export class Game {
       return;
     }
     this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+    this.catchBreath();
     // a blow ends Hurricane and Rapid Fire (not the skills being charged)
     if (this.keydown && HELD_SHOTS.has(this.keydown.id)) this.endKeydown();
     // Meso Guard: half the blow is paid in mesos (x% of it), as far as they go; the number shows what you lose

@@ -419,7 +419,7 @@ export class StatusBar {
       case 'BtStat': g.windows.toggle('stat'); break;
       case 'BtSkill': g.windows.toggle('skill'); break;
       case 'BtQuest': g.windows.toggle('quest'); break;
-      case 'BtChannel': g.windows.toggle('channel'); break;
+      case 'BtChannel': g.channelMenu(); break;
       case 'BtComm': g.windows.toggle('userlist'); break;
       case 'BtMobbook': g.windows.toggle('monsterbook'); break;
       case 'BtMessenger': g.windows.toggle('messenger'); break;
