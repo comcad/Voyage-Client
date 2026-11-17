@@ -85,14 +85,15 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 @keyframes mhud-pulse { 50% { filter: brightness(1.7); } }
 .mhud .mh-bar span { position: absolute; inset: 0; display: flex; justify-content: space-between; align-items: center; padding: 0 5px;
   font-size: 8px; font-weight: 700; letter-spacing: 0.2px; text-shadow: 0 0 2px #000, 0 0 2px #000; }
-.mhud .mh-act { position: absolute; right: calc(6px + env(safe-area-inset-right)); top: 6px; display: flex; gap: 5px; padding: 4px;
+/* the buttons (and their menu) at the screen's very right edge, as the mini map is at the left */
+.mhud .mh-act { position: absolute; right: 4px; top: 6px; display: flex; gap: 5px; padding: 4px;
   border-radius: 22px; pointer-events: auto; }
 .mhud .mh-btn { position: relative; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; color: #e9eefb;
   background: radial-gradient(circle at 50% 30%, rgba(255, 255, 255, 0.17), rgba(255, 255, 255, 0.04)); border: 1px solid rgba(255, 255, 255, 0.15);
   touch-action: manipulation; cursor: pointer; }
 .mhud .mh-btn:active, .mhud .mh-btn.mh-on { background: rgba(122, 170, 255, 0.4); border-color: rgba(170, 205, 255, 0.5); }
 .mhud .mh-btn svg { width: 17px; height: 17px; pointer-events: none; }
-.mhud .mh-menu { position: absolute; right: calc(6px + env(safe-area-inset-right)); top: 50px; width: 186px; max-height: calc(100% - 58px);
+.mhud .mh-menu { position: absolute; right: 4px; top: 50px; width: 186px; max-height: calc(100% - 58px);
   overflow-y: auto; padding: 5px; pointer-events: auto; display: none; -webkit-overflow-scrolling: touch; }
 .mhud .mh-menu.mh-open { display: block; }
 .mhud .mh-row { display: flex; align-items: center; gap: 9px; min-height: 30px; padding: 3px 8px; border-radius: 8px; font-size: 12px; cursor: pointer; }
