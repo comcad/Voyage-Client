@@ -1830,7 +1830,7 @@ export class Game {
       || (type === 553 ? this.useCashBare : null)
       || (Math.floor(id / 1000) === 5281 ? this.useEffectCash : null);
     if (!run) return false;
-    if (this.cashFree()) run.call(this, Number(slot), id);
+    if (this.cashGate()) run.call(this, Number(slot), id);   // refused: "Other requests are in process", as the client says
     return true;
   }
   /**
@@ -1894,9 +1894,13 @@ export class Game {
    * sealed; notExtend refused) it asks with the time it adds, held to the item's maxDays from now.
    */
   async useSandglass(slot, id, pos = 0) {
-    if (!pos) { this.sendCashItem(slot, id, (w) => w.short(0)); return; }
+    // the client checks for a request waiting on its answer when the sandglass goes, and then holds the lock itself
+    const send = (at) => {
+      if (!this.canExclusive(500)) { this.windows.notice('Other requests are in process.\r\nPlease try again in a little bit.'); return; }
+      if (this.sendCashItem(slot, id, (w) => w.short(at))) this.lockExclusive();
+    };
+    if (!pos) { send(0); return; }
     if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
-    if (!this.canExclusive(500)) return;
     const it = this.inventory?.equipped?.[pos], glass = this.inventory?.[5]?.[slot];
     if (!it) return;
     if (glass?.flag & 1) { this.windows.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }
@@ -1910,7 +1914,7 @@ export class Game {
     const d = Math.floor(add / 86400), h = Math.floor((add % 86400) / 3600), m = Math.floor((add % 3600) / 60);
     const dur = `${d > 0 ? `${d} days` : ''}${h > 0 ? `${h} hrs.` : ''}${m > 0 ? `${m} min.` : ''}`;
     if (!(await this.windows.confirm(`When used on ${this.windows.itemName(it.id) || ''},  the effective date will be extended by ${dur}. Would you like to use it?`))) return;
-    this.sendCashItem(slot, id, (w) => w.short(pos));
+    send(pos);
   }
   async openKarma(slot, id) {
     if (this.tradeOpen()) { this.hud.message('Not available', CHAT_COLOR.error); return; }
@@ -4291,6 +4295,7 @@ export class Game {
     const seq = this.loadSeq = (this.loadSeq || 0) + 1;
     const current = () => seq === this.loadSeq;
     this.petMpArmed = false;
+    this.releaseExclusive();   // (a request still waiting on its answer is let go, and the next one spaced from here)
     this.loading = true; this.loadingId = id; this.objVisQueue = null;
     // a scene ends with its map; the next map's scene comes while that one loads
     this.direction = null;
@@ -4979,7 +4984,7 @@ export class Game {
   useInventoryItem(tab, slot, it) {
     if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
     if (tab === 5 && it.id === 5170000) { this.useNameTag(slot, it.id); return; }                  // Pet Name Tag
-    if (tab === 5 && it.id === 5180000) { if (this.cashFree()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
+    if (tab === 5 && it.id === 5180000) { if (this.cashGate()) this.net.waterOfLife(); return; }   // Water of Life: the fairy does the rest
     if (tab === 5 && Math.floor(it.id / 10000) === 524) { this.useCashPetFood(slot, it.id); return; }
     if (tab === 5 && this.useCashTabItem(slot, it.id)) return;
     if (tab === 5 && it.id === 5060002) {
@@ -6021,6 +6026,25 @@ export class Game {
   /** A modal window with its art loaded first. */
   showModal(w) { this.assets.preload(w.frames()).then(() => this.windows.show(w)); }
 
+  /**
+   * Invite someone to your party from their menu, as the client does it: not as a beginner (Beginner, Noblesse,
+   * Legend) below Lv. 10, not yourself, and in a party only as its leader with room left. With no party the invite
+   * alone goes: the server makes the party.
+   */
+  partyInvite(name) {
+    const job = this.stats?.job ?? 0;
+    if ([0, 1000, 2000, 2001].includes(job) && (this.stats?.level ?? 0) < 10) { this.notice('Characters whose level is below Lv. 10, such as Beginners, Noblesses, and Legends cannot form a party.'); return; }
+    if (name === this.player.name) { this.notice('You may not invite yourself to the party.'); return; }
+    if (this.party && this.party.leader !== this.player.id) { this.notice('You are not the master of the party.'); return; }
+    if (this.party && this.party.members.length >= 6) { this.notice('It is impossible to invite someone to the party.'); return; }
+    this.net?.partyOp(4, name);
+  }
+  /** A party search ends when you make a party, join one, or quit as its leader: the server is told, whatever the window shows. */
+  partySearchEnd() {
+    this.net?.partySearchStop();
+    const w = this.windows.wins.partysearch;
+    if (w) w.state = 'idle';
+  }
   /** PARTY_OPERATION results: keep this.party = { id, leader, members[] } in step with the server. */
   onParty(p) {
     const me = this.player.id, msg = (t) => this.hud.message(t, CHAT_COLORS.party);
@@ -6054,6 +6078,7 @@ export class Game {
     if (['update', 'join', 'leave', 'expel', 'disband', 'created'].includes(p.kind)) this.refreshTownDoors(false);
     this.windows.wins.partyhp?.sync();
     this.windows.wins.partysearch?.partyChanged();
+    if (p.kind === 'created' || (p.kind === 'join' && p.name === this.player.name) || (p.kind === 'disband' && p.target === me)) this.partySearchEnd();
   }
 
   /** A whisper with your own whispers off in the Game Option warns you that the answer may not come (chat type 9). */
@@ -6961,17 +6986,7 @@ export class Game {
     const ld = skillId ? sb.levelData(skillId, lv) : null;
     if (skillId && this.net) {
       if (sb.cooling(skillId)) { this.notice('You may not use the skill yet.'); return false; }
-      // what it costs, in the client's order: HP (Dragon Roar wants half of it at least), then MP, then the item it uses
-      // up, by count. A refusal says what was short at most every 2s, and is silent in between.
-      const short = (what) => {
-        const now = performance.now();
-        if (now - (this.costSaidAt ?? -Infinity) > 2000) { this.costSaidAt = now; this.hud.message(`You don't have enough ${what} to use this skill.`, CHAT_COLOR.error); }
-        return false;
-      };
-      if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) return short('HP');
-      if ((ld?.hpCon || 0) >= this.stats.hp) return short('HP');
-      if ((ld?.mpCon || 0) > this.stats.mp) return short('MP');
-      if ((ld?.itemConNo || 0) > 0 && this.itemCount(ld.itemCon) < ld.itemConNo) return short(this.windows.itemName(ld.itemCon) || 'items');
+      if (!this.skillCostOk(skillId, ld)) return false;
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
@@ -7804,8 +7819,30 @@ export class Game {
   }
 
   /** Heal: the party heal goes out (with the members it reaches), then its strike on the undead in its box. */
+  /**
+   * Whether you can pay for a skill, in the client's order: HP (Dragon Roar wants half of it at least), then MP, then
+   * the item it uses up, by count. A refusal says what was short at most every 2s, and is silent in between.
+   */
+  skillCostOk(skillId, ld) {
+    const short = (what) => {
+      const now = performance.now();
+      if (now - (this.costSaidAt ?? -Infinity) > 2000) { this.costSaidAt = now; this.hud.message(`You don't have enough ${what} to use this skill.`, CHAT_COLOR.error); }
+      return false;
+    };
+    if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) return short('HP');
+    if ((ld?.hpCon || 0) >= this.stats.hp) return short('HP');
+    if ((ld?.mpCon || 0) > this.stats.mp) return short('MP');
+    if ((ld?.itemConNo || 0) > 0 && this.itemCount(ld.itemCon) < ld.itemConNo) return short(this.windows.itemName(ld.itemCon) || 'items');
+    return true;
+  }
   castHeal(id, lv) {
     if (this.player.ladder) return false;
+    // the client checks the cast before anything goes out: nothing is sent or shown for one it refuses (in the air,
+    // cooling down, or short of what it costs)
+    const p = this.player;
+    if (!p.fh && !AIR_SPELLS.has(id) && !this.map?.swimming(p.x, p.y)) return false;
+    if (this.net && this.skills.cooling(id)) { this.notice('You may not use the skill yet.'); return false; }
+    if (this.net && !this.skillCostOk(id, this.skills.levelData(id, lv))) return false;
     this.playSkillEffect(id, this.player);
     this.net?.heal(id, lv, this.partyMask(id, lv));
     return this.attack(id, 'magic', { heal: true });

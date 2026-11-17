@@ -66,7 +66,7 @@ export class PlayerMenu extends Win {
       [M.BtSave, () => { navigator.clipboard?.writeText(name).catch(() => {}); g.statusBar.focusChat(); }],
       [M.BtTrade, () => g.requestTrade(target)],
       [M.BtWhisper, () => g.statusBar.focusChat(`/w ${name} `)],
-      (!g.party || g.party.leader === g.player.id) && [M.BtParty, () => { if (!g.party) g.net?.partyOp(1); g.net?.partyOp(4, name); }],
+      (!g.party || g.party.leader === g.player.id) && [M.BtParty, () => g.partyInvite(name)],
       g.guild && (guildRank === 1 || guildRank === 2) && [M.BtGuild, () => g.net?.guildOp(5, name)],
       [M.BtClaim, () => g.openReport(name)],
       g.family && g.family.juniors < g.family.maxJuniors && [M.BtFamily, () => g.net?.familyAdd(name)],
