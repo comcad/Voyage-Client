@@ -6961,10 +6961,17 @@ export class Game {
     const ld = skillId ? sb.levelData(skillId, lv) : null;
     if (skillId && this.net) {
       if (sb.cooling(skillId)) { this.notice('You may not use the skill yet.'); return false; }
-      if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
-      if ((ld?.hpCon || 0) >= this.stats.hp) { this.notice('Not enough HP.'); return false; }
-      if ((ld?.itemConNo || 0) > 0 && this.itemCount(ld.itemCon) < ld.itemConNo) { this.notice('You do not have the required item to use this skill.'); return false; }
-      if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) { this.notice("You don't have enough HP to use this skill."); return false; }
+      // what it costs, in the client's order: HP (Dragon Roar wants half of it at least), then MP, then the item it uses
+      // up, by count. A refusal says what was short at most every 2s, and is silent in between.
+      const short = (what) => {
+        const now = performance.now();
+        if (now - (this.costSaidAt ?? -Infinity) > 2000) { this.costSaidAt = now; this.hud.message(`You don't have enough ${what} to use this skill.`, CHAT_COLOR.error); }
+        return false;
+      };
+      if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) return short('HP');
+      if ((ld?.hpCon || 0) >= this.stats.hp) return short('HP');
+      if ((ld?.mpCon || 0) > this.stats.mp) return short('MP');
+      if ((ld?.itemConNo || 0) > 0 && this.itemCount(ld.itemCon) < ld.itemConNo) return short(this.windows.itemName(ld.itemCon) || 'items');
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
