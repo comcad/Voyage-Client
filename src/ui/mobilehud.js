@@ -99,7 +99,7 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 /* the chat keeps to the screen's very left edge (an iPhone's side inset is for its camera, higher up) */
 .mhud .mh-chat { position: absolute; left: 4px; bottom: calc(38px + env(safe-area-inset-bottom));
   width: min(34%, 280px); display: flex; align-items: flex-end; gap: 5px; }
-.mhud.mh-saying .mh-chat { left: 50%; transform: translateX(-50%); bottom: calc(80px + env(safe-area-inset-bottom)); width: min(64%, 540px); }
+.mhud.mh-saying .mh-chat { left: 50%; transform: translateX(-50%); bottom: calc(64px + env(safe-area-inset-bottom)); width: var(--mh-line-w, min(64%, 540px)); }
 .mhud.mh-saying .mh-chat .mh-chatbtn { display: none; }
 .mhud .mh-log { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; gap: 1px; max-height: 5.6em;
   overflow: hidden; font-size: 10px; line-height: 1.25; text-shadow: 0 1px 2px #000, 0 0 2px #000; transition: opacity 0.7s; pointer-events: none; }
@@ -110,17 +110,20 @@ html.touch-device .mhud [data-scroll="x"], html.touch-device .mhud [data-scroll=
 .mhud .mh-log div.mh-tag { padding: 0 5px; border-radius: 4px; text-shadow: none; }
 .mhud .mh-chat .mh-btn { flex: none; pointer-events: auto; width: 26px; height: 26px; }
 .mhud .mh-chat .mh-btn svg { width: 14px; height: 14px; }
-.mhud .mh-say { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(38px + env(safe-area-inset-bottom));
-  width: min(64%, 540px); display: none; align-items: center; gap: 6px; padding: 4px; border-radius: 20px; pointer-events: auto; }
+.mhud .mh-say { position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(34px + env(safe-area-inset-bottom));
+  width: var(--mh-line-w, min(64%, 540px)); display: none; align-items: center; gap: 5px; padding: 3px 4px; border-radius: 14px; pointer-events: auto; }
 .mhud .mh-say.mh-open { display: flex; }
 .mhud .mh-tgt { flex: none; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 6px 10px; border-radius: 14px; white-space: nowrap;
   font-size: 11px; font-weight: 700; background: rgba(255, 255, 255, 0.1); cursor: pointer; }
-.mhud .mh-say input { flex: 1; min-width: 0; height: 30px; padding: 0 12px; border-radius: 15px; border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(0, 0, 0, 0.38); color: #fff; font: 14px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; -webkit-user-select: text; user-select: text; }
-.mhud .mh-send { flex: none; height: 30px; padding: 0 14px; border: 0; border-radius: 15px; cursor: pointer; font-weight: 800; font-size: 12px;
+.mhud .mh-say .mh-tgt { padding: 3px 9px; border-radius: 10px; font-size: 10px; }
+.mhud .mh-say input { flex: 1; min-width: 0; height: 20px; padding: 0 10px; border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(0, 0, 0, 0.38); color: #fff; font: 13px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; -webkit-user-select: text; user-select: text; }
+.mhud .mh-send { flex: none; height: 20px; padding: 0 11px; border: 0; border-radius: 10px; cursor: pointer; font-weight: 800; font-size: 10.5px;
   color: #3a2400; background: linear-gradient(180deg, #ffe07a, #f0aa2c); }
-.mhud .mh-tlist { position: absolute; bottom: calc(80px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
-  width: min(64%, 540px); display: none; flex-wrap: wrap; gap: 5px; padding: 6px; pointer-events: auto; }
+.mhud .mh-say .mh-closebtn { width: 20px; height: 20px; }
+.mhud .mh-say .mh-closebtn svg { width: 11px; height: 11px; }
+.mhud .mh-tlist { position: absolute; bottom: calc(64px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%);
+  width: var(--mh-line-w, min(64%, 540px)); display: none; flex-wrap: wrap; gap: 5px; padding: 6px; pointer-events: auto; }
 .mhud .mh-tlist.mh-open { display: flex; }
 .mhud .mh-tlist .mh-tgt.mh-on { background: rgba(122, 170, 255, 0.45); }
 `;
@@ -257,6 +260,7 @@ export class MobileHud {
     set(P.tgt, key === 'whisper' && sb?.whisperTo ? sb.whisperTo : CHAT_TARGETS.find((t) => t.key === key)?.label || 'To All');
     for (const b of P.tlist.children) b.classList.toggle('mh-on', b.dataset.key === key);
     for (const [b, kind] of this.actionBtns) b.classList.toggle('mh-on', this.sheets.kind === kind);
+    if (P.say.classList.contains('mh-open')) this.matchLine();   // (the status line grows with its numbers)
   }
   gauge(bar, ratio, text, low) {
     const w = `${Math.max(0, Math.min(1, ratio || 0)) * 100}%`, fill = bar.firstElementChild, em = bar.querySelector('em');
@@ -295,9 +299,15 @@ export class MobileHud {
     const P = this.parts;
     P.say.classList.add('mh-open');
     this.el.classList.add('mh-saying');
+    this.matchLine();
     if (!this.logOpen) this.toggleLog();
     if (prefix && !P.input.value) P.input.value = prefix;
     P.input.focus();
+  }
+  /** The line to type on (and the log and targets over it) as wide as the status line. */
+  matchLine() {
+    const w = this.parts.st.offsetWidth;
+    if (w && this.lineW !== w) { this.lineW = w; this.el.style.setProperty('--mh-line-w', `${w}px`); }
   }
   closeSay() {
     const P = this.parts;
