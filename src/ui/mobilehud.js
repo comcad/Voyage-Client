@@ -3,6 +3,7 @@
  * hidden then). It keeps to the edges so the field stays clear:
  *   - bottom middle: one slim bar with your level, name and job and the HP / MP / EXP gauges (a tap opens the Stat
  *     window); while a sheet is open it moves up to the top left, beside the buttons;
+ *   - top left: the mini map (ui/mobileminimap.js);
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
  *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - bottom left, over the bar's height: the last chat lines, fading out when the chat is quiet (they take no touches,
@@ -17,6 +18,7 @@ import { settings } from '../settings.js';
 import { CHAT_TARGETS } from './statusbar.js';
 import { UI_W } from '../view.js';
 import { MobileSheets } from './mobilesheets.js';
+import { MobileMiniMap } from './mobileminimap.js';
 
 /** Seconds the chat lines stay after the last new one before they fade. */
 const CHAT_SHOW = 8;
@@ -190,7 +192,8 @@ export class MobileHud {
       if (e.key === 'Enter') { e.preventDefault(); this.send(); } else if (e.key === 'Escape') this.closeSay();
     });
     for (const t of ['keyup', 'keypress']) P.input.addEventListener(t, (e) => e.stopPropagation());
-    // the windows' sheets, under the menu and the chat line
+    // the mini map, then the windows' sheets, under the menu and the chat line
+    this.mini = new MobileMiniMap(this, el);
     this.sheets = new MobileSheets(this, el);
     el.append(P.menu, P.tlist, P.say);
     this.seen = null; this.lastLineAt = -Infinity; this.logOpen = false;
@@ -204,11 +207,11 @@ export class MobileHud {
     node.addEventListener('click', (e) => { e.stopPropagation(); fn(e); });
   }
 
-  /** Its top buttons in interface pixels: a window opening under them is moved down (WindowManager.fit). */
+  /** Its top panels (the mini map, the buttons) in interface pixels: a window opening under them is moved down (WindowManager.fit). */
   reserved() {
     if (!this.shown) return [];
     const c = this.g.canvas.getBoundingClientRect(), k = UI_W / (c.width || 1);
-    return [this.parts.act].map((n) => {
+    return [this.mini.el, this.parts.act].filter((n) => n.offsetParent).map((n) => {
       const r = n.getBoundingClientRect();
       return { x: (r.left - c.left) * k, y: (r.top - c.top) * k, w: r.width * k, h: r.height * k };
     });
