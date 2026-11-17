@@ -5,7 +5,7 @@
  *     window); it goes while a sheet is open;
  *   - top left: the mini map (ui/mobileminimap.js);
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
- *     and Quest windows open as its own sheets, made for a phone (ui/mobilesheets.js);
+ *     and Quest windows and System Options open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - the chat, only while it is open: a little up-arrow tab out of the status line's top opens a line to type on,
  *     with the chat target beside it, centred right over the status line, and the log over it; closed, nothing of the
  *     chat shows but a gold dot on the tab when lines came in meanwhile;
@@ -247,9 +247,13 @@ export class MobileHud {
   /** A window function (MENU id) whose window it has a sheet for: that sheet opens or closes; false for the others. */
   sheet(m) {
     const kind = MobileSheets.kindOf(m, MENU);
-    if (!kind || !this.shown) return false;
+    return !!kind && this.openSheet(kind);
+  }
+  /** A sheet by its kind (System Options too) opens, or closes when it is the one open; false while hidden. */
+  openSheet(kind, keep = false) {
+    if (!this.shown) return false;
     this.closeMenu();
-    this.sheets.toggle(kind);
+    this.sheets.toggle(kind, keep);
     this.update();
     return true;
   }

@@ -10767,6 +10767,10 @@ export class Game {
   setMobileUi(on) {
     settings.mobileUi = !!on; saveSettings();
     const t = this.controls?.touch, wm = this.windows, mini = wm?.wins.minimap;
+    // System Option open as it switches (where it is switched): MOBILE UI's sheet takes over from the window, or the
+    // window from the sheet, carrying on with what CANCEL puts back
+    const so = wm?.wins.sysopt, soWin = !!so && on && wm.isOpen('sysopt'), soSheet = !on && this.mobileHud?.sheets?.kind === 'sysopt';
+    if (soWin) wm.close(so);
     if (t && on && t.show === 'off') { t.show = 'auto'; t.byMobileUi = true; saveControls(this.controls); }
     else if (t && !on && t.byMobileUi) { if (t.show === 'auto') t.show = 'off'; delete t.byMobileUi; saveControls(this.controls); }
     if (mini && on && wm.isOpen('minimap')) { wm.close(mini); this.miniByMobileUi = true; }
@@ -10774,6 +10778,8 @@ export class Game {
     this.statusBar?.showInput();
     this.touch?.render();
     this.mobileHud?.refresh();
+    if (soWin) this.mobileHud?.openSheet('sysopt', true);
+    if (soSheet) { const before = so.before; wm.open('sysopt'); so.before = before; }
   }
   setResolution() {
     applyResolution();

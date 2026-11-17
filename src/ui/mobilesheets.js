@@ -10,11 +10,16 @@
  *   - skills: SP (SkillWin.canRaise / raiseId);
  *   - quests: the Quest window's lists; a picked quest slides out a panel to the left, as the window's detail panel
  *     does: the quest giver standing (its own frames), the level line, a chain's parts, the text in its own names for
- *     NPCs, items and monsters, the summary and rewards, the time left, and its buttons (give up, Quest Helper, Mark NPC).
+ *     NPCs, items and monsters, the summary and rewards, the time left, and its buttons (give up, Quest Helper, Mark NPC);
+ *   - System Options: the System Option window's rows (sound, screen, game) as sliders, switches and choices, applied
+ *     as they change through the window's own code; Cancel puts back what was there when it opened.
  * Item and skill icons are the game's own.
  */
 import { EXP, jobName, itemDesc, isScroll } from '../data.js';
 import { richText, LIGHT_COLORS } from './richtext.js';
+import { settings, saveSettings } from '../settings.js';
+import { music, sfx } from '../audio.js';
+import { UI_SCALE, VIEW_W, VIEW_H, maxUiScale } from '../view.js';
 
 const INV_TABS = [[1, 'Equip'], [2, 'Use'], [3, 'Set-up'], [4, 'Etc'], [5, 'Cash']];
 const EQ_STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK'], ['hp', 'MaxHP'], ['mp', 'MaxMP'], ['watk', 'Weapon Attack'],
@@ -29,7 +34,7 @@ const EQUIP_GRID = {
 const STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK']];
 const STARTERS = [0, 1000, 2000, 2001];
 const QUEST_TABS = [[0, 'Available'], [1, 'In Progress'], [2, 'Completed']];
-const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', skills: 'Skills', quests: 'Quests' };
+const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', skills: 'Skills', quests: 'Quests', sysopt: 'System Options' };
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
 const CSS = `
@@ -128,6 +133,32 @@ const CSS = `
   -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .mhud .mh-qd-time { margin-top: 8px; font-size: 11px; font-weight: 800; color: #ff7a7a; }
 .mhud .mh-empty { padding: 18px 6px; text-align: center; color: rgba(225, 232, 248, 0.5); font-size: 11.5px; }
+/* System Options: its rows' controls */
+.mhud .mh-opt em { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 600; }
+.mhud .mh-slw { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.mhud .mh-slw small { flex: none; min-width: 44px; text-align: right; font-size: 10.5px; font-weight: 700; color: rgba(225, 232, 248, 0.8); }
+.mhud .mh-sl { position: relative; flex: 1; min-width: 60px; height: 28px; margin: 0 9px; cursor: pointer; }
+html.touch-device .mhud .mh-sheet .mh-sl, .mhud .mh-sheet .mh-sl { touch-action: none; }
+.mhud .mh-sl::before { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 6px; margin-top: -3px; border-radius: 3px; background: rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+.mhud .mh-sl i { position: absolute; left: 0; top: 50%; height: 6px; margin-top: -3px; border-radius: 3px; background: linear-gradient(90deg, #f0b22e, #ffe07a); }
+.mhud .mh-sl b { position: absolute; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: radial-gradient(circle at 50% 35%, #fff, #dfe6f5);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5); }
+.mhud .mh-slw.mh-dis { opacity: 0.4; }
+.mhud .mh-slw.mh-dis .mh-sl { cursor: default; }
+.mhud .mh-sw { position: relative; flex: none; width: 42px; height: 24px; padding: 0; border: 0; border-radius: 12px; background: rgba(0, 0, 0, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); cursor: pointer; transition: background 0.2s; }
+.mhud .mh-sw i { position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #e9eefb; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.2s; }
+.mhud .mh-sw.mh-on { background: linear-gradient(180deg, #ffe07a, #f0aa2c); }
+.mhud .mh-sw.mh-on i { transform: translateX(18px); }
+.mhud .mh-seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.mhud .mh-opt button.mh-tab { border: 0; font-family: inherit; }
+.mhud .mh-opt button.mh-tab:disabled { opacity: 0.4; cursor: default; }
+.mhud .mh-select { flex: 1; min-width: 0; height: 28px; padding: 0 8px; border-radius: 9px; border: 1px solid rgba(255, 255, 255, 0.18); background: rgba(0, 0, 0, 0.4);
+  color: #f2f5fb; font: 600 12px -apple-system, "Segoe UI", system-ui, sans-serif; outline: none; }
+.mhud .mh-select:disabled { opacity: 0.45; }
+.mhud .mh-sh-detail .mh-ctas.mh-end { justify-content: flex-end; margin: 0; }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -173,8 +204,10 @@ export class MobileSheets {
   static kindOf(m, MENU) {
     return { [MENU.ITEMS]: 'items', [MENU.EQUIP]: 'equip', [MENU.STATS]: 'stats', [MENU.SKILLS]: 'skills', [MENU.QUESTS]: 'quests' }[m] || null;
   }
-  toggle(kind) { if (this.kind === kind) this.close(); else this.show(kind); }
-  show(kind) {
+  /** keep: System Options carries on from the window it takes over from (what CANCEL puts back stays that window's). */
+  toggle(kind, keep = false) { if (this.kind === kind) this.close(); else this.show(kind, keep); }
+  show(kind, keep = false) {
+    if (kind === 'sysopt' && this.kind !== kind && !keep) this.wm.wins.sysopt?.onOpen();   // what CANCEL goes back to
     if (this.kind !== kind) { this.sel = null; this.move = null; if (kind !== 'equip') this.pick = null; this.p.body.scrollTop = 0; }
     this.kind = kind;
     this.el.classList.add('mh-open'); this.hud.el.classList.add('mh-sheeting');
@@ -188,7 +221,7 @@ export class MobileSheets {
 
   /** Drawn again when what it shows changes (an item moved, a level gained, an icon or name loaded). */
   refresh() {
-    if (!this.kind || !this.g.stats) return;
+    if (!this.kind || !this.g.stats || this.sliding) return;   // (not under a finger moving a slider)
     const sig = this.signature();
     if (sig !== this.sig) this.render();
   }
@@ -203,6 +236,9 @@ export class MobileSheets {
       if (!w) return base;
       const npc = this.sel ? w.questNpc(this.sel) : 0;
       return `${base}|${this.tab.quests}|${this.questEntries(w, this.tab.quests).map((e) => e.id).join(',')}|${w.portraits?.get(npc)?.length || 0}|${!!w.str}|${!!g.questTimers?.get(this.sel)}`;
+    }
+    if (this.kind === 'sysopt') {
+      return `${base}|${JSON.stringify([settings, music.volume, music.muted, sfx.volume, sfx.muted, !!document.fullscreenElement, UI_SCALE, maxUiScale(), VIEW_W, VIEW_H])}`;
     }
     return base;
   }
@@ -428,6 +464,105 @@ export class MobileSheets {
       d.append(head, el('div', 'mh-dt-text', plain(sb.desc(id))));
     }
     return list;
+  }
+
+  // ---------------------------------------------------------------- System Options
+  /**
+   * The System Option window's rows, through its own code (its values and setValue, its lists, revert): they apply
+   * as you change them, as the window's do; Cancel puts back what was there when it opened, OK (or the X) keeps them.
+   */
+  sysopt() {
+    const g = this.g, w = this.wm.wins.sysopt, out = el('div');
+    if (!w) return out;
+    const [, mob, size, fps] = w.combos();
+    const row = (label, ...right) => { const r = el('div', 'mh-kv mh-opt'), e = el('em'); r.append(el('span', null, label)); e.append(...right); r.append(e); out.append(r); };
+    const pct = (v) => `${Math.round(v * 100)}%`;
+    const mute = (on, fn) => {
+      const b = el('button', `mh-tab${on ? ' mh-on' : ''}`, 'Mute');
+      b.type = 'button';
+      this.hud.tap(b, () => { sfx.play('UI/BtMouseClick'); fn(); this.render(); });
+      return b;
+    };
+    out.append(el('div', 'mh-sec', 'Sound'));
+    row('Music', this.slider(w, 'bgm', () => pct(music.volume)), mute(music.muted, () => music.setMuted(!music.muted)));
+    row('Effects', this.slider(w, 'sound', () => pct(sfx.volume)), mute(sfx.muted, () => sfx.setMuted(!sfx.muted)));
+    out.append(el('div', 'mh-sec', 'Screen'));
+    row('Quality', this.slider(w, 'quality', () => { const v = Number(settings.quality) || 0; return v <= 0.02 ? 'Speed' : v >= 0.98 ? 'Best' : pct(v); }));
+    row('Fit to screen', this.switch(!!settings.fit, () => { settings.fit = !settings.fit; saveSettings(); g.setResolution?.(); }));
+    row('Screen size', this.select(size));
+    row('UI size', this.slider(w, 'uiScale', () => pct(w.pendingScale ?? UI_SCALE), Math.max(1, Math.round((maxUiScale() - 1) * 10))));
+    row('Zoom', this.slider(w, 'zoom', () => pct(Number(settings.zoom) || 1), 10));
+    row('Frame rate', this.choice(fps));
+    if (document.documentElement.requestFullscreen) {   // (a phone's browser may have no full screen)
+      const full = !!document.fullscreenElement;
+      row('View', this.choice({ items: ['Window', 'Full screen'], value: full ? 1 : 0,
+        set: (i) => { if (i) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen?.(); } }));
+    }
+    out.append(el('div', 'mh-sec', 'Game'));
+    const alert = (k) => () => (Number(settings[k]) ? pct(Number(settings[k])) : 'Off');
+    row('HP alert', this.slider(w, 'hpAlert', alert('hpAlert'), 19));
+    row('MP alert', this.slider(w, 'mpAlert', alert('mpAlert'), 19));
+    row('Shake on skills', this.switch(!!settings.shake, () => { settings.shake = !settings.shake; saveSettings(); }));
+    row('Monster info', this.choice(mob));
+    row('Mobile UI', this.switch(!!settings.mobileUi, () => g.setMobileUi?.(!settings.mobileUi)));
+    // OK keeps what was changed; Cancel puts it back (the sheet gone first, so turning MOBILE UI back off leaves nothing open)
+    const a = el('div', 'mh-ctas mh-end');
+    a.append(this.button('Cancel', () => { this.close(); w.revert(); }), this.button('OK', () => this.close(), 'mh-main'));
+    this.p.detail.append(a);
+    return out;
+  }
+  /** A slider on the window's value k (0..1), live as the finger moves; it clicks when pressed and let go, as the window's do. */
+  slider(w, k, label, steps = 20) {
+    const box = el('div', 'mh-slw'), sl = el('div', 'mh-sl'), fill = el('i'), knob = el('b'), val = el('small');
+    sl.append(fill, knob); box.append(sl, val);
+    const show = () => {
+      const v = Math.max(0, Math.min(1, Number(w.value(k)) || 0));
+      fill.style.width = `${v * 100}%`; knob.style.left = `${v * 100}%`; val.textContent = label();
+    };
+    show();
+    if (w.off(k)) { box.classList.add('mh-dis'); return box; }
+    const at = (e) => {
+      const r = sl.getBoundingClientRect(), v = Math.max(0, Math.min(1, (e.clientX - r.left) / (r.width || 1)));
+      w.setValue(k, Math.round(v * steps) / steps);
+      show();
+    };
+    sl.addEventListener('pointerdown', (e) => {
+      e.stopPropagation(); e.preventDefault();
+      sl.setPointerCapture?.(e.pointerId);
+      this.sliding = k; sfx.play('UI/BtMouseClick'); at(e);
+    });
+    sl.addEventListener('pointermove', (e) => { if (this.sliding === k) at(e); });
+    // let go: the window's own let-go (its click, and UI SIZE applied then)
+    const end = () => { if (this.sliding !== k) return; this.sliding = null; w.drag = k; w.up(); show(); };
+    for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) sl.addEventListener(t, end);
+    return box;
+  }
+  /** An on / off switch: it flips at once, the change made, and the sheet catches up on its next look. */
+  switch(on, fn) {
+    const s = el('button', `mh-sw${on ? ' mh-on' : ''}`);
+    s.type = 'button'; s.append(el('i'));
+    this.hud.tap(s, () => { sfx.play('UI/BtMouseClick'); s.classList.toggle('mh-on'); fn(); });
+    return s;
+  }
+  /** One of a short list (one of the window's combo boxes) as pills. */
+  choice(c) {
+    const box = el('div', 'mh-seg');
+    c.items.forEach((t, i) => {
+      const b = el('button', `mh-tab${i === c.value ? ' mh-on' : ''}`, t);
+      b.type = 'button'; b.disabled = !!c.off;
+      this.hud.tap(b, () => { if (c.off || i === c.value) return; sfx.play('UI/BtMouseClick'); c.set(i); this.render(); });
+      box.append(b);
+    });
+    return box;
+  }
+  /** A longer list (the screen sizes) in the device's own picker. */
+  select(c) {
+    const s = el('select', 'mh-select');
+    c.items.forEach((t, i) => { const o = el('option', null, t); o.value = String(i); s.append(o); });
+    s.value = String(c.value); s.disabled = !!c.off;
+    for (const t of ['pointerdown', 'keydown', 'keyup']) s.addEventListener(t, (e) => e.stopPropagation());
+    s.addEventListener('change', () => { sfx.play('UI/BtMouseClick'); c.set(Number(s.value)); this.render(); });
+    return s;
   }
 
   // ---------------------------------------------------------------- Quests
