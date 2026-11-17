@@ -9951,8 +9951,8 @@ export class Game {
    * accuracy is no more than a roll between a tenth of your avoid and all of it.
    * Physical: attack x 0.80-0.85 x attack / 100, less (s x 0.00125 + 0.28) x your defence and a share of how far your
    * defence is above or below the standard for your class and level (Base/StandardPDD.img), s being a mix of your stats
-   * ((LUK + DEX) / 4 + INT / 9 + STR x 2/7 for a warrior, LUK / 4 + INT / 9 + DEX x 2/7 + STR x 0.4 for the rest).
-   * Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 + magic defence) x 0.3 (a
+   * ((LUK + DEX) / 4 + INT / 9 + STR x 2/7 for a warrior, LUK / 4 + INT / 9 + DEX x 2/7 + STR x 0.4 for the rest),
+   * then Invincible's x% of what is left. Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 + magic defence) x 0.3 (a
    * magician's) or 0.25. Either is held to 1-199999: a blow that isn't dodged does at least 1.
    */
   damageTaken(m, power, magic) {
@@ -9977,6 +9977,7 @@ export class Game {
     if (pdd >= std) d -= (pdd - std) * (k / 900 + lv / 1300 + 0.28) * 0.7;
     else if (mobLv <= lv) d -= ((pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 13) / (lv - mobLv + 13);
     else d -= (pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 1.3;
+    d -= buff('invincible') * d * 0.01;
     return Math.trunc(clamp(d, 1, 199999));
   }
   /** The standard weapon defence for a class (0 beginner .. 5 pirate) at a level, from Base/StandardPDD.img (gaps take the last value). */

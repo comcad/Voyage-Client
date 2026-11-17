@@ -1163,6 +1163,7 @@ export class ChannelSession {
     const SPEED = 0x8000000000n, JUMP = 0x10000000000n, BOOSTER = 0x80000000000n;   // BuffStat.SPEED / JUMP / BOOSTER
     const WATK = 0x100000000n, WDEF = 0x200000000n, MATK = 0x400000000n, MDEF = 0x800000000n, HANDS = 0x4000000000n, AVOID = 0x2000000000n, ACC = 0x1000000000n, MAPLE_WARRIOR = 0x8n, COMBO = 0x20000000000000n, STANCE = 0x10n;   // BuffStat.WATK / ACC / MAPLE_WARRIOR / COMBO / STANCE
     const RIDING = 0x20000000000000n;   // BuffStat.MONSTER_RIDING, in the first mask
+    const INVINCIBLE = 0x800000000000n;   // BuffStat.INVINCIBLE (Invincible's x%: physical damage taken less that)
     const HOMING = 0x80000000000000n;   // Homing Beacon, in the first mask
     const popcount = (big) => { let n = 0; for (let v = big; v; v &= v - 1n) n++; return n; };
     on(S.GIVE_BUFF, (r) => {
@@ -1225,7 +1226,7 @@ export class ChannelSession {
       // Speed / Jump (Haste, Nimble Feet, speed potions...), weapon attack and accuracy: the values come in mask-bit
       // order, so each one's place is the number of set bits below it (all live in the second mask)
       const mask = BigInt.asUintN(64, m2);
-      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MATK | MDEF | AVOID | HANDS | BOOSTER))) {
+      if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MATK | MDEF | AVOID | HANDS | BOOSTER | INVINCIBLE))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         const at = (bit) => popcount(mask & (bit - 1n));   // the game server lists the plain stats (WATK..JUMP) first
@@ -1238,6 +1239,7 @@ export class ChannelSession {
         if (mask & MDEF) b.mdef = values[at(MDEF)];
         if (mask & HANDS) b.hands = values[at(HANDS)];
         if (mask & AVOID) b.avoid = values[at(AVOID)];
+        if (mask & INVINCIBLE) b.invincible = values[at(INVINCIBLE)];
         if (mask & BOOSTER) b.booster = values[at(BOOSTER)];   // -1 to -4: that much faster
       }
       // Speed Infusion: its value comes first, as an int
