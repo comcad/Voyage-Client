@@ -346,8 +346,10 @@ export class MobileHud {
     this.drawLog(this.g.statusBar?.lines || []);
   }
 
+  /** The menu: opening it puts away the sheet that is open (Key Setting asks about unsaved changes first). */
   toggleMenu() {
     const open = !this.parts.menu.classList.contains('mh-open');
+    if (open && this.sheets?.kind) { if (this.sheets.kind === 'keys') this.sheets.closeAsked(); else this.sheets.close(); }
     this.parts.menu.classList.toggle('mh-open', open);
     this.menuBtn.classList.toggle('mh-on', open);
   }
