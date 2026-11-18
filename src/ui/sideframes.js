@@ -1,9 +1,9 @@
 /**
  * The space beside a screen that doesn't fill the window - the 4:3 login screens (log in, worlds, characters) and Cash
  * Shop, and the game itself with FIT TO SCREEN off - beside it when the window is wider than the screen's shape (or
- * above and below it when the window is taller): instead of black, a soft glow of the screen
- * itself (a tiny copy of it, stretched over the window, blurred and darkened, so it always takes the screen's own
- * colours), a faint pattern of gold maple leaves and a vignette, behind the screen (a hole is cut where it is); and
+ * above and below it when the window is taller): instead of black, a still twilight sky - deep blue going to dusk,
+ * soft blue and amber glows and out-of-focus specks of light in the corners, a faint pattern of gold maple leaves and
+ * a vignette - behind the screen (a hole is cut where it is); and
  * over the screen's edges, gilded rails with two sapphire studs and a gold maple leaf on each and a gold boss on each
  * corner. Neither takes a tap or click. Both follow the screen's place every frame, at any window size.
  */
@@ -12,7 +12,7 @@ import { UI_W } from '../view.js';
 /** A maple leaf, 24 x 24, its stem at the bottom. */
 const LEAF = 'M12 1.5L13.6 5.1L16 3.9L15.4 8.1L18.7 5.7L19 7.8L22 7.5L20.2 10.5L22 12L17.8 13.8L18.7 15.9L14.2 15.3L13.5 20.1L12.75 20.1'
   + 'L12.75 22.5L11.25 22.5L11.25 20.1L10.5 20.1L9.8 15.3L5.3 15.9L6.2 13.8L2 12L3.8 10.5L2 7.5L5 7.8L5.3 5.7L8.6 8.1L8 3.9L10.4 5.1Z';
-/** The leaves scattered over the glow, faint gold, at a slant. */
+/** The leaves scattered over the sky, faint gold, at a slant. */
 const PATTERN = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140" viewBox="0 0 140 140">
 <g fill="#ffd978" fill-opacity="0.07"><path transform="translate(14 12) rotate(-18 12 12) scale(1.1)" d="${LEAF}"/>
 <path transform="translate(86 52) rotate(24 12 12) scale(0.8)" d="${LEAF}"/><path transform="translate(34 92) rotate(-40 12 12) scale(0.65)" d="${LEAF}"/>
@@ -20,18 +20,33 @@ const PATTERN = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http:
 /** Gold across a rail: dark edges, a bright crest, as polished metal. */
 const GOLD = '#1a1005 0%, #5e3a10 9%, #b47a24 22%, #f2cf75 38%, #fff3c4 46%, #e2a843 58%, #94591a 76%, #3f2508 92%, #1a1005 100%';
 const SAPPHIRE = 'radial-gradient(circle at 34% 30%, #eef9ff 0%, #8fcfff 20%, #2f7ddb 50%, #133c80 78%, #0a1f45 100%)';
+/** An out-of-focus speck of light: colour (r, g, b), opacity, size (vmin), where (x%, y%). */
+const speck = (rgb, a, size, x, y) => `radial-gradient(circle ${size}vmin at ${x}% ${y}%, rgba(${rgb}, ${a}) 0%, rgba(${rgb}, ${a * 0.55}) 45%, rgba(${rgb}, 0) 100%)`;
+const GOLDEN = '255, 196, 110', ICE = '140, 190, 255', ROSE = '255, 150, 170';
+/** The sky: mostly in the corners and along the sides, the parts that show beside (or above and below) a screen. */
+const SKY = [
+  speck(GOLDEN, 0.22, 2.6, 7, 22), speck(ICE, 0.2, 1.8, 13, 38), speck(GOLDEN, 0.16, 3.4, 4, 63), speck(ROSE, 0.14, 2.2, 11, 80),
+  speck(ICE, 0.18, 1.5, 9, 9), speck(GOLDEN, 0.2, 2.2, 93, 18), speck(ROSE, 0.14, 2.8, 88, 41), speck(ICE, 0.2, 1.7, 96, 57),
+  speck(GOLDEN, 0.17, 3.2, 90, 76), speck(ICE, 0.15, 1.4, 86, 93), speck(GOLDEN, 0.15, 2, 30, 5), speck(ICE, 0.14, 1.6, 68, 4),
+  speck(ROSE, 0.12, 2.2, 38, 96), speck(GOLDEN, 0.16, 1.8, 63, 95),
+  'radial-gradient(ellipse 34% 42% at 0% 100%, rgba(255, 166, 72, 0.32), rgba(255, 166, 72, 0) 70%)',
+  'radial-gradient(ellipse 34% 42% at 100% 100%, rgba(255, 166, 72, 0.3), rgba(255, 166, 72, 0) 70%)',
+  'radial-gradient(ellipse 36% 46% at 0% 0%, rgba(84, 140, 255, 0.3), rgba(84, 140, 255, 0) 70%)',
+  'radial-gradient(ellipse 36% 46% at 100% 0%, rgba(150, 112, 255, 0.26), rgba(150, 112, 255, 0) 70%)',
+  'linear-gradient(180deg, #0c1836 0%, #14284f 42%, #1c2448 70%, #2b1e33 100%)',
+].join(', ');
 
-// #side-frames: the glow, behind the screen; #side-border: the rails, over its edges but under MOBILE UI's panels
+// #side-frames: the sky, behind the screen; #side-border: the rails, over its edges but under MOBILE UI's panels
 // (6) (--t: a rail's thickness)
 const CSS = `
 #side-frames, #side-border { position: fixed; inset: 0; display: none; pointer-events: none; overflow: hidden; }
 #side-frames { z-index: 4; }
 #side-border { z-index: 5; }
 #side-frames.sf-on, #side-border.sf-on { display: block; }
-#side-frames .sf-amb { position: absolute; left: -8%; top: -8%; width: 116%; height: 116%; filter: blur(18px) saturate(1.35) brightness(0.55); }
+#side-frames .sf-sky { position: absolute; inset: 0; background: ${SKY}; }
 #side-frames .sf-veil { position: absolute; inset: 0; background:
-  radial-gradient(ellipse 70% 85% at 50% 50%, rgba(4, 8, 24, 0) 45%, rgba(3, 6, 18, 0.72) 100%), ${PATTERN},
-  linear-gradient(180deg, rgba(20, 34, 72, 0.28), rgba(6, 10, 26, 0.45)); background-size: auto, 140px 140px, auto; }
+  radial-gradient(ellipse 75% 90% at 50% 50%, rgba(4, 8, 24, 0) 50%, rgba(3, 6, 18, 0.6) 100%), ${PATTERN};
+  background-size: auto, 140px 140px; }
 #side-border .sf-rail, #side-border .sf-boss { position: absolute; display: none; --t: 14px; }
 #side-border .sf-show { display: block; }
 #side-border .sf-l, #side-border .sf-r { background: linear-gradient(90deg, ${GOLD}); }
@@ -74,27 +89,24 @@ function rail(side) {
 }
 
 /**
- * Where the screen is (on the window), the canvas and part of it that it is drawn on, and how often (ms) its glow is
- * taken; null when there is none: the login screen, the Cash Shop's 800x600, or in game with FIT TO SCREEN off (or a
- * window held upright), the game's own picture at its shape. In game fitted it fills the window: nothing to frame.
+ * Where the screen is on the window; null when there is none: the login screen, the Cash Shop's 800x600, or in game
+ * with FIT TO SCREEN off (or a window held upright), the game's own picture at its shape. In game fitted it fills the
+ * window: nothing to frame.
  */
 function screen() {
   if (document.body.classList.contains('at-login')) {
-    const c = document.querySelector('#login-root .login-canvas');
-    const r = c?.getBoundingClientRect();
-    return r?.width ? { r, src: c, part: [0, 0, c.width, c.height], every: 250 } : null;
+    const r = document.querySelector('#login-root .login-canvas')?.getBoundingClientRect();
+    return r?.width ? r : null;
   }
   const g = globalThis.game, c = g?.canvas;
   if (!c || (!g.inCashShop && document.body.classList.contains('fit-screen'))) return null;
   const cr = c.getBoundingClientRect();
   if (!cr.width) return null;
-  // in game the map moves under it: its glow is taken less often (the game's frames come first)
-  if (!g.inCashShop) return { r: cr, src: c, part: [0, 0, c.width, c.height], every: 1000 };
+  if (!g.inCashShop) return cr;
   const cs = g.csWin;
   if (!cs) return null;
-  const k = cr.width / UI_W, r = { left: cr.left + cs.x * k, top: cr.top + cs.y * k, width: cs.w * k, height: cs.h * k };
-  const bk = c.width / cr.width;
-  return { r, src: c, part: [(r.left - cr.left) * bk, (r.top - cr.top) * bk, r.width * bk, r.height * bk], every: 250 };
+  const k = cr.width / UI_W;
+  return { left: cr.left + cs.x * k, top: cr.top + cs.y * k, width: cs.w * k, height: cs.h * k };
 }
 
 export function setupSideFrames() {
@@ -106,13 +118,9 @@ export function setupSideFrames() {
   const back = document.createElement('div'), front = document.createElement('div');
   back.id = 'side-frames'; front.id = 'side-border';
   for (const el of [back, front]) el.setAttribute('aria-hidden', 'true');
-  const amb = document.createElement('canvas');
-  // big enough that the browser keeps it on the graphics card with the screen's canvas (copying between them is cheap)
-  amb.className = 'sf-amb'; amb.width = 320; amb.height = 240;
-  const actx = amb.getContext('2d');
-  const veil = document.createElement('div');
-  veil.className = 'sf-veil';
-  back.append(amb, veil);
+  const sky = document.createElement('div'), veil = document.createElement('div');
+  sky.className = 'sf-sky'; veil.className = 'sf-veil';
+  back.append(sky, veil);
   const rails = { l: rail('l'), r: rail('r'), t: rail('t'), b: rail('b') };
   const boss = () => { const b = document.createElement('i'); b.className = 'sf-boss'; return b; };
   const bosses = { tl: boss(), tr: boss(), bl: boss(), br: boss() };
@@ -120,19 +128,14 @@ export function setupSideFrames() {
   const put = () => document.body.append(back, front);
   if (document.body) put(); else addEventListener('DOMContentLoaded', put, { once: true });
 
-  let shape = '', glowAt = 0;
-  const frame = (now) => {
+  let shape = '';
+  const frame = () => {
     requestAnimationFrame(frame);
-    const sc = screen(), W = innerWidth, H = innerHeight;
-    const r = sc?.r, gapX = r ? Math.max(r.left, W - r.left - r.width) : 0, gapY = r ? Math.max(r.top, H - r.top - r.height) : 0;
+    const r = screen(), W = innerWidth, H = innerHeight;
+    const gapX = r ? Math.max(r.left, W - r.left - r.width) : 0, gapY = r ? Math.max(r.top, H - r.top - r.height) : 0;
     const on = !!r && (gapX >= 6 || gapY >= 6);
     if (back.classList.contains('sf-on') !== on) { back.classList.toggle('sf-on', on); front.classList.toggle('sf-on', on); }
     if (!on) { shape = ''; return; }
-    // the glow: the screen, tiny, a few times a second (it is blurred: its moving parts only stir it)
-    if (now - glowAt > sc.every) {
-      glowAt = now;
-      try { actx.drawImage(sc.src, ...sc.part, 0, 0, amb.width, amb.height); } catch { /* not drawable yet */ }
-    }
     // the hole where the screen is, and the rails over its edges, only when its place or the window changes
     const l = Math.round(r.left), t = Math.round(r.top), w = Math.round(r.width), h = Math.round(r.height), rr = l + w, bb = t + h;
     const key = `${W}x${H}|${l},${t},${w},${h}`;
@@ -141,12 +144,15 @@ export function setupSideFrames() {
     // the window's outline, then the screen's the other way round (joined by a seam of no width): a frame with a hole
     const hole = `polygon(0 0, 0 ${H}px, ${l}px ${H}px, ${l}px ${t}px, ${rr}px ${t}px, ${rr}px ${bb}px, ${l}px ${bb}px, ${l}px ${H}px, ${W}px ${H}px, ${W}px 0)`;
     back.style.clipPath = hole; back.style.webkitClipPath = hole;
-    amb.style.filter = `blur(${Math.max(14, Math.round(Math.max(W, H) * 0.022))}px) saturate(1.35) brightness(0.55)`;
-    // each rail lies across the screen's edge, half over the screen; a side with (next to) no space beside it has none
+    // each rail lies across the screen's edge, a quarter of it over the screen (its middle that far out: out); a side
+    // with (next to) no space beside it has none
     const thick = Math.max(8, Math.min(16, Math.round(h * 0.018)));
     const gap = { l, r: W - rr, t, b: H - bb };
-    const size = {}, shown = {};
-    for (const k of ['l', 'r', 't', 'b']) { size[k] = Math.round(Math.min(thick, gap[k] * 2)); shown[k] = gap[k] >= 6; }
+    const size = {}, shown = {}, out = {};
+    for (const k of ['l', 'r', 't', 'b']) {
+      size[k] = Math.round(Math.min(thick, gap[k] * 2)); shown[k] = gap[k] >= 6;
+      out[k] = shown[k] ? Math.max(0, Math.min(Math.max(2, Math.round(size[k] / 4)), gap[k] - Math.ceil(size[k] / 2))) : 0;
+    }
     const place = (el, show, css, k, bare = false) => {
       el.classList.toggle('sf-show', show);
       if (!show) return;
@@ -155,16 +161,18 @@ export function setupSideFrames() {
       el.classList.toggle('sf-bare', bare);
     };
     // the side rails run on over the corners when there are rails above and below too; the ornaments need some room
-    const vt = t - (shown.t ? size.t / 2 : 0), vb = bb + (shown.b ? size.b / 2 : 0);
     const half = (k) => Math.round(k / 2);
-    place(rails.l, shown.l, { left: `${l - half(size.l)}px`, top: `${vt}px`, width: `${size.l}px`, height: `${vb - vt}px` }, size.l, gap.l < size.l * 1.4);
-    place(rails.r, shown.r, { left: `${rr - half(size.r)}px`, top: `${vt}px`, width: `${size.r}px`, height: `${vb - vt}px` }, size.r, gap.r < size.r * 1.4);
-    place(rails.t, shown.t, { left: `${l}px`, top: `${t - half(size.t)}px`, width: `${w}px`, height: `${size.t}px` }, size.t, gap.t < size.t * 1.4);
-    place(rails.b, shown.b, { left: `${l}px`, top: `${bb - half(size.b)}px`, width: `${w}px`, height: `${size.b}px` }, size.b, gap.b < size.b * 1.4);
+    const xl = l - out.l, xr = rr + out.r, yt = t - out.t, yb = bb + out.b;   // where the rails' middles run
+    const vt = shown.t ? yt - half(size.t) : t, vb = shown.b ? yb + half(size.b) : bb;
+    const bare = (k) => gap[k] < size[k] * 1.4 + out[k];
+    place(rails.l, shown.l, { left: `${xl - half(size.l)}px`, top: `${vt}px`, width: `${size.l}px`, height: `${vb - vt}px` }, size.l, bare('l'));
+    place(rails.r, shown.r, { left: `${xr - half(size.r)}px`, top: `${vt}px`, width: `${size.r}px`, height: `${vb - vt}px` }, size.r, bare('r'));
+    place(rails.t, shown.t, { left: `${xl}px`, top: `${yt - half(size.t)}px`, width: `${xr - xl}px`, height: `${size.t}px` }, size.t, bare('t'));
+    place(rails.b, shown.b, { left: `${xl}px`, top: `${yb - half(size.b)}px`, width: `${xr - xl}px`, height: `${size.b}px` }, size.b, bare('b'));
     // a boss on each corner where two rails meet
     const corner = (el, sx, sy, x, y) => place(el, shown[sx] && shown[sy], { left: `${x}px`, top: `${y}px` }, Math.min(size[sx], size[sy]));
-    corner(bosses.tl, 'l', 't', l, t); corner(bosses.tr, 'r', 't', rr, t);
-    corner(bosses.bl, 'l', 'b', l, bb); corner(bosses.br, 'r', 'b', rr, bb);
+    corner(bosses.tl, 'l', 't', xl, yt); corner(bosses.tr, 'r', 't', xr, yt);
+    corner(bosses.bl, 'l', 'b', xl, yb); corner(bosses.br, 'r', 'b', xr, yb);
   };
   requestAnimationFrame(frame);
 }
