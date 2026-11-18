@@ -196,7 +196,7 @@ export class MobileHud {
     }
     // chat
     this.tab = el.querySelector('.mh-st-tab');
-    this.tap(this.tab, () => this.openSay());
+    this.tap(this.tab, () => this.openSay('', false));   // (a phone's keyboard comes up only when the line itself is tapped)
     this.tap(P.tgt, () => this.toggleTargets());
     this.tap(el.querySelector('.mh-send'), () => this.send());
     this.tap(el.querySelector('.mh-closebtn'), () => this.closeSay());
@@ -318,8 +318,11 @@ export class MobileHud {
   toggleTargets() { this.parts.tlist.classList.toggle('mh-open'); }
   closeTargets() { this.parts.tlist.classList.remove('mh-open'); }
 
-  /** The line to type on (from the chat button, Enter, or a chat key), with what was asked to start it. */
-  openSay(prefix = '') {
+  /**
+   * The line to type on (from the chat tab, Enter, or a chat key), with what was asked to start it; typing starts at
+   * once (focus) from a key, while the tab only opens it.
+   */
+  openSay(prefix = '', focus = true) {
     const P = this.parts;
     P.say.classList.add('mh-open');
     this.tab.classList.remove('mh-unread');
@@ -327,7 +330,7 @@ export class MobileHud {
     this.matchLine();
     if (!this.logOpen) this.toggleLog();
     if (prefix && !P.input.value) P.input.value = prefix;
-    P.input.focus();
+    if (focus) P.input.focus();
   }
   /** The line to type on (and the log and targets over it) as wide as the status line. */
   matchLine() {
