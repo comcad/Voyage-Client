@@ -1024,7 +1024,7 @@ class PlayerInfoView {
       const up = el('button', 'mh-plus', '+'), down = el('button', 'mh-plus mh-minus', '\u2212');
       up.type = down.type = 'button';
       sk.tap(up, () => g.giveFame(w.name(), 1)); sk.tap(down, () => g.giveFame(w.name(), 0));
-      fame.push(up, down);
+      fame.push(down, up);   // (- then +)
     }
     p.facts.replaceChildren(kv('Level', String(i.level)), kv('Job', jobName(i.job)), kv('Fame', ...fame), kv('Guild', i.guild || '-'), kv('Alliance', i.alliance || '-'));
     // the lists, one at a time
