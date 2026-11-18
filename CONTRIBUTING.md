@@ -4,7 +4,7 @@ Thanks for wanting to help. Voyage Client has one goal: to behave **exactly like
 
 ## Before you start
 
-- **Read the code you're changing.** Much of what looks like a typo or a strange number (an `x + 30` where `y + 30` seems right, or a two-space gap in a message) is copied from the original on purpose, and is often marked so in a comment. "Fixing" these makes the client less faithful.
+- **Read the code you're changing.** Much of what looks like a typo or a strange number (an `x + 30` where `y + 30` seems right, or a two-space gap in a message). "Fixing" these makes the client less faithful.
 - **For anything big, ask first.** Open an issue or ask on Discord before starting a large change, so we can agree on it before you spend the time.
 
 ## Pull requests
