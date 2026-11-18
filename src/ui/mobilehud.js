@@ -34,7 +34,8 @@ const TAP_SLOP = 12, TAP_HOLD = 800;
 const ACTIONS = [[MENU.ITEMS, 'Items', 'bag'], [MENU.EQUIP, 'Equipment', 'armor'], [MENU.SKILLS, 'Skills', 'star'], [MENU.QUESTS, 'Quests', 'scroll']];
 /** The menu, in groups under a heading: window functions, then the status bar Menu's own entries. */
 const MENU_ROWS = [
-  'Character', [MENU.STATS, 'Stats'], [MENU.WORLDMAP, 'World Map'], [MENU.MINIMAP, 'Mini Map'], [MENU.QUEST_HELPER, 'Quest Helper'],
+  // (no Mini Map: MOBILE UI has its own at the top left, and the window's would stay over it)
+  'Character', [MENU.STATS, 'Stats'], [MENU.WORLDMAP, 'World Map'], [MENU.QUEST_HELPER, 'Quest Helper'],
   [MENU.MONSTERBOOK, 'Monster Book'], [MENU.MEDAL, 'Medals'],
   'Community', [MENU.BUDDY, 'Buddies'], [MENU.PARTY, 'Party'], [MENU.GUILD, 'Guild'], [MENU.PARTY_SEARCH, 'Party Search'],
   [MENU.MESSENGER, 'Messenger'], [MENU.FAMILY, 'Family'],
