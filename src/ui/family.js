@@ -48,7 +48,7 @@ export function familyResult(code, mesos, severed = '') {
 }
 const plain = (t) => (t || '').replace(/\\n/g, '\n').replace(/#[a-z]/g, '').replace(/#/g, '');
 // RightIcon per privilege (the game server's FamilyEntitlement order): 2 EXP, 3 DROP, 4 the family ones (reunion, summon, bonding)
-const ICONS = [4, 4, 3, 2, 4, 3, 2, 3, 2, 3, 2];
+export const ICONS = [4, 4, 3, 2, 4, 3, 2, 3, 2, 3, 2];
 
 export class FamilyWin extends Win {
   constructor(mgr) {

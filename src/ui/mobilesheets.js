@@ -26,6 +26,8 @@ import { UI_SCALE, UI_W, UI_H, VIEW_W, VIEW_H, maxUiScale } from '../view.js';
 import { FUNCTIONS } from './windows.js';
 import { BUTTON, STICK } from './keyconfig-tabs.js';
 import { bindingLabel, PAD_BUTTONS, TOUCH_MAX_BUTTONS } from '../controls.js';
+import { GROUPS as PS_GROUPS, ALL_BITS as PS_ALL } from './partysearch.js';
+import { ICONS as FAMILY_ICONS } from './family.js';
 
 const INV_TABS = [[1, 'Equip'], [2, 'Use'], [3, 'Set-up'], [4, 'Etc'], [5, 'Cash']];
 const EQ_STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK'], ['hp', 'MaxHP'], ['mp', 'MaxMP'], ['watk', 'Weapon Attack'],
@@ -41,9 +43,28 @@ const STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK']];
 const STARTERS = [0, 1000, 2000, 2001];
 const QUEST_TABS = [[0, 'Available'], [1, 'In Progress'], [2, 'Completed']];
 const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', skills: 'Skills', quests: 'Quests', sysopt: 'System Options',
-  keys: 'Key Setting', gameopt: 'Game Options', channel: 'Change Channel' };
+  keys: 'Key Setting', gameopt: 'Game Options', channel: 'Change Channel', community: 'Community', partysearch: 'Party Search', family: 'Family' };
 /** Sheets standing for a window with its own open / close (what Cancel goes back to, the touch controls held): its name. */
-const WINDOW_OF = { sysopt: 'sysopt', keys: 'keyconfig', gameopt: 'gameopt', channel: 'channel' };
+const WINDOW_OF = { sysopt: 'sysopt', keys: 'keyconfig', gameopt: 'gameopt', channel: 'channel', family: 'family' };
+/** The community window's tabs, and each tab's buttons (its own, by name) with the words on their art. */
+const COMMUNITY_TABS = [[0, 'Buddies'], [1, 'Party'], [2, 'Guild'], [3, 'Alliance'], [4, 'Blacklist']];
+const COMMUNITY_TOOLS = [['add', 'Add Buddy'], ['group', 'Add Group'], ['online', 'Online only'], ['all', 'Show all']];
+const COMMUNITY_BUTTONS = [
+  [['whisper', 'Whisper'], ['talk', 'Messenger'], ['party', 'Party Invite'], ['groupChat', 'Group Chat'], ['note', 'Note'], ['mod', 'Change Group'],
+    ['block', 'Block'], ['unblock', 'Unblock'], ['del', 'Delete']],
+  [['create', 'Create'], ['invite', 'Invite'], ['whisper', 'Whisper'], ['talk', 'Messenger'], ['boss', 'Make Leader'], ['kick', 'Expel'],
+    ['search', 'Party Search'], ['hp', 'Party HP'], ['leave', 'Leave']],
+  [['whisper', 'Whisper'], ['talk', 'Messenger'], ['party', 'Party Invite'], ['where', 'Find'], ['up', 'Rank Up'], ['down', 'Rank Down'],
+    ['kick', 'Expel'], ['invite', 'Invite'], ['notice', 'Notice'], ['bbs', 'Guild BBS'], ['leave', 'Leave']],
+  [['whisper', 'Whisper'], ['talk', 'Messenger'], ['party', 'Party Invite'], ['up', 'Rank Up'], ['down', 'Rank Down'], ['change', 'Make Leader'],
+    ['kick', 'Expel'], ['invite', 'Invite'], ['notice', 'Notice'], ['leave', 'Leave']],
+  [['add', 'Add'], ['del', 'Delete']],
+];
+/** The menu's community entries: the tab they open. */
+const COMMUNITY_OF = (m, MENU) => ({ [MENU.BUDDY]: 0, [MENU.PARTY]: 1, [MENU.GUILD]: 2 })[m];
+/** Family's pedigree, in the order its plates go down the tree, with what each place is. */
+const FAMILY_PLACES = [['leader', 'Leader'], ['grand', "Senior's Senior"], ['senior', 'Senior'], ['self', 'You'], ['sibling', "Senior's other Junior"],
+  ['j0', 'Junior'], ['j1', 'Junior'], ['s00', "Junior's Junior"], ['s01', "Junior's Junior"], ['s10', "Junior's Junior"], ['s11', "Junior's Junior"]];
 /** Game Option's rows (its keys, as the window keeps them) and the names on its art. */
 const GAME_OPTS = [['whisper', 'Whisper'], ['friends', 'Friends'], ['chatInvite', 'Chat Invite'], ['tradeRequest', 'Trade Request'],
   ['partyInvite', 'Party Invite'], ['partySearch', 'Party Search'], ['gameInvite', 'Game Invite'], ['guildChat', 'Guild Chat'],
@@ -206,6 +227,26 @@ html.touch-device .mhud .mh-sheet .mh-tp, html.touch-device .mhud .mh-sheet .mh-
 .mhud .mh-kp { padding: 6px 8px; margin: 2px 0 6px; border-radius: 9px; background: rgba(0, 0, 0, 0.22); }
 .mhud .mh-kp > div:nth-child(2) { flex: 1; min-width: 0; }
 .mhud .mh-kp .mh-cta { height: 26px; padding: 0 11px; }
+/* Community, Party Search, Family */
+.mhud .mh-dot { flex: none; width: 9px; height: 9px; margin: 0 4px 0 2px; border-radius: 50%; background: rgba(180, 190, 210, 0.35); }
+.mhud .mh-dot.mh-on { background: #6fb6ff; box-shadow: 0 0 6px rgba(111, 182, 255, 0.6); }
+.mhud .mh-dot.mh-here { background: #7be35c; box-shadow: 0 0 6px rgba(123, 227, 92, 0.6); }
+.mhud .mh-dot.mh-blocked { background: #ff6b6b; }
+.mhud .mh-list .mh-li { min-height: 36px; }
+.mhud .mh-grp { display: flex; align-items: center; gap: 4px; margin: 8px 0 3px; border-radius: 7px; font-size: 11px; font-weight: 800; color: #9fc6ff; cursor: pointer; }
+.mhud .mh-grp.mh-sel { background: rgba(255, 210, 94, 0.14); box-shadow: inset 0 0 0 1px rgba(255, 210, 94, 0.45); }
+.mhud .mh-grp > span:last-child { flex: 1; padding: 4px 6px 4px 0; }
+.mhud .mh-fold { flex: none; width: 24px; text-align: center; font-size: 12px; padding: 4px 0; color: rgba(225, 232, 248, 0.75); }
+.mhud .mh-ghead { margin: 2px 0 6px; padding: 7px 9px; border-radius: 9px; background: rgba(0, 0, 0, 0.22); }
+.mhud .mh-ghead b { display: block; font-size: 13px; font-weight: 800; color: #ffd978; }
+.mhud .mh-ghead span { display: block; margin-top: 2px; font-size: 10.5px; color: rgba(225, 232, 248, 0.7); overflow-wrap: anywhere; }
+.mhud .mh-empty.mh-small { padding: 4px 8px; text-align: left; font-size: 10.5px; }
+.mhud .mh-in.mh-num { flex: none; width: 52px; text-align: center; }
+.mhud .mh-opt em small { color: rgba(225, 232, 248, 0.6); font-weight: 600; }
+.mhud .mh-tapsec { cursor: pointer; }
+.mhud .mh-ps-state { flex: 1; align-self: center; font-size: 10.5px; color: rgba(225, 232, 248, 0.75); }
+.mhud .mh-priv .mh-li-sub:last-child { white-space: normal; }
+.mhud .mh-priv .mh-cta { flex: none; height: 26px; padding: 0 12px; }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -237,7 +278,7 @@ export class MobileSheets {
     this.p = { title: $('.mh-sh-title'), extra: $('.mh-sh-extra'), tabs: $('.mh-sh-tabs'), banner: $('.mh-sh-banner'), body: $('.mh-sh-body'), detail: $('.mh-sh-detail') };
     hud.tap($('.mh-sh-x'), () => this.closeAsked());
     this.kind = null; this.sig = '';
-    this.tab = { items: 1, equip: 'worn', quests: 1, keys: 'touch' }; this.book = null;
+    this.tab = { items: 1, equip: 'worn', quests: 1, keys: 'touch', community: 0, ps: 1, family: 'info' }; this.book = null;
     this.kpick = null;   // Key Setting: the touch button's id or controller button picked
     this.ksrc = 'fn';    // Key Setting: what the bindings to choose from are (functions, skills, items)
     this.sel = null;     // the item slot, equipment slot, skill or quest picked
@@ -251,8 +292,11 @@ export class MobileSheets {
   get wm() { return this.g.windows; }
   /** MENU ids the sheets stand in for. */
   static kindOf(m, MENU) {
-    return { [MENU.ITEMS]: 'items', [MENU.EQUIP]: 'equip', [MENU.STATS]: 'stats', [MENU.SKILLS]: 'skills', [MENU.QUESTS]: 'quests', [MENU.KEYS]: 'keys' }[m] || null;
+    return { [MENU.ITEMS]: 'items', [MENU.EQUIP]: 'equip', [MENU.STATS]: 'stats', [MENU.SKILLS]: 'skills', [MENU.QUESTS]: 'quests', [MENU.KEYS]: 'keys',
+      [MENU.BUDDY]: 'community', [MENU.PARTY]: 'community', [MENU.GUILD]: 'community', [MENU.PARTY_SEARCH]: 'partysearch', [MENU.FAMILY]: 'family' }[m] || null;
   }
+  /** The community tab a MENU id opens (Buddy, Party, Guild), or undefined. */
+  static communityTab(m, MENU) { return COMMUNITY_OF(m, MENU); }
   /** keep: System Options carries on from the window it takes over from (what CANCEL puts back stays that window's). */
   toggle(kind, keep = false) { if (this.kind === kind) this.close(); else this.show(kind, keep); }
   show(kind, keep = false) {
@@ -306,6 +350,25 @@ export class MobileSheets {
       return `${base}|${this.tab.keys}|${this.kpick}|${this.ksrc}|${JSON.stringify(this.wm.wins.keyconfig?.ctlDraft)}|${Object.keys(g.skills?.levels || {}).length}|${inv}|${UI_W}x${UI_H}`;
     }
     if (this.kind === 'gameopt') return `${base}|${JSON.stringify(this.wm.wins.gameopt?.allow)}`;
+    if (this.kind === 'community') {
+      const w = this.wm.wins.userlist;
+      // (what each list shows, field by field: the records may hold looks that don't make text)
+      const mem = (list) => (list || []).map((m) => [m.id, m.name, m.job, m.level, m.channel, m.map, m.rank, m.online, m.allianceRank, m.group, m.pending].join(':')).join(',');
+      const gu = (x) => (x ? `${x.id}|${x.name}|${x.notice}|${x.ranks}|${x.gp}|${mem(x.members)}` : '');
+      return `${base}|${this.tab.community}|${w?.sel}|${w?.showOnline}|${[...(w?.closedGroups || [])]}|${this.guildInfo}|${mem(g.buddies)}|${g.party?.leader}|${mem(g.party?.members)}`
+        + `|${gu(g.guild)}|${g.alliance ? `${g.alliance.name}|${g.alliance.notice}|${g.alliance.ranks}` : ''}|${(g.allianceGuilds || []).map(gu).join('/')}`
+        + `|${w?.mine.black}|${[...(w?.mine.blocked || [])]}|${g.buddyCapacity}|${g.map?.id}|${g.channel}`;
+    }
+    if (this.kind === 'partysearch') {
+      const w = this.wm.wins.partysearch;
+      return `${base}|${this.tab.ps}|${w?.state}|${[...(w?.bits || [])]}|${w?.leader}|${['min', 'max', 'members'].map((k) => w?.fields[k].value)}`;
+    }
+    if (this.kind === 'family') {
+      const t = this.wm.wins.familytree;
+      const c = t?.chart;
+      return `${base}|${this.tab.family}|${JSON.stringify(g.family || null)}|${g.familyPrivileges?.length}|${t?.sel}`
+        + `|${c ? c.members.map((m) => [m.id, m.senior, m.name, m.level, m.job, m.online].join(':')).join(',') : ''}`;
+    }
     if (this.kind === 'channel') { const w = this.wm.wins.channel; return `${base}|${w?.pick}|${g.channel}|${w?.count}`; }
     return base;
   }
@@ -832,6 +895,241 @@ export class MobileSheets {
       };
       n.addEventListener('pointermove', move); n.addEventListener('pointerup', up); n.addEventListener('pointercancel', up);
     });
+  }
+
+  // ---------------------------------------------------------------- Community: Buddies, Party, Guild, Alliance, Blacklist
+  /**
+   * The community window's lists (its own models and rows) and buttons (its own, lit as the window lights them for
+   * the one picked): Buddies by group, the party online and off, the guild and the alliance by who is on, the
+   * Blacklist. Every action is the window's.
+   */
+  community() {
+    const g = this.g, w = this.wm.wins.userlist, out = el('div', 'mh-list');
+    if (!w) return out;
+    const tab = this.tab.community;
+    if (w.tab !== tab) w.setTab(tab);
+    this.tabs(COMMUNITY_TABS, tab, (k) => { this.tab.community = k; w.setTab(k); this.guildInfo = false; });
+    w.updateButtons();
+    const pick = (key) => { w.sel = w.sel === key ? null : key; this.findPage(w); this.render(); };
+    const row = (key, main, sub, mark, off = false) => {
+      const r = el('div', `mh-li${w.sel === key ? ' mh-sel' : ''}${off ? ' mh-off' : ''}`), m = el('div', 'mh-li-main');
+      if (mark) r.append(mark);
+      m.append(el('div', 'mh-li-name', main));
+      if (sub) m.append(el('div', 'mh-li-sub', sub));
+      r.append(m);
+      if (key) this.hud.tap(r, () => pick(key));
+      out.append(r);
+      return r;
+    };
+    const dot = (cls) => el('span', `mh-dot ${cls}`);
+    const tools = el('div', 'mh-ctas');
+    if (tab === 0) {
+      for (const [k, label] of COMMUNITY_TOOLS) { const b = w.bb[k]; if (b?.visible) tools.append(this.button(label, () => b.onClick(), k === 'add' ? 'mh-main' : '')); }
+      out.append(tools);
+      this.p.extra.append(el('span', 'mh-pill', `${(g.buddies || []).filter((b) => !b.pending).length} / ${g.buddyCapacity ?? 20}`));
+      for (const r of w.model().rows) {
+        if (r.kind === 'group') {
+          const h = el('div', `mh-grp${w.sel === r.key ? ' mh-sel' : ''}`), fold = el('span', 'mh-fold', r.open ? '▾' : '▸');
+          this.hud.tap(fold, () => { w.toggleGroup(r.item.name); this.render(); });
+          const label = el('span', null, r.label);
+          this.hud.tap(label, () => pick(r.key));
+          h.append(fold, label);
+          out.append(h);
+        } else if (r.kind === 'buddy') {
+          const b = r.item, blocked = w.isBlocked(b), on = b.channel >= 0;
+          row(r.key, b.name, blocked ? 'Blocked' : on ? `Channel ${b.channel + 1}${b.channel === g.channel ? ' · here' : ''}` : 'Offline',
+            dot(blocked ? 'mh-blocked' : on ? (b.channel === g.channel ? 'mh-here' : 'mh-on') : ''), !on || blocked);
+        } else if (r.kind === 'none') out.append(el('div', 'mh-empty mh-small', 'none'));
+      }
+    } else if (tab === 1) {
+      const p = g.party;
+      if (!p) out.append(el('div', 'mh-empty', 'You are not in a party.'));
+      else {
+        for (const r of w.model().rows) {
+          if (r.kind === 'bar') out.append(el('div', 'mh-sec', `${r.tip} ${r.count}`));
+          else if (r.kind === 'member') {
+            const m = r.item, on = m.channel >= 0;
+            const where = !on ? 'Offline' : r.here ? 'Here' : `Ch. ${m.channel + 1} · ${w.mapName(m.map)}`;
+            row(r.key, `${m.id === p.leader ? '★ ' : ''}${m.name}`, `${jobName(m.job)} · Lv. ${m.level} · ${where}`, dot(on ? (r.here ? 'mh-here' : 'mh-on') : ''), !on);
+          }
+        }
+      }
+    } else if (tab === 2 || tab === 3) {
+      const gd = g.guild, a = tab === 3 && gd ? g.alliance : null;
+      if (!gd) out.append(el('div', 'mh-empty', 'You are not in a guild.'));
+      else if (tab === 3 && !a) out.append(el('div', 'mh-empty', 'This guild is not affiliated with any Guild Union.'));
+      else {
+        const head = el('div', 'mh-ghead');
+        head.append(el('b', null, tab === 2 ? gd.name : a.name), el('span', null, (tab === 2 ? gd.notice : a.notice) || (tab === 2 ? 'No guild notice.' : 'No Guild Union notice.')));
+        out.append(head);
+        if (tab === 2) {
+          const info = this.button(this.guildInfo ? 'Hide ranks' : 'Ranks and GP', () => { this.guildInfo = !this.guildInfo; this.render(); });
+          const t = el('div', 'mh-ctas'); t.append(info); out.append(t);
+          if (this.guildInfo) {
+            out.append(el('div', 'mh-sec', `Guild Points ${fmt(gd.gp ?? 0)}`));
+            (gd.ranks || []).forEach((name, i) => { if (name) out.append(el('div', 'mh-kv', `${i + 1}. ${name}`)); });
+          }
+        }
+        const ranks = tab === 2 ? gd.ranks : a.ranks, rankOf = (m) => (tab === 2 ? ranks?.[m.rank - 1] : ranks?.[m.allianceRank - 1]) || '';
+        const member = (m, key) => row(key, m.name, `${m.job < 0 ? '??' : jobName(m.job)} · Lv. ${m.level < 0 ? '??' : m.level}${rankOf(m) ? ` · ${rankOf(m)}` : ''}`,
+          dot(m.online ? 'mh-on' : ''), !m.online);
+        const guilds = tab === 2 ? [gd] : [gd, ...(g.allianceGuilds || [])];
+        for (const gg of guilds) {
+          if (tab === 3) out.append(el('div', 'mh-sec', `${gg.name} [${gg.members.filter((m) => m.online).length}/${gg.members.length}]`));
+          for (const online of tab === 2 ? [true, false] : [null]) {
+            const list = gg.members.filter((m) => online === null || !!m.online === online);
+            if (tab === 2) out.append(el('div', 'mh-sec', `${online ? 'Online' : 'Offline'} [${list.length}/${gg.members.length}]`));
+            if (!list.length) out.append(el('div', 'mh-empty mh-small', 'none'));
+            for (const m of list.sort((x, y) => (x.rank - y.rank) || x.name.localeCompare(y.name))) member(m, `${tab === 2 ? 'm' : 'a'}:${m.id}`);
+          }
+        }
+      }
+    } else {
+      const names = w.mine.black;
+      this.p.extra.append(el('span', 'mh-pill', `${names.length} / 26`));
+      if (!names.length) out.append(el('div', 'mh-empty', 'Nobody is on your Blacklist.'));
+      names.forEach((n, i) => row(`k:${i}`, n, null, null));
+    }
+    // the window's buttons for this tab, as it lights them
+    const set = [w.bb, w.pb, w.gb, w.ab, w.lb][tab], a = el('div', 'mh-ctas');
+    for (const [k, label] of COMMUNITY_BUTTONS[tab]) {
+      const b = set[k];
+      if (!b?.visible || !b.enabled) continue;
+      a.append(this.button(label, () => this.communityAct(tab, k, b), ['create', 'invite', 'add'].includes(k) ? 'mh-main' : ['del', 'kick', 'leave', 'block'].includes(k) ? 'mh-warn' : ''));
+    }
+    if (a.childElementCount) this.p.detail.append(a);
+    return out;
+  }
+  /** A guild or alliance member picked: the window's list page with them on it, so its buttons see them. */
+  findPage(w) {
+    if (!w.sel || w.selected()) return;
+    const secs = w.tab === 2 ? w.gsec : w.tab === 3 ? [...w.asecs.values()] : [];
+    for (const sec of secs) {
+      const page = sec.page;
+      for (let p = 0; p < 40; p++) { sec.page = p; sec.open = true; if (w.selected()) return; }
+      sec.page = page;
+    }
+  }
+  /** A community button: as the window's, but Party Search opens its sheet and a whisper goes to the chat line. */
+  communityAct(tab, k, b) {
+    if (tab === 1 && k === 'search') { this.show('partysearch'); return; }
+    if (k === 'whisper' || k === 'bbs') this.close();
+    b.onClick();
+    this.render();
+  }
+
+  // ---------------------------------------------------------------- Party Search
+  /** Party Search through its window (its job bits, fields and start / pause / stop): who you look for and how many. */
+  partysearch() {
+    const g = this.g, w = this.wm.wins.partysearch, out = el('div');
+    if (!w) return out;
+    this.tabs([[1, 'Find Members'], [0, 'Find Party']], this.tab.ps, (k) => { this.tab.ps = k; w.tab = k; });
+    w.tab = this.tab.ps;
+    if (this.tab.ps === 0) {
+      out.append(el('div', 'mh-dt-text', 'Party leaders looking for members invite players near them who have no party yet.\n\n'
+        + 'You can be invited whenever you are not in a party. Invitations from a search are marked "PS:".'));
+      return out;
+    }
+    const f = w.fields, lv = g.stats?.level || 1;
+    if (!f.min.value) f.min.value = String(Math.max(1, lv - 10));
+    if (!f.max.value) f.max.value = String(Math.min(200, lv + 10));
+    if (!f.members.value) f.members.value = '6';
+    out.append(el('div', 'mh-dt-text', w.leader ? 'Choose the levels and jobs you want, then Start. Matching players near you are invited to your party.'
+      : 'Only a party leader can search for members. Create a party first.'));
+    const num = (field, max) => {
+      const i = el('input', 'mh-in mh-num'); Object.assign(i, { type: 'text', inputMode: 'numeric', maxLength: max, value: field.value });
+      for (const t of ['keydown', 'keyup', 'keypress', 'pointerdown']) i.addEventListener(t, (e) => e.stopPropagation());
+      i.addEventListener('input', () => { i.value = i.value.replace(/\D/g, ''); field.value = i.value; });
+      return i;
+    };
+    const lvRow = el('div', 'mh-kv mh-opt'), e = el('em');
+    e.append(num(f.min, 3), el('small', null, 'to'), num(f.max, 3));
+    lvRow.append(el('span', null, 'Level'), e); out.append(lvRow);
+    const mRow = el('div', 'mh-kv mh-opt');
+    mRow.append(el('span', null, 'Party size'), this.choice({ items: ['2', '3', '4', '5', '6'], value: Math.max(0, Number(f.members.value) - 2), set: (i) => { f.members.value = String(i + 2); } }));
+    out.append(mRow);
+    const allRow = el('div', 'mh-kv mh-opt mh-wide'), ae = el('em');
+    ae.append(this.switch(w.bits.size === PS_ALL.length, () => { const on = w.bits.size !== PS_ALL.length; for (const b of PS_ALL) { if (on) w.bits.add(b); else w.bits.delete(b); } }));
+    allRow.append(el('span', null, 'All jobs'), ae); out.append(allRow);
+    for (const [, , , title, jobs] of PS_GROUPS) {
+      const head = el('div', 'mh-sec mh-tapsec', title), all = jobs.every(([b]) => w.bits.has(b));
+      this.hud.tap(head, () => { for (const [b] of jobs) { if (all) w.bits.delete(b); else w.bits.add(b); } sfx.play('UI/BtMouseClick'); this.render(); });
+      out.append(head);
+      const chips = el('div', 'mh-seg');
+      for (const [b, name] of jobs) {
+        const c = el('button', `mh-tab${w.bits.has(b) ? ' mh-on' : ''}`, name); c.type = 'button';
+        this.hud.tap(c, () => { if (w.bits.has(b)) w.bits.delete(b); else w.bits.add(b); sfx.play('UI/BtMouseClick'); this.render(); });
+        chips.append(c);
+      }
+      out.append(chips);
+    }
+    const a = el('div', 'mh-ctas mh-end'), msg = { searching: 'Searching for party members...', paused: 'The search is paused.', idle: '' }[w.state];
+    if (msg) a.append(el('span', 'mh-ps-state', msg));
+    if (w.state === 'searching') a.append(this.button('Pause', () => { w.stop('paused'); this.render(); }));
+    else { const s = this.button('Start', () => { w.start(); this.render(); }, 'mh-main'); s.disabled = !w.leader; a.append(s); }
+    const stop = this.button('Stop', () => { w.stop('idle'); this.render(); }); stop.disabled = w.state === 'idle'; a.append(stop);
+    this.p.detail.append(a);
+    return out;
+  }
+
+  // ---------------------------------------------------------------- Family
+  /** The Family window (your family, reputation and privileges) and its pedigree, through their own windows. */
+  family() {
+    const g = this.g, w = this.wm.wins.family, t = this.wm.wins.familytree, out = el('div', 'mh-list');
+    if (!w || !t) return out;
+    this.tabs([['info', 'Family'], ['tree', 'Pedigree']], this.tab.family, (k) => { this.tab.family = k; if (k === 'tree') t.load(g.player.name); });
+    const f = g.family || { rep: 0, totalRep: 0, todayRep: 0, juniors: 0, maxJuniors: 2, name: '', message: '', used: {} };
+    const a = el('div', 'mh-ctas');
+    a.append(this.button('Add Junior', () => g.familyAddJunior(), 'mh-main'));
+    if (this.tab.family === 'info') {
+      const kv = (label, value) => { const r = el('div', 'mh-kv'); r.append(el('span', null, label), el('em', null, value)); out.append(r); };
+      out.append(el('div', 'mh-sec', f.name || 'No family yet'));
+      if (!f.name) out.append(el('div', 'mh-dt-text', 'Add a junior to start a family.'));
+      if (f.message) out.append(el('div', 'mh-dt-text', f.message));
+      kv('Juniors', `${f.juniors} / ${f.maxJuniors}`);
+      kv('Reputation', `${fmt(f.rep)} / ${fmt(f.totalRep)}`);
+      kv("Today's Rep", fmt(f.todayRep));
+      const privs = w.privileges;
+      if (privs.length) out.append(el('div', 'mh-sec', 'Entitlements'));
+      privs.forEach((p, i) => {
+        const r = el('div', 'mh-li mh-priv'), m = el('div', 'mh-li-main'), used = f.used?.[i] || 0;
+        r.append(this.img(w.F.RightIcon?.[FAMILY_ICONS[i] || 4]));
+        m.append(el('div', 'mh-li-name', p.name), el('div', 'mh-li-sub', `${fmt(p.cost)} Rep · used ${used} / ${p.limit}`), el('div', 'mh-li-sub', plain(p.desc).replace(/\s+/g, ' ')));
+        r.append(m);
+        const use = this.button('Use', () => { w.page = i; w.use(); });
+        use.disabled = !f.name || f.rep < p.cost || used >= p.limit;
+        r.append(use);
+        out.append(r);
+      });
+      if (f.name && f.leader === g.player.id) a.append(this.button('Precepts', () => w.editPrecepts()));
+      a.append(this.button('Pedigree', () => { this.tab.family = 'tree'; t.load(g.player.name); this.render(); }));
+    } else {
+      const c = t.chart;
+      if (!c) out.append(el('div', 'mh-empty', 'Loading the pedigree...'));
+      else {
+        out.append(el('div', 'mh-sec', `Family members: ${c.members.length}`));
+        // each member once, with every place they hold (the leader may be your senior too)
+        const places = new Map();
+        for (const [slot, label] of FAMILY_PLACES) {
+          const m = t.place?.[slot];
+          if (!m) continue;
+          if (places.has(m.id)) places.get(m.id).labels.push(label); else places.set(m.id, { m, labels: [label] });
+        }
+        for (const { m, labels } of places.values()) {
+          const r = el('div', `mh-li${t.sel === m.id ? ' mh-sel' : ''}${m.online ? '' : ' mh-off'}`), main = el('div', 'mh-li-main');
+          r.append(el('span', `mh-dot${m.online ? ' mh-on' : ''}`));
+          main.append(el('div', 'mh-li-name', m.name), el('div', 'mh-li-sub', `${labels.join(' · ')} · Lv. ${m.level} · ${jobName(m.job)}`));
+          r.append(main);
+          // tapped again: that member's own pedigree, as the window's double-click
+          this.hud.tap(r, () => { if (t.sel === m.id && m.id !== c.self) t.load(m.name); else t.sel = m.id; this.render(); });
+          out.append(r);
+        }
+        if (!t.mine) a.append(this.button('My pedigree', () => t.load(g.player.name)));
+        a.append(this.button('Bye', () => t.separate(), 'mh-warn'));
+      }
+    }
+    this.p.detail.append(a);
+    return out;
   }
 
   // ---------------------------------------------------------------- Quests

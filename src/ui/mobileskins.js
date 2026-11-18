@@ -9,6 +9,8 @@
  *     under them with its description and BUY, or SELL and RECHARGE;
  *   - trades: a panel on the left (your inventory opens on the right, to offer from): your partner's offer and
  *     yours, the mesos, who has confirmed, the trade's chat, TRADE and Cancel;
+ *   - Maple Messenger: a panel on the left with the three seats (who sits there, standing), the room's chat, who is
+ *     typing, and a line to type on; Invite, Report and Leave;
  *   - invitations and notices (trade, party, guild, buddy, messenger, family, parcels, notes, quests): cards at the
  *     top with their own buttons, fading in and out as the balloons do.
  * The client's own windows stay open behind them and do all the work (WindowManager.skin keeps them from drawing or
@@ -21,13 +23,15 @@ import { sfx } from '../audio.js';
 import { NpcDialog, UtilBox, ShopWin, textRef, potionPrice } from './dialogs.js';
 import { TradeWin } from './trade.js';
 import { Balloon, QuestNotice } from './notifier.js';
+import { MessengerWin } from './messenger.js';
 import { richText, LIGHT_COLORS } from './richtext.js';
 
-/** The message boxes shown as cards (the ones with a name list keep the client's look). */
-const BOX_KINDS = new Set(['ok', 'okcancel', 'okcancelLeft', 'quantity', 'text']);
+/** The message boxes shown as cards (all of them, their name and group lists too). */
+const BOX_KINDS = new Set(['ok', 'okcancel', 'okcancelLeft', 'quantity', 'text', 'whisper', 'buddy', 'group']);
 const SELL_TABS = [[1, 'Equip'], [2, 'Use'], [3, 'Set-up'], [4, 'Etc'], [5, 'Cash']];
 /** The trade log's colours (made for the window's white log) on the dark glass. */
-const LOG_COLORS = { '#000': '#e8edf8', '#555': 'rgba(225, 232, 248, 0.6)', '#0047b3': '#8cc2ff', '#006699': '#7fd4ff' };
+const LOG_COLORS = { '#000': '#e8edf8', '#000000': '#e8edf8', '#555': 'rgba(225, 232, 248, 0.6)', '#0047b3': '#8cc2ff', '#006699': '#7fd4ff',
+  '#ff2020': '#ff9a9a', '#336600': '#a6f08a' };
 const TEXT = { base: '#eef2fb', colors: LIGHT_COLORS, size: 12 };
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
@@ -153,6 +157,23 @@ const CSS = `
 .mhud .mh-tr-log div { overflow-wrap: anywhere; }
 .mhud .mh-tr-say, .mhud .mh-tr-btns { flex: none; display: flex; gap: 6px; }
 .mhud .mh-tr-btns .mh-cta { flex: 1; }
+
+/* Maple Messenger */
+.mhud .mh-ms { position: absolute; left: calc(6px + env(safe-area-inset-left)); top: 6px; bottom: calc(54px + env(safe-area-inset-bottom)); z-index: 1;
+  width: min(330px, 42%); display: flex; flex-direction: column; gap: 6px; padding: 8px; pointer-events: auto; animation: mh-fade 0.2s ease; }
+.mhud .mh-ms.mh-folded { bottom: auto; }
+.mhud .mh-ms.mh-folded > :not(.mh-tr-head) { display: none; }
+.mhud.mh-messaging .mh-mm { display: none; }
+.mhud .mh-ms-fold { width: 26px; height: 26px; font-weight: 900; font-size: 15px; }
+.mhud .mh-ms-seats { flex: none; display: flex; gap: 6px; }
+.mhud .mh-ms-seat { position: relative; flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px 5px;
+  border-radius: 10px; background: rgba(0, 0, 0, 0.22); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+.mhud .mh-ms-seat canvas { width: 64px; height: 70px; image-rendering: pixelated; }
+.mhud .mh-ms-seat b { max-width: 100%; font-size: 10.5px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mhud .mh-ms-seat.mh-me b { color: #ffd978; }
+.mhud .mh-ms-seat.mh-empty-seat b { color: rgba(225, 232, 248, 0.4); font-weight: 600; }
+.mhud .mh-ms-seat i { position: absolute; top: 3px; right: 7px; font-style: normal; font-size: 16px; font-weight: 900; color: #fff; animation: mhud-pulse 0.9s ease-in-out infinite; }
+.mhud .mh-ms-typing { flex: none; min-height: 13px; font-size: 10px; color: rgba(225, 232, 248, 0.65); }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -209,6 +230,7 @@ export class MobileSkins {
     if (w instanceof ShopWin) return 'shop';
     if (w instanceof TradeWin) return 'trade';
     if (w instanceof Balloon) return 'toast';
+    if (w instanceof MessengerWin) return 'messenger';
     return null;
   }
   /** Each frame: a view for each window it stands in for (made, ticked, dropped as they open and close). */
@@ -230,11 +252,15 @@ export class MobileSkins {
     for (const [w, v] of this.views) if (!live.has(w)) { v.destroy(); this.views.delete(w); }
     this.npc.show(talk);
     this.npc.tick(now);
-    let shop = false, trade = false;
-    for (const v of this.views.values()) { v.tick(now); if (v instanceof ShopView) shop = true; else if (v instanceof TradeView) trade = true; }
+    let shop = false, trade = false, chat = false;
+    for (const v of this.views.values()) {
+      v.tick(now);
+      if (v instanceof ShopView) shop = true; else if (v instanceof TradeView) trade = true; else if (v instanceof MessengerView) chat = true;
+    }
     const c = this.hud.el.classList;
     if (c.contains('mh-shopping') !== shop) c.toggle('mh-shopping', shop);
     if (c.contains('mh-trading') !== trade) c.toggle('mh-trading', trade);
+    if (c.contains('mh-messaging') !== chat) c.toggle('mh-messaging', chat);
   }
 
   // ---------------------------------------------------------------- pieces
@@ -444,6 +470,20 @@ class BoxView {
       card.append(row);
       keys(i, () => this.finish(true), () => this.finish(false));
       focusSoft(i, true);
+    }
+    // Add Buddy's and To Group's group list (the one picked is the box's); the names whispered before, to tap one in
+    if ((w.kind === 'buddy' || w.kind === 'group') && w.names?.length) {
+      const s = el('select', 'mh-select');
+      for (const n of w.names) { const o = el('option', null, n); o.value = n; s.append(o); }
+      s.value = w.group;
+      for (const t of ['pointerdown', 'keydown', 'keyup']) s.addEventListener(t, (e) => e.stopPropagation());
+      s.addEventListener('change', () => { w.group = s.value; });
+      const r = el('div', 'mh-bx-row'); r.append(s); card.append(r);
+    }
+    if (w.kind === 'whisper' && w.names?.length && this.input) {
+      const chips = el('div', 'mh-seg');
+      for (const n of w.names) { const b = el('button', 'mh-tab', n); b.type = 'button'; sk.tap(b, () => { this.input.value = n; }); chips.append(b); }
+      card.append(chips);
     }
     const btns = el('div', 'mh-bx-btns');
     if (w.kind !== 'ok') btns.append(sk.button('Cancel', () => this.finish(false)));
@@ -656,4 +696,82 @@ class TradeView {
   }
 }
 
-const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView };
+/**
+ * Maple Messenger, through its window (kept open: its room, its lines and typing notices): the three seats with who
+ * sits there, standing, the room's chat in its colours, who is typing, and a line to type on; Invite, Report and
+ * Leave as the window's. It sits at the left, over the status line; it folds to its title.
+ */
+const MS_SEAT = { w: 64, h: 70, feet: 66 };
+class MessengerView {
+  constructor(sk, w) {
+    this.sk = sk; this.w = w;
+    w.field?.show(false);
+    const n = this.el = el('div', 'mh-ms mh-glass');
+    n.innerHTML = `<div class="mh-tr-head"><span class="mh-sh-title">Messenger</span><span class="mh-sp"></span>
+      <div class="mh-btn mh-ms-fold" title="Fold">–</div><div class="mh-btn mh-sh-x" title="Leave">${X_ICON}</div></div>
+      <div class="mh-ms-seats"></div><div class="mh-ms-typing"></div><div class="mh-tr-log" data-scroll="y"></div>
+      <div class="mh-tr-say"></div><div class="mh-tr-btns"></div>`;
+    n.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const $ = (q) => n.querySelector(q);
+    this.p = { seats: $('.mh-ms-seats'), typing: $('.mh-ms-typing'), log: $('.mh-tr-log'), say: $('.mh-tr-say'), btns: $('.mh-tr-btns'), fold: $('.mh-ms-fold') };
+    sk.tap($('.mh-sh-x'), () => w.askLeave());
+    sk.tap(this.p.fold, () => { const f = n.classList.toggle('mh-folded'); this.p.fold.textContent = f ? '+' : '–'; });
+    this.seats = [0, 1, 2].map(() => {
+      const s = el('div', 'mh-ms-seat'), cv = el('canvas'), name = el('b'), dots = el('i', null, '…');
+      s.append(cv, name, dots); this.p.seats.append(s);
+      return { s, cv, name, dots };
+    });
+    // typing: the window's line follows this one, so its typing notices go as they do
+    const i = this.input = textInput(256, '');
+    i.enterKeyHint = 'send'; i.placeholder = 'Say something';
+    i.addEventListener('input', () => { if (w.field) w.field.value = i.value; });
+    keys(i, () => this.send(), () => i.blur());
+    this.p.say.append(i, sk.button('Send', () => this.send()));
+    this.p.btns.append(sk.button('Invite', async () => {
+      const name = (await sk.wm.askText('Who do you want to invite to the chat?', '', { max: 13 }))?.trim();
+      if (name) w.inviteByName(name);
+    }, 'mh-main'), sk.button('Report', () => w.report()), sk.button('Leave', () => w.askLeave(), 'mh-warn'));
+    sk.el.append(n);
+  }
+  send() {
+    const w = this.w;
+    if (w.field) w.field.value = this.input.value;
+    w.send();
+    this.input.value = w.field?.value || '';
+  }
+  tick(now) {
+    if (now - (this.at || 0) < 150) return;
+    this.at = now;
+    const w = this.w, g = this.sk.g;
+    this.seats.forEach((seat, pos) => {
+      const m = w.members[pos];
+      seat.s.className = `mh-ms-seat${!m ? ' mh-empty-seat' : ''}${m?.me ? ' mh-me' : ''}`;
+      if (seat.name.textContent !== (m?.name || 'Empty')) seat.name.textContent = m?.name || 'Empty';
+      seat.dots.style.display = m && !m.me && w.typing[pos] ? '' : 'none';
+      this.drawSeat(seat, m?.me ? g.look : m?.look, now);
+    });
+    const typing = w.members.map((m, pos) => (m && !m.me && w.typing[pos] ? m.name : null)).filter(Boolean);
+    const t = typing.length ? `${typing.join(', ')} is typing.` : '';
+    if (this.p.typing.textContent !== t) this.p.typing.textContent = t;
+    const last = w.lines[w.lines.length - 1];
+    if (last !== this.logLast || w.lines.length !== this.logN) {
+      const log = this.p.log;
+      log.replaceChildren(...w.lines.map((l) => { const d = el('div', null, l.text); d.style.color = LOG_COLORS[l.color] || '#e8edf8'; return d; }));
+      log.scrollTop = log.scrollHeight;
+      this.logLast = last; this.logN = w.lines.length;
+    }
+  }
+  /** Someone in a seat, standing (drawn again now and then, as their look's parts come in). */
+  drawSeat(seat, look, now) {
+    const cv = seat.cv, dpr = Math.min(3, globalThis.devicePixelRatio || 1);
+    if (cv.width !== MS_SEAT.w * dpr) { cv.width = MS_SEAT.w * dpr; cv.height = MS_SEAT.h * dpr; }
+    if (seat.look === look && now - (seat.drawn || 0) < 600) return;
+    seat.look = look; seat.drawn = now;
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.imageSmoothingEnabled = false; ctx.clearRect(0, 0, MS_SEAT.w, MS_SEAT.h);
+    if (look?.compose) drawParts(ctx, this.sk.g.assets, look.compose(look.standAction(), 0), MS_SEAT.w / 2, MS_SEAT.feet, false);
+  }
+  destroy() { this.el.remove(); if (this.sk.wm.order.includes(this.w)) this.w.field?.show(true); }
+}
+
+const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView, messenger: MessengerView };

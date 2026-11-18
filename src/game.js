@@ -2473,7 +2473,7 @@ export class Game {
     if (!this.hud) return;
     const chatKey = CHAT_KEYS[m];
     if (chatKey) { if (chatKey === 'toggle') this.statusBar?.toggleChat(); else this.statusBar?.openChat(chatKey); return; }
-    if (settings.mobileUi && this.mobileHud?.sheet(m)) return;   // MOBILE UI: the Item, Equipment, Stat, Skill, Quest and Key Setting windows as its sheets
+    if (settings.mobileUi && this.mobileHud?.sheet(m)) return;   // MOBILE UI: its sheets for these windows (Messenger: its panel over the window)
     if (m === MENU.ITEMS) this.windows.toggle('inventory');
     else if (m === MENU.EQUIP) this.windows.toggle('equip');
     else if (m === MENU.STATS) this.windows.toggle('stat');

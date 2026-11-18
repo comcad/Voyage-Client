@@ -14,7 +14,7 @@ import { UI_W } from '../view.js';
  *   Find Party: Party/party0..3. The game server takes no registration - anyone without a party can be invited.
  * Job bits follow the game server's PartySearchCoordinator table.
  */
-const GROUPS = [
+export const GROUPS = [
   // [box x, box y, width, title, [[job bit, name]...]] inside party4
   [0, 0, 80, 'Beginner', [[1, 'Beginner']]],
   [0, 53, 80, 'Legend', [[2, 'Aran'], [25, 'Evan']]],
@@ -24,7 +24,7 @@ const GROUPS = [
   [84, 104, 90, 'Bowman', [[21, 'Bowman'], [22, 'Hunter'], [23, 'Crossbowman'], [24, 'Wind Archer']]],
   [177, 104, 110, 'Pirate', [[13, 'Pirate'], [14, 'Brawler'], [15, 'Gunslinger'], [16, 'Thunder Breaker']]],
 ];
-const ALL_BITS = GROUPS.flatMap((g) => g[4].map(([b]) => b));
+export const ALL_BITS = GROUPS.flatMap((g) => g[4].map(([b]) => b));
 const JOBS = { x: 9, y: 170 }, ROW = 15;
 
 export class PartySearchWin extends Win {

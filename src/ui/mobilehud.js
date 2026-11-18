@@ -5,13 +5,13 @@
  *     window); it goes while a sheet is open;
  *   - top left: the mini map (ui/mobileminimap.js);
  *   - top right: round buttons for the windows used most, and a menu for the rest; the Item, Equipment, Stat, Skill
- *     and Quest windows, System Options, Game Options, Key Setting and Change Channel open as its own sheets, made for
- *     a phone (ui/mobilesheets.js);
+ *     and Quest windows, System Options, Game Options, Key Setting, Change Channel, the community window (Buddies, Party,
+ *     Guild), Party Search and Family open as its own sheets, made for a phone (ui/mobilesheets.js);
  *   - the chat, only while it is open: a little up-arrow tab out of the status line's top opens a line to type on,
  *     with the chat target beside it, centred right over the status line, and the log over it; closed, nothing of the
  *     chat shows but a gold dot on the tab when lines came in meanwhile;
- *   - NPC and quest conversations, message boxes, NPC shops, trades and invitations / notices in the same style
- *     (ui/mobileskins.js).
+ *   - NPC and quest conversations, message boxes, NPC shops, trades, the Messenger and invitations / notices in the
+ *     same style (ui/mobileskins.js).
  * Everything goes through the status bar's own code (its log, history, chat targets and menu actions) and
  * Game.toggleMenu, so nothing behaves differently from the bar; only the look and the place differ.
  */
@@ -276,7 +276,15 @@ export class MobileHud {
   /** A window function (MENU id) whose window it has a sheet for: that sheet opens or closes; false for the others. */
   sheet(m) {
     const kind = MobileSheets.kindOf(m, MENU);
-    return !!kind && this.openSheet(kind);
+    if (!kind) return false;
+    // Buddy / Party / Guild: the community sheet on that tab (another tab while it is open moves to it, not closes it)
+    const tab = MobileSheets.communityTab(m, MENU);
+    if (tab !== undefined && this.shown) {
+      const moving = this.sheets.kind === 'community' && this.sheets.tab.community !== tab;
+      this.sheets.tab.community = tab;
+      if (moving) { this.closeMenu(); this.sheets.show('community'); this.update(); return true; }
+    }
+    return this.openSheet(kind);
   }
   /** A sheet by its kind (System Options too) opens, or closes when it is the one open; false while hidden. */
   openSheet(kind, keep = false) {
