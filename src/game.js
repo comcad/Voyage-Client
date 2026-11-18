@@ -4006,6 +4006,7 @@ export class Game {
     }
   }
   openQuest(id) {
+    if (this.mobileHud?.shown) { this.mobileHud.sheets.openQuest(id); return; }   // MOBILE UI: its Quests sheet
     const st = this.quests.status(id), w = this.windows.open('quest');
     if (!w) return;
     w.tab = st === 1 ? 1 : st === 2 ? 2 : 0; w.first = 0;

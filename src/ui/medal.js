@@ -347,7 +347,7 @@ export class MedalWin extends Win {
 }
 
 /** "Ended at y/m/d at hh:00" from a completion FILETIME (UTC fields, as the client turns it). */
-function endedText(ft) {
+export function endedText(ft) {
   let ms = null;
   try { ms = ft === undefined || ft === true ? null : Number(BigInt(ft) / 10000n - 11644473600000n); } catch { ms = null; }
   if (ms === null) return '';

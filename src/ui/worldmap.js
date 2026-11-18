@@ -12,6 +12,8 @@ import { UI_W, UI_H } from '../view.js';
  * Everything is drawn at centre + spot (or centre - origin). Right-click goes back up a level.
  */
 const BX = 7, BY = 33, W = 654, H = 521;
+/** Where the map itself sits in the window (inside the frame): MOBILE UI draws just that. */
+export const MAP_BOX = { x: BX, y: BY, w: 640, h: 470 };
 /** The frame of an animation (its numbered frames, each held for its delay: 100ms when it has none) at `now`. */
 function animFrame(anim, now) {
   const frames = [];

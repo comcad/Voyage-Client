@@ -11,6 +11,10 @@
  *     yours, the mesos, who has confirmed, the trade's chat, TRADE and Cancel;
  *   - Maple Messenger: a panel on the left with the three seats (who sits there, standing), the room's chat, who is
  *     typing, and a line to type on; Invite, Report and Leave;
+ *   - the Quest Helper: a little tracker under the buttons (folding as its menu entry folds it), each quest's
+ *     objectives with how far along they are;
+ *   - the World Map (Find NPC's too): a large panel with the map as the window draws it, tapped to go into a region
+ *     or to see a spot's name, Back up a level;
  *   - invitations and notices (trade, party, guild, buddy, messenger, family, parcels, notes, quests): cards at the
  *     top with their own buttons, fading in and out as the balloons do.
  * The client's own windows stay open behind them and do all the work (WindowManager.skin keeps them from drawing or
@@ -24,6 +28,8 @@ import { NpcDialog, UtilBox, ShopWin, textRef, potionPrice } from './dialogs.js'
 import { TradeWin } from './trade.js';
 import { Balloon, QuestNotice } from './notifier.js';
 import { MessengerWin } from './messenger.js';
+import { QuestAlarmWin } from './questalarm.js';
+import { WorldMapWin, MAP_BOX } from './worldmap.js';
 import { richText, LIGHT_COLORS } from './richtext.js';
 
 /** The message boxes shown as cards (all of them, their name and group lists too). */
@@ -174,6 +180,39 @@ const CSS = `
 .mhud .mh-ms-seat.mh-empty-seat b { color: rgba(225, 232, 248, 0.4); font-weight: 600; }
 .mhud .mh-ms-seat i { position: absolute; top: 3px; right: 7px; font-style: normal; font-size: 16px; font-weight: 900; color: #fff; animation: mhud-pulse 0.9s ease-in-out infinite; }
 .mhud .mh-ms-typing { flex: none; min-height: 13px; font-size: 10px; color: rgba(225, 232, 248, 0.65); }
+
+/* the Quest Helper */
+.mhud .mh-qa { position: absolute; right: 4px; top: 50px; width: 236px; max-height: calc(100% - 112px - env(safe-area-inset-bottom)); display: flex;
+  flex-direction: column; padding: 5px 6px 6px 9px; pointer-events: auto; }
+.mhud.mh-sheeting .mh-qa, .mhud.mh-shopping .mh-qa, .mhud .mh-menu.mh-open ~ .mh-skins .mh-qa { display: none; }
+.mhud .mh-qa-head { flex: none; display: flex; align-items: center; gap: 5px; }
+.mhud .mh-qa-head b { font-size: 11px; font-weight: 800; white-space: nowrap; }
+.mhud .mh-qa-auto { flex: none; padding: 2px 7px; border-radius: 8px; font-size: 9px; font-weight: 800; color: rgba(225, 232, 248, 0.7); background: rgba(255, 255, 255, 0.08); cursor: pointer; }
+.mhud .mh-qa-auto.mh-on { color: #2e1d00; background: linear-gradient(180deg, #ffe58a, #f0b22e); }
+.mhud .mh-qa .mh-btn { width: 22px; height: 22px; font-weight: 900; font-size: 13px; }
+.mhud .mh-qa .mh-btn svg { width: 11px; height: 11px; }
+.mhud .mh-qa-body { flex: 1; min-height: 0; overflow-y: auto; margin-top: 4px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.mhud .mh-qa.mh-folded .mh-qa-body { display: none; }
+.mhud .mh-qa-q { display: flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 11px; font-weight: 800; color: #ffd978; }
+.mhud .mh-qa-q.mh-auto { color: #9fc6ff; }
+.mhud .mh-qa-q > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; padding: 2px 0; }
+.mhud .mh-qa-qx { flex: none; width: 20px; text-align: center; font-size: 14px; color: rgba(225, 232, 248, 0.6); cursor: pointer; }
+.mhud .mh-qa-r { display: flex; gap: 6px; padding: 1px 0 1px 8px; font-size: 10.5px; color: rgba(232, 237, 248, 0.88); }
+.mhud .mh-qa-r span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mhud .mh-qa-r em { flex: none; font-style: normal; font-weight: 700; }
+
+/* the World Map */
+.mhud .mh-wm { position: absolute; left: 50%; top: 6px; bottom: calc(50px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2;
+  width: min(760px, calc(100% - 12px - env(safe-area-inset-left) - env(safe-area-inset-right))); display: flex; flex-direction: column; gap: 6px;
+  padding: 8px; pointer-events: auto; animation: mh-fade 0.2s ease; }
+.mhud .mh-wm .mh-tr-head .mh-cta { height: 26px; padding: 0 12px; }
+.mhud.mh-mapping .mh-mm, .mhud.mh-mapping .mh-act, .mhud.mh-mapping .mh-menu, .mhud.mh-mapping .mh-qa { display: none; }
+.mhud .mh-wm-where { font-size: 11px; color: rgba(225, 232, 248, 0.65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mhud .mh-wm-stage { flex: 1; min-height: 0; display: grid; place-items: center; }
+.mhud .mh-wm-stage canvas { border-radius: 8px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12); image-rendering: pixelated; cursor: pointer; }
+.mhud .mh-wm-info { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-height: 18px; font-size: 11px; color: rgba(225, 232, 248, 0.75); }
+.mhud .mh-wm-info b { font-size: 12px; font-weight: 800; color: #ffd978; }
+.mhud .mh-wm-hint { color: rgba(225, 232, 248, 0.5); }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -231,6 +270,8 @@ export class MobileSkins {
     if (w instanceof TradeWin) return 'trade';
     if (w instanceof Balloon) return 'toast';
     if (w instanceof MessengerWin) return 'messenger';
+    if (w instanceof QuestAlarmWin) return 'questhelper';
+    if (w instanceof WorldMapWin) return 'worldmap';
     return null;
   }
   /** Each frame: a view for each window it stands in for (made, ticked, dropped as they open and close). */
@@ -252,15 +293,17 @@ export class MobileSkins {
     for (const [w, v] of this.views) if (!live.has(w)) { v.destroy(); this.views.delete(w); }
     this.npc.show(talk);
     this.npc.tick(now);
-    let shop = false, trade = false, chat = false;
+    let shop = false, trade = false, chat = false, map = false;
     for (const v of this.views.values()) {
       v.tick(now);
       if (v instanceof ShopView) shop = true; else if (v instanceof TradeView) trade = true; else if (v instanceof MessengerView) chat = true;
+      else if (v instanceof WorldMapView) map = true;
     }
     const c = this.hud.el.classList;
     if (c.contains('mh-shopping') !== shop) c.toggle('mh-shopping', shop);
     if (c.contains('mh-trading') !== trade) c.toggle('mh-trading', trade);
     if (c.contains('mh-messaging') !== chat) c.toggle('mh-messaging', chat);
+    if (c.contains('mh-mapping') !== map) c.toggle('mh-mapping', map);
   }
 
   // ---------------------------------------------------------------- pieces
@@ -774,4 +817,128 @@ class MessengerView {
   destroy() { this.el.remove(); if (this.sk.wm.order.includes(this.w)) this.w.field?.show(true); }
 }
 
-const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView, messenger: MessengerView };
+/** The Quest Helper's colours for how far along an objective is (made for its white rows), on the dark glass. */
+const QA_COLOR = (have, need) => { const p = (have * 100) / (need || 1); return p < 33 ? '#ff8a8a' : p < 66 ? '#ff8ad1' : p < 100 ? '#ffc266' : '#a6f08a'; };
+/**
+ * The Quest Helper as a little tracker under the buttons, through its window (kept open: its list, Auto, its 10
+ * minutes): "Quest Helper (n/5)", Auto, fold and clear; each quest's title (tapped: registered when Auto put it there,
+ * else opened in the Quests sheet; x leaves it out of Auto until you log on again) and its objectives.
+ */
+class QuestHelperView {
+  constructor(sk, w) {
+    this.sk = sk; this.w = w;
+    const n = this.el = el('div', 'mh-qa mh-glass');
+    n.innerHTML = `<div class="mh-qa-head"><b></b><span class="mh-sp"></span><span class="mh-qa-auto"></span><div class="mh-btn mh-qa-fold"></div>
+      <div class="mh-btn mh-qa-x" title="Clear">${X_ICON}</div></div><div class="mh-qa-body" data-scroll="y"></div>`;
+    n.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const $ = (q) => n.querySelector(q);
+    this.p = { title: $('.mh-qa-head b'), auto: $('.mh-qa-auto'), fold: $('.mh-qa-fold'), body: $('.mh-qa-body') };
+    sk.tap(this.p.auto, () => { w.state.auto = !w.state.auto; w.save(); this.at = 0; });
+    sk.tap(this.p.fold, () => { w.state.min = !w.state.min; w.save(); this.at = 0; });
+    sk.tap($('.mh-qa-x'), () => w.clearAll());
+    sk.el.append(n);
+  }
+  tick(now) {
+    this.w.update(0);   // Auto's quests going after 10 minutes, as its own draw (skipped) would
+    if (now - (this.at || 0) < 300 || this.sk.hud.busy) return;
+    this.at = now;
+    const w = this.w, s = w.state, list = w.entries();
+    const sig = JSON.stringify([s.min, s.auto, s.ids.length, list, this.sk.wm.namesVersion]);
+    if (sig === this.sig) return;
+    this.sig = sig;
+    this.p.title.textContent = `Quest Helper (${s.ids.length}/5)`;
+    this.p.auto.textContent = s.auto ? 'Auto on' : 'Auto off';
+    this.p.auto.classList.toggle('mh-on', !!s.auto);
+    this.p.fold.textContent = s.min || !list.length ? '+' : '\u2013';
+    this.el.classList.toggle('mh-folded', !!s.min || !list.length);
+    const body = this.p.body;
+    body.replaceChildren();
+    for (const e of list) {
+      const head = el('div', `mh-qa-q${e.blue ? ' mh-auto' : ''}`), name = el('span', null, e.name), x = el('span', 'mh-qa-qx', '\u00d7');
+      this.sk.tap(name, () => { if (w.isAutoAdded(e.id)) { w.keep(e.id); this.at = 0; } else this.sk.g.openQuest(e.id); });
+      this.sk.tap(x, () => {
+        w.excluded.add(e.id); w.remove(e.id);
+        this.sk.g.hud.message(`[${this.sk.g.quests.name(e.id)}] It has been excluded from the auto alarm and it will not be automatically reigstered until you re log-on`, '#bbbbbb');
+        this.at = 0;
+      });
+      head.append(name, x);
+      body.append(head);
+      for (const r of e.rows) {
+        const row = el('div', 'mh-qa-r'), right = el('em');
+        row.append(el('span', null, r.label));
+        if (r.status) { right.textContent = r.status.replace(/[()]/g, ''); right.style.color = r.status.includes('Incomplete') ? '#ff8a8a' : '#a6f08a'; }
+        else if (r.amount) { right.textContent = Number(r.amount).toLocaleString('en-US'); right.style.color = r.color === '#336600' ? '#a6f08a' : '#ff8a8a'; }
+        else { const h = el('b', null, String(r.have)); h.style.color = QA_COLOR(r.have, r.need); right.append(h, ` / ${r.need}`); }
+        row.append(right);
+        body.append(row);
+      }
+    }
+  }
+  destroy() { this.el.remove(); }
+}
+
+/**
+ * The World Map (and Find NPC's, from a quest) as a large panel over its window (kept open): the map as the window
+ * draws it - its base, spots, the path of the spot picked, where you, your party and your spouse are, a looked-for
+ * NPC's marks - scaled to fit; a tap goes into a region, or picks a spot and shows its name, street and words. Back
+ * goes up a level; the X closes it.
+ */
+class WorldMapView {
+  constructor(sk, w) {
+    this.sk = sk; this.w = w;
+    const n = this.el = el('div', 'mh-wm mh-glass');
+    n.innerHTML = `<div class="mh-tr-head"><span class="mh-sh-title">World Map</span><span class="mh-wm-where"></span><span class="mh-sp"></span>
+      <div class="mh-btn mh-sh-x" title="Close">${X_ICON}</div></div><div class="mh-wm-stage"><canvas></canvas></div><div class="mh-wm-info"></div>`;
+    n.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const $ = (q) => n.querySelector(q);
+    this.p = { where: $('.mh-wm-where'), stage: $('.mh-wm-stage'), cv: $('canvas'), info: $('.mh-wm-info') };
+    this.back = sk.button('Back', () => { this.spot = null; w.back(); });
+    $('.mh-tr-head').insertBefore(this.back, $('.mh-sh-x'));
+    sk.tap($('.mh-sh-x'), () => sk.wm.close(w));
+    sk.tap(this.p.cv, (e) => this.tapAt(e));
+    sk.el.append(n);
+  }
+  /** Where a tap lands on the map, in the window's own coordinates (its picking takes it from there). */
+  tapAt(e) {
+    const r = this.p.cv.getBoundingClientRect(), w = this.w;
+    if (!r.width || e.clientX === undefined) return;
+    const lx = MAP_BOX.x + ((e.clientX - r.left) / r.width) * MAP_BOX.w, ly = MAP_BOX.y + ((e.clientY - r.top) / r.height) * MAP_BOX.h;
+    const p = w.pick(lx, ly);
+    if (p?.link?.link?.linkMap) { sfx.play('UI/BtMouseClick'); this.spot = null; w.hover = null; w.show(p.link.link.linkMap); return; }
+    w.hover = p?.spot ? { spot: p.spot } : null;
+    this.spot = p?.spot ? w.tooltip(lx, ly) : null;
+    this.info();
+  }
+  info() {
+    const i = this.p.info, t = this.spot;
+    i.replaceChildren();
+    if (!t) { i.append(el('span', 'mh-wm-hint', 'Tap a region to go in, or a spot to see its name.')); return; }
+    i.append(el('b', null, t.title || ''));
+    for (const l of t.lines || []) if (l) i.append(el('span', null, l));
+  }
+  tick(now) {
+    const w = this.w, d = w.data;
+    if (this.drawnName !== w.name) { this.drawnName = w.name; this.spot = null; this.info(); }
+    this.back.disabled = !d?.info?.parentMap;
+    const label = d?.info?.parentMap ? '' : 'The whole world';
+    if (this.p.where.textContent !== label) this.p.where.textContent = label;
+    if (now - (this.drawn || 0) < 66) return;   // (its marks bob: about 15 frames a second)
+    this.drawn = now;
+    // the biggest it fits in its stage, at the map's own shape
+    const st = this.p.stage, sw = st.clientWidth, sh = st.clientHeight;
+    if (!sw || !sh) return;
+    const k = Math.min(sw / MAP_BOX.w, sh / MAP_BOX.h), cw = Math.floor(MAP_BOX.w * k), ch = Math.floor(MAP_BOX.h * k);
+    const cv = this.p.cv, dpr = Math.min(3, globalThis.devicePixelRatio || 1);
+    if (cv.width !== Math.round(cw * dpr) || cv.height !== Math.round(ch * dpr)) {
+      cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr); cv.style.width = `${cw}px`; cv.style.height = `${ch}px`;
+    }
+    const ctx = cv.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.setTransform(k * dpr, 0, 0, k * dpr, -MAP_BOX.x * k * dpr, -MAP_BOX.y * k * dpr);
+    ctx.save(); ctx.beginPath(); ctx.rect(MAP_BOX.x, MAP_BOX.y, MAP_BOX.w, MAP_BOX.h); ctx.clip();
+    try { w.body(ctx); } finally { ctx.restore(); }
+  }
+  destroy() { this.el.remove(); }
+}
+
+const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView, messenger: MessengerView, questhelper: QuestHelperView, worldmap: WorldMapView };

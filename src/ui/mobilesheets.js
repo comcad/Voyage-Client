@@ -16,6 +16,7 @@
  *   - Game Options: its rows as switches; Change Channel: the channels to tap (yours marked);
  *   - Key Setting: its Touch and Controller tabs (no keyboard part here): the touch controls on a little screen to
  *     drag about, the controller's buttons, and for the one picked what it does, from the functions, skills or items.
+ *   - the community window, Party Search, Family, Medals and the Monster Book, through their own windows.
  * Item and skill icons are the game's own.
  */
 import { EXP, jobName, itemDesc, isScroll, itemKeyType } from '../data.js';
@@ -28,6 +29,7 @@ import { BUTTON, STICK } from './keyconfig-tabs.js';
 import { bindingLabel, PAD_BUTTONS, TOUCH_MAX_BUTTONS } from '../controls.js';
 import { GROUPS as PS_GROUPS, ALL_BITS as PS_ALL } from './partysearch.js';
 import { ICONS as FAMILY_ICONS } from './family.js';
+import { endedText } from './medal.js';
 
 const INV_TABS = [[1, 'Equip'], [2, 'Use'], [3, 'Set-up'], [4, 'Etc'], [5, 'Cash']];
 const EQ_STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK'], ['hp', 'MaxHP'], ['mp', 'MaxMP'], ['watk', 'Weapon Attack'],
@@ -43,9 +45,13 @@ const STATS = [['str', 'STR'], ['dex', 'DEX'], ['int', 'INT'], ['luk', 'LUK']];
 const STARTERS = [0, 1000, 2000, 2001];
 const QUEST_TABS = [[0, 'Available'], [1, 'In Progress'], [2, 'Completed']];
 const TITLES = { items: 'Inventory', equip: 'Equipment', stats: 'Character', skills: 'Skills', quests: 'Quests', sysopt: 'System Options',
-  keys: 'Key Setting', gameopt: 'Game Options', channel: 'Change Channel', community: 'Community', partysearch: 'Party Search', family: 'Family' };
+  keys: 'Key Setting', gameopt: 'Game Options', channel: 'Change Channel', community: 'Community', partysearch: 'Party Search', family: 'Family', medal: 'Medals', monsterbook: 'Monster Book' };
 /** Sheets standing for a window with its own open / close (what Cancel goes back to, the touch controls held): its name. */
-const WINDOW_OF = { sysopt: 'sysopt', keys: 'keyconfig', gameopt: 'gameopt', channel: 'channel', family: 'family' };
+const WINDOW_OF = { sysopt: 'sysopt', keys: 'keyconfig', gameopt: 'gameopt', channel: 'channel', family: 'family', medal: 'medal' };
+const MEDAL_TABS = [[0, 'Basic'], [1, 'Job'], [2, 'General'], [3, 'Challenge'], [4, 'Event']];
+/** The Monster Book's sets of cards (the card id's thousands digit; 8 the special ones), after its summary (9). */
+const BOOK_TABS = [[9, 'Info'], ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => [i, String(i + 1)]), [8, 'Special']];
+const BOOK_PAGES = [['Basic', 1], ['Episode', 3], ['Drops', 4], ['Found in', 5]];
 /** The community window's tabs, and each tab's buttons (its own, by name) with the words on their art. */
 const COMMUNITY_TABS = [[0, 'Buddies'], [1, 'Party'], [2, 'Guild'], [3, 'Alliance'], [4, 'Blacklist']];
 const COMMUNITY_TOOLS = [['add', 'Add Buddy'], ['group', 'Add Group'], ['online', 'Online only'], ['all', 'Show all']];
@@ -247,6 +253,10 @@ html.touch-device .mhud .mh-sheet .mh-tp, html.touch-device .mhud .mh-sheet .mh-
 .mhud .mh-ps-state { flex: 1; align-self: center; font-size: 10.5px; color: rgba(225, 232, 248, 0.75); }
 .mhud .mh-priv .mh-li-sub:last-child { white-space: normal; }
 .mhud .mh-priv .mh-cta { flex: none; height: 26px; padding: 0 12px; }
+/* Medals, Monster Book */
+.mhud .mh-cell.mh-faint img { opacity: 0.28; filter: grayscale(0.6); }
+.mhud .mh-qd .mh-ctas button.mh-tab { border: 0; font-family: inherit; }
+.mhud .mh-qd .mh-ctas button.mh-tab:disabled { opacity: 0.35; cursor: default; }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -278,7 +288,8 @@ export class MobileSheets {
     this.p = { title: $('.mh-sh-title'), extra: $('.mh-sh-extra'), tabs: $('.mh-sh-tabs'), banner: $('.mh-sh-banner'), body: $('.mh-sh-body'), detail: $('.mh-sh-detail') };
     hud.tap($('.mh-sh-x'), () => this.closeAsked());
     this.kind = null; this.sig = '';
-    this.tab = { items: 1, equip: 'worn', quests: 1, keys: 'touch', community: 0, ps: 1, family: 'info' }; this.book = null;
+    this.tab = { items: 1, equip: 'worn', quests: 1, keys: 'touch', community: 0, ps: 1, family: 'info', medal: 0, mbook: 9 }; this.book = null;
+    this.mtab = 0;       // the Monster Book card's page (Basic, Episode, Drops, Found in)
     this.kpick = null;   // Key Setting: the touch button's id or controller button picked
     this.ksrc = 'fn';    // Key Setting: what the bindings to choose from are (functions, skills, items)
     this.sel = null;     // the item slot, equipment slot, skill or quest picked
@@ -293,7 +304,8 @@ export class MobileSheets {
   /** MENU ids the sheets stand in for. */
   static kindOf(m, MENU) {
     return { [MENU.ITEMS]: 'items', [MENU.EQUIP]: 'equip', [MENU.STATS]: 'stats', [MENU.SKILLS]: 'skills', [MENU.QUESTS]: 'quests', [MENU.KEYS]: 'keys',
-      [MENU.BUDDY]: 'community', [MENU.PARTY]: 'community', [MENU.GUILD]: 'community', [MENU.PARTY_SEARCH]: 'partysearch', [MENU.FAMILY]: 'family' }[m] || null;
+      [MENU.BUDDY]: 'community', [MENU.PARTY]: 'community', [MENU.GUILD]: 'community', [MENU.PARTY_SEARCH]: 'partysearch', [MENU.FAMILY]: 'family',
+      [MENU.MEDAL]: 'medal', [MENU.MONSTERBOOK]: 'monsterbook' }[m] || null;
   }
   /** The community tab a MENU id opens (Buddy, Party, Guild), or undefined. */
   static communityTab(m, MENU) { return COMMUNITY_OF(m, MENU); }
@@ -362,6 +374,15 @@ export class MobileSheets {
     if (this.kind === 'partysearch') {
       const w = this.wm.wins.partysearch;
       return `${base}|${this.tab.ps}|${w?.state}|${[...(w?.bits || [])]}|${w?.leader}|${['min', 'max', 'members'].map((k) => w?.fields[k].value)}`;
+    }
+    if (this.kind === 'medal') {
+      const w = this.wm.wins.medal, qw = this.wm.wins.quest, m = this.sel && w?.medals().find((x) => x.id === this.sel);
+      return `${base}|${this.tab.medal}|${w?.area}|${[...(w?.folded || [])]}|${(w?.medals() || []).map((x) => `${x.id}:${x.state}`).join(',')}|${g.inventory?.equipped?.[-49]?.id}`
+        + `|${m ? qw?.portraits?.get(m.npc)?.length || 0 : ''}|${m ? JSON.stringify(g.quests?.records?.[m.id] ?? '') : ''}`;
+    }
+    if (this.kind === 'monsterbook') {
+      const w = this.wm.wins.monsterbook, b = g.monsterBook || {};
+      return `${base}|${this.tab.mbook}|${this.mtab}|${!!w?.cards}|${w?.art?.mob}|${b.cover}|${Object.entries(b.cards || {}).map((e) => e.join(':')).join(',')}`;
     }
     if (this.kind === 'family') {
       const t = this.wm.wins.familytree;
@@ -1130,6 +1151,174 @@ export class MobileSheets {
     }
     this.p.detail.append(a);
     return out;
+  }
+
+  // ---------------------------------------------------------------- Medals
+  /**
+   * The Medal window's medals (its quests of the Title area, through its own lists): Basic the ones you have (the one
+   * you wear marked), the others a category's, in progress and obtainable; a medal picked slides out its panel, as
+   * the window's does: its NPC standing, its limits or when you got it, its text, Find NPC, and a Challenge medal's
+   * Start / Give up.
+   */
+  medal() {
+    const g = this.g, w = this.wm.wins.medal, out = el('div', 'mh-list');
+    if (!w) return out;
+    if (w.area === undefined && !this.medalLoading) { this.medalLoading = true; w.load().then(() => { this.medalLoading = false; this.sig = ''; }); }
+    const tab = this.tab.medal;
+    this.tabs(MEDAL_TABS, tab, (k) => { this.tab.medal = k; });
+    w.tab = tab;
+    const rows = w.rows(), worn = g.inventory?.equipped?.[-49]?.id;
+    if (tab === 0) out.append(el('div', 'mh-sec', `Number of medals obtained: ${rows.length}`));
+    if (!rows.length) out.append(el('div', 'mh-empty', w.area === undefined ? 'Loading the medals...' : tab === 0 ? 'No medals yet.' : 'No medals here right now.'));
+    for (const r of rows) {
+      if (r.kind === 'head') {
+        const open = !w.folded.has(`${tab - 1}:${r.group}`), h = el('div', 'mh-grp'), fold = el('span', 'mh-fold', open ? '\u25be' : '\u25b8');
+        h.append(fold, el('span', null, `${['Title being challenged', 'Obtainable Title'][r.group]} (${r.n})`));
+        this.hud.tap(h, () => { w.fold(r.group, open); this.render(); });
+        out.append(h);
+        continue;
+      }
+      const li = el('div', `mh-li${this.sel === r.id ? ' mh-sel' : ''}`), main = el('div', 'mh-li-main');
+      li.append(this.itemImg(r.item));
+      main.append(el('div', 'mh-li-name', `${r.name}${tab === 0 && worn && worn === r.item ? ' \u00b7 wearing' : ''}`),
+        el('div', 'mh-li-sub', r.state === 2 ? endedText(g.quests.completed[r.id]) : w.limits(r.id).filter(Boolean).join(' \u00b7 ')));
+      li.append(main);
+      this.hud.tap(li, () => { this.sel = this.sel === r.id ? null : r.id; this.render(); });
+      out.append(li);
+    }
+    const m = this.sel && w.medals().find((x) => x.id === this.sel);
+    if (m) this.medalPanel(w, m);
+    return out;
+  }
+  medalPanel(w, m) {
+    const g = this.g, q = this.qp, qw = this.wm.wins.quest;
+    this.questShown = true;
+    q.dot.className = `mh-qd-dot mh-q${m.state === 2 ? 2 : m.state === 1 ? 1 : 0}`;
+    q.title.textContent = m.name;
+    const lv = m.state === 2 ? endedText(g.quests.completed[m.id]) : w.limits(m.id).filter(Boolean).join(' \u00b7 ');
+    q.lv.textContent = lv; q.lv.style.display = lv ? '' : 'none';
+    q.npc.replaceChildren(el('b', null, w.npcNames?.[m.npc]?.name || ''), el('span', null, ['Not started', 'In progress', 'Obtained'][m.state] || ''));
+    if (qw) this.npcStage(qw, m.npc);
+    q.acts.replaceChildren(this.button('Find NPC', async () => {
+      const maps = Object.values(w.npcMaps?.[m.npc] || {}).map(Number).filter(Boolean), WorldMap = this.wm.wins.worldmap?.constructor;
+      if (!maps.length || !(await WorldMap?.searchNpc(this.wm, maps))) this.wm.notice('This NPC is located at a spot not\navailable through the World Map.');
+    }));
+    if (m.cat === 2 && m.state === 0) q.acts.append(this.button('Start', () => { w.sel = m.id; w.startMedal(); }, 'mh-main'));
+    if (m.cat === 2 && m.state === 1) q.acts.append(this.button('Give up', () => { w.sel = m.id; w.giveUp(); }, 'mh-warn'));
+    // its text for where you are in it (the data's breaks), and while it runs its summary
+    const info = g.quests.info[m.id] || {};
+    let text = String(info[m.state] ?? '').replace(/\\r\\n/g, '\n\n').replace(/\\n/g, '\n');
+    if (m.state === 1) { const sum = ['summary', 'demandSummary', 'rewardSummary'].map((k) => String(info[k] ?? '')).filter(Boolean); if (sum.length) text += `\n${sum.join('\n')}`; }
+    const keep = this.qShownId === `m${m.id}` ? q.body.scrollTop : 0;
+    q.body.replaceChildren();
+    if (text && qw) q.body.append(this.rich(el('div', 'mh-dt-text'), text, qw.ref()));
+    q.body.scrollTop = keep; this.qShownId = `m${m.id}`;
+  }
+
+  // ---------------------------------------------------------------- Monster Book
+  /**
+   * The Monster Book through its window (its cards, sets, level and choices): the summary (level, cards, the cover
+   * monster, a search by name), or a set of cards (faint until you have one, with how many); a card picked slides out
+   * its panel: the monster, its level, HP and MP, its pages (Basic, Episode, Drops, Found in) as your cards open them,
+   * and Register / Release as the book's cover.
+   */
+  monsterbook() {
+    const g = this.g, w = this.wm.wins.monsterbook, out = el('div');
+    if (!w) return out;
+    const tab = this.tab.mbook;
+    this.tabs(BOOK_TABS, tab, (k) => { this.tab.mbook = k; });
+    if (!w.cards) { out.append(el('div', 'mh-empty', 'Loading the Monster Book...')); return out; }
+    const book = w.book;
+    if (tab === 9) {
+      const lv = w.level(), ids = Object.keys(book.cards).map(Number), special = ids.filter((id) => id >= 2388000).length;
+      const head = el('div', 'mh-dt-head');
+      head.append(this.img(w.B.icon?.[lv - 1]));
+      const t = el('div'); t.append(el('div', 'mh-dt-name', `Book Level ${lv}`), el('div', 'mh-dt-sub', `${ids.length} kinds of cards collected`));
+      head.append(t); out.append(head);
+      const kv = (label, value) => { const r = el('div', 'mh-kv'); r.append(el('span', null, label), el('em', null, String(value))); out.append(r); };
+      kv('Normal cards', ids.length - special); kv('Special cards', special); kv('Cover', w.cards[book.cover]?.name || 'None');
+      out.append(el('div', 'mh-sec', 'Find a monster'));
+      const row = el('div', 'mh-bx-row'), i = el('input', 'mh-in');
+      Object.assign(i, { type: 'text', placeholder: 'Monster name', autocomplete: 'off', spellcheck: false });
+      const find = () => {
+        const q = i.value.replace(/ /g, '').toLowerCase();
+        if (!q) return;
+        const all = Object.values(w.cards), hit = all.find((c) => c.name.replace(/ /g, '').toLowerCase() === q) || all.find((c) => c.name.replace(/ /g, '').toLowerCase().includes(q));
+        if (!hit) { this.wm.notice('No monster with that name was found.'); return; }
+        i.blur(); w.choose(hit.id); this.tab.mbook = hit.cat; this.sel = hit.id; this.mtab = 0; this.p.body.scrollTop = 0; this.render();
+      };
+      i.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') find(); });
+      for (const t2 of ['keyup', 'keypress', 'pointerdown']) i.addEventListener(t2, (e) => e.stopPropagation());
+      row.append(i, this.button('Find', find, 'mh-main'));
+      out.append(row);
+      return out;
+    }
+    const list = w.cats[tab] || [], owned = list.filter((id) => w.count(id)).length, grid = el('div', 'mh-grid');
+    out.append(el('div', 'mh-sec', `${owned} / ${list.length} cards`));
+    for (const id of list) {
+      const c = w.cards[id], n = w.count(id), cell = el('div', `mh-cell${this.sel === id ? ' mh-sel' : ''}${n ? '' : ' mh-faint'}`);
+      cell.title = c.name;
+      cell.append(this.img(c.icon));
+      if (n) cell.append(el('b', null, String(n)));
+      this.hud.tap(cell, () => { this.sel = this.sel === id ? null : id; if (this.sel) { w.choose(id); this.mtab = 0; } this.render(); });
+      grid.append(cell);
+    }
+    out.append(grid);
+    if (this.sel && w.cards[this.sel]) this.monsterPanel(w, w.cards[this.sel]);
+    return out;
+  }
+  monsterPanel(w, c) {
+    const g = this.g, q = this.qp, n = w.count(c.id), a = w.art?.mob === c.mob ? w.art : null, info = a?.info || {};
+    this.questShown = true;
+    q.dot.className = `mh-qd-dot mh-q${n >= 5 ? 2 : n ? 1 : 0}`;
+    q.title.textContent = c.name;
+    q.lv.textContent = n ? `Lv. ${info.level ?? '?'} \u00b7 HP ${n > 1 ? info.maxHP ?? '???' : '???'} \u00b7 MP ${n > 1 ? info.maxMP ?? '???' : '???'}` : 'You do not have this card yet.';
+    q.lv.style.display = '';
+    // the monster on the stage, made smaller to fit when it is big
+    clearTimeout(this.npcTimer); this.stageNpc = null;
+    q.stage.replaceChildren();
+    const f = n ? a?.frame : null;
+    if (f?._canvas) {
+      const im = el('img'), o = f.origin || [(f._w || 0) / 2, f._h || 0], k = Math.min(1, 86 / (f._w || 1), 88 / (f._h || 1));
+      im.alt = ''; im.draggable = false; im.src = `${g.assets.base}/${f._canvas}`;
+      Object.assign(im.style, { width: `${(f._w || 0) * k}px`, height: `${(f._h || 0) * k}px`, left: `${46 - o[0] * k}px`, top: `${88 - o[1] * k}px` });
+      q.stage.append(im);
+    }
+    const gauge = el('div', 'mh-qd-gauge'), fill = el('i');
+    fill.style.width = `${Math.min(1, n / 5) * 100}%`; gauge.append(fill);
+    q.npc.replaceChildren(el('b', null, `Cards ${Math.min(n, 5)} / 5`), gauge, el('small', null, w.book.cover === c.id ? 'The book\'s cover' : 'More cards open more pages'));
+    // its pages, as your cards open them; the book's cover
+    q.acts.replaceChildren();
+    if (n < BOOK_PAGES[this.mtab][1]) this.mtab = 0;
+    BOOK_PAGES.forEach(([label, need], i) => {
+      const b = el('button', `mh-tab${i === this.mtab ? ' mh-on' : ''}`, label);
+      b.type = 'button'; b.disabled = n < need;
+      this.hud.tap(b, () => { if (n >= need) { this.mtab = i; this.render(); } });
+      q.acts.append(b);
+    });
+    if (n && w.book.cover !== c.id) q.acts.append(this.button('Register', () => g.net?.bookCover(c.id), 'mh-main'));
+    if (w.book.cover) q.acts.append(this.button('Release', () => g.net?.bookCover(0)));
+    const body = q.body;
+    body.replaceChildren();
+    if (this.mtab === 1) body.append(el('div', 'mh-dt-text', plain(String(c.episode || '').replace(/\\r/g, '')) || 'No episode is recorded for this monster.'));
+    else if (this.mtab === 2) {
+      if (!c.rewards.length) body.append(el('div', 'mh-empty', 'No drops are recorded for this monster.'));
+      const grid = el('div', 'mh-grid');
+      for (const id of c.rewards) { const cell = el('div', 'mh-cell'); cell.title = this.wm.itemName(id) || ''; cell.append(this.itemImg(id)); grid.append(cell); }
+      body.append(grid);
+    } else if (this.mtab === 3) {
+      const rows = (w.where || []).flat();
+      if (!rows.length) body.append(el('div', 'mh-empty', 'No locations are recorded for this monster.'));
+      for (const r of rows) body.append(el('div', r.head ? 'mh-sec' : 'mh-dt-text', r.text));
+    } else body.append(el('div', 'mh-dt-text', n ? `${c.name}: ${n} card${n > 1 ? 's' : ''}.` : 'Hunt this monster for its card.'));
+  }
+  /** A quest opened from elsewhere (the Quest Helper, a notice): the Quests sheet on its tab, with it picked. */
+  openQuest(id) {
+    const st = this.g.quests?.status(id) ?? 0;
+    this.tab.quests = st === 1 ? 1 : st === 2 ? 2 : 0; this.qCache = null;
+    this.show('quests');
+    this.sel = id;
+    this.render();
   }
 
   // ---------------------------------------------------------------- Quests
