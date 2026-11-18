@@ -60,6 +60,11 @@ export function applyResolution() {
   document.body?.classList.toggle('fit-screen', !!settings.fit && !portrait());   // System Option FIT TO SCREEN (4:3 upright)
 }
 applyResolution();
-// a phone turned before the game is up (the login screen, held upright first): the view takes its new shape then too
-// (the game, once up, follows every resize itself)
-globalThis.matchMedia?.('(orientation: portrait)').addEventListener?.('change', () => applyResolution());
+// a phone turned (or its browser bars coming or going) before the game is up - the login screen, held upright first:
+// the view takes its new shape then too. Every resize, a frame later: a phone tells of its turn before its new size
+// is known (the game, once up, follows every resize itself and takes the shape as it starts)
+let reshaping = 0;
+const reshape = () => { if (!reshaping) reshaping = requestAnimationFrame(() => { reshaping = 0; applyResolution(); }); };
+addEventListener('resize', reshape);
+globalThis.visualViewport?.addEventListener('resize', reshape);
+globalThis.matchMedia?.('(orientation: portrait)').addEventListener?.('change', reshape);

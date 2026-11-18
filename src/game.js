@@ -6342,6 +6342,7 @@ export class Game {
     }
   }
   start() {
+    this.setResolution();   // the window's shape as it is now (FIT TO SCREEN), whatever it was while logging in
     // the server has a newer build than this page is running (it keeps the one it loaded until it is reloaded): said
     // once in the chat, looked for every minute and when the tab comes back
     const newer = async () => {
