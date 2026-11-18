@@ -15,10 +15,14 @@
  *     objectives with how far along they are;
  *   - the World Map (Find NPC's too): a large panel with the map as the window draws it, tapped to go into a region
  *     or to see a spot's name, Back up a level;
+ *   - a player's info (a double tap on them): who they are, standing, with Party, Trade, Family and fame, and their
+ *     equipment, wish list, pets, mount and Monster Book;
  *   - invitations and notices (trade, party, guild, buddy, messenger, family, parcels, notes, quests): cards at the
  *     top with their own buttons, fading in and out as the balloons do.
  * The client's own windows stay open behind them and do all the work (WindowManager.skin keeps them from drawing or
- * taking the pointer), so every answer, check and prompt is theirs; only the look and the place differ.
+ * taking the pointer), so every answer, check and prompt is theirs; only the look and the place differ. Should one of
+ * its views fail on what it is given, that window goes back to the client's own look rather than to nothing, and the
+ * rest carry on.
  */
 import { settings } from '../settings.js';
 import { invType, itemDesc } from '../data.js';
@@ -30,6 +34,8 @@ import { Balloon, QuestNotice } from './notifier.js';
 import { MessengerWin } from './messenger.js';
 import { QuestAlarmWin } from './questalarm.js';
 import { WorldMapWin, MAP_BOX } from './worldmap.js';
+import { CharInfoWin } from './social.js';
+import { jobName } from '../data.js';
 import { richText, LIGHT_COLORS } from './richtext.js';
 
 /** The message boxes shown as cards (all of them, their name and group lists too). */
@@ -213,6 +219,22 @@ const CSS = `
 .mhud .mh-wm-info { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-height: 18px; font-size: 11px; color: rgba(225, 232, 248, 0.75); }
 .mhud .mh-wm-info b { font-size: 12px; font-weight: 800; color: #ffd978; }
 .mhud .mh-wm-hint { color: rgba(225, 232, 248, 0.5); }
+
+/* a player's info */
+.mhud .mh-pi { position: absolute; left: 50%; top: 6px; transform: translateX(-50%); z-index: 2;
+  width: min(560px, calc(100% - 24px - env(safe-area-inset-left) - env(safe-area-inset-right))); max-height: calc(100% - 56px - env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 6px; padding: 8px; pointer-events: auto; animation: mh-fade 0.2s ease; }
+.mhud .mh-pi-top { flex: none; display: flex; gap: 12px; align-items: stretch; }
+.mhud .mh-pi-side { flex: none; width: 108px; display: flex; flex-direction: column; align-items: center; gap: 5px; }
+.mhud .mh-pi-facts { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.mhud .mh-pi .mh-kv em { display: flex; align-items: center; gap: 6px; }
+.mhud .mh-pi .mh-minus { background: linear-gradient(180deg, #c9d4ea, #8d9bb8); }
+.mhud .mh-pi-acts { flex: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.mhud .mh-pi-acts:empty { display: none; }
+.mhud .mh-pi-tabs { flex: none; }
+.mhud .mh-pi button.mh-tab { border: 0; font-family: inherit; }
+.mhud .mh-pi-body { flex: 1; min-height: 60px; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.mhud .mh-pi-body .mh-cta { flex: none; height: 26px; padding: 0 12px; }
 `;
 
 const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text !== undefined) n.textContent = text; return n; };
@@ -254,7 +276,8 @@ export class MobileSkins {
     hud.el.append(this.el);
     this.views = new Map();   // window -> its view (the conversation has the one panel, reused page to page)
     this.descs = new Map(); this.descV = 0;
-    this.skinned = (w) => this.active && !!this.kindOf(w);
+    this.broken = new WeakSet();   // windows whose view failed: drawn as the client's own again
+    this.skinned = (w) => this.active && !this.broken.has(w) && !!this.kindOf(w);
     const loop = () => {
       try { this.sync(); } catch (e) { if (!this.failed) { this.failed = true; console.error('MOBILE UI windows', e); } }
       requestAnimationFrame(loop);
@@ -272,7 +295,14 @@ export class MobileSkins {
     if (w instanceof MessengerWin) return 'messenger';
     if (w instanceof QuestAlarmWin) return 'questhelper';
     if (w instanceof WorldMapWin) return 'worldmap';
+    if (w instanceof CharInfoWin) return 'charinfo';
     return null;
+  }
+  /** A view that failed: its window goes back to the client's own look (said once in the console, by its kind). */
+  fail(w, what, e) {
+    if (w) this.broken.add(w);
+    (this.reported ??= new Set());
+    if (!this.reported.has(what)) { this.reported.add(what); console.error(`MOBILE UI ${what} failed: the window is shown as the client's own`, e); }
   }
   /** Each frame: a view for each window it stands in for (made, ticked, dropped as they open and close). */
   sync() {
@@ -284,18 +314,18 @@ export class MobileSkins {
     if (on) {
       for (const w of wm.order) {
         const k = this.kindOf(w);
-        if (!k) continue;
+        if (!k || this.broken.has(w)) continue;
         if (k === 'npc') { talk = w; continue; }
         live.add(w);
-        if (!this.views.has(w)) this.views.set(w, new VIEWS[k](this, w));
+        if (!this.views.has(w)) { try { this.views.set(w, new VIEWS[k](this, w)); } catch (e) { live.delete(w); this.fail(w, k, e); } }
       }
     }
-    for (const [w, v] of this.views) if (!live.has(w)) { v.destroy(); this.views.delete(w); }
-    this.npc.show(talk);
-    this.npc.tick(now);
+    for (const [w, v] of this.views) if (!live.has(w)) { try { v.destroy(); } catch { /* gone anyway */ } this.views.delete(w); }
+    // each on its own: one failing never holds back the others (a request card waiting on its tick to show or time out)
+    try { this.npc.show(talk); this.npc.tick(now); } catch (e) { const w = this.npc.w; this.npc.show(null); this.fail(w, 'npc', e); }
     let shop = false, trade = false, chat = false, map = false;
-    for (const v of this.views.values()) {
-      v.tick(now);
+    for (const [w, v] of this.views) {
+      try { v.tick(now); } catch (e) { try { v.destroy(); } catch { /* gone anyway */ } this.views.delete(w); this.fail(w, v.constructor.name, e); continue; }
       if (v instanceof ShopView) shop = true; else if (v instanceof TradeView) trade = true; else if (v instanceof MessengerView) chat = true;
       else if (v instanceof WorldMapView) map = true;
     }
@@ -378,16 +408,18 @@ class Stage {
     };
     show();
   }
-  look(g) {
-    if (!g.look) return;
+  /** Someone standing: you (g.look), or another's look. */
+  look(g, look = g.look) {
+    if (!look) return;
     const now = performance.now();
-    if (this.cv && now - this.drawn < 250) return;   // (its parts may still be coming in)
+    if (this.cv && this.drawnLook === look && now - this.drawn < 250) return;   // (its parts may still be coming in)
+    this.drawnLook = look;
     if (!this.cv) { this.stop(); this.cv = el('canvas'); this.box.append(this.cv); }
     const W = this.box.clientWidth || 108, H = this.box.clientHeight || 112, dpr = Math.min(3, globalThis.devicePixelRatio || 1), cv = this.cv;
     if (cv.width !== Math.round(W * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); Object.assign(cv.style, { left: '0', top: '0', width: `${W}px`, height: `${H}px` }); }
     const ctx = cv.getContext('2d');
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.imageSmoothingEnabled = false; ctx.clearRect(0, 0, W, H);
-    drawParts(ctx, g.assets, g.look.compose(g.look.standAction(), 0), this.fx, this.fy, false);
+    drawParts(ctx, g.assets, look.compose(look.standAction(), 0), this.fx, this.fy, false);
     this.drawn = now;
   }
 }
@@ -941,4 +973,115 @@ class WorldMapView {
   destroy() { this.el.remove(); }
 }
 
-const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView, messenger: MessengerView, questhelper: QuestHelperView, worldmap: WorldMapView };
+/**
+ * A player's info (a double tap on them, or yours) over its window: the character standing with the name under it,
+ * their level, job, fame (+ / - as the window allows), guild and alliance; Party, Trade and Family as the window's
+ * (Family opening MOBILE UI's own sheet); and their equipment, wish list (Present), pets, mount and Monster Book.
+ */
+const PI_TABS = [['item', 'Equipment'], ['wish', 'Wish List'], ['pet', 'Pets'], ['mount', 'Mount'], ['book', 'Monster Book']];
+class PlayerInfoView {
+  constructor(sk, w) {
+    this.sk = sk; this.w = w; this.tab = w.info.pets?.length ? 'pet' : 'item';
+    const n = this.el = el('div', 'mh-pi mh-glass');
+    n.innerHTML = `<div class="mh-tr-head"><span class="mh-sh-title">Character Info</span><span class="mh-sp"></span>
+      <div class="mh-btn mh-sh-x" title="Close">${X_ICON}</div></div>
+      <div class="mh-pi-top"><div class="mh-pi-side"><div class="mh-stage"></div><div class="mh-name"></div></div><div class="mh-pi-facts"></div></div>
+      <div class="mh-pi-acts"></div><div class="mh-seg mh-pi-tabs"></div><div class="mh-pi-body mh-list" data-scroll="y"></div>`;
+    n.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const $ = (q) => n.querySelector(q);
+    this.p = { stage: $('.mh-stage'), name: $('.mh-name'), facts: $('.mh-pi-facts'), acts: $('.mh-pi-acts'), tabs: $('.mh-pi-tabs'), body: $('.mh-pi-body') };
+    this.stage = new Stage(this.p.stage, 54, 104);
+    sk.tap($('.mh-sh-x'), () => sk.wm.close(w));
+    const g = sk.g, other = w.info.id !== g.player.id;
+    if (other) {
+      this.p.acts.append(sk.button('Party', () => { if (g.party && g.party.leader === g.player.id) g.net?.partyOp(4, w.name()); else g.hud?.message('Only a party leader can invite.', '#ff9e9e'); }, 'mh-main'),
+        sk.button('Trade', () => { const rp = g.others.get(w.info.id); if (rp) g.requestTrade(rp); }));
+    }
+    this.p.acts.append(sk.button('Family', () => {
+      const sh = sk.hud.sheets, name = w.name();
+      sk.wm.close(w);
+      if (name === g.player.name) sh.show('family');
+      else { sh.tab.family = 'tree'; sk.wm.wins.familytree?.load(name); sh.show('family'); }
+    }));
+    sk.el.append(n);
+  }
+  tick(now) {
+    const w = this.w, g = this.sk.g, i = w.info, look = i.id === g.player.id ? g.look : g.others.get(i.id)?.look;
+    if (look) this.stage.look(g, look);
+    if (now - (this.at || 0) < 250 || this.sk.hud.busy) return;
+    this.at = now;
+    const sig = JSON.stringify([i, w.name(), this.tab, this.sk.wm.namesVersion, !!w.commodity, w.fameUp.enabled]);
+    if (sig === this.sig) return;
+    this.sig = sig;
+    this.render();
+  }
+  render() {
+    const w = this.w, sk = this.sk, g = sk.g, i = w.info, p = this.p, wm = sk.wm;
+    p.name.textContent = `${i.married ? '\u2665 ' : ''}${w.name()}`;
+    const kv = (label, ...value) => { const r = el('div', 'mh-kv'), e = el('em'); e.append(...value); r.append(el('span', null, label), e); return r; };
+    const fame = [String(i.fame)];
+    if (w.fameUp.enabled) {
+      const up = el('button', 'mh-plus', '+'), down = el('button', 'mh-plus mh-minus', '\u2212');
+      up.type = down.type = 'button';
+      sk.tap(up, () => g.giveFame(w.name(), 1)); sk.tap(down, () => g.giveFame(w.name(), 0));
+      fame.push(up, down);
+    }
+    p.facts.replaceChildren(kv('Level', String(i.level)), kv('Job', jobName(i.job)), kv('Fame', ...fame), kv('Guild', i.guild || '-'), kv('Alliance', i.alliance || '-'));
+    // the lists, one at a time
+    p.tabs.replaceChildren(...PI_TABS.map(([k, label]) => {
+      const b = el('button', `mh-tab${k === this.tab ? ' mh-on' : ''}`, label);
+      b.type = 'button';
+      sk.tap(b, () => { this.tab = k; this.sig = ''; this.at = 0; });
+      return b;
+    }));
+    const body = p.body, keep = this.shownTab === this.tab ? body.scrollTop : 0;
+    body.replaceChildren();
+    const row = (icon, name, sub, extra) => {
+      const r = el('div', 'mh-li'), m = el('div', 'mh-li-main');
+      if (icon !== undefined) { const c = el('div', 'mh-ico'); c.append(sk.img(icon)); r.append(c); }
+      m.append(el('div', 'mh-li-name', name)); if (sub) m.append(el('div', 'mh-li-sub', sub));
+      r.append(m); if (extra) r.append(extra);
+      body.append(r);
+    };
+    const none = (t) => body.append(el('div', 'mh-empty', t));
+    if (this.tab === 'item') {
+      const ids = w.equipped();
+      if (!ids.length) none('Nothing equipped that shows.');
+      for (const id of ids) row(wm.icon(id), wm.itemName(id) || '...', wm.info(id)?.reqLevel ? `Req. Lv. ${wm.info(id).reqLevel}` : '');
+    } else if (this.tab === 'wish') {
+      const list = w.wishItems();
+      if (!(i.wish || []).length) none('The wish list is empty.');
+      else if (!list.length) none('Loading the wish list...');
+      w.sideFirst = 0;
+      list.forEach((c, k) => {
+        const give = w.canPresent(k) ? sk.button('Present', () => w.present(k), 'mh-main') : null;
+        row(wm.icon(c.ItemId), `${wm.itemName(c.ItemId) || '...'}${c.Count > 1 ? ` \u00d7${c.Count}` : ''}`, `${Number(c.Price || 0).toLocaleString('en-US')} NX`, give);
+      });
+    } else if (this.tab === 'pet') {
+      const pets = i.pets || [];
+      if (!pets.length) none('No pets are out.');
+      for (const pt of pets) row(wm.icon(pt.id), pt.name, `${wm.itemName(pt.id) || 'Pet'} \u00b7 Lv. ${pt.level} \u00b7 Closeness ${pt.closeness} \u00b7 Fullness ${pt.fullness}`);
+    } else if (this.tab === 'mount') {
+      const t = i.mount, { shown } = w.slots(), ids = [18, 19, 20].map(shown).filter((id) => [190, 191].includes(Math.floor(id / 10000)));
+      if (!t) none('No taming mob.');
+      else {
+        const mount = ids.find((id) => Math.floor(id / 10000) === 190);
+        row(mount ? wm.icon(mount) : null, mount ? wm.itemName(mount) || 'Taming mob' : 'Taming mob', `Lv. ${t.level} \u00b7 EXP ${t.exp} \u00b7 Tiredness ${t.tiredness}`);
+        for (const id of ids.filter((x) => x !== mount)) row(wm.icon(id), wm.itemName(id) || '...', '');
+      }
+    } else {
+      const b = i.book || {};
+      body.append(kv('Book level', String(b.level ?? 0)), kv('Cover', b.cover ? wm.strings.mob?.[b.cover]?.name || '-' : '-'),
+        kv('Cards', `${b.total ?? 0} (${b.normal ?? 0} normal, ${b.special ?? 0} special)`));
+      if (i.medal) row(wm.icon(i.medal), wm.itemName(i.medal) || 'Medal', 'Medal worn');
+      const quests = i.medalQuests || [];
+      body.append(el('div', 'mh-sec', `Medal quests: ${quests.length}`));
+      for (const q of quests) body.append(el('div', 'mh-dt-text', g.quests?.name(q) || `Quest ${q}`));
+    }
+    body.scrollTop = keep; this.shownTab = this.tab;
+  }
+  destroy() { this.el.remove(); }
+}
+
+const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView, messenger: MessengerView, questhelper: QuestHelperView, worldmap: WorldMapView,
+  charinfo: PlayerInfoView };
