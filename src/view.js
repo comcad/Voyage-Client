@@ -13,8 +13,8 @@ export let VIEW_W = BASE_W, VIEW_H = BASE_H;
  */
 export let UI_SCALE = 1, UI_W = BASE_W, UI_H = BASE_H;
 /**
- * A screen that must show whole at 800x600 (the Cash Shop): while it is up, UI SIZE goes no larger than leaves the
- * interface 800x600, so a phone's raised UI SIZE doesn't cut it off; it comes back after.
+ * A screen that is 800x600 and nothing else (the Cash Shop): while it is up, the interface is drawn as large as lets
+ * all of it fit the window, whatever UI SIZE says (as the login screens are); UI SIZE comes back after.
  */
 let wholeScreen = false;
 export function setWholeScreen(on) { wholeScreen = !!on; }
@@ -54,7 +54,7 @@ export const maxUiScale = () => {
 export function applyResolution() {
   [VIEW_W, VIEW_H] = settings.fit ? fitSize() : RESOLUTIONS[resolutionIndex()];
   UI_SCALE = Math.min(maxUiScale(), Math.max(1, Math.round((Number(settings.uiScale) || 1) * 10) / 10));
-  if (wholeScreen) UI_SCALE = Math.max(1, Math.min(UI_SCALE, Math.floor(Math.min(VIEW_W / BASE_W, VIEW_H / BASE_H) * 10 + 1e-9) / 10));
+  if (wholeScreen) UI_SCALE = Math.max(1, Math.min(VIEW_W / BASE_W, VIEW_H / BASE_H));
   UI_W = VIEW_W / UI_SCALE; UI_H = VIEW_H / UI_SCALE;
   document.documentElement.style.setProperty('--view-ar', String(VIEW_W / VIEW_H));
   document.body?.classList.toggle('fit-screen', !!settings.fit && !portrait());   // System Option FIT TO SCREEN (4:3 upright)

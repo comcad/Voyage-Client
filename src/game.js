@@ -1159,7 +1159,7 @@ export class Game {
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
     music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
-    setWholeScreen(true); this.setResolution();   // all 800x600 of it on screen, whatever UI SIZE (and no touch controls)
+    setWholeScreen(true); this.setResolution();   // all 800x600 of it, as large as fits the window (and no touch controls)
     this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
   /** The status bar's chat line is a page element over the canvas: hide it while the shop screen is up. */

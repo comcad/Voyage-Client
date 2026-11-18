@@ -7,9 +7,11 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { modal } from './ui/dom.js';
 import { setupTouchDevice } from './touchdevice.js';
+import { setupSideFrames } from './ui/sideframes.js';
 import { loadConfig } from './config.js';
 
 setupTouchDevice();
+setupSideFrames();   // the space beside the 4:3 login screens and Cash Shop
 
 const PRELOAD = ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'prone', 'ladder', 'rope', 'alert',
   'swingO1', 'swingO2', 'swingO3', 'stabO1', 'swingT1', 'swingT2', 'swingT3', 'stabT1', 'swingP1', 'swingP2'];
