@@ -282,7 +282,7 @@ export class MobileSheets {
 
   /** Drawn again when what it shows changes (an item moved, a level gained, an icon or name loaded). */
   refresh() {
-    if (!this.kind || !this.g.stats || this.sliding) return;   // (not under a finger moving a slider)
+    if (!this.kind || !this.g.stats || this.sliding || this.hud.busy) return;   // (not under a finger: a tap lands where it was)
     const sig = this.signature();
     if (sig !== this.sig) this.render();
   }

@@ -412,7 +412,7 @@ class NpcPanel {
   tick() {
     const w = this.w;
     if (!w) return;
-    if (this.names !== this.sk.wm.namesVersion) this.drawText();
+    if (this.names !== this.sk.wm.namesVersion && !this.sk.hud.busy) this.drawText();   // (not under a finger on a choice)
     if ((w.avatar ? 'me' : w.face) !== this.faceOf || (w.name || '') !== this.p.name.textContent) this.drawStage();
     if (w.avatar) this.stage.look(this.sk.g);
   }
@@ -508,7 +508,7 @@ class ShopView {
     sk.hud.sheets?.close(); sk.hud.closeMenu();
   }
   tick(now) {
-    if (now - (this.at || 0) < 100) return;
+    if (now - (this.at || 0) < 100 || this.sk.hud.busy) return;   // (not redrawn under a finger)
     this.at = now;
     const w = this.w, g = this.sk.g;
     if (w.npc && !this.npcUp) { this.npcUp = true; this.stage.frames(w.npc.frames, g.assets.base); }
@@ -612,7 +612,7 @@ class TradeView {
     if (t) this.sk.g.roomChat?.(t);
   }
   tick(now) {
-    if (now - (this.at || 0) < 100) return;
+    if (now - (this.at || 0) < 100 || this.sk.hud.busy) return;   // (not redrawn under a finger)
     this.at = now;
     const w = this.w;
     const sig = JSON.stringify([w.partner?.name, w.items.map((s) => Object.entries(s).map(([k, it]) => `${k}:${it?.id}:${it?.quantity}`)), w.meso, w.confirmed, this.sk.wm.namesVersion]);

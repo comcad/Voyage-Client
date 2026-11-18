@@ -28,6 +28,8 @@ import { MobileSkins } from './mobileskins.js';
 const CHAT_SHOW = 8;
 /** Lines shown: resting, and with the log opened. */
 const LINES = 4, LINES_OPEN = 40;
+/** A finger's tap: how far it may move (px) and how long it may stay down (ms) and still be one. */
+const TAP_SLOP = 12, TAP_HOLD = 800;
 /** The buttons along the top right (window functions, as Key Setting's), then the menu. */
 const ACTIONS = [[MENU.ITEMS, 'Items', 'bag'], [MENU.EQUIP, 'Equipment', 'armor'], [MENU.SKILLS, 'Skills', 'star'], [MENU.QUESTS, 'Quests', 'scroll']];
 /** The menu, in groups under a heading: window functions, then the status bar Menu's own entries. */
@@ -167,6 +169,9 @@ export class MobileHud {
       <div class="mh-say mh-glass"><span class="mh-tgt"></span><input type="text" maxlength="70" enterkeyhint="send" autocomplete="off" autocapitalize="off"
         spellcheck="false"><button class="mh-send" type="button">Send</button><div class="mh-btn mh-closebtn" title="Close">${ICON.close}</div></div>`;
     root.append(el);
+    // a press on any of its panels holds off their redrawing until it lifts (busy), so a tap lands on what it was on
+    el.addEventListener('pointerdown', () => { this.pressAt = performance.now(); }, true);
+    for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { this.pressAt = 0; }, true);
     const $ = (s) => el.querySelector(s);
     this.parts = { st: $('.mh-st'), lv: $('.mh-lv'), nm: $('.mh-nm'), jb: $('.mh-jb'), act: $('.mh-act'), menu: $('.mh-menu'), log: $('.mh-log'), chat: $('.mh-chat'),
       say: $('.mh-say'), tgt: $('.mh-say .mh-tgt'), input: $('.mh-say input'), tlist: $('.mh-tlist'),
@@ -223,11 +228,34 @@ export class MobileHud {
     this.update();
   }
 
-  /** A tap (a touch or a click), without the game seeing it. */
+  /**
+   * A tap, without the game seeing it. A finger's counts as it lifts (within TAP_SLOP of where it came down, and not
+   * held past TAP_HOLD) rather than on the browser's click, which a phone sends late, or not at all when another
+   * finger is down or the page changed just then; the click after it is let go. A mouse still goes by the click.
+   */
   tap(node, fn) {
-    node.addEventListener('pointerdown', (e) => e.stopPropagation());
-    node.addEventListener('click', (e) => { e.stopPropagation(); fn(e); });
+    let down = null;
+    node.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      down = e.pointerType === 'mouse' ? null : { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+    });
+    node.addEventListener('pointercancel', () => { down = null; });   // (the list took the finger to scroll)
+    node.addEventListener('pointerup', (e) => {
+      const d = down;
+      down = null;
+      if (!d || d.id !== e.pointerId || Math.hypot(e.clientX - d.x, e.clientY - d.y) > TAP_SLOP || performance.now() - d.t > TAP_HOLD) return;
+      e.stopPropagation();
+      this.tappedAt = performance.now();
+      if (!node.disabled) fn(e);
+    });
+    node.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (performance.now() - (this.tappedAt ?? -1e9) < 700) return;   // the click a finger's tap brings after it
+      if (!node.disabled) fn(e);
+    });
   }
+  /** A finger (or mouse button) is down on one of its panels: what it shows isn't drawn again under it until it lifts. */
+  get busy() { return !!this.pressAt && performance.now() - this.pressAt < 1500; }
 
   /** Its top panels (the mini map, the buttons) in interface pixels: a window opening under them is moved down (WindowManager.fit). */
   reserved() {
