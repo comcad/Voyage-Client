@@ -60,3 +60,6 @@ export function applyResolution() {
   document.body?.classList.toggle('fit-screen', !!settings.fit && !portrait());   // System Option FIT TO SCREEN (4:3 upright)
 }
 applyResolution();
+// a phone turned before the game is up (the login screen, held upright first): the view takes its new shape then too
+// (the game, once up, follows every resize itself)
+globalThis.matchMedia?.('(orientation: portrait)').addEventListener?.('change', () => applyResolution());

@@ -8,7 +8,7 @@
  *   resolution  the game's screen size, 'WxH'
  *   uiScale   the interface's size, 1 .. 1.8 in tenths (held to what the screen size allows)
  *   zoom      how close the view is on your character, 1 .. 2 in tenths (the interface keeps its size)
- *   fit       stretch the game to fill the window, without black bars
+ *   fit       stretch the game to fill the window, without black bars (on unless turned off)
  *   fps       'vsync' (every screen refresh), 60 or 30: how many frames a second are drawn
  *   fpsMeter  the /fps performance meter is shown
  *   mobileUi  MOBILE UI: an HTML interface for phones in place of the status bar (ui/mobilehud.js), and window buttons
@@ -17,7 +17,7 @@
 import { readKept, writeKept } from './kept.js';
 
 const KEY = 'maple.sysopt';
-export const DEFAULTS = { quality: 1, hpAlert: 0.5, mpAlert: 0.5, shake: true, mobInfo: 2, resolution: '800x600', uiScale: 1, zoom: 1, fit: false, fps: 'vsync', fpsMeter: false, mobileUi: false };
+export const DEFAULTS = { quality: 1, hpAlert: 0.5, mpAlert: 0.5, shake: true, mobInfo: 2, resolution: '800x600', uiScale: 1, zoom: 1, fit: true, fps: 'vsync', fpsMeter: false, mobileUi: false };
 export const MOB_INFO = ['Do not mark', 'Mark HP only', 'Mark name and HP'];
 /** FRAME RATE's choices, in the order the list shows them. */
 export const FPS_CHOICES = [['vsync', 'VSync'], [60, '60 FPS'], [30, '30 FPS']];
