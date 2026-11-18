@@ -36,14 +36,13 @@ export function defaultPad() {
 /** Touch layout: positions are fractions of the 800x600 view (the button's centre). Hidden until turned on in Key Setting. */
 export function defaultTouch() {
   return {
-    show: 'off', size: 1, opacity: 0.75,
+    show: 'off', size: 1.5, opacity: 0.75,   // X-Large: big enough for a thumb on a phone
     stick: { x: 0.12, y: 0.74 },
     buttons: [
-      // above the quick slots in the bottom-right corner
-      { id: 1, x: 0.92, y: 0.62, b: { type: 5, action: ACTION.JUMP } },
-      { id: 2, x: 0.81, y: 0.67, b: { type: 5, action: ACTION.ATTACK } },
-      { id: 3, x: 0.82, y: 0.51, b: { type: 5, action: ACTION.PICKUP } },
-      { id: 4, x: 0.93, y: 0.46, b: { type: 5, action: ACTION.NPC_CHAT } },
+      // a triangle in the bottom-right corner: Attack and Pick Up side by side, Jump under and between them
+      { id: 1, x: 0.89, y: 0.81, b: { type: 5, action: ACTION.JUMP } },
+      { id: 2, x: 0.84, y: 0.66, b: { type: 5, action: ACTION.ATTACK } },
+      { id: 3, x: 0.94, y: 0.65, b: { type: 5, action: ACTION.PICKUP } },
     ],
   };
 }

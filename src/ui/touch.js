@@ -40,8 +40,9 @@ export class TouchControls {
     const t = this.layout;
     this.el.replaceChildren();
     this.release();
-    this.el.style.display = touchShown(t) ? '' : 'none';
-    if (!touchShown(t)) return;
+    const shown = touchShown(t) && !this.g.inCashShop;   // (nothing to move or hit in the Cash Shop)
+    this.el.style.display = shown ? '' : 'none';
+    if (!shown) return;
     const s = this.scale * (t.size || 1);
     // the stick
     const base = this.disc(t.stick.x, t.stick.y, STICK * s, t.opacity);

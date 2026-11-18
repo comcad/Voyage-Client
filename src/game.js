@@ -83,7 +83,7 @@ import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
 import { settings, saveSettings } from './settings.js';
-import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale, PIXEL_SCALE } from './view.js';
+import { VIEW_W, VIEW_H, UI_W, UI_H, UI_SCALE, applyResolution, snapPx, setPixelScale, PIXEL_SCALE, setWholeScreen } from './view.js';
 import { config, refreshPublished } from './config.js';
 import { frameMaker } from './framemaker.js';
 import { DirectionScene } from './direction.js';
@@ -1156,6 +1156,7 @@ export class Game {
     this.showChatBox(false);
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
     music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
+    setWholeScreen(true); this.setResolution();   // all 800x600 of it on screen, whatever UI SIZE (and no touch controls)
     this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
   /** The status bar's chat line is a page element over the canvas: hide it while the shop screen is up. */
@@ -1186,7 +1187,7 @@ export class Game {
       this.setServerTime(entered.serverTime);
       const info = entered.info;
       if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
-      if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); }
+      if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); setWholeScreen(false); this.setResolution(); }
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
       await loaded;
@@ -1194,7 +1195,10 @@ export class Game {
       // the server comes back without your item effect: put it back on (or off, if the item is gone)
       const fx = this.player.itemFxId;
       if (fx) { if (this.itemCount(fx)) net.useItemEffect(fx); else this.setItemEffect(this.player, 0); }
-      if (fromCashShop) { this.windows.open('minimap'); this.showChatBox(true); }
+      if (fromCashShop) {
+        if (settings.mobileUi) this.miniByMobileUi = true; else this.windows.open('minimap');   // (MOBILE UI has its own)
+        this.showChatBox(true);
+      }
       if (this.stats.hp <= 0 && (!this.dead || !this.death)) this.die(false);   // still dead after the switch (or the Cash Shop)
     } catch (e) {
       console.error(e);
