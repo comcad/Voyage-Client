@@ -911,6 +911,9 @@ export class Game {
     let swipe = null, lastTap = null, synthDbl = -1e9;
     addEventListener('pointerdown', (e) => {
       if (e.pointerType !== 'touch') { swipe = null; return; }
+      // a finger on the page's own controls (MOBILE UI's panels, the touch controls) isn't on the field: it neither
+      // swipes what is under it nor counts towards a double tap there
+      if (e.target !== c) { swipe = null; lastTap = null; return; }
       const [x, y] = at(e);
       swipe = { x, y, last: y, on: false, cx: e.clientX, cy: e.clientY, t: performance.now(), ui: !!(wm.top(x, y) || sb.contains(x, y)) };
     }, true);

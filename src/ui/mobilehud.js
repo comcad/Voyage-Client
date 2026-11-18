@@ -173,6 +173,12 @@ export class MobileHud {
     // a press on any of its panels holds off their redrawing until it lifts (busy), so a tap lands on what it was on
     el.addEventListener('pointerdown', () => { this.pressAt = performance.now(); }, true);
     for (const t of ['pointerup', 'pointercancel']) addEventListener(t, () => { this.pressAt = 0; }, true);
+    // and should a click (or double-click) still come of a tap on its panels, it goes nowhere behind them
+    for (const t of ['click', 'dblclick']) {
+      addEventListener(t, (e) => {
+        if (performance.now() - (this.tappedAt ?? -1e9) < 700 && !e.target?.closest?.('.mhud')) { e.preventDefault(); e.stopImmediatePropagation(); }
+      }, true);
+    }
     const $ = (s) => el.querySelector(s);
     this.parts = { st: $('.mh-st'), lv: $('.mh-lv'), nm: $('.mh-nm'), jb: $('.mh-jb'), act: $('.mh-act'), menu: $('.mh-menu'), log: $('.mh-log'), chat: $('.mh-chat'),
       say: $('.mh-say'), tgt: $('.mh-say .mh-tgt'), input: $('.mh-say input'), tlist: $('.mh-tlist'),
@@ -249,6 +255,9 @@ export class MobileHud {
       this.tappedAt = performance.now();
       if (!node.disabled) fn(e);
     });
+    // the touch's end after a tap that was taken: no click and mouse events of its own (they would go to whatever is
+    // under the finger once the tap has closed its panel - the field, an NPC)
+    node.addEventListener('touchend', (e) => { if (performance.now() - (this.tappedAt ?? -1e9) < 150 && e.cancelable) e.preventDefault(); });
     node.addEventListener('click', (e) => {
       e.stopPropagation();
       if (performance.now() - (this.tappedAt ?? -1e9) < 700) return;   // the click a finger's tap brings after it
