@@ -976,7 +976,8 @@ class WorldMapView {
 /**
  * A player's info (a double tap on them, or yours) over its window: the character standing with the name under it,
  * their level, job, fame (+ / - as the window allows), guild and alliance; Party, Trade and Family as the window's
- * (Family opening MOBILE UI's own sheet); and their equipment, wish list (Present), pets, mount and Monster Book.
+ * (Family opening MOBILE UI's own sheet; Party inviting even with no party yet, the server making one first); and their
+ * equipment, wish list (Present), pets, mount and Monster Book.
  */
 const PI_TABS = [['item', 'Equipment'], ['wish', 'Wish List'], ['pet', 'Pets'], ['mount', 'Mount'], ['book', 'Monster Book']];
 class PlayerInfoView {
@@ -994,7 +995,8 @@ class PlayerInfoView {
     sk.tap($('.mh-sh-x'), () => sk.wm.close(w));
     const g = sk.g, other = w.info.id !== g.player.id;
     if (other) {
-      this.p.acts.append(sk.button('Party', () => { if (g.party && g.party.leader === g.player.id) g.net?.partyOp(4, w.name()); else g.hud?.message('Only a party leader can invite.', '#ff9e9e'); }, 'mh-main'),
+      // Party invites them whether or not you are in a party yet (the server makes one with you as its leader first)
+      this.p.acts.append(sk.button('Party', () => { const name = w.name(); if (name) g.net?.partyOp(4, name); }, 'mh-main'),
         sk.button('Trade', () => { const rp = g.others.get(w.info.id); if (rp) g.requestTrade(rp); }));
     }
     this.p.acts.append(sk.button('Family', () => {
