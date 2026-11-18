@@ -144,14 +144,14 @@ export function setupSideFrames() {
     // the window's outline, then the screen's the other way round (joined by a seam of no width): a frame with a hole
     const hole = `polygon(0 0, 0 ${H}px, ${l}px ${H}px, ${l}px ${t}px, ${rr}px ${t}px, ${rr}px ${bb}px, ${l}px ${bb}px, ${l}px ${H}px, ${W}px ${H}px, ${W}px 0)`;
     back.style.clipPath = hole; back.style.webkitClipPath = hole;
-    // each rail lies across the screen's edge, a quarter of it over the screen (its middle that far out: out); a side
-    // with (next to) no space beside it has none
+    // each rail lies along the screen's edge, its inner side about on it (its middle that far out: out), its studs,
+    // leaf and corner bosses reaching a little over the screen; a side with (next to) no space beside it has none
     const thick = Math.max(8, Math.min(16, Math.round(h * 0.018)));
     const gap = { l, r: W - rr, t, b: H - bb };
     const size = {}, shown = {}, out = {};
     for (const k of ['l', 'r', 't', 'b']) {
       size[k] = Math.round(Math.min(thick, gap[k] * 2)); shown[k] = gap[k] >= 6;
-      out[k] = shown[k] ? Math.max(0, Math.min(Math.max(2, Math.round(size[k] / 4)), gap[k] - Math.ceil(size[k] / 2))) : 0;
+      out[k] = shown[k] ? Math.max(0, Math.min(Math.max(3, Math.round(size[k] * 0.45)), gap[k] - Math.ceil(size[k] / 2))) : 0;
     }
     const place = (el, show, css, k, bare = false) => {
       el.classList.toggle('sf-show', show);
