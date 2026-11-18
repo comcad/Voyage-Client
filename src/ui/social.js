@@ -122,9 +122,11 @@ export class CharInfoWin extends Win {
     // with a pet out it opens on PET INFO
     this.U = U; this.info = info; this.panel = info.pets?.length ? 'pet' : 'none'; this.side = null; this.sideFirst = 0; this.petSel = 0;
     const g = this.g, other = info.id !== g.player.id;
-    // PARTY invites only from a party's leader (with no party it does nothing); PARTY and TRADE are off on your own window
+    // PARTY invites them whether or not you are in a party yet (the server makes one with you as its leader first);
+    // PARTY and TRADE are off on your own window
     const party = this.button(U.BtParty, 149, 23, () => {
-      if (g.party && g.party.leader === g.player.id) g.net?.partyOp(4, this.name());
+      const name = this.name();
+      if (name) g.net?.partyOp(4, name);
     });
     party.enabled = other;
     const rp = g.others.get(info.id);
