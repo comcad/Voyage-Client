@@ -868,6 +868,9 @@ const mobDepth = (e) => {
 export class Game {
   /** net: ChannelSession when playing online, null for the offline map viewer. */
   constructor(canvas, assets, look, hooks = {}, net = null) {
+    // the Party Search kept with your session: 0 none, 1 searching, 2 paused; what it looks for; whether to take it up
+    // again on the next map (after a channel change or the Cash Shop)
+    this.partySearch = { state: 0, min: 0, max: 0, members: 0, mask: 0, restore: false };
     // (opaque: nothing shows through the game, so the browser needn't blend it with the page behind)
     this.canvas = canvas; this.ctx = snapToPixels(canvas.getContext('2d', { alpha: false }));
     this.frames = frameMaker; frameMaker.start();   // frames made ahead of use are made off the page's thread, where the browser can
@@ -1209,6 +1212,7 @@ export class Game {
       const info = entered.info;
       if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
       if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); setWholeScreen(false); this.setResolution(); }
+      this.partySearch.restore = true;   // a search that was on is taken up again on the new channel
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
       await loaded;
@@ -3421,8 +3425,7 @@ export class Game {
         // a Party Search one is ignored with party or Party Search invitations off, or from someone on the Blacklist
         if (p.autoJoin) { if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net.partyOp(3, p.id); return; }
         if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
-        (from !== p.name ? notify(this.windows, 'partySearch', from) : notify(this.windows, 'party', p.name))
-          .then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
+        notify(this.windows, 'party', p.name).then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
       },
       partyMessage: (code, text) => {
         const t = code === 0x24 ? text || PARTY_ERROR : PARTY_MESSAGES[code] ?? PARTY_ERROR;
@@ -4519,6 +4522,7 @@ export class Game {
       const q = this.queue; this.queue = [];
       for (const fn of q) fn();
       this.questAlert?.refresh();   // what this map, your items and your level offer
+      if (this.net) this.partySearchEntered();
     }
   }
 
@@ -6378,11 +6382,30 @@ export class Game {
     if (this.party && this.party.members.length >= 6) { this.notice('It is impossible to invite someone to the party.'); return; }
     this.net?.partyOp(4, name);
   }
-  /** A party search ends when you make a party, join one, or quit as its leader: the server is told, whatever the window shows. */
-  partySearchEnd() {
+  /** The search forgotten, and the server told (PARTY_SEARCH_UPDATE). */
+  partySearchClear() {
+    Object.assign(this.partySearch, { state: 0, min: 0, max: 0, members: 0, mask: 0 });
     this.net?.partySearchStop();
+  }
+  /**
+   * What ends a Party Search (making a party, joining one, quitting as its leader, someone joining once the party has
+   * the members it looked for, a map change on the same channel): with its window open, as its STOP (while a search
+   * is on); closed, the search is forgotten and the server told, even when none was on.
+   */
+  partySearchEnd() {
     const w = this.windows.wins.partysearch;
-    if (w) w.state = 'idle';
+    if (w && this.windows.isOpen('partysearch')) { if (this.partySearch.state) w.stop(); return; }
+    this.partySearchClear();
+  }
+  /** On each new map: after a channel change or the Cash Shop a search that was on goes out again; otherwise it ends. */
+  partySearchEntered() {
+    const s = this.partySearch;
+    if (s.restore) {
+      s.restore = false;
+      if (s.state === 1) this.net?.partySearchStart(s.min, s.max, s.members, s.mask);
+      return;
+    }
+    this.partySearchEnd();
   }
   /** PARTY_OPERATION results: keep this.party = { id, leader, members[] } in step with the server. */
   onParty(p) {
@@ -6416,8 +6439,10 @@ export class Game {
     if (this.party && p.slots) { this.party.slots = p.slots; this.party.doors = p.doors || this.party.doors || null; }
     if (['update', 'join', 'leave', 'expel', 'disband', 'created'].includes(p.kind)) this.refreshTownDoors(false);
     this.windows.wins.partyhp?.sync();
-    this.windows.wins.partysearch?.partyChanged();
-    if (p.kind === 'created' || (p.kind === 'join' && p.name === this.player.name) || (p.kind === 'disband' && p.target === me)) this.partySearchEnd();
+    // a search ends when you make a party, join one, quit as its leader, or someone joins once it has the members it
+    // looked for
+    const joined = p.kind === 'join' && p.name !== this.player.name && this.partySearch.members <= (this.party?.members.length || 0);
+    if (p.kind === 'created' || (p.kind === 'join' && p.name === this.player.name) || (p.kind === 'disband' && p.target === me) || joined) this.partySearchEnd();
   }
 
   /** A whisper with your own whispers off in the Game Option warns you that the answer may not come (chat type 9). */

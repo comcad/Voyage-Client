@@ -27,7 +27,7 @@ import { UI_SCALE, UI_W, UI_H, VIEW_W, VIEW_H, maxUiScale } from '../view.js';
 import { FUNCTIONS } from './windows.js';
 import { BUTTON, STICK } from './keyconfig-tabs.js';
 import { bindingLabel, PAD_BUTTONS, TOUCH_MAX_BUTTONS } from '../controls.js';
-import { GROUPS as PS_GROUPS, ALL_BITS as PS_ALL } from './partysearch.js';
+import { PANELS as PS_PANELS, FIRST_JOBS as PS_FIRST } from './partysearch.js';
 import { ICONS as FAMILY_ICONS } from './family.js';
 import { endedText } from './medal.js';
 
@@ -373,7 +373,7 @@ export class MobileSheets {
     }
     if (this.kind === 'partysearch') {
       const w = this.wm.wins.partysearch;
-      return `${base}|${this.tab.ps}|${w?.state}|${[...(w?.bits || [])]}|${w?.leader}|${['min', 'max', 'members'].map((k) => w?.fields[k].value)}`;
+      return `${base}|${w?.state}|${(w?.checked || []).map(Number).join('')}|${g.party?.leader}|${g.stats?.level}|${['min', 'max', 'members'].map((k) => w?.fields[k].value)}`;
     }
     if (this.kind === 'medal') {
       const w = this.wm.wins.medal, qw = this.wm.wins.quest, m = this.sel && w?.medals().find((x) => x.id === this.sel);
@@ -1041,54 +1041,50 @@ export class MobileSheets {
 
   // ---------------------------------------------------------------- Party Search
   /** Party Search through its window (its job bits, fields and start / pause / stop): who you look for and how many. */
+  /**
+   * Party Search through its window's own code: the levels and how many members, All and each first job's panel
+   * with its later jobs (by your level; under 30 only the first jobs), greyed while a search is on; Start, Pause and
+   * Stop lit by the search's state.
+   */
   partysearch() {
     const g = this.g, w = this.wm.wins.partysearch, out = el('div');
     if (!w) return out;
-    this.tabs([[1, 'Find Members'], [0, 'Find Party']], this.tab.ps, (k) => { this.tab.ps = k; w.tab = k; });
-    w.tab = this.tab.ps;
-    if (this.tab.ps === 0) {
-      out.append(el('div', 'mh-dt-text', 'Party leaders looking for members invite players near them who have no party yet.\n\n'
-        + 'You can be invited whenever you are not in a party. Invitations from a search are marked "PS:".'));
-      return out;
-    }
-    const f = w.fields, lv = g.stats?.level || 1;
-    if (!f.min.value) f.min.value = String(Math.max(1, lv - 10));
-    if (!f.max.value) f.max.value = String(Math.min(200, lv + 10));
-    if (!f.members.value) f.members.value = '6';
-    out.append(el('div', 'mh-dt-text', w.leader ? 'Choose the levels and jobs you want, then Start. Matching players near you are invited to your party.'
-      : 'Only a party leader can search for members. Create a party first.'));
+    const f = w.fields, st = w.state, on = st !== 1;
+    w.prepare(!f.min.value && !f.max.value && !f.members.value);
     const num = (field, max) => {
-      const i = el('input', 'mh-in mh-num'); Object.assign(i, { type: 'text', inputMode: 'numeric', maxLength: max, value: field.value });
+      const i = el('input', 'mh-in mh-num'); Object.assign(i, { type: 'text', inputMode: 'numeric', maxLength: max, value: field.value, disabled: !on });
       for (const t of ['keydown', 'keyup', 'keypress', 'pointerdown']) i.addEventListener(t, (e) => e.stopPropagation());
       i.addEventListener('input', () => { i.value = i.value.replace(/\D/g, ''); field.value = i.value; });
       return i;
     };
     const lvRow = el('div', 'mh-kv mh-opt'), e = el('em');
-    e.append(num(f.min, 3), el('small', null, 'to'), num(f.max, 3));
+    e.append(num(f.min, 3), el('small', null, 'above'), num(f.max, 3), el('small', null, 'under'));
     lvRow.append(el('span', null, 'Level'), e); out.append(lvRow);
-    const mRow = el('div', 'mh-kv mh-opt');
-    mRow.append(el('span', null, 'Party size'), this.choice({ items: ['2', '3', '4', '5', '6'], value: Math.max(0, Number(f.members.value) - 2), set: (i) => { f.members.value = String(i + 2); } }));
-    out.append(mRow);
+    const mRow = el('div', 'mh-kv mh-opt'), me = el('em');
+    me.append(num(f.members, 1), el('small', null, 'ppl'));
+    mRow.append(el('span', null, 'Party member'), me); out.append(mRow);
+    const flip = (n) => { if (!on) return; w.toggle(n); sfx.play('UI/BtMouseClick'); this.render(); };
     const allRow = el('div', 'mh-kv mh-opt mh-wide'), ae = el('em');
-    ae.append(this.switch(w.bits.size === PS_ALL.length, () => { const on = w.bits.size !== PS_ALL.length; for (const b of PS_ALL) { if (on) w.bits.add(b); else w.bits.delete(b); } }));
+    ae.append(this.switch(w.checked[0], () => flip(0)));
     allRow.append(el('span', null, 'All jobs'), ae); out.append(allRow);
-    for (const [, , , title, jobs] of PS_GROUPS) {
-      const head = el('div', 'mh-sec mh-tapsec', title), all = jobs.every(([b]) => w.bits.has(b));
-      this.hud.tap(head, () => { for (const [b] of jobs) { if (all) w.bits.delete(b); else w.bits.add(b); } sfx.play('UI/BtMouseClick'); this.render(); });
-      out.append(head);
+    for (const head of [1, 2, 3, 8, 13, 17, 21]) {
+      const sec = el('div', 'mh-sec mh-tapsec', `${w.checked[head] ? '\u2611' : '\u2610'} ${w.label(head)}`);
+      this.hud.tap(sec, () => flip(head));
+      out.append(sec);
+      const subs = (PS_PANELS[head] || []).filter((n) => !w.low || PS_FIRST.includes(n));
+      if (!subs.length) continue;
       const chips = el('div', 'mh-seg');
-      for (const [b, name] of jobs) {
-        const c = el('button', `mh-tab${w.bits.has(b) ? ' mh-on' : ''}`, name); c.type = 'button';
-        this.hud.tap(c, () => { if (w.bits.has(b)) w.bits.delete(b); else w.bits.add(b); sfx.play('UI/BtMouseClick'); this.render(); });
+      for (const n of subs) {
+        const c = el('button', `mh-tab${w.checked[n] ? ' mh-on' : ''}`, w.label(n)); c.type = 'button'; c.disabled = !on;
+        this.hud.tap(c, () => flip(n));
         chips.append(c);
       }
       out.append(chips);
     }
-    const a = el('div', 'mh-ctas mh-end'), msg = { searching: 'Searching for party members...', paused: 'The search is paused.', idle: '' }[w.state];
-    if (msg) a.append(el('span', 'mh-ps-state', msg));
-    if (w.state === 'searching') a.append(this.button('Pause', () => { w.stop('paused'); this.render(); }));
-    else { const s = this.button('Start', () => { w.start(); this.render(); }, 'mh-main'); s.disabled = !w.leader; a.append(s); }
-    const stop = this.button('Stop', () => { w.stop('idle'); this.render(); }); stop.disabled = w.state === 'idle'; a.append(stop);
+    const a = el('div', 'mh-ctas mh-end');
+    const start = this.button('Start Search', () => { w.start(); this.render(); }, 'mh-main'); start.disabled = st === 1; a.append(start);
+    const pause = this.button('Pause Search', () => { w.pause(); this.render(); }); pause.disabled = st !== 1; a.append(pause);
+    const stop = this.button('Stop Search', () => { w.stop(); this.render(); }); stop.disabled = st === 0; a.append(stop);
     this.p.detail.append(a);
     return out;
   }
