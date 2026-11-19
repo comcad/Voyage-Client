@@ -581,7 +581,7 @@ const WEAPON_IMMUNE = 0x40000, MAGIC_IMMUNE = 0x80000, immuneTo = (m, bit) => !!
 const HARD_SKIN = 0x200000, guarded = (m) => !!(m?.status?.second & 0x80000000) && !!m.guardValue;
 const takenPct = (m) => (m?.status?.first & 0x4 ? Number(m.takenPct) || 0 : 0);
 // another player's level up, job change, quest clear, monster card and item level up, heard in full
-const FOREIGN_SOUND = { 0: 'Game/LevelUp', 8: 'Game/JobChanged', 9: 'Game/QuestClear', 0x0d: 'Game/mCardGet', 0x0f: 'Game/ItemLevelUp' };
+const FOREIGN_SOUND = { 0: 'Game/LevelUp', 7: 'Game/Portal', 8: 'Game/JobChanged', 9: 'Game/QuestClear', 0x0d: 'Game/mCardGet', 0x0f: 'Game/ItemLevelUp' };
 // Grenade and Poison Bomb make no weapon swing; Grenade's throw is Use2; Blast's cast follows the charge on the weapon
 const GRENADE = 5201002, POISON_BOMB = 14111006, BLAST = 1221009, NO_SWING = new Set([GRENADE, POISON_BOMB]);
 // thrown and charged as Grenade (Poison Bomb's reuse is 1.5s)
@@ -3728,7 +3728,7 @@ export class Game {
       }),
       portalSound: () => sfx.play('Game/Portal'),
       spawnNpc: later((n, controlled) => this.spawnLife('Npc', n, !!controlled)),
-      npcAction: later((oid, action, chat) => this.lifeByOid.get(oid)?.npcActed?.(action, chat)),
+      npcAction: later((oid, action, chat, start, moves) => this.lifeByOid.get(oid)?.npcActed?.(action, chat, start, moves)),
       forcedMapEquip: later(() => this.forceMapEquip()),
       forcedStats: (f) => { this.forcedStats = f; },
       // a change to what you wear, your buffs or skills: goes out with your next movement
@@ -4582,7 +4582,7 @@ export class Game {
       e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying && this.net) { this.net.moveMob(m.oid, start, moves, activity, 0, 0, m.flying ? m.fly : null); m.moveWait = true; } };
     }
     // an NPC we control asks the server what it does next, and does what comes back
-    if (kind === 'Npc' && controlled) e.onNpcAction = (n, action, chat) => this.net?.npcAction(n.oid, action, chat);
+    if (kind === 'Npc' && controlled) e.onNpcAction = (n, action, chat, start, moves) => this.net?.npcAction(n.oid, action, chat, start, moves);
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`, { volume: this.volumeAt(e.x, e.y) }); }
     if (kind === 'Mob') {
       e.team = d.team || 0;
@@ -6887,7 +6887,6 @@ export class Game {
     }
     if (this.hitAction(ACTION.NPC_CHAT) && this.net) this.talkToNearestNpc();
 
-    if (inp.hit('up') && p.fh && this.useDoorAt(p)) return;
     this.scriptTouch();
     this.touchPortal();
     this.springPortal(held);
@@ -6897,8 +6896,10 @@ export class Game {
       const touch = portal && TOUCH_PORTALS.has(portal.pt);
       const touched = touch && portal !== this.touchedPortal;
       this.touchedPortal = touch ? portal : null;
-      if (portal && (inp.hit('up') || touched)) { this.usePortal(portal); if (!touched) return; }
+      if (portal && (inp.hit('up') || touched) && this.usePortal(portal) && !touched) return;
     }
+    // Up where no portal took you: a Mystic Door
+    if (inp.hit('up') && p.fh && this.useDoorAt(p)) return;
     // on the floor, up grabs a ladder / rope whose bottom is at most 20px above your feet (lifting you onto it), and
     // down one whose top is at most 10px below them; left / right may be held too
     if (p.fh && this.canClimb()) {
@@ -7022,20 +7023,25 @@ export class Game {
   usePortal(portal) {
     const map = this.map;
     this.flushMovement();   // the server and everyone else see where you were before you go
-    // a script portal with no target map (types 7, 8, 11) only asks the server to run its script: no sound, no fade
+    // a script portal with no target map only asks the server to run its script (types 7, 8, 11; no sound, no fade);
+    // any other with none does nothing, and Up then goes to a Mystic Door
     if (portal.tm === 999999999) {
-      if (!this.net) return;
+      if (![7, 8, 11].includes(portal.pt)) return false;
+      if (!this.net) return true;
       this.portalCooldown = 0.5;
       this.net.scriptPortal(portal.pn, { x: Math.round(this.player.x), y: Math.round(this.player.y) });
-      return;
+      return true;
     }
-    sfx.play('Game/Portal');
-    if (portal.tm === map.id && portal.pt !== 4 && portal.pt !== 5) { this.innerTeleport(portal, map.spawnPortal(portal.tn)); return; }
+    // the portal sound once the move has gone out; types 4 and 5 go without it (and never within the map)
+    const sound = portal.pt !== 4 && portal.pt !== 5;
+    if (portal.tm === map.id && sound) { this.innerTeleport(portal, map.spawnPortal(portal.tn)); sfx.play('Game/Portal'); return true; }
     this.portalCooldown = 0.5;
     this.fadeOut();
     this.after(3000, () => { if (this.fade?.dir === 'out' && !this.loading && this.map === map) this.fade = { dir: 'in', t0: performance.now() }; });
     if (!this.net) this.changeMap(portal.tm, { portal: portal.tn });
     else this.net.enterPortal(portal.pn);   // the server runs a portal's script, if it has one, from here too
+    if (sound) sfx.play('Game/Portal');
+    return true;
   }
   /**
    * The server moving you through a portal of this map (Mu Lung Dojo's way up, a stage cleared): the portal by its
@@ -8805,6 +8811,22 @@ export class Game {
     if (s && p.x >= s[0] - 10 && p.x < s[0] + 10 && p.y >= s[1] - 30 && p.y < s[1] + 30) { p.seat = { id: seat, item: 0 }; p.x = s[0]; p.y = s[1]; p.vx = 0; return; }
     p.seat = null;
     this.net?.cancelChair(-1);
+  }
+  /**
+   * The map's own effect on everyone in it (info/effect: Aqua Road's Bubbling), looping from their feet in front of
+   * them, from when they are first seen on the map.
+   */
+  drawMapEffect(ctx, ent, sx, sy) {
+    const fr = this.map?.mapEffFrames;
+    if (!fr?.length) return;
+    if (ent.mapEffMap !== this.map.id) { ent.mapEffMap = this.map.id; ent.mapEffT0 = performance.now(); }
+    const delay = (f) => Number(f.delay) || 100, total = fr.reduce((t, f) => t + delay(f), 0);
+    let t = (performance.now() - ent.mapEffT0) % total, n = fr[0];
+    for (const f of fr) { if (t < delay(f)) { n = f; break; } t -= delay(f); }
+    const img = this.assets.image(n);
+    if (!img) return;
+    const o = n.origin || [0, 0];
+    ctx.drawImage(img, Math.round(sx - o[0]), Math.round(sy - o[1]));
   }
   /**
    * Item/Install/0301.img/<id>: the chair's pictures (loaded once per chair) - its effect and, on twelve chairs,
@@ -11294,6 +11316,7 @@ export class Game {
     this.drawWeddingFx(ctx, cam, this.frameDt || 0);
     this.drawKeyGauge(ctx, cam);
     unshifted(() => map.drawBacks(ctx, view, true));
+    map.drawClouds(ctx, cam);   // info/cloud's clouds, over the whole map
     this.fieldMode?.drawOver?.(ctx, cam);
     this.drawBalloons(ctx, cam);
     this.vfx?.drawWorld(ctx, cam);
@@ -11522,6 +11545,7 @@ export class Game {
     drawParts(ctx, this.assets, whole, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead, held);
     if (blink) ctx.restore();
     if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight, true);   // its layers in front of them
+    if (!dead) this.drawMapEffect(ctx, ent, sx, sy);
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawSetFx(ctx, cam, ent, true, gx, gy);

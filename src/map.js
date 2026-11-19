@@ -1,5 +1,5 @@
 import { pad, isCanvas, frames } from './assets.js';
-import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
+import { Footholds, PHYS, accelerate, approach, swimVelocity, groundVelocity } from './physics.js';
 import { BASE_W, BASE_H, snapPx, PIXEL_SCALE } from './view.js';
 import { roundTo, pathKeys, hermite } from './movepath.js';
 
@@ -131,6 +131,15 @@ export class GameMap {
       a.json('String/Map.img'), a.json('String/Npc.img'), a.json('String/Mob.img'), a.json('Map/MapHelper.img'),
     ]);
     this.name = findMapName(strMap, this.id);
+    this.makeClouds(helper?.weather?.cloud);
+    // info/effect (Aqua Road's Bubbling): Effect/MapEff.img/<it>, on everyone in the map (see Game.drawMapEffect)
+    if (this.info.effect) a.json('Effect/MapEff.img').then(async (e) => {
+      const node = e?.[String(this.info.effect)];
+      if (!node) return;
+      const anim = new Anim(node, true);
+      await a.preload(anim.frames);
+      this.mapEffFrames = anim.frames;
+    });
 
     onStatus?.('Loading backgrounds...');
     for (const [k, b] of Object.entries(data.back || {})) {
@@ -277,9 +286,50 @@ export class GameMap {
     return this.ladders.find((l) => l.x >= left && l.x <= right && top <= l.y2 && l.y1 <= bottom);
   }
 
+  /**
+   * info/cloud: MapHelper.img/weather/cloud clouds scattered over the ground's extent (its walls, ceiling and floor)
+   * widened by 200px all round, 10-59 of them (more on a bigger map): each a picture of the set picked at random, a
+   * speed s of 50-149, an alpha of 140-219, anywhere in that area. Each drifts right at s/3 px/s (and up or down a little,
+   * the slowest rising, the fastest sinking), coming back in at the other side when it leaves the area, fading in over
+   * its first 3s. They are drawn over the whole map, the front backgrounds too, moving with it.
+   */
+  makeClouds(set) {
+    this.clouds = [];
+    if (!Number(this.info.cloud) || !set) return;
+    const pics = Object.keys(set).filter((k) => !k.startsWith('_')).map((k) => set[k]);
+    if (!pics.length) return;
+    const f = this.fh, rnd = (n) => Math.floor(Math.random() * n);
+    const L = f.wallL - 200, T = f.ceiling - 200, W = f.wallR - f.wallL + 400, H = f.ground - f.ceiling + 400;
+    if (!(W > 0 && H > 0)) return;
+    this.cloudBox = { L, T, W, H };
+    const n = rnd(20) + 10 + Math.trunc(30 * Math.min(1, (W * H) / 9000000));
+    for (let i = 0; i < n; i++) {
+      const pic = pics[rnd(pics.length)], r1 = rnd(100), s = r1 + 50, alpha = (rnd(80) + 140) / 255;
+      const x = L + rnd(W), y = T + rnd(H);
+      this.clouds.push({ pic, x, y, vx: (10 * s) / 30, vy: Math.trunc((r1 - 60) / 4) / 30, alpha, t: 0 });
+    }
+    this.assets.preload(pics);
+  }
+  /** The clouds, where they are now (see makeClouds). */
+  drawClouds(ctx, cam) {
+    for (const c of this.clouds || []) {
+      const img = this.assets.image(c.pic);
+      if (!img) continue;
+      const o = c.pic.origin || [0, 0];
+      ctx.save(); ctx.globalAlpha *= c.alpha * Math.min(1, c.t / 3);
+      ctx.drawImage(img, Math.round(c.x - o[0] - cam.x), Math.round(c.y - o[1] - cam.y));
+      ctx.restore();
+    }
+  }
   update(dt) {
     const ms = dt * 1000;
     this.scroll += dt;
+    const B = this.cloudBox;
+    for (const c of this.clouds || []) {
+      c.t += dt; c.x += c.vx * dt; c.y += c.vy * dt;
+      if (c.x >= B.L + B.W) c.x -= B.W; else if (c.x < B.L) c.x += B.W;
+      if (c.y >= B.T + B.H) c.y -= B.H; else if (c.y < B.T) c.y += B.H;
+    }
     for (const b of this.backs) {
       b.anim.update(ms);
       const f = b.fade;
@@ -648,8 +698,8 @@ export class Life {
     for (const k of this.actions) this.anims[k] = new Anim(src[k], false);
     if (kind === 'Npc') {
       // its speed stat is speed + 70 (capped at 140) percent of the walk speed; only one with a move animation wanders
-      this.speed = Math.min(140, Math.max(0, (info.speed ?? 0) + 70)) * PHYS.walk / 100;
-      this.walks = !!src.move && spawn.rx1 > spawn.rx0;
+      this.speed = Math.max(10, Math.min(140, (info.speed ?? 0) + 70)) * PHYS.walk / 100;
+      this.walks = !!src.move;   // it walks within rx0-rx1 (in place when they are the same)
       this.picks = []; this.actT = 3 + Math.random() * 6; this.moveT = 0; this.dir = 0;
     }
     if (kind === 'Npc') for (const a of Object.values(this.anims)) a.defaultDelay = 180;   // the client's NPC frame default
@@ -777,7 +827,8 @@ export class Life {
     b.acc += dt * 1000;
     while (b.acc > 0) {
       b.acc -= 30;
-      if (!this.pathTick() && (this.online ? this.controlled && !this.moveWait : this.kind === 'Mob') && !keepPose && !this.dying) { this.x = b.cur.x; this.y = b.cur.y; this.planPath(); }
+      const waiting = this.kind === 'Npc' ? this.npcWaiting : this.moveWait;
+      if (!this.pathTick() && (this.online ? this.controlled && !waiting : true) && !keepPose && !this.dying) { this.x = b.cur.x; this.y = b.cur.y; this.planPath(); }
     }
     this.keepPose = false;
     const k = -b.acc / 30;
@@ -788,6 +839,13 @@ export class Life {
   /** A path point's pose (its stance: 1 walk, 2 stand, 3 jump, 6 fly, 16 chase; bit 0 faces left) and floor. */
   takePose(s) {
     this.facingRight = !(s.stance & 1);
+    if (this.kind === 'Npc') {
+      // standing (4) or walking; an action playing keeps its pose until it ends
+      this.walkPose = s.stance >> 1 === 2 || !this.anims.move ? 'stand' : 'move';
+      if (!this.acting) this.setState(this.walkPose);
+      if (s.fh) this.fh = this.footholds.get(s.fh) || this.fh;
+      return;
+    }
     const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: this.flying && !this.anims.chase ? 'fly' : 'chase' }[s.stance >> 1];
     if (pose) this.setState(this.anims[pose] ? pose : pose === 'stand' ? this.state : this.flying ? 'fly' : 'move');
     if (!this.flying) this.fh = s.fh ? this.footholds.get(s.fh) || this.fh : null;
@@ -805,6 +863,7 @@ export class Life {
    * the same time. Its AI picks up from where the path ends.
    */
   planPath() {
+    if (this.kind === 'Npc') { this.npcPlan(); return; }
     if (this.flying) { this.planFlyPath(); return; }
     const sim = Object.create(this), moves = [], start = { x: Math.trunc(this.x), y: Math.trunc(this.y) };
     sim.setState = function (st) { if (this.anims[st]) this.state = st; };
@@ -1345,73 +1404,130 @@ export class Life {
   }
 
   /**
-   * An NPC idles. Every 3-9s, while no line is up and no action plays, it does one thing at random: one of its
-   * actions, saying one of that action's lines if it has any, or one of its own lines (up for 5s; none while it has
-   * a quest icon). One that wanders stands 1-3s or, 1 time in 5, walks 0.5-1.5s either way, turning back at
-   * either end of rx0-rx1; an action brings it to a stop.
+   * An NPC idles. One that walks plays the stretches it is sent (see npcPlan); one we control that stays put asks
+   * the server before it acts (npcAsk); any other, every 3-9s while no line is up and no action plays, does one thing
+   * at random: one of its actions, saying one of that action's lines if it has any, or one of its own lines (up for
+   * 5s; none while it has a quest icon). An action plays once, then it stands or walks again.
    */
   npcStep(dt) {
     if (this.chat && (this.chat.t -= dt) <= 0) this.chat = null;
-    if (this.acting && this.anims[this.acting]?.done !== false) this.acting = null;
-    if (this.onNpcAction && !this.walks) this.npcAsk(dt);
+    if (this.acting && this.anims[this.acting]?.done !== false) { this.acting = null; this.setState(this.walkPose || 'stand'); }
+    if (this.walks && (this.onNpcAction || !this.online)) { this.actT -= dt; this.playPath(dt); return; }
+    if (this.walks) { this.playPath(dt); return; }
+    if (this.onNpcAction) this.npcAsk(dt);
     else if ((this.actT -= dt) <= 0 && !this.chat && !this.acting && this.picks.length) {
       this.actT = 3 + Math.random() * 6;
       const p = this.picks[Math.floor(Math.random() * this.picks.length)];
       if (this.anims[p.action]) { this.acting = p.action; this.setState(p.action); }
       if (p.lines.length && !this.questIcon) this.chat = { text: p.lines[Math.floor(Math.random() * p.lines.length)], t: 5 };
     }
-    if (this.walks && this.fh) this.npcWalk(dt);
-    if (!this.acting) this.setState(this.dir ? 'move' : 'stand');
+    if (!this.acting) this.setState('stand');
   }
   /**
-   * An NPC we control (one that stays put): once its 3-9s wait is up, with no line up, no action playing and no answer
-   * waiting, it picks a number below 50, taken modulo its actions (but the special ones) and lines together. An
-   * action (not the shop) goes as 2 + its place, with one of its own lines if it has any; otherwise that line of its
-   * own. It sends NPC_ACTION and does nothing until the server sends it back (npcActed).
+   * The client's pick, once its 3-9s wait is up with no line up and no action playing (the wait starts again): a
+   * number below 50, taken modulo its actions (but the special ones) and lines together. An action (not the shop) goes
+   * as 2 + its place, with one of its own lines if it has any; otherwise that line of its own. Null when not yet.
    */
-  npcAsk(dt) {
-    if ((this.actT -= dt) > 0 || this.chat || this.acting || this.npcWaiting) return;
+  npcPick() {
+    if (this.actT > 0 || this.chat || this.acting) return null;
     this.actT = (3000 + Math.floor(Math.random() * 6000)) / 1000;
-    const L = this.npcLists, n = L.actions.filter((a) => !a.special).length, m = L.lines.length;
-    if (!(n + m)) return;
+    const L = this.npcLists, n = L ? L.actions.filter((a) => !a.special).length : 0, m = L ? L.lines.length : 0;
+    if (!(n + m)) return null;
     const r = npcRoll() % (n + m);
-    let action = -1, chat;
-    if (r < n && !L.actions[r].shop) { action = r + 2; const k = L.actions[r].lines.length; chat = k ? npcRoll() % k : -1; }
-    else chat = r - n;
-    this.npcWaiting = true;
-    this.onNpcAction(this, action, chat);
+    if (r < n && !L.actions[r].shop) { const k = L.actions[r].lines.length; return { action: r + 2, chat: k ? npcRoll() % k : -1 }; }
+    return { action: -1, chat: r - n };
   }
-  /** NPC_ACTION back from the server: play that action (from 2) and say that line, or say that line of its own (-1). */
-  npcActed(action, chat) {
+  /** An NPC we control that stays put: its pick goes out as NPC_ACTION, and nothing more until the server sends it back. */
+  npcAsk(dt) {
+    this.actT -= dt;
+    if (this.npcWaiting) return;
+    const pick = this.npcPick();
+    if (!pick) return;
+    this.npcWaiting = true;
+    this.onNpcAction(this, pick.action, pick.chat);
+  }
+  /**
+   * NPC_ACTION back from the server: play that action (from 2) and say that line, or say that line of its own (-1);
+   * for one that walks, the stretch it carries is queued to be walked.
+   */
+  npcActed(action, chat, start = null, moves = null) {
     this.npcWaiting = false;
     const L = this.npcLists;
-    if (!L) return;
     const say = (lines) => { if (chat >= 0 && chat < lines.length && !this.questIcon) this.chat = { text: lines[chat], t: 5 }; };
-    if (action === -1) { say(L.lines); return; }
-    const a = L.actions[action - 2];
-    if (!a) return;
-    if (this.anims[a.action]) { this.acting = a.action; this.setState(a.action); }
-    say(a.lines);
-  }
-  npcWalk(dt) {
-    const s = this.spawn;
-    if (this.acting) this.vx = approach(this.vx, 0, 400 * dt);
-    else {
-      if ((this.moveT -= dt) <= 0) {
-        const walk = Math.random() < 0.2;
-        this.dir = walk ? (Math.random() < 0.5 ? -1 : 1) : 0;
-        this.moveT = Math.floor((walk ? 500 + Math.random() * 1000 : 1000 + Math.random() * 2000) / 90) * 0.09;
-      }
-      const k = this.swimming() ? PHYS.swimDec : 1;
-      this.vx = this.dir ? accelerate(this.vx, this.dir * PHYS.walkAccel * k, this.speed * k, dt) : approach(this.vx, 0, PHYS.walkBrake * dt);
-      if (this.dir) this.facingRight = this.dir > 0;
+    if (L && action === -1) say(L.lines);
+    else if (L) {
+      const a = L.actions[action - 2];
+      if (a) { if (this.anims[a.action]) { this.acting = a.action; this.setState(a.action); } say(a.lines); }
     }
-    const { x, y, fh } = this;
-    const want = this.x + this.vx * dt, to = Math.max(s.rx0, Math.min(s.rx1, want));
-    if (to !== want) this.vx = 0;
-    if (to !== x && this.footholds.walk(this, to - x) !== 'ok') { this.x = x; this.y = y; this.fh = fh; this.vx = 0; }
-    // held up at an end: turn back (and give up if that way is blocked too)
-    if (this.dir && !this.acting && dt > 0 && this.x === x) { this.dir = this.turned ? 0 : -this.dir; this.turned = true; } else this.turned = false;
+    if (moves && this.walks) this.applyMovement(start, moves);
+  }
+  /**
+   * A walking NPC we control works out its next stretch, as the client does, on a stand-in that carries on from where
+   * its last stretch ended: its pick (an action and line, or none); for an action, a stop and a still stretch as long
+   * as the action's frames (180ms a frame unless it says); then its walk, a 90ms step every third 30ms tick (55 ticks
+   * at most), until a second is planned with some of it on the ground. The stretch goes out with NPC_ACTION and is
+   * walked only when the server sends it back (offline, at once).
+   */
+  npcPlan() {
+    const S = (this.npcSim ??= { x: this.x, y: this.y, fh: this.fh, v: 0, dir: 0, count: 0, acc: 0, stance: this.facingRight ? 4 : 5 });
+    const pick = this.npcPick() || { action: -1, chat: -1 };
+    const start = { x: Math.trunc(S.x), y: Math.trunc(S.y) }, moves = [];
+    let ms = 0;
+    // a point where it is (speeds as it goes along its floor), merged into the one before while its floor, pose and
+    // the signs of its speeds stay the same
+    const record = (dur) => {
+      const f = S.fh, vx = Math.trunc(S.v), vy = Math.trunc(f && f.x2 > f.x1 ? (S.v * (f.y2 - f.y1)) / (f.x2 - f.x1) : 0);
+      const e = { cmd: 0, x: Math.trunc(S.x), y: Math.trunc(S.y), vx, vy, fh: f?.id || 0, stance: S.stance, duration: dur }, l = moves[moves.length - 1];
+      if (l && l.cmd === 0 && l.fh === e.fh && l.stance === e.stance && Math.sign(l.vx) === Math.sign(vx) && Math.sign(l.vy) === Math.sign(vy)) Object.assign(l, { ...e, duration: l.duration + dur });
+      else moves.push(e);
+      ms += dur;
+    };
+    if (pick.action !== -1) {
+      const a = this.npcLists?.actions[pick.action - 2], anim = a && this.anims[a.action];
+      const pause = anim ? anim.frames.reduce((t, f) => t + (Number(f.delay) || 180), 0) : 0;
+      S.v = 0;
+      moves.push({ cmd: 2, rx: 0, ry: 0, stance: S.stance, duration: 0 });
+      for (let t = 0; t < pause; t += 30) record(Math.min(30, pause - t));
+    }
+    const ready = () => moves.length && ms >= 1000 && moves.some((m) => m.cmd === 0 && m.fh);
+    for (let n = 0; n < 55 && !ready(); n++) {
+      if ((S.acc += 30) < 90) continue;
+      S.acc -= 90;
+      this.npcWalkStep(S);
+      record(90);
+    }
+    if (!this.online) { this.npcActed(pick.action, pick.chat); this.queueOwn(moves); return; }
+    this.npcWaiting = true;
+    this.onNpcAction?.(this, pick.action, pick.chat, start, moves);
+  }
+  /**
+   * One 90ms step of a walking NPC's stand-in: once its count runs out it walks 1 time in 5 (0.5-1.5s, either way) or
+   * stands (1-3s); it speeds up and brakes as a character walking does, at its speed; it stays within rx0-rx1 and on
+   * its chain of floors (stopped at either); held up where it was, it turns back.
+   */
+  npcWalkStep(S) {
+    const rnd = (n) => Math.floor(Math.random() * n), dt = 0.09, sp = this.spawn;
+    if (S.count < 1) {
+      if (rnd(5) === 0) { S.count = Math.floor((rnd(1000) + 500) / 90); S.dir = rnd(2) ? -1 : 1; }
+      else { S.dir = 0; S.count = Math.floor((rnd(2000) + 1000) / 90); }
+    }
+    S.count--;
+    S.stance = S.dir ? 2 | (S.dir < 0 ? 1 : 0) : 4 | (S.stance & 1);
+    if (!S.fh) return;
+    const v0 = S.v, x0 = S.x;
+    S.v = groundVelocity(v0, S.dir, S.fh, this.footholds.fs || 1, this.speed, false, dt);
+    const want = S.x + ((v0 + S.v) / 2) * dt, to = Math.max(sp.rx0 ?? -Infinity, Math.min(sp.rx1 ?? Infinity, want));
+    if (to !== want) S.v = 0;
+    let dx = to - S.x;
+    for (let guard = 0; guard < 16 && dx; guard++) {
+      const f = S.fh, nx = S.x + dx;
+      if (nx >= f.x1 && nx <= f.x2) { S.x = nx; S.y = Footholds.yAt(f, nx); break; }
+      const right = dx > 0, nb = this.footholds.get(right ? f.next : f.prev);
+      S.x = right ? f.x2 : f.x1; S.y = right ? f.y2 : f.y1; dx = nx - S.x;
+      if (nb && nb.x1 < nb.x2) { S.fh = nb; continue; }
+      S.v = 0; break;   // the chain ends (or a wall): it stops at its end
+    }
+    if (S.dir && S.x === x0) S.dir = -S.dir;
   }
 
   /**

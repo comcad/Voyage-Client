@@ -1347,7 +1347,7 @@ export class ChannelSession {
       else if (effect === 5 && r.available >= 4) this.emit('skillSpecial', id, r.int());   // a skill's special art (Dragon Blood's drain)
       else if (effect === 0x0a && r.available >= 1) this.emit('healNumber', id, r.ubyte());   // HP they recovered (blue number)
       else if (effect === 4 && r.available >= 2) { const e = r.ubyte(); this.emit('petEffect', id, r.ubyte(), e); }   // a pet's level up / evolution
-      else if ([0, 8, 9, 0x0d, 0x0f].includes(effect)) this.emit('foreignEffect', id, effect); // level up / job change / quest clear / card / item level up
+      else if ([0, 7, 8, 9, 0x0d, 0x0f].includes(effect)) this.emit('foreignEffect', id, effect); // level up / portal / job change / quest clear / card / item level up
       else if (effect === 0x10 && r.available >= 4) this.emit('makerResult', id, r.int());   // the Maker: 0 made, 1 failed
       else if (effect === 0x17 && r.available >= 2) this.emit('avatarPicture', r.string(), id);   // a picture on them (fishing)
     });
@@ -1571,7 +1571,13 @@ export class ChannelSession {
     });
     on(S.FORCED_STAT_RESET, () => this.emit('forcedStats', null));
     // what an NPC we control does, as the server sends it back: an action (from 2) or -1, and a line (-1: none)
-    on(S.NPC_ACTION, (r) => { const oid = r.int(); this.emit('npcAction', oid, r.byte(), r.byte()); });
+    // what an NPC does, as the server sends it back: an action (from 2) or -1, a line (-1: none), and for a walking
+    // NPC the stretch it walks (where it starts, then the moves)
+    on(S.NPC_ACTION, (r) => {
+      const oid = r.int(), action = r.byte(), chat = r.byte();
+      const start = r.available >= 5 ? r.pos2() : null, moves = start ? readMovement(r) : null;
+      this.emit('npcAction', oid, action, chat, start, moves);
+    });
 
     on(S.DROP_ITEM_FROM_MAPOBJECT, (r) => {
       const mode = r.ubyte(), oid = r.int(), meso = r.bool(), id = r.int(), owner = r.int(), type = r.ubyte();
@@ -1752,7 +1758,17 @@ export class ChannelSession {
 
   /** activity: (12 + attack) * 2 + facing for an attack, (20 + skill action) * 2 + facing for a skill (with its id/level). */
   /** NPC_ACTION: what an NPC we control is about to do (an action from 2, or -1) and which line it says (-1: none). */
-  npcAction(oid, action, chat) { this.send(new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat)); }
+  npcAction(oid, action, chat, start = null, moves = null) {
+    const w = new PacketWriter(C.NPC_ACTION).int(oid).byte(action).byte(chat);
+    // a walking NPC's stretch: where it starts, the moves, no keys, and the box they keep within
+    if (moves) {
+      w.pos(start); writeMovement(w, moves);
+      let l = start.x, t = start.y, r = start.x, b = start.y;
+      for (const m of moves) if (m.x !== undefined && m.cmd === 0) { l = Math.min(l, m.x); r = Math.max(r, m.x); t = Math.min(t, m.y); b = Math.max(b, m.y); }
+      w.byte(0).short(l).short(t).short(r).short(b);
+    }
+    this.send(w);
+  }
   /** `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else). */
   moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null) {
     // each monster counts its own moves
