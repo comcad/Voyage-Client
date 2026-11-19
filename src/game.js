@@ -1,5 +1,5 @@
 import { GameMap, nameTag, artTag, Anim } from './map.js';
-import { Footholds, PHYS, accelerate, approach, swimVelocity } from './physics.js';
+import { Footholds, PHYS, accelerate, approach, groundVelocity, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame, makeSprite, holdFrame } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
 import { stanceByte, STANCE_NAMES, lookEquipIds } from './net/proto.js';
@@ -535,6 +535,11 @@ const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 122101
  * for 2s. Another player's shakes you less the farther they are (400 less the distance, up to 400px).
  */
 const SHOUT = 1111008;
+/**
+ * Bosses whose body going (once its death is over) shakes the screen: [px, how much longer than the usual 2s it
+ * lasts without easing, even with SHAKE UP off]. Zakum's third body and Balrog only with the option on.
+ */
+const BOSS_SHAKES = { 8800002: [30, 0, false], 8810026: [10, 4000, true], 8810018: [5, 3000, true], 8830003: [10, 3000, false] };
 const SHAKERS = new Set([SHOUT, 1311006, 9001001, 1009, 10001009, 20001009, 20011009, 1020, 10001020, 20001020, 20011020]);
 /** BuffStat.MORPH (second mask): transformed by a morph potion or skill. */
 const MORPH = 0x2n, GHOST_MASK = 0x20000n;
@@ -4531,6 +4536,7 @@ export class Game {
     if (entry.newSpawn) { e.appear(); if (kind === 'Mob') sfx.play(`Mob/${pad(Number(d.id), 7)}/Regen`, { volume: this.volumeAt(e.x, e.y) }); }
     if (kind === 'Mob') {
       e.team = d.team || 0;
+      if (d.appear === -4 && Number(d.id) === 8800000) this.shakeScreen(30, false);   // Zakum's body coming in
       const ap = entry.appearAs;
       if (ap?.type >= 0) this.summonAppear(e, ap.type, ap.option);
       // -3: hidden until its parent (a part of the same boss) has finished dying
@@ -4650,6 +4656,12 @@ export class Game {
     }
     this.finishKill(e, anim);
   }
+  /** A monster gone after dying, vanishing or being swallowed (leave types 0, 1 and 3): some bosses shake the screen (BOSS_SHAKES). */
+  bossGone(e) {
+    if (e.kind !== 'Mob' || !(e.leaveType < 2 || e.leaveType === 3)) return;
+    const s = BOSS_SHAKES[Number(e.spawn?.id)];
+    if (s) this.shakeScreen(s[0], false, 0, s[1], s[2]);
+  }
   /** A blow landing on e: its last line shows `last` ms from now, and e can't die before then. */
   linesLanded(e, last) { e.linesUntil = Math.max(e.linesUntil || 0, performance.now() + last); }
   finishKill(e, anim = e.queuedKill?.anim) {
@@ -4658,6 +4670,7 @@ export class Game {
     this.releaseDrops(e);
     if (anim && e.kind === 'Mob') sfx.play(`Mob/${pad(Number(e.spawn.id), 7)}/Die`, { volume: this.volumeAt(e.x, e.y) });
     if (e.kind === 'Mob' && Number(e.spawn.id) === this.vfx?.boss?.oid) this.vfx.boss = null; // the gauge goes with its boss
+    e.leaveType = anim ?? 0;   // how it went (see bossGone)
     if (anim) e.kill(anim); else e.removed = true;
   }
 
@@ -6417,6 +6430,7 @@ export class Game {
     for (const rp of this.others.values()) if (rp.morphView) rp.morphView.update(rp, rp.action, !!rp.attack, dt, rp.attack ? rp.attackScale || 1 : 1);
     this.questAlert?.update(dt * 1000); this.questAlert?.tick();
     lap('quests');
+    for (const e of this.map.life) if (e.removed && e.leaveType !== undefined) this.bossGone(e);
     this.map.life = this.map.life.filter((e) => !e.removed);
     if (this.reactors) for (const [oid, r] of this.reactors) { r.update(dt); if (r.removed) this.reactors.delete(oid); }
     this.guide?.update(dt);
@@ -6656,7 +6670,7 @@ export class Game {
       p.y += p.vy * dt;
       action = l.l ? 'ladder' : 'rope';
       const leaving = () => ({ fh: -(l.id || 0), stance: this.currentStance() });   // how you were on it, for those watching
-      if (jumpHit() && dir && !this.hasDisease(WEAKEN)) {
+      if (jumpHit() && dir && !this.hasDisease(WEAKEN) && this.jumpAllowed()) {
         const leave = leaving();
         p.ladder = null; p.vy = -JUMP * (swim ? 0.3 : 0.5); p.vx = dir * PHYS.walk * ms.speed * 1.3; p.facingRight = dir > 0;   // the client's ladder jump
         this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy, leave };
@@ -6712,6 +6726,7 @@ export class Game {
     if (inp.hit('up') && p.fh && this.useDoorAt(p)) return;
     this.scriptTouch();
     this.touchPortal();
+    this.springPortal(held);
     if (p.fh && this.portalCooldown <= 0) {
       const portal = map.portalAt(p.x, p.y);
       // touch portals fire once on entry, not every frame you stand in them
@@ -6737,11 +6752,11 @@ export class Game {
       if (dir) p.facingRight = dir > 0;
       // holding jump keeps jumping: each landing jumps again (a down-jump still needs its own press); in water a jump
       // goes at most every 300ms
-      if (!this.hasDisease(WEAKEN) && (jumpHit() || (jumpHeld() && !held('down'))) && this.swimJumpReady(swim)) {   // Weakness: no jumping
+      // (a map may forbid jumping, or down-jumps: see jumpAllowed and downJumpAllowed)
+      if (!this.hasDisease(WEAKEN) && (jumpHit() || (jumpHeld() && !held('down'))) && this.swimJumpReady(swim) && (held('down') || this.jumpAllowed())) {   // Weakness: no jumping
         if (held('down')) {
-          const below = fh.below(p.x, p.y + 1, Infinity, p.fh);   // any floor under us, however far down
           // a little hop first, then down through the floor: it stays ignored until we are well past it
-          if (below) {
+          if (this.downJumpAllowed()) {
             this.moveEvent = { kind: 'down', ofh: p.fh.id, x: p.x, y: p.y };
             p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump');
           }
@@ -6757,11 +6772,10 @@ export class Game {
           sfx.play('Game/Jump');
         }
       } else {
-        // walking speeds up and slows down rather than starting and stopping dead (moved by the step's average speed)
-        // (faster than walking, as after a push, you slow to the walk the way a stop does, holding that way or not)
+        // walking speeds up and slows down rather than starting and stopping dead (moved by the step's average speed);
+        // a conveyor carries you, an icy map's floors are slippery (see groundVelocity)
         const v0 = p.vx || 0;
-        if (dir && dir * v0 > WALK) p.vx = approach(v0, dir * WALK, PHYS.walkBrake * dt);
-        else p.vx = dir ? accelerate(v0, dir * PHYS.walkAccel * (swim ? PHYS.swimDec : 1), WALK, dt) : approach(v0, 0, PHYS.walkBrake * dt);
+        p.vx = groundVelocity(v0, dir, p.fh, map.fh.fs, WALK, swim, dt);
         const dx = ((v0 + p.vx) / 2) * dt;
         if (dx) { const r = fh.walk(p, dx); if (r === 'edge') p.vy = 0; else if (r === 'wall') p.vx = 0; }
         if (held('down') && !dir) action = 'prone';
@@ -6775,7 +6789,7 @@ export class Game {
       if (swim) {
         // a stroke: the jump key (pressed, or its key repeat while held) sends you up; nothing else rises
         const key = this.keysFor(5, ACTION.JUMP).some((c) => inp.hit(c) || inp.repeated(c));
-        if (key && !this.hasDisease(WEAKEN) && this.swimJumpReady(true)) {
+        if (key && !this.hasDisease(WEAKEN) && this.swimJumpReady(true) && this.jumpAllowed()) {
           p.vy = -PHYS.swimSpeed * 5 * this.swimShoe(ms).v;
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
         }
@@ -6998,11 +7012,66 @@ export class Game {
     if (p.fh) p.zMass = p.fh.zMass;
     this.coast(dt);
   }
-  /** No input: on a floor you slide to a stop, in the air you fall (and stop on landing). */
+  /** No input: on a floor you slide to a stop (or a conveyor carries you), in the air you fall (and stop on landing). */
   coast(dt) {
     const p = this.player, fh = this.map.fh;
-    if (p.fh) { const v0 = p.vx || 0; p.vx = approach(v0, 0, PHYS.walkBrake * dt); const dx = ((v0 + p.vx) / 2) * dt; if (dx) fh.walk(p, dx); }
+    if (p.fh) {
+      const v0 = p.vx || 0, swim = this.map.swimming(p.x, p.y), max = PHYS.walk * this.moveStats().speed * (swim ? PHYS.swimDec : 1);
+      p.vx = groundVelocity(v0, 0, p.fh, fh.fs, max, swim, dt);
+      const dx = ((v0 + p.vx) / 2) * dt;
+      if (dx) fh.walk(p, dx);
+    }
     else { this.playerFall(dt, 0, 0); if (p.fh) p.vx = 0; }
+  }
+
+  /** Jumping (from a floor, a ladder or rope, or a stroke in water): not on a map that forbids it (fieldLimit 0x1), unless a GM. */
+  jumpAllowed() { return !!this.gm || !((this.map?.info?.fieldLimit || 0) & 0x1); }
+  /**
+   * A down-jump from the floor you stand on: not on a map that forbids it (fieldLimit 0x20000; a GM may), nor standing
+   * in a spring portal (type 12 or 13), nor from a floor marked forbidFallDown; and only with somewhere to land: the
+   * lowest floor at most 300px down, else the nearest one 300-600px down, and not one at your own height (within 5px).
+   */
+  downJumpAllowed() {
+    const p = this.player, map = this.map, own = p.fh;
+    if (!own) return false;
+    if (!this.gm && (map.info?.fieldLimit || 0) & 0x20000) return false;
+    const tp = map.touchPortalAt(p.x, p.y);
+    if (tp && (tp.pt === 12 || tp.pt === 13)) return false;
+    if (Number(own.forbidFallDown)) return false;
+    const x = Math.trunc(p.x), y = Math.trunc(p.y);
+    const at = (f) => f.y1 + Math.trunc(((f.y2 - f.y1) * (x - f.x1)) / (f.x2 - f.x1));
+    let to = null, ty = -Infinity;
+    for (const f of map.fh.floors) { if (x < f.x1 || x > f.x2) continue; const fy = at(f); if (fy <= y + 300 && fy > ty) { to = f; ty = fy; } }
+    if (!to || to === own) {
+      to = null; ty = y + 600;
+      for (const f of map.fh.floors) { if (x < f.x1 || x > f.x2) continue; const fy = at(f); if (fy >= y + 300 && fy < ty) { to = f; ty = fy; } }
+    }
+    return !!to && !(ty > y - 5 && ty < y + 5);
+  }
+  /**
+   * Spring portals, while you stand on a floor in one's box. Type 12 throws you 2300 up and 200 the way you face, 100
+   * more or less with an arrow held. Type 13 throws you by its horizontalImpact and verticalImpact, only on the maps
+   * that have them (field types 19, 20, 21 and 25, and the GM room) and, when it names a reactor, while that one is
+   * in state 1. Both show BasicEff's VerticalJump; those watching see the throw (movement 18, or 19).
+   */
+  springPortal(held) {
+    const p = this.player, map = this.map;
+    if (!p.fh || p.ladder || this.dead) return;
+    const tp = map.touchPortalAt(p.x, p.y);
+    if (!tp || (tp.pt !== 12 && tp.pt !== 13)) return;
+    let vx, vy, flip;
+    if (tp.pt === 12) {
+      vx = (p.facingRight ? 200 : -200) + (held('left') ? -100 : 0) + (held('right') ? 100 : 0); vy = -2300; flip = p.facingRight;
+    } else {
+      if (![19, 20, 21, 25].includes(Number(map.info?.fieldType)) && map.id !== 180000002) return;
+      if (tp.reactorName) { const r = [...(this.reactors?.values() || [])].find((e) => e.name === tp.reactorName); if (r?.cur !== 1) return; }
+      vx = Number(tp.horizontalImpact) || 0; vy = -(Number(tp.verticalImpact) || 0); flip = vx !== 0;
+    }
+    const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
+    p.y = Math.floor(p.y - 1); p.fh = null;
+    p.vx = impact(p.vx || 0, vx); p.vy = impact(p.vy || 0, vy);
+    this.moveEvent = { kind: 'jump', cmd: tp.pt === 12 ? 18 : 19, vx: p.vx, vy: p.vy };
+    this.playBasicEff('VerticalJump', p.x, p.y, flip);
   }
 
   /** Mounts can't climb, except Monster Rider's (190xxxx) and those of 1932001-1932005 and 1932007-1932011. */
@@ -7469,9 +7538,17 @@ export class Game {
   }
   /** The screen shake of a skill landing (see SHAKERS); `near` is 400 for your own, 400 less the distance for another's. */
   startShake(skillId, near, delay) {
-    if (!settings.shake || near <= 0) return;
+    if (near <= 0) return;
     const shout = skillId === SHOUT;
-    this.after(delay, () => { this.shake = { s: near / (shout ? 15 : 25), f: shout ? 0.85 : 0.92, left: shout ? 1500 : 2000, acc: 0, dx: 0, dy: 0 }; });
+    this.shakeScreen(near / (shout ? 15 : 25), shout, delay);
+  }
+  /**
+   * Shake the screen by px at first, easing by 8% each 30ms step for 2s at most (quick: by 15%, for 1.5s), after delay
+   * ms; one given a duration doesn't ease and lasts that much longer. Only with SHAKE UP on, unless forced.
+   */
+  shakeScreen(px, quick, delay = 0, duration = 0, forced = false) {
+    if (!forced && !settings.shake) return;
+    this.after(delay, () => { this.shake = { s: px, f: duration ? 1 : quick ? 0.85 : 0.92, left: (quick ? 1500 : 2000) + duration, acc: 0, dx: 0, dy: 0 }; });
   }
   shakeStep(dt) {
     const k = this.shake;
@@ -8602,7 +8679,8 @@ export class Game {
     const p = this.player, map = this.map, ld = this.skills.levelData(id, lv);
     if ((map?.info?.fieldLimit || 0) & 2) return false;
     if (!p.fh || p.ladder || p.attack) return false;
-    if (map.boxPortalAt(p.x, p.y, 12) || map.boxPortalAt(p.x, p.y, 13)) return false;
+    const tp = map.touchPortalAt(p.x, p.y);
+    if (tp && (tp.pt === 12 || tp.pt === 13)) return false;
     if (this.net && !this.skillCostOk(id, ld)) return false;
     this.net?.specialMove(id, lv, null);
     const k = (p.facingRight ? 1 : -1) * (ld?.x || 0), v = p.vx || 0;
@@ -10559,6 +10637,7 @@ export class Game {
   }
   mobAttackLand(m, a, spots) {
     const p = this.player;
+    if (Number(a.info?.tremble)) this.shakeScreen(30, true);   // Zakum's arms, Horntail, Balrog...
     // the client works an attack out only from a monster that may attack (no info/notAttack, not disabled) and, when
     // it is Hypnotized, only from the last one put under it
     if ((hypnotized(m) && m !== this.lastHypnotized) || Number(m.src?.info?.notAttack) || this.mobDisabled(m)) return;
@@ -10666,7 +10745,7 @@ export class Game {
     const here = { cmd: 0, x: Math.round(p.x), y: Math.round(p.y) };
     // leaving a ladder or rope: where you let go, first still on it, then off it
     if (ev?.leave) pair(here, ev.leave, { fh: 0, stance: stanceByte(air, left) });
-    if (ev?.kind === 'jump') this.moveBuf.push({ cmd: 1, rx: Math.round(ev.vx), ry: Math.round(ev.vy), stance: stanceByte(air, left), duration: 0 });
+    if (ev?.kind === 'jump') this.moveBuf.push({ cmd: ev.cmd || 1, rx: Math.round(ev.vx), ry: Math.round(ev.vy), stance: stanceByte(air, left), duration: 0 });
     if (ev?.kind === 'down') {
       pair({ cmd: 15, x: Math.round(ev.x), y: Math.round(ev.y) - 1, ofh: ev.ofh }, { fh: ev.ofh, stance: stanceByte('prone', left) }, { fh: 0, stance: stanceByte(air, left) });
       this.downOfh = ev.ofh;

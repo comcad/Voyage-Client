@@ -238,6 +238,18 @@ export class GameMap {
       return x >= p.x - hw && x < p.x + hw && y >= p.y - hh && y < p.y + hh;
     });
   }
+  /**
+   * The touch portal - type 3, 9, 12 or 13, the ones the client keeps on a list of their own - whose hRange x vRange box
+   * holds this point, last listed first: the one that counts where you stand.
+   */
+  touchPortalAt(x, y) {
+    x = Math.trunc(x); y = Math.trunc(y);
+    return this.portals.findLast((p) => {
+      if (p.pt !== 3 && p.pt !== 9 && p.pt !== 12 && p.pt !== 13) return false;
+      const hw = Math.trunc((p.hRange ?? 100) / 2), hh = Math.trunc((p.vRange ?? 100) / 2);
+      return x >= p.x - hw && x < p.x + hw && y >= p.y - hh && y < p.y + hh;
+    });
+  }
 
   /**
    * Hidden portals show while you are within [x-100, x+100) x [y-50, y+50) of one: portalStart, then portalContinue

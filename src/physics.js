@@ -14,6 +14,8 @@ export const PHYS = {
   // pushes at 2*floatDrag2/100 but only up to walkSpeed/walkForce*floatDrag2 (~9px/s), and letting go drags
   // at floatDrag2*floatCoefficient/100 - so a jump keeps the speed it left the ground with
   walkAccel: 1400, walkBrake: 800, airAccel: 200, airLimit: (125 / 140000) * 10000, airDrag: 1,
+  // a floor's friction stays within Physics.img's minFriction and maxFriction
+  minFriction: 0.05, maxFriction: 2,
   // in water (Physics.img swimForce / swimSpeed / floatDrag1 over the mass of 100, swimSpeedDec)
   swimAccel: 1200, swimSpeed: 140, swimDrag: 1000, swimDec: 0.9,
 };
@@ -42,6 +44,35 @@ export function accelerate(v, accel, limit, dt) {
 }
 /** Brake toward a target without overshooting it. */
 export function approach(v, target, amount) { return v > target ? Math.max(target, v - amount) : Math.min(target, v + amount); }
+
+/**
+ * The client's walk on a floor for one step: the speed along x after dt seconds, held direction dir (-1, 0 or 1), walk
+ * speed max (the speed stat's, slowed in water), on foothold f of a map whose info/fs is fs (1 when unset).
+ *
+ * The floor's friction is the foothold's drag (x0.01, 1 when unset) times the map's fs, kept to 0.05-2 and halved
+ * below 1: El Nath's 0.2 makes 0.1, so its ice brakes at a tenth of the usual and, with the push also times fs,
+ * takes a while to get going. A foothold's force (x0.01: a conveyor) carries you its way when you hold nothing, up to
+ * the walk speed times its whole part; walking with it pushes and lets you go twice that, against it a fifth over
+ * that. Faster than the floor allows (as after a push), you slow to it first.
+ */
+export function groundVelocity(v, dir, f, fs, max, swim, dt) {
+  const force = f?.force ? Number(f.force) / 100 : 0;
+  let drag = (f?.drag ? Number(f.drag) / 100 : 1) * fs;
+  drag = Math.min(PHYS.maxFriction, Math.max(PHYS.minFriction, drag));
+  if (drag < 1) drag *= 0.5;
+  const brake = drag * PHYS.walkBrake * dt;
+  let accel = dir * PHYS.walkAccel * fs * (swim ? PHYS.swimDec : 1);
+  if (force) {
+    const k = Math.max(1, Math.abs(Math.trunc(force)));   // (every conveyor in the game pushes 1 or more)
+    const by = !dir ? k : dir * force <= 0 ? 0.2 / k : 2 * k;
+    accel = dir ? accel * by : force * PHYS.walkAccel * fs;
+    max *= by;
+  }
+  if (v > max) v = Math.max(max, v - brake);
+  else if (v < -max) v = Math.min(-max, v + brake);
+  if (!dir && !force) return approach(v, 0, brake);
+  return accelerate(v, accel, max, dt);
+}
 
 /** Which side of a foothold's line a point is on: below 0 in front of it, above 0 behind it, 0 on it. */
 const sideOf = (f, x, y) => (f.x2 - f.x1) * (y - f.y1) - (f.y2 - f.y1) * (x - f.x1);
