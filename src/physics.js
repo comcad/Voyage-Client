@@ -136,6 +136,21 @@ export class Footholds {
 
   get(id) { return this.byId.get(id); }
 
+  /**
+   * Looking `dist` px ahead along the chain from `at` px along floor `f`, going `dir` (-1 or 1): the first foothold
+   * that isn't a floor (a wall, an underside); null when the chain ends first; a floor when it is all floor that far
+   * (`f` itself for no direction, or when its own end is further than `dist`).
+   */
+  ahead(f, dir, at, dist) {
+    if (!dir) return f;
+    for (let rest = dist - (dir > 0 ? f.len - at : at); rest > 0; rest -= f.len) {
+      f = this.get(dir > 0 ? f.next : f.prev);
+      if (!f) return null;
+      if (!(f.ux > 0)) return f;
+    }
+    return f;
+  }
+
   /** Whether x,y is in water (the map sets this). */
   swimming() { return false; }
   static yAt(f, x) { return f.x1 === f.x2 ? f.y1 : f.y1 + ((f.y2 - f.y1) * (x - f.x1)) / (f.x2 - f.x1); }
@@ -251,13 +266,15 @@ export class Footholds {
    * Airborne step (in water the speeds are already set: no gravity). Mutates ent.x/y/vx/vy/fh.
    * old: the speeds before this step's push (steering, swimming); without it, the speeds as they are now.
    * ent.zMass is the group of the floor it last stood on (walk and landing keep it), for meets.
+   * hold: where across it may end up (given where it would), before anything it meets (a jumping monster's range).
    */
-  fall(ent, dt, ignore = null, swimming = false, old = null) {
+  fall(ent, dt, ignore = null, swimming = false, old = null, hold = null) {
     // moved by the average of the speed before and after the step's push and gravity, on both axes, so a jump peaks
     // at v²/2g whatever the frame time
     const vx0 = old ? old.vx : ent.vx, vy0 = old ? old.vy : ent.vy;
     if (!swimming) ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
     let x0 = ent.x, y0 = ent.y, nx = ent.x + ((vx0 + ent.vx) / 2) * dt, ny = ent.y + ((vy0 + ent.vy) / 2) * dt;
+    if (hold) nx = hold(nx);
     // the map's sides are walls for what is inside them
     if (x0 >= this.wallL && nx < this.wallL) { nx = this.wallL; ent.vx = 0; }
     else if (x0 <= this.wallR && nx > this.wallR) { nx = this.wallR; ent.vx = 0; }
