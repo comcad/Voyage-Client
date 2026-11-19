@@ -1276,6 +1276,13 @@ export class ChannelSession {
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
         b.ghost = values[popcount(mask >> 32n) + popcount(mask & 0x3n)] || 0;
       }
+      // Infinity (0x200): on, and Concentrate (0x2000): its value, the % taken off what a skill costs in MP
+      if (pick === normal && mask & 0x200n) b.infinity = true;
+      if (pick === normal && mask & 0x2000n) {
+        r.pos = start;
+        const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
+        b.concentrate = values[popcount(mask >> 32n) + popcount(mask & 0x1fffn)] || 0;
+      }
       // Shadow Stars: its one stat picks the star it throws (the item 2069999 above it)
       if (pick === normal && n === 1 && mask === 0x100n) { r.pos = start; b.shadowStars = r.short(); }
       // Power Stance / Freeze Standing: its one stat is the % chance not to be knocked back
@@ -1300,7 +1307,7 @@ export class ChannelSession {
       const d = { owner: r.int(), oid: r.int(), skill: r.int() };
       r.ubyte(); d.level = r.ubyte();
       const at = r.pos2(); d.x = at.x; d.y = at.y;
-      d.stance = r.ubyte(); r.short(); d.moveType = r.ubyte(); d.canAttack = r.bool(); d.animated = !r.bool();
+      d.stance = r.ubyte(); r.short(); d.moveType = r.ubyte(); d.assist = r.ubyte(); d.canAttack = d.assist !== 0; d.animated = !r.bool();
       this.emit('summonSpawn', d);
     });
     on(S.REMOVE_SPECIAL_MAPOBJECT, (r) => this.emit('summonRemove', r.int(), r.int(), r.ubyte() === 4));
@@ -2346,15 +2353,22 @@ export class ChannelSession {
    * monster: oid, its id + 4 unread bytes, where it is now and next, the hit delay (ms) and the damage.
    */
   /** A summon's attack: its action (4 attack1, 5 attack2) with facing left in the top bit, then each monster struck. */
-  summonAttack(s, hits, delay, action = 4) {
+  /**
+   * SUMMON_ATTACK: the summon, the time, its action (facing left in the top bit), how many; your position, then the
+   * summon's; for each monster its id and kind, the hit pose it is to take (6 + one of its hit poses, 0xFF with none),
+   * its facing and action, its frame, a byte, where it is and where it was the tick before, when the blow lands and
+   * the damage; then an int.
+   */
+  summonAttack(s, owner, hits, action = 4) {
     const w = new PacketWriter(C.SUMMON_ATTACK).int(s.oid).int(Date.now() | 0).byte((action & 0x7f) | (s.facingRight ? 0 : 0x80)).byte(hits.length);
-    const sx = Math.round(s.x), sy = Math.round(s.y);
-    w.short(sx).short(sy).short(sx).short(sy);
-    for (const { mob, dmg } of hits) {
-      const at = { x: Math.round(mob.x), y: Math.round(mob.y) };
-      w.int(mob.oid).int(Number(mob.spawn?.id) || 0).int(0).pos(at).pos(at).short(delay).int(dmg);
+    w.short(owner.x).short(owner.y).short(Math.trunc(s.x)).short(Math.trunc(s.y));
+    for (const { mob, dmg, delay } of hits) {
+      const hitPoses = Object.keys(mob.src || {}).filter((k) => /^hit\d+$/.test(k)).length, st = mob.stance || 0;
+      w.int(mob.oid).int(Number(mob.spawn?.id) || 0).byte(hitPoses ? 6 + Math.floor(Math.random() * hitPoses) : 0xff)
+        .byte(((st & 1) << 7) | ((st >> 1) & 0x7f)).byte(mob.anims?.[mob.state]?.i || 0).byte(0)
+        .pos({ x: Math.trunc(mob.x), y: Math.trunc(mob.y) }).pos({ x: Math.trunc(mob.prevX ?? mob.x), y: Math.trunc(mob.prevY ?? mob.y) }).short(delay).int(dmg);
     }
-    this.send(w);
+    this.send(w.int(0));
   }
   /** USE_UPGRADE_SCROLL: the scroll's USE slot, the equip's slot (negative = worn), 2 with a White Scroll (else 1), Legendary Spirit */
   useScroll(scrollSlot, equipSlot, white, legendary) { this.send(new PacketWriter(C.USE_UPGRADE_SCROLL).int(Date.now() | 0).short(scrollSlot).short(equipSlot).short(white ? 2 : 1).byte(legendary ? 1 : 0)); }

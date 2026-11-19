@@ -76,7 +76,7 @@ import { KiteInputWin, KiteMessageWin, MemoSendWin, CancelRequestWin, CancelResu
 import { StorageWin } from './ui/storage.js';
 import { WorldMapWin } from './ui/worldmap.js';
 import { Pet, pickReaction, NO_LOOT_MAP } from './pets.js';
-import { Summon, PUPPET_RANGE, PUPPETS } from './summons.js';
+import { Summon, PUPPET_RANGE, PUPPETS, MAGIC_SUMMONS } from './summons.js';
 import { Dragon } from './dragon.js';
 import { CashShopWin } from './ui/cashshop.js';
 import { ChannelSession } from './net/channel.js';
@@ -650,10 +650,20 @@ const ARAN_SWINGS = { 21000002: [[21120002, 21120009], [21110002, 21110007]], 21
  * How long after an attack's pose ends it can be used again (ms): Double Uppercut and Dragon Strike only after
  * striking something; Grenade from when it is thrown.
  */
-const REUSE = { 5101003: 1000, 5121001: 400, 5121005: 500, 5121007: 400, 15111004: 400, 5201006: 2000, 5211004: 450, 5211005: 450 };
+const REUSE = { 5101003: 1000, 5121001: 400, 5121005: 500, 5121007: 400, 15111004: 400, 5201006: 2000, 5211004: 450, 5211005: 450, 4121008: 500, 13101005: 400 };
 const REUSE_ON_HIT = new Set([5101003, 5121001]);
 /** Dash, Transformation and Super Transformation are refused, with a notice, where the map forbids movement skills. */
-const MOVE_LIMITED_SAY = new Set([5001005, 15001003, 5111005, 15111002, 5121003]);
+const MOVE_LIMITED_SAY = new Set([5001005, 15001003, 5111005, 15111002, 5121003, 13111005, 1014, 10001015]);
+/**
+ * The spells Element Amplification covers (their MP cost x its x%): the fire / poison and ice / lightning mages', the
+ * Blaze Wizard's and the Evan's attack spells.
+ */
+const AMPLIFIED = new Set([2001004, 2001005, 2101004, 2101005, 2111002, 2111003, 2111006, 2121001, 2121003, 2121006, 2121007,
+  2201004, 2201005, 2211002, 2211003, 2211006, 2221001, 2221003, 2221006, 2221007, 12001003, 12101002, 12101006, 12111003, 12111005, 12111006,
+  22001001, 22101000, 22111000, 22121000, 22131000, 22151001, 22171002, 22171003, 22181001]);
+/** Three Snails, and the skills that say "This skill cannot be used with the equipped item." for the wrong weapon. */
+const THREE_SNAILS = new Set([1000, 10001000, 20001000, 20011000]), EQUIPPED_ITEM_SAY = new Set([11101004, 11111006, 12101006, 12111005, 12111006]);
+const MYSTIC_DOOR = 2311002, SMOKESCREEN = 4221006;
 const DASHES = [5001005, 15001003];
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
@@ -3778,7 +3788,8 @@ export class Game {
         this.buffs = this.buffs.filter((x) => x.source !== b.source);
         if (BigInt.asUintN(64, BigInt(b.m2 ?? 0)) & BARRIER_MASK) this.after(0, () => this.barrierShield(this.player));
         this.buffs.push({ source: b.source, until: Date.now() + b.duration, dur: b.duration, m1: b.m1, m2: b.m2, hbHp: b.hbHp, hbMp: b.hbMp, sharpEyes: b.sharpEyes, speed: b.speed, jump: b.jump,
-          watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid });
+          watk: b.watk, matk: b.matk, hands: b.hands, acc: b.acc, booster: b.booster, infusion: b.infusion, mapleWarrior: b.mapleWarrior, combo: b.combo, stance: b.stance, wdef: b.wdef, mdef: b.mdef, avoid: b.avoid,
+          infinity: b.infinity, concentrate: b.concentrate });
       },
       cancelBuff: (m1, m2) => {
         if (BigInt.asUintN(64, BigInt(m1)) & RIDING_MASK) this.riding = null;
@@ -5483,31 +5494,50 @@ export class Game {
   }
 
   /**
-   * The most a summon may hit for, as the game server's SummonDamageHandler caps it (it flags anything above):
-   * magic ones (no pad) take 5% x mad of the base magic damage, others 7.7% x pad of your weapon's base
-   * damage (5.4% from 438 up). Rolled at most 95% of that.
+   * A summon's blow on monster m, as the client works it out: a physical one misses by your accuracy (x 0.7-1.3
+   * against its avoid), else (main stat x 0.7-1.0 x 2.5 + second stat) x the skill's pad% - DEX and STR, the Dawn
+   * Warrior's and Thunder Breaker's STR and DEX, the Wind Archer's DEX and STR, the Night Walker's LUK and DEX; a magic
+   * one (Elquines, Ifrit, Summon Dragon, Bahamut, Flame) misses by your magic accuracy (x 0.5-1.2), else (3.3 x a roll
+   * of magic x mastery to magic + INT / 2 + (0.058 x magic)^2) x its mad%, mastery being (the skill's x 5 + 10) x 0.9%.
+   * A guard stops either, immunity lets 1 through; then the monster's element and Bullseye. A monster with a fixed
+   * damage takes that instead; one hurt only by plain attacks, or only by other skills, takes nothing.
    */
-  /**
-   * A physical summon's blow (Octopus, Gaviota, Wrath of the Octopi): a miss by your accuracy as for your own blows,
-   * else (DEX x 0.7-1.0 x 2.5 + STR) x the skill's pad %. No weapon attack, defence, level gap or critical.
-   */
-  summonHitDamage(id, lv, m) {
-    const info = m.src?.info || {}, over = Math.max(0, (info.level || 0) - (this.stats?.level || 1));
-    if (this.accuracyMiss(info, over)) return 0;
-    const pad = Number(this.skills.levelData(id, lv)?.pad) || 0;
-    return Math.trunc(((this.totalStat('dex') * (0.7 + Math.random() * 0.3) * 2.5 + this.totalStat('str')) * pad) / 100);
-  }
-  summonMaxDamage(id, lv) {
-    const ld = this.skills.levelData(id, lv) || {}, s = this.stats;
-    let max;
-    if (!ld.pad) {
-      const ti = (s.int || 0) + this.equipStat('int'), matk = Math.max(14, ti + this.equipStat('matk'));
-      max = Math.floor(((matk - ti + Math.floor(0.1996049769 * ti ** 1.290631341)) * 107) / 100) * 0.05 * (ld.mad || 0);
+  summonDamage(sm, m) {
+    const info = m.src?.info || {}, sb = this.skills, ld = sb.levelData(sm.skill, sm.level) || {}, magic = MAGIC_SUMMONS.has(sm.skill);
+    const over = Math.max(0, (info.level || 0) - (this.stats?.level || 1)), num = (v) => Number(v) || 0, clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+    const rand = (a, b) => { const lo = Math.min(a, b), hi = Math.max(a, b); return lo + Math.random() * (hi - lo); };
+    let d;
+    if (!magic) {
+      if (this.accuracyMiss(info, over) || guarded(m)) d = 0;
+      else if (immuneTo(m, WEAPON_IMMUNE)) d = 1;
+      else {
+        const job = this.stats?.job || 0, cyg = Math.floor(job / 1000) === 1 ? Math.floor((job % 1000) / 100) : 0;
+        const [main, second] = cyg === 1 || cyg === 5 ? ['str', 'dex'] : cyg === 3 ? ['dex', 'str'] : cyg === 4 ? ['luk', 'dex'] : ['dex', 'str'];
+        d = this.summonElement((this.totalStat(main) * (0.7 + Math.random() * 0.3) * 2.5 + this.totalStat(second)) * num(ld.pad) * 0.01, sm.skill, m);
+      }
     } else {
-      const base = this.maxDamage();
-      max = base * (base >= 438 ? 0.054 : 0.077) * ld.pad;
+      const INT = this.totalStat('int'), LUK = this.totalStat('luk'), acc = ((Math.floor(INT / 10) + Math.floor(LUK / 10)) * 5 * 100) / (over * 10 + 255);
+      if (rand(acc * 0.5, acc * 1.2) < clamp(info.eva || 0, 0, 999) || guarded(m)) d = 0;
+      else if (immuneTo(m, MAGIC_IMMUNE)) d = 1;
+      else {
+        const now = Date.now(), buff = Math.max(0, ...(this.buffs || []).filter((b) => b.matk && b.until > now).map((b) => b.matk));
+        const soul = sb.level(DRAGON_SOUL) ? num(sb.levelData(DRAGON_SOUL)?.mad) : 0;
+        const MAD = clamp(clamp(INT + this.equipStat('matk') + soul, 0, 1999) + buff, 0, 1999), k = (num(ld.mastery) * 5 + 10) * 0.009;
+        d = this.summonElement((rand(MAD * k, MAD) * 3.3 + INT * 0.5 + (MAD * 0.058) ** 2) * num(ld.mad) * 0.01, sm.skill, m);
+      }
     }
-    return Math.max(1, Math.floor(max * 0.95));
+    if (d > 1 && m === this.beaconMob && sb.level(BULLSEYE)) d *= (num(sb.levelData(BULLSEYE)?.x) + 100) * 0.01;
+    d = Math.trunc(d);
+    if (d > 0 && num(info.fixedDamage) > 0) d = num(info.fixedDamage);
+    const only = info.damagedBySelectedSkill && Object.values(info.damagedBySelectedSkill).map(Number);
+    if (num(info.onlyNormalAttack) || (only && !only.includes(sm.skill))) d = 0;
+    return d;
+  }
+  /** A summon's damage against m's element: its skill's element (weak x1.5, strong x0.5, immune x0). */
+  summonElement(d, skillId, m) {
+    const elem = String(this.skills.node(skillId)?.elemAttr || 'p').toUpperCase();
+    const a = Number(new RegExp(`${elem}(\\d)`).exec(m.src?.info?.elemAttr || '')?.[1]) || 0;
+    return a === 1 ? 0 : a === 2 ? d * 0.5 : a === 3 ? Math.min(Math.max(d, d * 1.5), 199999) : d;
   }
 
   /** A summon's blow landing: the monster flinches, the numbers show and attack1's hit art plays on it. */
@@ -7240,7 +7270,6 @@ export class Game {
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
     if (this.player.ladder && (kind !== 'special' || NO_LADDER.has(id))) return false;   // on a ladder or rope only buffs
     if (SHIP_SHOTS.has(id) && !this.onShip()) { this.notice('This skill is available only when you are riding the Battleship.'); return false; }
-    if (MOVE_LIMITED_SAY.has(id) && (this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
     if (performance.now() < (this.reuseAt?.[id] || 0)) return false;
     // any other skill ends a Dash
     if (!DASHES.includes(id) && this.dashing() && performance.now() > (this.dashEndSent || 0)) {
@@ -7275,7 +7304,6 @@ export class Game {
     // Shockwave needs floor 55px ahead (within 30px up or down)
     if (SHOCKWAVES.has(id) && !this.floorNear(this.player.x + (this.player.facingRight ? 55 : -55), this.player.y, 30)) return false;
     if (MOVE_LIMITED.has(id) && ((this.map?.info?.fieldLimit || 0) & 2)) return false;
-    if (id === SHADOW_MESO && this.meso < Math.trunc(((sb.levelData(id)?.moneyCon || 0) * (100 + (this.partner()?.y || 0))) / 100)) { this.notice("You don't have enough mesos to use this skill."); return false; }
     // buffs fire once per key press; Teleport repeats while the key is held (its own delay paces it)
     if (kind === 'special' && !this.skillKeyPressed && !TELEPORTS.has(id)) return false;
     if (TELEPORTS.has(id) && performance.now() < (this.teleportLock || 0)) return false;
@@ -7371,10 +7399,6 @@ export class Game {
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
     if (p.ladder && kind !== 'special') return false;   // no attacks of any kind on a ladder or rope
-    if (skillId && this.net && !sb.weaponOk(skillId, weapon)) {
-      this.notice(kind === 'melee' ? 'This skill cannot be used with the equipped item.' : "You cannot use this skill with the weapon you're equipped with.");
-      return false;
-    }
     if (GROUND_ONLY.has(skillId) && !p.fh) return false;
     if (kind === 'magic' && !p.fh && !AIR_SPELLS.has(skillId) && !this.map?.swimming(p.x, p.y)) return false;
     // a plain attack in Dark Sight (without Vanish) only brings you out of it
@@ -7405,6 +7429,12 @@ export class Game {
     if (skillId && this.net) {
       if (sb.cooling(skillId)) { this.notice('You may not use the skill yet.'); return false; }
       if (!this.skillCostOk(skillId, ld)) return false;
+      if (MOVE_LIMITED_SAY.has(skillId) && (this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
+      if (!sb.weaponOk(skillId, weapon)) {
+        this.notice(THREE_SNAILS.has(skillId) ? 'You may only use this skill with a one-handed weapon equipped.'
+          : kind === 'melee' || EQUIPPED_ITEM_SAY.has(skillId) ? 'This skill cannot be used with the equipped item.' : "You cannot use this skill with the weapon you're equipped with.");
+        return false;
+      }
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
@@ -7569,7 +7599,7 @@ export class Game {
     else if (projectile && !out.length) this.after(hitDelay, () => this.shoot(skillId, p, clip && { ...clip, point: true }, kind === 'ranged' ? ammo : 0, null));
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
-    if (HELD_SHOTS.has(skillId)) this.catchBreath();
+    this.catchBreath();   // any attack that goes out (5s before a channel change, a chair...)
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
@@ -7928,7 +7958,7 @@ export class Game {
       this.notice(GRENADES.has(id) ? "You cannot use this skill with the weapon you're equipped with." : 'This skill cannot be used with the equipped item.');
       return false;
     }
-    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    if (this.net && !this.skillCostOk(id, ld)) return false;
     // a prepare pose the client has no action for ("dash") goes out as none: you stand (or fall) as you are
     const act = node?.prepare?.action, known = !act || ACTIONS.includes(act);
     const pose = !act ? 'alert' : known ? act : p.fh ? this.look.standAction() : 'jump';
@@ -7936,6 +7966,7 @@ export class Game {
     const prepare = id === EXPLOSION ? (this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale) / 1000 : 0;
     this.charging = { id, lv, t: 0, pose, prepare };
     if (GRENADES.has(id)) this.reuseAt = { ...this.reuseAt, [id]: performance.now() + GRENADE_REUSES[id] };
+    if (MONSTER_MAGNETS.has(id)) this.reuseAt = { ...this.reuseAt, [id]: performance.now() + 2000 };   // 2s from the hold starting
     this.catchBreath();
     this.net?.skillEffect(id, lv, known ? this.actionId(pose) : 0x7fff, !p.facingRight, this.attackSpeed());
     if (node?.keydown) this.loopSkillEffect(id, p, 'keydown', () => this.charging?.id === id);
@@ -8110,12 +8141,12 @@ export class Game {
     const p = this.player, sb = this.skills, ld = sb.levelData(id, lv), wcat = Math.floor(this.weaponId() / 10000);
     if (!this.skillKeyPressed || p.attack) return false;
     if (this.net) {
-      if (!sb.weaponOk(id, this.weaponId())) { this.notice('You cannot use this skill with the weapon you are holding.'); return false; }
+      if (!sb.weaponOk(id, this.weaponId())) { this.notice("You cannot use this skill with the weapon you're equipped with."); return false; }
       if (!this.hasAmmo(id)) {
         this.notice(AMMO_OUT[wcat] || AMMO_OUT[145]);
         return id === RAPID_FIRE ? this.attack(0) : false;
       }
-      if ((ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+      if (!this.skillCostOk(id, ld)) return false;
     }
     // a monster within the weapon's swing gets the swing (or a Mortal Blow) and Hurricane / Rapid Fire doesn't start
     if (HELD_SHOTS.has(id) && this.swingsClose()) return this.attack(0);
@@ -8227,6 +8258,7 @@ export class Game {
     const star = id === SHADOW_STARS ? this.shadowStarsPick(lv) : 0;
     if (id === SHADOW_STARS && !star) { this.hud.message('You do not have enough throwing stars to use this skill.', CHAT_COLOR.error); return false; }
     const p = this.player, node = this.skills.node(id);
+    if (id === MYSTIC_DOOR && !this.doorOk()) return false;
     const action = p.ladder ? (p.ladder.l ? 'ladder2' : 'rope2') : this.skills.action(id) || 'alert2';
     if (this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
     if (id === RESURRECTION) {
@@ -8241,8 +8273,26 @@ export class Game {
     this.playSkillEffect(id, p);
     const needsPos = node?.summon || id === 2311002; // summons and Mystic Door are placed at the caster
     this.net?.specialMove(id, lv, needsPos ? { x: Math.round(p.x), y: Math.round(p.y) } : null, star);
+    if (id === MYSTIC_DOOR) this.lockExclusive();   // until the server's answer
+    if (id === SMOKESCREEN) this.catchBreath();
     if (id === WINGS) this.startWings(id, lv);
     return true;
+  }
+  /**
+   * Mystic Door, as the client checks it after its cost: one request at a time (200ms); not on a map that forbids it
+   * (fieldLimit 0x08: "You cannot use that skill on this map."); silently not off the ground, in a town, or on a map
+   * whose id's second and third digits are 09; not within 50px of a portal (any but a spawn point: "You cannot use the
+   * Mystic Door Skill near the portal."); not while another action plays.
+   */
+  doorOk() {
+    const p = this.player, map = this.map, id = map?.id || 0;
+    if (!this.canExclusive(200)) return false;
+    if ((map?.info?.fieldLimit || 0) & 0x08) { this.notice('You cannot use that skill on this map.'); return false; }
+    if (!p.fh || Number(map?.info?.town) || Math.floor(id / 1000000) % 100 === 9) return false;
+    if ((map?.portals || []).some((o) => Number(o.pt) !== 0 && p.x >= o.x - 50 && p.x < o.x + 50 && p.y >= o.y - 50 && p.y < o.y + 50)) {
+      this.notice('You cannot use the Mystic Door Skill near the portal.'); return false;
+    }
+    return !p.attack;
   }
   /**
    * Wings: for its time (s) you fall no faster than x thousandths of the jump speed, with its special art and Loop
@@ -8267,17 +8317,43 @@ export class Game {
    * Whether you can pay for a skill, in the client's order: HP (Dragon Roar wants half of it at least), then MP, then
    * the item it uses up, by count. A refusal says what was short at most every 2s, and is silent in between.
    */
+  /**
+   * What a skill costs, as the client checks it before anything goes out (a shortfall says so, at most every 2s):
+   * Dragon Roar needs half your most HP and costs its x% of it; MP is the mpCon, times Element Amplification's x% for
+   * the spells it covers, nothing under Infinity, less Concentrate's % (rounded up from 0.01); then the HP (more than
+   * the cost), the MP (at least), the mesos (Shadow Meso's more with Shadow Partner) and the item it takes.
+   */
   skillCostOk(skillId, ld) {
     const short = (what) => {
       const now = performance.now();
       if (now - (this.costSaidAt ?? -Infinity) > 2000) { this.costSaidAt = now; this.hud.message(`You don't have enough ${what} to use this skill.`, CHAT_COLOR.error); }
       return false;
     };
-    if (skillId === DRAGON_ROAR && this.stats.hp < this.maxHpShown() / 2) return short('HP');
-    if ((ld?.hpCon || 0) >= this.stats.hp) return short('HP');
-    if ((ld?.mpCon || 0) > this.stats.mp) return short('MP');
+    let hpCon = ld?.hpCon || 0;
+    if (skillId === DRAGON_ROAR) {
+      const max = this.maxHpShown();
+      if (this.stats.hp < Math.trunc(max / 2)) return short('HP');
+      hpCon = Math.trunc((max * (ld?.x || 0)) / 100);
+    }
+    const mp = this.skillMpCost(skillId, ld);
+    if (hpCon && this.stats.hp <= hpCon) return short('HP');
+    if (mp && this.stats.mp < mp) return short('MP');
+    let mesos = ld?.moneyCon || 0;
+    if (skillId === SHADOW_MESO && this.partner()) mesos += Math.trunc((mesos * (this.partner()?.y || 0)) / 100);
+    if (mesos && this.meso < mesos) return short('mesos');
     if ((ld?.itemConNo || 0) > 0 && this.itemCount(ld.itemCon) < ld.itemConNo) return short(this.windows.itemName(ld.itemCon) || 'items');
     return true;
+  }
+  /** A skill's MP cost: see skillCostOk. */
+  skillMpCost(skillId, ld) {
+    const sb = this.skills, job = this.stats?.job || 0, now = Date.now();
+    const amp = AMPLIFIED.has(skillId) && AMPLIFIERS.find((id) => { const req = Math.floor(id / 10000); return Math.floor(job / 10) === Math.floor(req / 10) && job % 10 >= req % 10 && sb.level(id); });
+    let mp = Math.trunc(((ld?.mpCon || 0) * (amp ? Number(sb.levelData(amp)?.x) || 100 : 100)) / 100);
+    const on = (k) => (this.buffs || []).find((b) => b[k] && b.until > now)?.[k];
+    if (on('infinity')) mp = 0;
+    const c = on('concentrate');
+    if (c) mp = Math.trunc((100 - c) * mp * 0.01 + 0.99);
+    return mp;
   }
   castHeal(id, lv) {
     if (this.player.ladder) return false;
@@ -8810,7 +8886,7 @@ export class Game {
     if (!this.skillKeyPressed || p.fh || p.ladder || p.attack || this.fjUsed) return false;
     if ((p.vy || 0) > 0 && !this.map.swimming(p.x, p.y)) return false;   // falling, except in water
     if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
-    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    if (this.net && !this.skillCostOk(id, ld)) return false;
     const n = Math.floor(lv / 4), dir = p.facingRight ? 1 : -1;
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
     p.vx = impact(p.vx || 0, dir * (350 + 40 * n)); p.vy = impact(p.vy || 0, -(250 + 20 * n));
@@ -8869,7 +8945,7 @@ export class Game {
     const p = this.player, ld = this.skills.levelData(id, lv);
     if (!this.skillKeyPressed || p.attack || this.chakra || p.ladder) return false;
     if (((this.stats?.hp || 0) * 100) / Math.max(1, this.maxHpShown()) > 49) return false;
-    if (this.net && (ld?.mpCon || 0) > this.stats.mp) { this.notice('Not enough MP.'); return false; }
+    if (this.net && !this.skillCostOk(id, ld)) return false;
     const action = this.skills.node(id)?.prepare?.action, pose = action && this.look.has(action) ? action : 'alert';
     p.attack = pose; p.action = pose; p.frame = 0; p.frameT = 0; p.attackScale = this.attackScale();
     this.chakra = { x: ld?.x || 100 };
@@ -9646,6 +9722,7 @@ export class Game {
     p.attack = pose; p.frame = 0; p.frameT = 0; p.action = pose;
     const scale = p.attackScale = this.attackScale(this.attackSpeed(0)), trailAt = this.hitFrame(pose, 'melee');
     this.after(this.frameTime(pose, trailAt) * scale, () => { this.playAfterimage(pose, trailAt, 0); this.playWeaponSound(p); });
+    this.catchBreath();
     this.net?.attack('melee', { targets: [], lines: 1, stance: this.actionId(pose), facingLeft: !p.facingRight, speed: this.attackSpeed(0), at: p });
     return { hit, delay: Math.round(this.look.attackDelay(pose) * scale) };
   }
@@ -10068,7 +10145,8 @@ export class Game {
       else if (m.aggro instanceof Summon) m.aggro = this.player;
     }
     if (!pp || (pp.hitT -= dt) > 0) return;
-    const box = { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
+    // what a monster runs into: its body this frame, with where it was the tick before
+    const box = pp.hitBox() || { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       const b = m.hitBox();
