@@ -30,6 +30,7 @@ import { drawParts } from '../character.js';
 import { sfx } from '../audio.js';
 import { NpcDialog, UtilBox, ShopWin, textRef, potionPrice } from './dialogs.js';
 import { TradeWin } from './trade.js';
+import { StorageWin } from './storage.js';
 import { Balloon, QuestNotice } from './notifier.js';
 import { MessengerWin } from './messenger.js';
 import { QuestAlarmWin } from './questalarm.js';
@@ -128,6 +129,13 @@ const CSS = `
 .mhud .mh-shop-meso { max-width: 100%; display: flex; align-items: center; padding: 3px 8px; border-radius: 10px; background: rgba(0, 0, 0, 0.3);
   font-size: 11px; font-weight: 800; white-space: nowrap; overflow: hidden; }
 .mhud .mh-shop-side .mh-cta { width: 100%; }
+/* the storage: laid out as the shop, the keeper as it stands, each list's mesos at its foot */
+.mhud .mh-store .mh-shop-side .mh-stage img { transform: none; }
+.mhud .mh-st-count { font-size: 10px; font-weight: 700; color: rgba(225, 232, 248, 0.55); padding-right: 9px; }
+.mhud .mh-st-meso { flex: none; display: flex; align-items: center; gap: 6px; padding: 5px 6px 6px 9px; border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 11px; font-weight: 800; white-space: nowrap; }
+.mhud .mh-st-meso span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.mhud .mh-st-meso .mh-cta { flex: none; height: 24px; padding: 0 10px; font-size: 10.5px; }
 .mhud .mh-shop-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .mhud .mh-shop-lists { flex: 1; min-height: 0; display: flex; gap: 8px; }
 .mhud .mh-shop-col { flex: 1; min-width: 0; display: flex; flex-direction: column; border-radius: 10px; background: rgba(0, 0, 0, 0.18);
@@ -291,6 +299,7 @@ export class MobileSkins {
     if (w instanceof UtilBox) return BOX_KINDS.has(w.kind) ? 'box' : null;
     if (w instanceof ShopWin) return 'shop';
     if (w instanceof TradeWin) return 'trade';
+    if (w instanceof StorageWin) return 'storage';
     if (w instanceof Balloon) return 'toast';
     if (w instanceof MessengerWin) return 'messenger';
     if (w instanceof QuestAlarmWin) return 'questhelper';
@@ -326,7 +335,7 @@ export class MobileSkins {
     let shop = false, trade = false, chat = false, map = false;
     for (const [w, v] of this.views) {
       try { v.tick(now); } catch (e) { try { v.destroy(); } catch { /* gone anyway */ } this.views.delete(w); this.fail(w, v.constructor.name, e); continue; }
-      if (v instanceof ShopView) shop = true; else if (v instanceof TradeView) trade = true; else if (v instanceof MessengerView) chat = true;
+      if (v instanceof ShopView || v instanceof StorageView) shop = true; else if (v instanceof TradeView) trade = true; else if (v instanceof MessengerView) chat = true;
       else if (v instanceof WorldMapView) map = true;
     }
     const c = this.hud.el.classList;
@@ -693,6 +702,87 @@ class ShopView {
     else { if (r.recharge > 0) act('Recharge', () => w.recharge()); act('Sell', () => w.sell(), true); }
   }
   destroy() { this.el.remove(); }
+}
+
+/**
+ * The storage, laid out as the shop: the keeper (Arrange, Leave) beside what is stored and your inventory by tab,
+ * each list with its mesos and a button to move them; the chosen row's item at the foot with Take out or Store. All
+ * of it goes through the window's own actions, so its questions, fees and one-request-at-a-time hold here too.
+ */
+class StorageView {
+  constructor(sk, w) {
+    this.sk = sk; this.w = w;
+    const n = this.el = el('div', 'mh-shop mh-store mh-glass');
+    n.innerHTML = `<div class="mh-shop-side"><div class="mh-stage"></div><div class="mh-name"></div><div class="mh-sp"></div></div>
+      <div class="mh-shop-main"><div class="mh-shop-lists">
+        <div class="mh-shop-col"><div class="mh-shop-top"><span class="mh-shop-h">Storage</span><div class="mh-sp"></div><span class="mh-st-count"></span></div><div class="mh-list mh-shop-list" data-scroll="y"></div><div class="mh-st-meso"></div></div>
+        <div class="mh-shop-col"><div class="mh-shop-top"><span class="mh-shop-h">Inventory</span><div class="mh-sh-tabs" data-scroll="x"></div></div><div class="mh-list mh-shop-list" data-scroll="y"></div><div class="mh-st-meso"></div></div>
+      </div><div class="mh-shop-foot"></div></div>`;
+    n.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const [a, b] = n.querySelectorAll('.mh-shop-col'), $ = (q) => n.querySelector(q);
+    this.p = { stage: $('.mh-stage'), name: $('.mh-name'), side: $('.mh-shop-side'), foot: $('.mh-shop-foot'), count: a.querySelector('.mh-st-count'),
+      kept: a.querySelector('.mh-shop-list'), keptMeso: a.querySelector('.mh-st-meso'), tabs: b.querySelector('.mh-sh-tabs'), mine: b.querySelector('.mh-shop-list'), myMeso: b.querySelector('.mh-st-meso') };
+    this.p.side.append(sk.button('Arrange', () => w.arrange()), sk.button('Leave', () => w.close()));
+    this.stage = new Stage(this.p.stage, 50, 98);
+    sk.el.append(n);
+    sk.hud.sheets?.close(); sk.hud.closeMenu();
+  }
+  tick(now) {
+    if (now - (this.at || 0) < 100 || this.sk.hud.busy) return;   // (not redrawn under a finger)
+    this.at = now;
+    const w = this.w, g = this.sk.g, mine = w.mine();
+    if (w.keeper && !this.keeperUp) { this.keeperUp = true; this.stage.frames(w.keeper.frames, g.assets.base); }
+    const sig = JSON.stringify([w.tab, w.sel, w.pending, w.meso, g.meso, w.slots, w.items.map((it) => `${it.id}:${it.quantity}`),
+      mine.map((r) => `${r.pos}:${r.it.id}:${r.it.quantity}`), this.sk.wm.namesVersion, this.sk.descV]);
+    if (sig !== this.sig) { this.sig = sig; this.render(mine); }
+  }
+  render(mine) {
+    const w = this.w, sk = this.sk, g = sk.g, p = this.p, S = sk.wm.W.Shop;
+    p.name.textContent = sk.wm.strings.npc?.[w.npc]?.name || 'Storage';
+    p.count.textContent = `${w.items.length} / ${w.slots}`;
+    p.tabs.replaceChildren(...SELL_TABS.map(([k, label]) => {
+      const t = el('div', `mh-tab${k === w.tab ? ' mh-on' : ''}`, label);
+      sk.tap(t, () => { w.setTab(k); this.at = 0; });
+      return t;
+    }));
+    const same = this.tabSeen === w.tab, keep = [p.kept.scrollTop, same ? p.mine.scrollTop : 0];
+    this.tabSeen = w.tab;
+    p.kept.replaceChildren(...w.items.map((it, i) => this.row(w.sel.side === 0 && w.sel.idx === i, it, () => w.choose(0, i))));
+    if (!w.items.length) p.kept.append(el('div', 'mh-empty', 'Nothing stored yet.'));
+    p.mine.replaceChildren(...mine.map((r, i) => this.row(w.sel.side === 1 && w.sel.idx === i, r.it, () => w.choose(1, i))));
+    if (!mine.length) p.mine.append(el('div', 'mh-empty', 'Nothing here that can be stored.'));
+    [p.kept.scrollTop, p.mine.scrollTop] = keep;
+    const meso = (box, v, label, fn) => {
+      const b = sk.button(label, fn); b.disabled = !!w.pending;
+      const t = el('span'); t.append(sk.img(S?.meso, 'mh-coin'), fmt(v));
+      box.replaceChildren(t, b);
+    };
+    meso(p.keptMeso, w.meso, 'Take out', () => w.mesoOut());
+    meso(p.myMeso, g.meso, 'Store', () => w.mesoIn());
+    this.foot(mine);
+  }
+  row(sel, it, pick) {
+    const sk = this.sk, r = el('div', `mh-li${sel ? ' mh-sel' : ''}`), m = el('div', 'mh-li-main');
+    r.append(sk.icon(it.id, [2, 3, 4].includes(invType(it.id)) ? it.quantity : 0));
+    m.append(el('div', 'mh-li-name', sk.wm.itemName(it.id) || '...'), el('div', 'mh-li-sub', SELL_TABS[invType(it.id) - 1]?.[1] || ''));
+    r.append(m);
+    sk.tap(r, () => { pick(); this.at = 0; });
+    return r;
+  }
+  foot(mine) {
+    const w = this.w, sk = this.sk, f = this.p.foot;
+    f.replaceChildren();
+    const it = w.sel.side === 0 ? w.items[w.sel.idx] : w.sel.side === 1 ? mine[w.sel.idx]?.it : null;
+    if (!it) { f.append(el('div', 'mh-shop-hint', 'Tap a stored item to take it out, or one of yours to store it.')); return; }
+    const t = el('div', 'mh-shop-ft'), desc = plain(sk.desc(it.id));
+    t.append(el('b', null, sk.wm.itemName(it.id) || '...'));
+    if (desc) t.append(el('span', null, desc));
+    f.append(sk.icon(it.id), t);
+    const b = w.sel.side === 0 ? sk.button('Take out', () => w.takeOut(), 'mh-main') : sk.button('Store', () => w.store(), 'mh-main');
+    b.disabled = !!w.pending;
+    f.append(b);
+  }
+  destroy() { this.stage.stop(); this.el.remove(); }
 }
 
 /** A trade: both offers side by side (your partner's on the left, as the window has them), its chat, TRADE and Cancel. */
@@ -1085,5 +1175,5 @@ class PlayerInfoView {
   destroy() { this.el.remove(); }
 }
 
-const VIEWS = { box: BoxView, shop: ShopView, trade: TradeView, toast: ToastView, messenger: MessengerView, questhelper: QuestHelperView, worldmap: WorldMapView,
+const VIEWS = { box: BoxView, shop: ShopView, storage: StorageView, trade: TradeView, toast: ToastView, messenger: MessengerView, questhelper: QuestHelperView, worldmap: WorldMapView,
   charinfo: PlayerInfoView };

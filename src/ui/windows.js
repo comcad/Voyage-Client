@@ -469,16 +469,16 @@ class InventoryWin extends Win {
     this.g.csPreselect = SLOT_ITEM_SN[this.tab] || 0;
     this.g.enterCashShop();
   }
-  /** The coin button: drop 10 ~ 50,000 mesos on the ground (the game server's MesoDropHandler range). */
+  /** The coin button: drop 10 ~ 50,000 mesos (at most what you have); one request at a time, 200ms apart. */
   async dropMesos() {
-    if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
+    if (!this.g.handsFree(false)) return;
     const max = Math.min(50000, this.g.meso || 0);
-    if (max < 10) { this.g.notice('You need at least 10 mesos to drop.'); return; }
-    const v = await this.mgr.askNumber(`How many mesos will you drop?\n(10 ~ ${max.toLocaleString('en-US')})`, 10, 10, max);
-    if (!v) return;
+    const v = await this.mgr.askNumber('How many will you drop? (A portion of the amount may be lost if picked up by another user.)', 10, 10, max);
+    if (!(v >= 10) || !this.g.canExclusive(200)) return;
     // a map that forbids dropping refuses mesos too, as they go (the server would take them and leave nothing)
     if ((this.g.map?.info?.fieldLimit || 0) & 0x400000) { this.g.notice('You cannot drop the item here.'); return; }
     this.g.net?.dropMeso(v);
+    this.g.lockExclusive();
   }
   frames() {
     const W = this.W;
@@ -561,39 +561,18 @@ class InventoryWin extends Win {
   }
   drop(lx, ly, c) {
     if (c.kind !== 'item') return;
-    if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
     const to = this.slotAt(lx, ly) <= this.limit ? this.slotAt(lx, ly) : 0;
-    if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);
-    else if (c.tab === 'equip' && this.tab === 1) this.g.unequip(c.slot);
-  }
-  /** Dragged onto the field: drop it (ITEM_MOVE to slot 0), asking how many of a stack. */
-  async dropOutside(c) {
-    if (c.kind !== 'item' || typeof c.tab !== 'number') return;
-    const it = this.g.inventory?.[c.tab]?.[c.slot];
-    if (!it || this.g.dead) return;
-    if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
-    // wedding rings, ring boxes, the reservation receipts, the Parent's Blessing, the Officiator's Permission and the
-    // Admin's Candle stay; an engagement ring asks, then breaks it off
-    if (Math.floor(it.id / 10000) === 224 || NO_DROP_WEDDING.has(it.id)) return;
-    if (it.id >= 4031357 && it.id <= 4031364) {
-      const married = this.g.rings?.marriage?.status === 3;
-      if (await this.mgr.confirm(married ? 'You will not be able to receive the wedding ring.\r\nIs that okay?'
-        : 'Dropping this item will break your engagement.\r\nDo you still wish to drop this item?')) this.g.net?.breakEngagement(it.id);
+    // something you wear: into the cell it was dropped on; over another tab, the Equip tab opens with it still in hand
+    if (c.tab === 'equip') {
+      if (this.tab !== 1) { this.setTab(1); this.mgr.carry = c; return; }
+      this.g.unequip(c.slot, to || 0);
       return;
     }
-    // a cash item, one carrying a cash serial, and the 4220xxx items can't be dropped (the server would delete them)
-    const cashSerial = it.cash && BigInt(it.cashId ?? 0) !== 0n;
-    if (cashSerial || Math.floor(it.id / 1000) === 4220 || Number((await itemInfo(this.g.assets, it.id))?.cash)) { this.mgr.notice("You can't drop this item."); return; }
-    let qty = 1;
-    // throwing stars and bullets always go as a whole stack (the server drops them that way)
-    if (c.tab !== 1 && it.quantity > 1 && ![207, 233].includes(Math.floor(it.id / 10000))) {
-      qty = await this.mgr.askNumber(`How many will you drop?\n(1 ~ ${it.quantity})`, it.quantity, 1, it.quantity);
-      if (!qty) return;
-    }
-    // a map that forbids dropping refuses as the item goes (the server would delete it)
-    if ((this.g.map?.info?.fieldLimit || 0) & 0x400000) { this.g.notice('You cannot drop the item here.'); return; }
-    if (this.g.inventory?.[c.tab]?.[c.slot] === it) this.g.net?.moveItem(c.tab, c.slot, 0, qty);
+    if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
+    if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);
   }
+  /** Dragged onto the field: dropped, after the client's checks and questions (see Game.dropItem). */
+  dropOutside(c) { if (c.kind === 'item' && typeof c.tab === 'number') this.g.dropItem(c.tab, c.slot); }
   wheel(dy) { if (!this.full) this.first = Math.max(0, Math.min(this.rows - 6, this.first + Math.sign(dy))); }
   tooltip(lx, ly) {
     const slot = this.slotAt(lx, ly), it = slot && this.g.inventory?.[this.tab]?.[slot];
@@ -706,7 +685,19 @@ class EquipWin extends Win {
     const slot = this.slotAt(lx, ly), it = typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot];
     if (it) this.mgr.startCarry({ kind: 'item', tab: 'equip', slot, id: it.id }, this.mgr.icon(it.id));
   }
-  dblclick(lx, ly) { const slot = this.slotAt(lx, ly); if (typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot]) this.g.unequip(slot); }
+  /**
+   * Double-click: taken off into the first free equip slot (not when dead; the 1902040-1902042 mounts never), with
+   * the put-down sound.
+   */
+  dblclick(lx, ly) {
+    const slot = this.slotAt(lx, ly), it = typeof slot === 'number' && slot && this.g.inventory?.equipped?.[slot];
+    if (!it || !this.g.handsFree(false)) return;
+    if (slot === -18 && it.id >= 1902040 && it.id <= 1902042) return;
+    sfx.play('UI/DragEnd');
+    this.g.unequip(slot);
+  }
+  /** Something you wear dragged onto the field: dropped as the inventory's are (see Game.dropItem). */
+  dropOutside(c) { if (c.kind === 'item' && c.tab === 'equip' && typeof c.slot === 'number') this.g.dropItem(1, c.slot); }
   drop(lx, ly, c) {
     if (c.kind !== 'item') return;
     const slot = this.slotAt(lx, ly);

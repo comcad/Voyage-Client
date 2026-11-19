@@ -535,6 +535,8 @@ const CHARGED_BLOW = 1211002, ADVANCED_CHARGE = 1220010, HEAVENS_HAMMER = 122101
  * for 2s. Another player's shakes you less the farther they are (400 less the distance, up to 400px).
  */
 const SHOUT = 1111008;
+/** Wedding rings, the reservation receipts, the Parent's Blessing, the Officiator's Permission and the Admin's Candle: never dropped. */
+const NO_DROP_WEDDING = new Set([1112803, 1112806, 1112807, 1112809, 4031481, 4031376, 4031480, 4031375, 4031373, 4031374, 3994085]);
 /**
  * Bosses whose body going (once its death is over) shakes the screen: [px, how much longer than the usual 2s it
  * lasts without easing, even with SHAKE UP off]. Zakum's third body and Balrog only with the option on.
@@ -5533,11 +5535,81 @@ export class Game {
     this.after(delay, () => { if (this.map === map) this.fx.push({ anim, follow: ent, flip: false }); });
   }
 
-  unequip(slot) {
-    const inv = this.inventory[1];
-    const limit = this.inventory.limits[1] || 24;
-    for (let s = 1; s <= limit; s++) if (!inv[s]) { this.net.moveItem(1, slot, s, 1); return; }
-    this.hud.message('Your equip inventory is full.', '#ff8080');
+  /**
+   * Take off what you wear in slot (negative) into equip slot `to`: the cell it was dropped on (0: none, nothing
+   * happens), or with null (a double-click, MOBILE UI's Take off) the first free one (none: nothing happens). Not
+   * with a shop-type window open, out of breath or dead (said), with a request still out, while the map holds your
+   * stats (said); the mount or saddle you are riding on calls the ride off instead. Onto a cell already taken the
+   * client would try a swap, which the game server never makes: nothing goes.
+   */
+  unequip(slot, to = null) {
+    if (this.tradeOpen() || !this.handsFree() || !this.canExclusive(500)) return;
+    const inv = this.inventory[1], limit = this.inventory.limits[1] || 24;
+    if (to === null) { to = 0; for (let s = 1; s <= limit; s++) if (!inv[s]) { to = s; break; } }
+    const it = this.inventory.equipped?.[slot];
+    if (!to || !it || this.rideFirst(it.id) || this.forcedRefusal('equipment') || inv[to]) return;
+    this.net?.moveItem(1, slot, to, -1);
+    this.lockExclusive();
+  }
+  /** Monster Rider for your job's branch: 1004, 10001004, 20001004 or 20011004. */
+  riderSkill() {
+    const job = this.stats?.job || 0, group = Math.floor(job / 100) === 22 || job === 2001 ? 2001 : Math.floor(job / 1000) * 1000;
+    return group * 10000 + 1004;
+  }
+  /** Riding a tamed monster, a mount or saddle (190xxxx / 191xxxx) taken off or dropped calls the ride off instead: true. */
+  rideFirst(id) {
+    if (Math.floor((this.riding?.item || 0) / 10000) !== 190 || ![190, 191].includes(Math.floor(id / 10000))) return false;
+    this.net?.cancelBuff(this.riderSkill());
+    return true;
+  }
+  /** Items can be handled: not out of breath (5s after a blow; unless only being dead counts) nor dead - else said. */
+  handsFree(breath = true) {
+    if (breath && this.outOfBreath()) { this.windows.notice("You can't do it right now.\r\nCatch your breath and then try again."); return false; }
+    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return false; }
+    return true;
+  }
+  /**
+   * An item dragged onto the field, from the inventory (tab, slot) or from what you wear (tab 1, a negative slot), in
+   * the client's order: not with a shop-type window open; out of breath or dead (said); one request at a time; worn
+   * items stay on an everlast map; the mount you ride calls the ride off; wedding items stay; an engagement ring asks
+   * and breaks it off; cash items refuse; a quest item (unless it carries Karma's mark), an untradeable one and an
+   * account-sharable one ask first (on an everlast map quest and untradeable items just stay); sealed items refuse;
+   * a New Year card asks; then how many, for a stack of Use, Set-up or Etc that doesn't expire (not stars or bullets).
+   */
+  async dropItem(tab, slot) {
+    const worn = slot < 0, everlast = !!Number(this.map?.info?.everlast);
+    if (this.tradeOpen() || !this.handsFree() || !this.canExclusive(500)) return;
+    if (worn && everlast) return;
+    const it = worn ? this.inventory?.equipped?.[slot] : this.inventory?.[tab]?.[slot];
+    if (!it || this.rideFirst(it.id)) return;
+    const W = this.windows, id = it.id;
+    if (Math.floor(id / 10000) === 224 || NO_DROP_WEDDING.has(id)) return;
+    if (id >= 4031357 && id <= 4031364) {
+      const married = this.rings?.marriage?.status === 3;
+      if (await W.confirm(married ? 'You will not be able to receive the wedding ring.\r\nIs that okay?'
+        : 'Dropping this item will break your engagement.\r\nDo you still wish to drop this item?')) this.net?.breakEngagement(id);
+      return;
+    }
+    const info = (await itemInfo(this.assets, id)) || {}, n = (k) => Number(info[k]) || 0;
+    const karma = !!(it.flag & (it.type === 1 ? 0x10 : 0x02)), gone = "This item can't be taken back once \r\nthrown away. Will you still drop it?";
+    if (n('cash') || BigInt(it.cashId ?? 0) !== 0n || Math.floor(id / 1000) === 4220) { W.notice("You can't drop this item."); return; }
+    if (n('quest') && !karma) { if (everlast || !(await W.confirm(gone))) return; }
+    if (Math.floor(id / 10000) !== 430 && ((it.type === 1 && it.flag & 0x08) || n('tradeBlock'))) {
+      if (everlast || !(await W.confirm(karma ? 'Once dropped, the item cannot be traded.\r\nWould you still like to drop it?' : gone))) return;
+    }
+    if (n('accountSharable') && !(await W.confirm('This item cannot be recovered once dropped. However, It is possible to transfer it to a different character on the same account by using the storage system. \r\n\r\nDo you really want to drop this item?'))) return;
+    if (it.type !== 3 && it.flag & 1) { W.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }
+    if (Math.floor(id / 10000) === 430 && !(await W.confirm('Would you like to throw\r\naway this card?'))) return;
+    let qty = 1;
+    if ([2, 3, 4].includes(invType(id)) && ![207, 233].includes(Math.floor(id / 10000)) && permanent(it.expiration) && it.quantity > 1) {
+      qty = await W.askNumber('How many will you drop?', it.quantity, 1, it.quantity);
+      if (!(qty >= 1)) return;
+    }
+    if (!this.canExclusive(500)) return;
+    if ((this.map?.info?.fieldLimit || 0) & 0x400000) { this.notice('You cannot drop the item here.'); return; }
+    if ((worn ? this.inventory?.equipped?.[slot] : this.inventory?.[tab]?.[slot]) !== it) return;
+    this.net?.moveItem(worn ? 1 : tab, slot, 0, qty);
+    this.lockExclusive();
   }
 
   /**
