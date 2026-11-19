@@ -116,6 +116,8 @@ export class UserListWin extends Win {
     this.save();
   }
   setArg(tab) { if (tab !== undefined && tab !== this.tab) this.setTab(tab); }
+  /** Tab: the next of its five tabs, after the last the first. */
+  nextTab() { this.setTab((this.tab + 1) % 5); }
   wantsArg(tab) { return tab !== undefined && tab !== this.tab; }
 
   // ---------------------------------------------------------------- data

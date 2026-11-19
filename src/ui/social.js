@@ -118,6 +118,7 @@ export class CharInfoWin extends Win {
     const U = mgr.W.UserInfo;
     super(mgr, null, 200, 60);
     this.w = 275; this.h = 199;
+    this.tabListed = true;   // among the windows Tab looks at (it has no tabs of its own)
     this.closePinned = true; this.closeBtn.x = 275 - 17;
     // with a pet out it opens on PET INFO
     this.U = U; this.info = info; this.panel = info.pets?.length ? 'pet' : 'none'; this.side = null; this.sideFirst = 0; this.petSel = 0;

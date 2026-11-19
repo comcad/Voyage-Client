@@ -528,6 +528,34 @@ export class DeathNotice extends Win {
 }
 
 /**
+ * The SkillUp notice (UIWindow.img/SkillUp, 215x201): centred on the 800x600 screen and 80px up from its middle; the
+ * new level ("%d") from (125, 108) and the skill's name centred on x 133 at y 129, both white Arial 12, among its art's
+ * own words; btOK at (88, 166) closes it. It takes the keyboard as it opens (see WindowManager.keyHolder): Enter
+ * closes it too. Dragged by any of it; no close box, and Esc leaves it.
+ */
+export class SkillUpNotice extends Win {
+  constructor(mgr) {
+    const S = mgr.W.SkillUp, w = S?.backgrd?._w || 215, h = S?.backgrd?._h || 201;
+    super(mgr, S?.backgrd, ((800 - w) >> 1) + ((UI_W - 800) >> 1), (((600 - h) >> 1) - 80) + ((UI_H - 600) >> 1));
+    this.closeBtn.visible = false;
+    this.dragH = 1e4; this.keepOnEscape = true;
+    this.button(S?.btOK, (this.w >> 1) - 19, this.h - 35, () => this.finish());
+    this.level = 0; this.name = '';
+  }
+  /** What it says: the new level and the skill's name. */
+  set(level, name) { this.level = level; this.name = name || ''; }
+  body(ctx) {
+    this.text(ctx, String(this.level), 125, 108, { color: '#fff', size: 12 });
+    ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';
+    const tw = Math.trunc(ctx.measureText(this.name).width);
+    ctx.restore();
+    this.text(ctx, this.name, 133 - (tw >> 1), 129, { color: '#fff', size: 12 });
+  }
+  key(e) { if (e.key === 'Enter') this.finish(); }
+  finish() { this.mgr.close(this); }
+}
+
+/**
  * The plain message box (Basic.img YesNo3: t 21, c 20 tiled, s 55, 266 wide, centred) with Basic BtOK2 at x 155 and
  * BtCancel2 at 205, 30px off the bottom; every notice, question and server pop-up uses it. 'okcancel': the lines centred, 14px apart, over at least two body tiles; 'okcancelLeft':
  * the lines as given (leading spaces kept), left-aligned at x 19 from y 24.

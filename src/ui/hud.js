@@ -24,6 +24,8 @@ export class Hud {
       // window hotkeys (I, S, K, Q, M...) come from the server keymap via Game.handleHotkeys
       if (e.key === 'Enter') { e.preventDefault(); game.statusBar?.focusChat(); }
       else if (e.key === 'Escape') this.closeWindows();
+      // Tab: the newest listed window's next tab (not with a skill held down, nor while the UI is locked)
+      else if (e.key === 'Tab') { e.preventDefault(); if (!game.uiLocked && !game.holdingSkill?.()) game.windows?.tabNext(); }
     });
   }
 

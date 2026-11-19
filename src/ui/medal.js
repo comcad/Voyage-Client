@@ -3,6 +3,7 @@ import { Win, allCanvases, cutText } from './windows.js';
 import { richText, drawRich } from './richtext.js';
 import { UI_W, UI_H } from '../view.js';
 import { jobName } from '../data.js';
+import { questFlow } from './quests-ui.js';
 
 /**
  * The Medal window (UIWindow.img/Title, 260x374; UI 0x1F, key 27). Its medals are the quests of the "Title" area
@@ -73,13 +74,15 @@ export class MedalWin extends Win {
   medals() {
     const q = this.g.quests, info = q?.info || {};
     if (!q || this.area === undefined) return [];
-    const out = [];
+    const out = [], ctx = this.g.textCtx?.();
     for (const id of Object.keys(info).map(Number).sort((x, y) => x - y)) {
       const it = info[id];
       if (Number(it?.area) !== this.area) continue;
       const npc = Number(this.check[id]?.[0]?.npc) || 0, cat = Number(it.medalCategory) || 0;
       if (!npc || cat < 0 || cat > 4) continue;
-      out.push({ id, cat, npc, state: q.status(id), item: Number(it.viewMedalItem) || 0, name: String(it.name ?? '') });
+      const state = q.status(id);
+      if (state === 0 && ctx && !q.canStart(id, ctx)) continue;   // one not started is listed only once it can be
+      out.push({ id, cat, npc, state, item: Number(it.viewMedalItem) || 0, name: String(it.name ?? '') });
     }
     return out;
   }
@@ -107,6 +110,8 @@ export class MedalWin extends Win {
     return out;
   }
   fold(g, on) { const k = `${this.tab - 1}:${g}`; if (on) this.folded.add(k); else this.folded.delete(k); }
+  /** Tab: Basic and the four categories, then Basic again. */
+  nextTab() { this.setTab((this.tab + 1) % 5); }
   setTab(t) {
     if (t === this.tab) return;
     this.tab = t; this.first = 0; this.sel = null;
@@ -147,8 +152,21 @@ export class MedalWin extends Win {
   get selected() { return this.sel ? this.medals().find((m) => m.id === this.sel) || null : null; }
   /** The medal on the panel (kept while it slides away). */
   get shown() { return this.did ? this.medals().find((m) => m.id === this.did) || null : null; }
-  startMedal() { const m = this.selected; if (m && m.state === 0) this.g.net?.questAction(1, m.id, m.npc, null); }
-  giveUp() { const m = this.selected; if (m && m.state === 1) this.g.net?.questAction(3, m.id); }
+  /**
+   * START: the quest starts as it would from its NPC (its script, or its lines with Accept), from wherever you are;
+   * with no lines it goes out straight away.
+   */
+  startMedal() { const m = this.selected; if (m && m.state === 0) questFlow(this.g, { spawn: { id: m.npc } }, m.id); }
+  /** GIVE UP: asked first, as the Quest window does; then off the Quest Helper and forfeited. */
+  giveUp() {
+    const m = this.selected;
+    if (!m || this.g.quests.status(m.id) !== 1) return;
+    this.mgr.confirm('Are you sure you want to quit?').then((ok) => {
+      if (!ok) return;
+      this.mgr.wins.questalarm?.remove(m.id);
+      this.g.net?.questAction(3, m.id);
+    });
+  }
 
   /** Where each visible row sits: { r, y }. Basic stops before a row that would reach y 338; a category draws on
    * while a row starts above y 335, the list's area clipping it. */

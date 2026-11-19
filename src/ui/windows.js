@@ -96,12 +96,37 @@ export class WindowManager {
     this.close(top);
     return true;
   }
+  /**
+   * Tab: the newest window still open of those the client keeps a list of (Equipment, Item, Stat, Skill, Quest,
+   * Medal, the user list, Character Info, Key Setting, Family and its tree, Maker, Party Search) moves on to its next
+   * tab, from its last back to its first, when it has tabs (Item, Skill, Quest, Medal, the user list); for the others
+   * nothing happens. No sound. False when nothing moved.
+   */
+  tabNext() {
+    const listed = new Set(['inventory', 'equip', 'stat', 'skill', 'quest', 'keyconfig', 'medal', 'userlist', 'family', 'familytree', 'partysearch'].map((k) => this.wins[k]));
+    let last = null;
+    for (const w of this.order) if ((w.tabListed || listed.has(w)) && (!last || (w.openedSeq || 0) > (last.openedSeq || 0))) last = w;
+    if (!last?.nextTab) return false;
+    last.nextTab();
+    return true;
+  }
+  /**
+   * The window that has the keyboard (the SkillUp notice, as it opens): Enter goes to it, Esc and Tab do nothing, and
+   * the game's own keys wait (the arrows still walk) until it closes or a click lands anywhere but on it.
+   */
+  get keyHolder() { return this.holder && this.order.includes(this.holder) && !this.modal ? this.holder : null; }
+  set keyHolder(w) { this.holder = w; }
   /** A transient window (dialog, shop) on top of everything. */
   show(w, sound = 'UI/DlgNotice') { this.fit(w); this.order.push(w); w.openedSeq = this.openSeq = (this.openSeq || 0) + 1; if (sound) sfx.play(sound); return w; }
   get modal() { for (let i = this.order.length - 1; i >= 0; i--) if (this.order[i].modal) return this.order[i]; return null; }
   keydown(e) {
     // Escape puts back an item held by a click
     if (e.key === 'Escape' && this.carry?.sticky) { e.preventDefault(); e.stopImmediatePropagation(); this.carry = null; return; }
+    const holder = this.keyHolder;
+    if (holder) {
+      if (e.key === 'Enter' || e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); if (e.key === 'Enter') holder.key?.(e); }
+      return;
+    }
     const top = this.modal || (this.order[this.order.length - 1]?.key && e.key === 'Escape' ? this.order[this.order.length - 1] : null);
     if (!top) return;
     if (this.skin?.(top) && e.target?.closest?.('.mhud')) return;   // MOBILE UI's own boxes take their keys
@@ -202,6 +227,7 @@ export class WindowManager {
   // ---------------------------------------------------------------- input (canvas coordinates)
   pointer(type, x, y, dy = 0) {
     this.mouse = { x, y };
+    if (type === 'down' && this.holder && this.top(x, y) !== this.holder) this.holder = null;   // a click elsewhere takes the keyboard back
     if (this.drag) {
       const d = this.drag;
       d.win.x = Math.round(Math.max(-d.win.w + 40, Math.min(UI_W - 40, x - d.dx)));
@@ -487,6 +513,8 @@ class InventoryWin extends Win {
   wantsArg(tab) { return tab !== undefined && tab !== this.tab; }
   setArg(tab) { if (tab !== undefined && tab !== this.tab) this.setTab(tab); }
   setTab(tab) { this.tab = tab; this.first = 0; this.showSortButton(); }
+  /** Tab: Equip, Use, Set-up, Etc, Cash, then Equip again. */
+  nextTab() { this.setTab((this.tab % 5) + 1); }
   get limit() { return this.g.inventory?.limits?.[this.tab] || 24; }
   get rows() { return Math.ceil(this.limit / 4); }
   /** A slot's 32x32 cell (top-left), or null when it isn't on show. */
@@ -1206,6 +1234,12 @@ class SkillWin extends Win {
     this.scrollbar(ctx, ...SKILL_BAR, this.first, list.length, 4, m.B.VScr4);
     this.text(ctx, this.sp, 110, 265 + SKILL_TEXT_DY, { align: 'right', size: 12 });
   }
+  /** Tab: the next of your skill books, after the last the first. */
+  nextTab() {
+    const b = this.books || [];
+    if (!b.length) return;
+    this.book = b[(b.indexOf(this.book) + 1) % b.length]; this.first = 0;
+  }
   down(lx, ly) {
     if (this.macroOpen && lx >= this.skillW) { this.macroDown(lx, ly); return; }
     const hit = tabAt(this.tabRects, lx, ly);
@@ -1639,15 +1673,20 @@ class QuestWin extends Win {
     if (this.dAlive && lx >= this.w && r && dl >= r.x && dl < r.x + r.w && ly >= r.y && ly < r.y + r.h) return lineTip(`Chain Quest ( ${r.done} / ${r.count} )`, 6, 2);
     return null;
   }
+  /** Another tab (Available, In Progress, Completed): its first quest picked (In Progress: the last one you looked at). */
+  setTab(t) {
+    if (t === this.tab) return;
+    this.tab = t; this.first = 0; this.sel = null;
+    const first = this.rows().find((r) => r.id && (t !== 0 || !this.tooLow(r.id)));
+    const keep = t === 1 && this.lastProgress && this.rows().some((r) => r.id === this.lastProgress) ? this.lastProgress : first?.id;
+    if (keep) { this.select(keep); this.scrollTo(keep); } else this.showDetail(false);
+  }
+  /** Tab: Available, In Progress, Completed, then Available again. */
+  nextTab() { this.setTab((this.tab + 1) % 3); }
   down(lx, ly) {
     const t = tabAt(this.tabRects, lx, ly);
     if (t >= 0) {
-      if (t !== this.tab) {
-        this.tab = t; this.first = 0; this.sel = null; sfx.play('UI/Tab');
-        const first = this.rows().find((r) => r.id && (t !== 0 || !this.tooLow(r.id)));
-        const keep = t === 1 && this.lastProgress && this.rows().some((r) => r.id === this.lastProgress) ? this.lastProgress : first?.id;
-        if (keep) { this.select(keep); this.scrollTo(keep); } else this.showDetail(false);
-      }
+      if (t !== this.tab) { this.setTab(t); sfx.play('UI/Tab'); }
       return;
     }
     if (lx >= this.w) {

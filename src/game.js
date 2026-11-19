@@ -8,7 +8,7 @@ import { QuestBook, TITLE_AREA } from './quests.js';
 import { MedalWin } from './ui/medal.js';
 import { MemoWin } from './ui/memo.js';
 import { ClaimNotice, ClaimForm } from './ui/claim.js';
-import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox } from './ui/dialogs.js';
+import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox, SkillUpNotice } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -865,7 +865,8 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
     this.assets = assets; this.look = look; this.hooks = hooks; this.net = net;
     this.input = new Input(canvas);
-    this.input.filter = (k, down) => (down && !!this.fieldMode?.key?.(k)) || this.dojoKey(k, down);   // the Carnival window's Tab / F1-F12 first
+    this.input.filter = (k, down) => (down && !!this.fieldMode?.key?.(k)) || this.dojoKey(k, down)
+      || (down && !!this.windows?.keyHolder && !['left', 'right', 'up', 'down'].includes(k));   // a window with the keyboard (SkillUp)   // the Carnival window's Tab / F1-F12 first
     this.controls = loadControls();          // controller and touch layouts, kept in this browser
     this.padInput = new PadInput(this.input, () => this.controls?.padMove || 'ls');
     this.cam = { x: 0, y: 0, w: VIEW_W, h: VIEW_H };
@@ -1276,7 +1277,7 @@ export class Game {
       if (!tpl) return;
       const water = !!this.map?.swimming(ent.x, ent.y);
       if ((tpl.type === 0 && water) || (tpl.type === 1 && !water)) return;
-      if (local) { if (this.player.seat) this.standUp(false); } else ent.chair = 0;
+      if (local) this.leaveSeat(); else ent.chair = 0;
     }
     const prev = ent.morph || 0;
     if (prev === id && !ent.morphView?.dropped) return;
@@ -1314,6 +1315,7 @@ export class Game {
     const prev = ent.ghost || 0, local = ent === this.player;
     if (prev === v) return;
     ent.ghost = v;
+    if (local && v) this.leaveSeat();   // becoming a ghost puts you off your seat, with nothing sent
     const look = local ? this.look : ent.look;
     if (look) look.ghost = v;
     if (v === 1) { if (ent.fxBeforeGhost === undefined) ent.fxBeforeGhost = ent.itemFxId || 0; this.setItemEffect(ent, 5010999); }
@@ -2524,7 +2526,7 @@ export class Game {
    * chairs, cash pet food and morphs. The first stack of it that isn't sealed is used.
    */
   async useItemById(id) {
-    if (this.hidden() || this.dead || !this.canExclusive(200)) return;
+    if (this.hidden() || this.dead || !this.canExclusive(200) || this.seduceInput()) return;
     const type = Math.floor(id / 10000);
     const bag = Math.floor(id / 1000) === 2109 || id === 2100067;
     if (!PLAIN_USE.has(type) && ![212, 524, 301, 530, 226, 227].includes(type) && !bag) return;
@@ -2985,8 +2987,9 @@ export class Game {
   petAutoPot(kind, pending = 0, flag = 0) {
     if (kind === 'mp' && !this.petMpArmed) return;
     const lead = this.myPets()[0], s = this.stats;
-    if (!lead || lead.slot !== 0 || !this.net || this.dead || !s || s.hp <= 0) return;
+    if (!lead || lead.slot !== 0 || !this.net || !s) return;
     if (!this.petFlags(lead)[kind === 'hp' ? 'consumeHP' : 'consumeMP']) return;
+    if (this.seduceInput()) return;   // not while seduced
     const max = kind === 'hp' ? this.maxHpShown() : this.maxMpShown(), alert = Math.round((settings[`${kind}Alert`] || 0) * 100);
     if (!alert || !max || ((kind === 'hp' ? s.hp - pending : s.mp) * 100) / max >= alert) return;
     const id = this.petPotions?.[kind];
@@ -2994,11 +2997,12 @@ export class Game {
     const slot = Object.entries(this.inventory?.[2] || {}).find(([, it]) => it.id === id)?.[0];
     const said = (this.petPotSaid ??= { hp: 0, mp: 0 });
     if (!slot) {
-      this.notice(`You are lacking the ${kind === 'hp' ? 'HP' : 'MP'} Potion that your pet is supposed to use.`);
       if (said[kind] < 3) { said[kind]++; this.petEvent(kind === 'hp' ? 'e_NOHPPotion' : 'e_NOMPPotion'); }
+      this.hud.message(`You are lacking the ${kind === 'hp' ? 'HP' : 'MP'} Potion that your pet is supposed to use.`, CHAT_COLOR.error);   // every time
       return;
     }
-    if ((this.map?.info?.fieldLimit || 0) & 0x400 || this.excl?.busy) return;
+    if (kind === 'hp') said.hp = 0;   // a potion found lets the pet say so again, whether or not it goes now
+    if ((this.map?.info?.fieldLimit || 0) & 0x400 || this.excl?.busy || (kind === 'hp' && s.hp <= 0)) return;
     const t = (this.petPotT ??= { hp: -Infinity, mp: -Infinity }), now = performance.now();
     if (now - t.hp < 200) return;
     t[kind] = now;
@@ -3006,7 +3010,6 @@ export class Game {
     this.excl = { busy: true, at: this.excl?.at ?? -Infinity };   // until the server's answer
     sfx.play(`Item/${pad(id, 8)}/Use`);
     if (kind === 'mp') this.petMpArmed = false;
-    else said.hp = 0;
   }
   /**
    * Whether the lead pet wears the HP (MP) Potion Pouch; null while what it wears is still being read. No lead pet
@@ -3461,7 +3464,7 @@ export class Game {
         this.refreshTownDoors(true);
       }),
       showChair: later((id, itemId) => { const rp = this.others.get(id); if (rp) rp.chair = itemId; if (itemId) this.chairArt(itemId); }),
-      cancelChair: later((seat) => { if (seat < 0 && this.player.seat) this.standUp(false); }),
+      cancelChair: later((seat) => this.chairAnswer(seat)),
       removePlayer: later((id) => { this.spawning?.delete(id); this.vfx?.untomb(this.others.get(id)); this.others.delete(id); this.dragons.delete(id); for (const [k, p] of this.pets) if (p.owner === id) this.pets.delete(k); }),
       spawnDragon: later((d) => this.dragons.set(d.owner, new Dragon(d))),
       moveDragon: later((owner, start, moves) => this.dragons.get(owner)?.move(start, moves)),
@@ -4224,6 +4227,34 @@ export class Game {
     else this.net.npcTalk(npc.oid, { x: Math.round(npc.x), y: Math.round(npc.y) });
   }
 
+  /**
+   * After a level-up: the first skill you have learned (in the order the client keeps them: by its id turned 5 bits
+   * right, modulo 31) whose CharLevel tiers include exactly the new level opens the SkillUp notice with that level and
+   * the skill's name, or rewrites the one already up. Only the Explorers' first-job attacks have tiers (10, 15, 20,
+   * 25); Evan skills are never looked at.
+   */
+  async skillUpNotice(level) {
+    const book = this.skills;
+    if (!book?.levels) return;
+    const order = (id) => (((id >>> 5) | (id << 27)) >>> 0) % 31;
+    const ids = Object.entries(book.levels).filter(([, v]) => (v?.level || 0) >= 1).map(([id]) => Number(id))
+      .filter((id) => Math.floor(id / 1000000) !== 22 && Math.floor(id / 10000) !== 2001)
+      .sort((a, b) => order(a) - order(b) || a - b);
+    for (const id of ids) {
+      const node = await book.ensure(id);
+      if (!Object.keys(node?.CharLevel || {}).some((k) => Number(k) === level)) continue;
+      const wm = this.windows;
+      let w = this.skillUpWin;
+      if (!w || !wm.order.includes(w)) {
+        w = this.skillUpWin = new SkillUpNotice(wm);
+        await this.assets.preload(w.frames());
+        wm.show(w, null);
+        wm.keyHolder = w;   // it takes the keyboard as it opens (not when it is only rewritten)
+      }
+      w.set(level, book.name(id));
+      return;
+    }
+  }
   onStats(s, enable) {
     if (!this.stats) return;
     if (enable) { this.apPending = false; this.scriptPending = 0; this.cashBusy = false; this.pickupAnswered(); }
@@ -4238,6 +4269,7 @@ export class Game {
       this.levelUpEffect(); sfx.play('Game/LevelUp');
       if (s.level < 11) this.statusBar?.blinkTab(2);   // the Stat tab blinks
       this.partyQuestInvites(s.level); this.refreshQuestBlink();
+      this.skillUpNotice(s.level);
     }
     if (s.level === 2 && before === 1) this.skillGuide();
     if (s.job !== undefined) {
@@ -4387,6 +4419,7 @@ export class Game {
 
   // ------------------------------------------------------------------ map
   async changeMap(id, { portal = null, portalIdx = null, pos = null } = {}) {
+    this.petPotSaid = { hp: 0, mp: 0 };   // the pet's "no potions" lines start again on each map
     if (this.loading && this.loadingId === id) return;
     // A newer SET_FIELD can arrive while a map is still loading: only the latest load wins.
     const seq = this.loadSeq = (this.loadSeq || 0) + 1;
@@ -4977,8 +5010,8 @@ export class Game {
         if (op.pos < 0 || op.to < 0) lookChanged = true;
       } else if (op.mode === 3) {
         const gone = box(op.inv, op.pos)[op.pos], chair = this.player.seat?.item;
-        // the last chair you sit on taken away: you stand up
-        if (chair && gone?.id === chair && Object.values(inv[op.inv] || {}).filter((it) => it?.id === chair).length === 1) this.standUp();
+        // the last chair you sit on taken away: you ask to stand up
+        if (chair && gone?.id === chair && Object.values(inv[op.inv] || {}).filter((it) => it?.id === chair).length === 1) this.askStandUp(0);
         delete box(op.inv, op.pos)[op.pos];
         if (op.pos < 0) lookChanged = true;
       }
@@ -6767,14 +6800,18 @@ export class Game {
       return;
     }
 
-    // seated (a map seat or a chair): moving, jumping, attacking or a skill stands you up; otherwise you stay put
+    // the Sit key: a seat, or standing up from one (see sitKey)
+    if (!chargingFree && this.hitAction(ACTION.SIT)) this.sitKey();
+    // seated (a map seat or a chair): Left or Right, or Jump (which doesn't jump), asks to stand up; Up still takes a
+    // portal; attacks, skills, macros and picking up do nothing. You stay put until the server says otherwise.
     if (p.seat) {
-      if (dir || jumpHeld() || this.holdAction(ACTION.ATTACK) || this.pressedSkill() || this.macroQueue?.length) this.standUp();
-      else {
-        this.advanceFrame('sit', dt);
-        return;
-      }
-    } else if (!chargingFree && this.hitAction(ACTION.SIT) && this.trySit()) { this.advanceFrame('sit', dt); return; }
+      if (inp.hit('left') || inp.hit('right') || this.hitAction(ACTION.JUMP)) this.askStandUp(200);
+      const portal = inp.hit('up') && p.fh && this.portalCooldown <= 0 ? map.portalAt(p.x, p.y) : null;
+      if (portal) this.usePortal(portal);
+      this.macroQueue = null;
+      this.advanceFrame('sit', dt);
+      return;
+    }
 
     // wait out an attack cut short by a hit
     if (!chargingFree && performance.now() >= (this.attackLock || 0)) {
@@ -8587,74 +8624,136 @@ export class Game {
   }
 
   // ------------------------------------------------------------------ sitting
-  /** Sitting needs you standing still on the ground (the client's check), and 200ms since the last try. */
-  canSit() {
-    const p = this.player, mt = this.morphTpl();
-    if (mt && !mt.superman) return false;   // not as a potion morph or the Oak Barrel
-    if (!p.fh || p.ladder || p.attack || p.seat || this.dead || Math.abs(p.vx || 0) > 1) return false;
-    if (performance.now() - (this.lastSit || 0) < 200) return false;
-    this.lastSit = performance.now();
-    return true;
-  }
-  /** The Sit key: the map's first seat within 10px across and 30px up or down; you move onto it. */
-  trySit() {
+  /** Standing still on a floor: not in the air, on a ladder or rope, nor moving either way. */
+  standingStill() { const p = this.player; return !!p.fh && !p.ladder && !(p.vx || 0) && !(p.vy || 0); }
+  /** A morph you can't sit or stand up in: one that hides you, or isn't a superman one. */
+  morphBlocks() { const mt = this.morphTpl(); return !!mt && (!!Number(mt.hide) || !mt.superman); }
+  /** A skill held down (Hurricane, Rapid Fire, a charge): no sitting or standing up meanwhile. */
+  holdingSkill() { return !!(this.keydown || this.charging); }
+  /**
+   * The Sit key, as the client takes it: nothing with a skill held down, stunned or seduced; riding or morphed (a
+   * ghost too) it says why; then one request at a time (200ms, alive). Seated (a chair or a map seat), it asks to
+   * stand up and you stay seated until the answer. Standing, it needs no skill held, 5s since a blow or attack and
+   * standing still on a floor, then asks for the map's first seat within 10px across and 30px up or down (the right and
+   * bottom edges left out); with none, nothing. There is no sitting on the bare floor.
+   */
+  sitKey() {
     const p = this.player;
-    if (!this.canSit()) return false;
-    const hit = Object.entries(this.map.data?.seat || {}).find(([, s]) => p.x >= s[0] - 10 && p.x < s[0] + 10 && Math.abs(p.y - s[1]) <= 30);
-    if (!hit) return false;
-    const [id, [x, y]] = hit;
-    p.seat = { id: Number(id), item: 0 }; p.x = x; p.y = y; p.vx = 0;
-    this.net?.cancelChair(Number(id));
-    return true;
+    if (this.holdingSkill() || this.hasDisease(STUN) || this.seduceInput()) return;
+    if (this.ridingRefusal()) return;
+    if (p.ghost || this.morphBlocks()) { this.transformRefusal(); return; }
+    if (!this.canExclusive(200)) return;
+    if (p.seat) { this.net?.cancelChair(-1); this.lockExclusive(); return; }
+    if (this.outOfBreath() || !this.standingStill()) return;
+    const id = this.seatAt(p.x, p.y);
+    if (id < 0) return;
+    this.net?.cancelChair(id);
+    this.lockExclusive();
   }
-  /** A chair item (double-clicked, or on a key): you sit where you stand, the chair under you. Again stands you up. */
-  sitChair(itemId) {
+  /** The first of the map's seats (in its order) whose box, 10px either side and 30px up and down, holds x, y; or -1. */
+  seatAt(x, y) {
+    for (const [id, s] of Object.entries(this.map.data?.seat || {})) if (x >= s[0] - 10 && x < s[0] + 10 && y >= s[1] - 30 && y < s[1] + 30) return Number(id);
+    return -1;
+  }
+  /**
+   * A chair item (double-clicked, or on a key), in the client's order: one request at a time (200ms, alive); not
+   * seated already (a chair or a map seat: nothing), with a skill held down, within 5s of a blow or attack, nor
+   * unless standing still on a floor; not morphed (it says why); not riding (it says why); not on a photo-booth map
+   * (field type 61: "It is not appropriate to use it here."); not below the chair's reqLevel (silently). USE_CHAIR
+   * then goes, and you sit where you stand with the chair under you at once.
+   */
+  async sitChair(itemId) {
     const p = this.player;
-    if (p.seat) { this.standUp(); return; }
-    if (p.ghost) { this.transformRefusal(); return; }   // nor sits
-    if (!this.canSit()) return;
+    if (!this.canExclusive(200) || p.seat || this.holdingSkill() || this.outOfBreath() || !this.standingStill()) return;
+    if (this.morphBlocks()) { this.transformRefusal(); return; }
+    if (this.ridingRefusal()) return;
+    if (!this.map || Number(this.map.info?.fieldType) === 61) { this.hud.message('It is not appropriate to use it here.', CHAT_COLOR.error); return; }
+    if ((this.stats?.level || 0) < (Number((await itemInfo(this.assets, itemId))?.reqLevel) || 0)) return;
+    if (p.seat || !this.canExclusive(200)) return;
+    this.net?.useChair(itemId);
+    this.lockExclusive();
     p.seat = { id: null, item: itemId }; p.vx = 0;
     this.chairArt(itemId);
-    this.net?.useChair(itemId);
   }
-  /** Off the seat or chair; tell is false when the server already stood you up. */
-  standUp(tell = true) {
+  /**
+   * Asks to stand up (CANCEL_CHAIR -1) when no other request waits and `wait` ms have passed since the last: Left or
+   * Right and Jump while seated (200ms), a blow that does damage and the last chair leaving your inventory (no wait).
+   * You stay seated until the server answers.
+   */
+  askStandUp(wait) {
+    if (!this.player.seat || !this.canExclusive(wait)) return;
+    this.net?.cancelChair(-1);
+    this.lockExclusive();
+  }
+  /** Off the seat or chair, here and now (the server's answer, becoming a ghost or taking a morph). */
+  leaveSeat() {
     const p = this.player;
     if (!p.seat) return;
     p.seat = null;
     if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
-    if (tell) this.net?.cancelChair(-1);
   }
-  /** Item/Install/0301.img/<id>/effect: the chair's picture (loaded once per chair). */
+  /**
+   * The server's answer to CANCEL_CHAIR (it lets the next request go): stand up, or a map seat - yours if you are
+   * still within its box (you move onto its spot), otherwise you ask straight away to stand up again.
+   */
+  chairAnswer(seat) {
+    this.releaseExclusive();
+    const p = this.player;
+    if (seat < 0) { this.leaveSeat(); return; }
+    const s = this.map.data?.seat?.[seat];
+    if (s && p.x >= s[0] - 10 && p.x < s[0] + 10 && p.y >= s[1] - 30 && p.y < s[1] + 30) { p.seat = { id: seat, item: 0 }; p.x = s[0]; p.y = s[1]; p.vx = 0; return; }
+    p.seat = null;
+    this.net?.cancelChair(-1);
+  }
+  /**
+   * Item/Install/0301.img/<id>: the chair's pictures (loaded once per chair) - its effect and, on twelve chairs,
+   * effect2 - each looping (120ms a frame unless it says), in front of its sitter when its z is 0 or more (3 when
+   * unset), behind them below 0.
+   */
   chairArt(id) {
     this.chairs ??= new Map();
     if (!this.chairs.has(id)) {
       this.chairs.set(id, null);
       this.assets.json('Item/Install/0301.img').then(async (img) => {
-        const node = img?.[pad(id, 8)]?.effect;
-        if (!node) return;
-        const anim = new Anim(node, true);
-        await this.assets.preload(anim.frames);
-        this.chairs.set(id, anim);
+        const c = img?.[pad(id, 8)], layers = [];
+        for (const k of ['effect', 'effect2']) {
+          const node = c?.[k];
+          if (!node) continue;
+          const anim = new Anim(node, true);
+          anim.defaultDelay = 120;
+          if (!anim.frames.length) continue;
+          layers.push({ anim, front: Number(node.z ?? 3) >= 0 });
+        }
+        await this.assets.preload(layers.flatMap((l) => l.anim.frames));
+        this.chairs.set(id, layers.length ? layers : null);
       });
     }
     return this.chairs.get(id);
   }
   /**
-   * The chair behind its sitter, flipped with them. Its art is anchored with its bottom on their feet (openms's
-   * reading: the canvas's height less its origin lifts every chair onto the floor; not a recovered rule).
+   * A chair's layers behind its sitter (front false) or in front of them, flipped with them. Every layer of a chair
+   * hangs on one point, each by its own origin; that point sits so the first layer's first picture rests its bottom
+   * on their feet (openms's reading: the canvas's height less its origin lifts every chair onto the floor; not a
+   * recovered rule).
    */
-  drawChair(ctx, id, sx, sy, facingRight) {
-    const anim = this.chairArt(id);
-    if (!anim?.frames.length) return;
-    const total = anim.frames.reduce((t, f) => t + (f.delay || 100), 0);
-    let t = performance.now() % total, n = anim.frames[0];
-    for (const f of anim.frames) { if (t < (f.delay || 100)) { n = f; break; } t -= f.delay || 100; }
-    const img = this.assets.image(n);
-    if (!img) return;
-    const ox = n.origin?.[0] || 0, top = Math.round(sy - img.height);
-    if (!facingRight) { ctx.drawImage(img, Math.round(sx - ox), top); return; }
-    ctx.save(); ctx.translate(Math.round(sx + ox), top); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
+  drawChair(ctx, id, sx, sy, facingRight, front = false) {
+    const layers = this.chairArt(id);
+    if (!layers) return;
+    const n0 = layers[0].anim.frames[0], img0 = this.assets.image(n0);
+    if (!img0) return;
+    const ay = sy - (img0.height - (n0.origin?.[1] || 0));
+    for (const { anim, front: f } of layers) {
+      if (f !== front) continue;
+      const delay = (fr) => (fr.delay ?? anim.defaultDelay) || anim.defaultDelay;
+      const total = anim.frames.reduce((t, fr) => t + delay(fr), 0);
+      let t = performance.now() % total, n = anim.frames[0];
+      for (const fr of anim.frames) { if (t < delay(fr)) { n = fr; break; } t -= delay(fr); }
+      const img = this.assets.image(n);
+      if (!img) continue;
+      const ox = n.origin?.[0] || 0, top = Math.round(ay - (n.origin?.[1] || 0));
+      if (!facingRight) { ctx.drawImage(img, Math.round(sx - ox), top); continue; }
+      ctx.save(); ctx.translate(Math.round(sx + ox), top); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0); ctx.restore();
+    }
   }
 
   /**
@@ -10302,7 +10401,7 @@ export class Game {
     this.petHitPots(null, d, -2);
     this.vfx?.damage(p, [d], 'violet');
     setExpression(p, 1, HIT_FACE_TIME);
-    this.standUp();
+    if (d > 0) this.askStandUp(0);   // a blow that does damage asks to stand up
     if ((vx || vy) && !this.holdsStance()) {
       if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
       if (vy < 0) { p.fh = null; p.ladder = null; }
@@ -10421,7 +10520,7 @@ export class Game {
     this.vfx?.damage(p, [lost], 'violet');
     if (CHAR_DAM[from]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[from]}`);
     setExpression(p, 1, HIT_FACE_TIME);
-    this.standUp();
+    this.askStandUp(0);   // a blow that does damage asks to stand up
     // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
     // monster you're thrown back less, and falling onto it only slows your fall
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
@@ -11319,6 +11418,7 @@ export class Game {
     }
     drawParts(ctx, this.assets, whole, sx, sy, mirror, (seeThrough ? 0.5 : 1) * (ghost?.alpha ?? 1), !dead, held);
     if (blink) ctx.restore();
+    if (chair) this.drawChair(ctx, chair, sx, sy, ent.facingRight, true);   // its layers in front of them
     this.drawItemFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawEquipFx(ctx, cam, ent, parts, true, gx, gy);
     this.drawSetFx(ctx, cam, ent, true, gx, gy);

@@ -113,6 +113,7 @@ export class MakerWin extends Win {
     const M = mgr.W.Maker;
     super(mgr, M.backgrnd, ((UI_W - 312) >> 1), Math.max(0, (UI_H - 393) >> 1));
     this.M = M; this.data = data || {};
+    this.tabListed = true;   // among the windows Tab looks at (it has no tabs of its own)
     this.closeBtn.x = 292; this.closePinned = true;
     this.startBtn = this.button(M.BtStart, ...START, () => this.create());
     this.button(M.BtCancel, ...CANCEL, () => this.mgr.close(this));
