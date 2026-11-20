@@ -78,6 +78,8 @@ export class LoginSession {
     this.conn.send(new PacketWriter(C.ACCEPT_TOS).byte(1));
     return this._status(await p);
   }
+  /** The terms window's Cancel: ACCEPT_TOS 0 (the server then closes the session). */
+  declineTos() { this.conn.send(new PacketWriter(C.ACCEPT_TOS).byte(0)); }
 
   /** The gender dialog's Cancel: SET_GENDER 0 (the server then closes the session). */
   genderCancel() { this.conn.send(new PacketWriter(0x08).byte(0)); }

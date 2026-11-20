@@ -7,6 +7,7 @@ import { jobName } from '../data.js';
 import { WzSprite, WzButton, TextField, uiText, wrapText } from './wzui.js';
 import { config } from '../config.js';
 import { bridgeUrl } from './login-ui.js';
+import { TERMS } from './terms.js';
 import { music, sfx } from '../audio.js';
 
 /**
@@ -164,9 +165,11 @@ export class LoginScene {
       // the click, unless the button already sounded on press; a race also plays its own sound after it
       if (target) { if (!target.downSound) sfx.play(target.sound || 'UI/BtMouseClick'); if (target.alsoSound) sfx.play(target.alsoSound); target.onClick?.(); }
     }, { signal });
+    // the wheel goes to the top layer (a dialog over the screen), as keys do
     this.canvas.addEventListener('wheel', (e) => {
-      if (this.panning() || this.dialogs.length) return;
-      if (this.screen?.onWheel) { e.preventDefault(); this.screen.onWheel(Math.sign(e.deltaY)); }
+      if (this.panning() && !this.dialogs.length) return;
+      const top = this.topLayer();
+      if (top?.onWheel) { e.preventDefault(); top.onWheel(Math.sign(e.deltaY)); }
     }, { passive: false });
     addEventListener('keydown', (e) => {
       if (this.panning() && !this.dialogs.length) return;
@@ -640,6 +643,98 @@ export class LoginScene {
     });
   }
 
+  /**
+   * The terms of service (LOGIN_STATUS 23): Login.img/TOS/0 (431x426) at (184, 47) with Voyage's own terms (ui/terms.js)
+   * in its text area, x 36-389, y 41-349: Arial 10 in black, headings bold Arial 11, wrapped at 350px, 5px a scroll
+   * step. Its bar is a VScr7 in the art's strip right of the text (its place is not known); the wheel scrolls over the
+   * bar or up to 355px left of it. OK (BtOk, on the art's left slot) is lit only while the text is scrolled to its end;
+   * Cancel (BtCancel, the right slot) declines. Resolves true for OK.
+   */
+  async terms() {
+    const L = this.L, x = 184, y = 47, T = { x: x + 36, y: y + 41, w: 353, h: 308 };
+    const WRAP = 350, STEP = 5, LINE = 13, GAP = 8;
+    const BODY = '10px Arial, "Segoe UI", sans-serif', HEAD = 'bold 11px Arial, "Segoe UI", sans-serif';
+    this.B ??= await this.assets.json('UI/Basic.img');
+    const ctx = this.ctx;
+    const wrap = (text, width, font) => {
+      ctx.save(); ctx.font = font;
+      const out = [];
+      let line = '';
+      for (const word of text.split(' ')) {
+        const t = line ? `${line} ${word}` : word;
+        if (line && ctx.measureText(t).width > width) { out.push(line); line = word; } else line = t;
+      }
+      out.push(line);
+      ctx.restore();
+      return out;
+    };
+    // laid out once: each line's text, its place in the text and whether it is a heading
+    const lines = [];
+    let height = 0;
+    for (const src of TERMS) {
+      if (!src) { height += GAP; continue; }
+      if (src.startsWith('# ')) {
+        for (const t of wrap(src.slice(2), WRAP, HEAD)) { lines.push({ t, x: 0, y: height, head: true }); height += LINE + 1; }
+        continue;
+      }
+      const point = src.startsWith('- '), indent = point ? 10 : 0;
+      wrap(point ? src.slice(2) : src, WRAP - indent, BODY).forEach((t, i) => {
+        if (point && i === 0) lines.push({ t: '•', x: 2, y: height });
+        lines.push({ t, x: indent, y: height });
+        height += LINE;
+      });
+    }
+    const max = Math.max(0, Math.ceil((height - T.h) / STEP));
+    const bar0 = this.vscr7(0, 0, T.h), bar = bar0 && this.vscr7(x + 389 + Math.floor((15 - bar0.w) / 2), T.y, T.h);
+    const barArt = Object.values(this.B?.VScr7 || {}).flatMap((st) => Object.values(st || {})).filter((n) => n?._canvas);
+    return new Promise((resolve) => {
+      let first = 0;
+      const ok = this.button(L.BtOk, x + 298, y + 387, () => close(true));
+      const cancel = this.button(L.BtCancel, x + 372, y + 387, () => close(false));
+      const scrollTo = (f) => { first = Math.max(0, Math.min(max, f)); ok.enabled = first >= max; };
+      scrollTo(0);
+      const d = {
+        buttons: [ok, cancel],
+        sprites: [new WzSprite(L.TOS[0], x + 215, y + 213)],   // origin (215, 213)
+        onEnter: () => { if (ok.enabled) close(true); },
+        onWheel: (dir) => {
+          const m = this.mouse;
+          if (bar && m.x >= bar.x - 355 && m.x < bar.x + bar.w && m.y >= bar.y && m.y < bar.y + bar.h) scrollTo(first + dir);
+        },
+        onPointer: (mx, my) => {
+          const f = this.vscrClick(bar, mx, my, first, max);
+          if (f === null) return;
+          scrollTo(f);
+          // the thumb (or the track under it) follows the mouse until it is let go
+          if (my >= bar.y + bar.a && my < bar.y + bar.h - bar.a && max > 0) {
+            this.drag = (m) => {
+              const g = this.vscrClick(bar, bar.x, Math.max(bar.y + bar.a, Math.min(bar.y + bar.h - bar.a - 1, m.y)), first, max);
+              if (g !== null) scrollTo(g);
+            };
+          }
+        },
+        get hotspots() { return bar ? [{ x: bar.x, y: bar.y, w: bar.w, h: bar.h }] : []; },
+        drawFront: (c) => {
+          c.save();
+          c.beginPath(); c.rect(T.x, T.y, T.w, T.h); c.clip();
+          const off = first * STEP;
+          for (const ln of lines) {
+            const ly = T.y + ln.y - off;
+            if (ly <= T.y - LINE || ly >= T.y + T.h) continue;
+            uiText(c, ln.t, T.x + ln.x, ly, { color: '#000', size: ln.head ? 11 : 10, bold: !!ln.head });
+          }
+          c.restore();
+          this.drawVScr(c, bar, first, max);
+        },
+      };
+      const close = (v) => {
+        if (this.drag) this.drag = null;
+        this.dialogs.splice(this.dialogs.indexOf(d), 1); this.hover(); resolve(v);
+      };
+      this.assets.preload([...d.sprites.flatMap((s) => s.frames()), ...ok.frames(), ...cancel.frames(), ...barArt]).then(() => { this.dialogs.push(d); this.hover(); });
+    });
+  }
+
   // ------------------------------------------------------------------ flow
   /** Same contract as LoginFlow.run(): resolves with the chosen character + channel port. */
   async run() {
@@ -726,11 +821,15 @@ export class LoginScene {
     await this.s.ready();
     let res = await this.s.login(user, password);
     this.titleLayer?.enable();
-    // the license agreement is accepted without being shown
-    if (!res.ok && res.reason === 23) res = await this.s.acceptTos();
-    if (!res.ok) { await this.loginFailed(res); return null; }
-    if (res.regStatus === 2 || res.regStatus === 3) { await this.notice(31, 'yesno'); return null; }
-    if (res.regStatus > 3) { await this.notice(NOTICE.LAUNCHER); return null; }
+    for (;;) {
+      if (!res.ok && res.reason !== 23) { await this.loginFailed(res); return null; }
+      if (res.regStatus === 2 || res.regStatus === 3) { await this.notice(31, 'yesno'); return null; }
+      if (res.regStatus > 3) { await this.notice(NOTICE.LAUNCHER); return null; }
+      if (res.reason !== 23) break;
+      // the terms of service: OK accepts them (the server answers as it does a login), Cancel declines (it closes the session)
+      if (!(await this.terms())) { this.s.declineTos(); return null; }
+      res = await this.s.acceptTos();
+    }
     let account = res.account;
     if (account.gender === 10) {
       const g = await this.gender();
@@ -1270,6 +1369,9 @@ export class LoginScene {
         const idx = list.chars.indexOf(c);
         for (const arr of [list.chars, looks, anim, backdrops]) arr.splice(idx, 1);
         if (store.get(lastKey) === String(c.stats.id)) store.set(lastKey, '');
+        // the character now in its place is selected, else the one before it (none when it was the only one)
+        const next = list.chars[idx] ? idx : idx - 1;
+        if (next >= 0) choose(next);
       };
       btnSelect.action = start; btnNew.action = guard(create); btnDelete.action = guard(remove);
       for (const b of board) b.onClick = b.press;
@@ -1402,9 +1504,17 @@ export class LoginScene {
     const loading = this.loading(() => { cancelled = true; this.s.close(); });
     let res;
     try { res = await this.s.viewAll(); } catch (e) { throw cancelled ? new BackToTitle() : e; } finally { loading.close(); }
-    if (res.error === 'none') { await this.notice('Cannot find any characters.', 'info'); return null; }
+    // none on any world: back to world select, which asks for the worlds again (with no PLAYER_DC first)
+    if (res.error === 'none') {
+      const again = this.s.worlds(true, false);
+      await this.notice('Cannot find any characters.', 'info');
+      this.worlds = await again;
+      return null;
+    }
+    // ten seconds with no character: back to the title, saying nothing
+    if (res.error === 'timeout') throw new BackToTitle();
     if (res.error) {
-      await this.notice(res.error === 'connected' ? 'You are already connected to server.' : res.error === 'timeout' || res.error === 'unknown' ? 'Unknown Error : View-All-Characters.' : res.error, 'info');
+      await this.notice(res.error === 'connected' ? 'You are already connected to server.' : res.error === 'unknown' ? 'Unknown Error : View-All-Characters.' : res.error, 'info');
       throw new BackToTitle();
     }
     const chars = res.chars.slice(0, 60);
