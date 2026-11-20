@@ -838,8 +838,10 @@ const GUILD_MESSAGES = {
 };
 const GUILD_ERROR = 'The guild request has not been accepted, due to unknown reason.';
 /** PacketCreator.getMiniRoomError codes for trades */
-const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "That character's buddy list is full.", 13: 'That character is already on your buddy list.',
-  14: 'You cannot add a GM to your buddy list.', 15: 'That character is not registered.' };
+const BUDDY_MESSAGES = { 11: 'Your buddy list is full.', 12: "The user's buddy list is full", 13: 'That character is already registered as your buddy.',
+  14: 'Gamemaster is not available as a buddy.', 15: 'That character is not registered.' };
+/** Buddy answers 0x10 / 0x11 / 0x13 / 0x16: the server's own reason, or this. */
+const BUDDY_DENIED = 'The request was denied due to an unknown error.';
 
 /** This computer's wall-clock time, as ms whose UTC fields read as the local time. */
 const localWallMs = () => Date.now() - new Date().getTimezoneOffset() * 60000;
@@ -1518,9 +1520,9 @@ export class Game {
     const win = this.windows.wins.messenger;
     if (e.op === 'invite') {
       // Messenger invitations off in the Game Option, or from someone on the Blacklist: turned down at once
-      if (!this.optionAllowed('chatInvite') || this.windows.wins.userlist?.blacklisted(e.from)) { this.net?.messengerDecline(e.from, this.player.name); return; }
+      if (!this.optionAllowed('chatInvite') || this.windows.wins.userlist?.blacklisted(e.from)) { this.net?.messengerDecline(e.from, this.player.name, true); return; }
       if (await notify(this.windows, 'messenger', e.from)) win.accept(e.id);
-      else this.net?.messengerDecline(e.from);
+      else this.net?.messengerDecline(e.from, this.player.name, false);
       return;
     }
     if (!win.active) return;
@@ -3305,15 +3307,19 @@ export class Game {
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
       // a buddy coming online gets its balloon (a guildmate's comes from the guild); one moving onto your channel gets the same-channel one
-      buddyChannel: (id, ch) => {
+      buddyChannel: (id, ch, inShop) => {
         const b = this.buddies.find((x) => x.id === id);
         if (!b) return;
-        const was = b.channel; b.channel = ch;
+        const was = b.channel; b.channel = ch; b.inShop = inShop;
         if (was < 0 && ch >= 0) { if (!this.guild?.members.some((m) => m.id === id)) notifyLogin(this.windows, b.name); }
         else if (was !== ch && ch === this.channel) notifyLogin(this.windows, b.name, true);
       },
       buddyCapacity: (n) => { this.buddyCapacity = n; },
-      buddyMessage: (code) => { const t = BUDDY_MESSAGES[code]; if (t) this.windows.notice(t); },
+      buddyMessage: (code, reason) => {
+        const t = [0x10, 0x11, 0x13, 0x16].includes(code) ? reason || BUDDY_DENIED : BUDDY_MESSAGES[code];
+        if (t) this.windows.notice(t);
+      },
+      buddyUpdate: (id, entry) => { const i = this.buddies.findIndex((x) => x.id === id); if (i >= 0) this.buddies = this.buddies.map((x, k) => (k === i ? entry : x)); },
       buddyRequest: (b) => {
         if (b.entry && !this.buddies.some((x) => x.id === b.entry.id)) this.buddies = [...this.buddies, b.entry];
         notify(this.windows, 'buddy', b.name).then((ok) => (ok ? this.net.buddyAccept(b.id) : this.net.buddyDelete(b.id)));
@@ -3441,9 +3447,10 @@ export class Game {
       partyInvite: (p) => {
         const from = p.name.startsWith('PS: ') ? p.name.slice(4) : p.name;
         // a Party Search one is ignored with party or Party Search invitations off, or from someone on the Blacklist
-        if (p.autoJoin) { if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net.partyOp(3, p.id); return; }
-        if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch')) { this.net.partyDeny(p.name); return; }
-        notify(this.windows, 'party', p.name).then((ok) => (ok ? this.net.partyOp(3, p.id) : this.net.partyDeny(p.name)));
+        if (p.autoJoin) { if (this.optionAllowed('partyInvite') && this.optionAllowed('partySearch') && !this.windows.wins.userlist?.blacklisted(from)) this.net.partyJoin(p.id, p.autoJoin); return; }
+        const me = this.player.name, open = this.windows.order.some((w) => w.kind === 'party' || w.kind === 'partySearch');
+        if (!this.optionAllowed('partyInvite') || this.windows.wins.userlist?.blacklisted(from) || open) { this.net.partyDeny(p.name, me, open ? 0x16 : 0x15); return; }
+        notify(this.windows, 'party', p.name).then((ok) => (ok ? this.net.partyJoin(p.id) : this.net.partyDeny(p.name, me, 0x17)));
       },
       partyMessage: (code, text) => {
         const t = code === 0x24 ? text || PARTY_ERROR : PARTY_MESSAGES[code] ?? PARTY_ERROR;
@@ -6336,7 +6343,7 @@ export class Game {
       case 'askName': this.askGuildName(); break;
       case 'agreement':
         if (this.party?.leader === me) { heracleSays(this.windows, 'Now I am asking other guild members for the agreement of forming a guild~ Please hold on~...'); break; }
-        this.showModal(new GuildContractWin(this.windows, d.master, d.name, (ok) => this.net.guildAgree(ok)));
+        this.showModal(new GuildContractWin(this.windows, d.master, d.name, (ok) => this.net.guildAgree(ok, this.player.id)));
         break;
       case 'invite': {
         // refused at once with guild invites off, from someone on the Blacklist (0x35) or while another is up (0x36)

@@ -69,6 +69,8 @@ export const NOTICE = {
 };
 // LOGIN_STATUS (and CHARLIST / SERVER_IP) result -> Notice/text
 const LOGIN_NOTICE = { 3: 16, 4: 3, 5: 20, 6: 15, 7: 17, 8: 15, 9: 15, 255: 15, 10: 19, 11: 14, 13: 21, 16: 33, 21: 33, 17: 27, 25: 40 };
+/** Entering the game refused with 0x0C / 0x17: the notice for its second byte (these also go back to the title); 15 for any other. */
+const ENTER_SUB_NOTICE = { 1: 28, 2: 29, 3: 30, 0x13: 25, 0x19: 31, 0x1B: 56 };
 const WORLD_BUSY = 'Since There Are Many\r\nConcurrent Users in This World,\r\nYou May Encounter Some Difficulties During the Game Play.';
 const WORLD_FULL = 'The Concurrent Users in This World\r\nHave Reached the Max.\r\nPlease Try Again Later.';
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -394,6 +396,12 @@ export class LoginScene {
   /** Shows a login-table result; result 7 also sends the player back to the title. */
   async loginFailed(res) {
     if (res.reason === 14 || res.reason === 15) { await this.notice(res.reason === 14 ? 27 : 26, 'nexon'); return; }
+    if ((res.reason === 0x0C || res.reason === 0x17) && res.sub !== undefined) {
+      const n = ENTER_SUB_NOTICE[res.sub];
+      await this.notice(n ?? 15);
+      if (n !== undefined) throw new BackToTitle();
+      return;
+    }
     const n = this.loginResult(res);
     if (n !== null) await this.notice(n);
     if (res.reason === 7) throw new BackToTitle();
@@ -1014,7 +1022,8 @@ export class LoginScene {
         } catch (e) { reject(cancelled ? new BackToTitle() : e); } finally { loading.close(); pending = false; }
       };
       let worldStatus = 0;   // the open world's SERVERSTATUS: 1 (busy) puts WorldNotice/Populated/1 on its paper
-      const openWorld = (w, status = 0) => {
+      // pre: the channel the server picks for it, selected as it opens
+      const openWorld = (w, status = 0, pre = -1) => {
         worldStatus = status;
         if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; sfx.play('UI/RollDown'); }
         world = w; channel = -1;
@@ -1029,6 +1038,7 @@ export class LoginScene {
           b.enabled = !!c; b.users = c?.load || 0; b.downSound = 'UI/WorldSelect';
           return b;
         });
+        if (w.channels[pre]) { channel = pre; select.anim.reset(); }
         this.assets.preload([...chButtons.flatMap((b) => b.frames()), WS.channel.chgauge, ...select.frames()]).then(() => this.hover());
       };
       const closeWorld = () => {
@@ -1045,11 +1055,11 @@ export class LoginScene {
         btn.enabled = false;   // the clicked tag stays pressed
         picked = true; focusWorld(w.id);      // and takes the keyboard focus, so no other tag keeps the highlight
         pending = true;
-        let status;
-        try { status = await this.s.serverStatus(w.id); } catch (e) { reject(e); return; } finally { pending = false; }
+        let status, pre;
+        try { ({ status, channel: pre } = await this.s.serverStatus(w.id)); } catch (e) { reject(e); return; } finally { pending = false; }
         if (status === 2) { await this.notice(WORLD_FULL, 'info'); btn.enabled = true; return; }
         if (status === 1) await this.notice(WORLD_BUSY, 'info');
-        openWorld(w, status);
+        openWorld(w, status, pre);
       };
       const hang = WS.BtWorld[0]?.disabled?.[0];
       const worldButtons = this.worlds.map((w, i) => {
@@ -1337,7 +1347,7 @@ export class LoginScene {
         const res = await this.s.selectChar(c.stats.id, pic);
         if (list.picFlag === 0 && !res.wrongPic) this.picRegistered(list);
         if (res.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
-        if (res.code !== undefined) { await this.loginFailed({ reason: res.code }); return; }
+        if (res.code !== undefined) { await this.loginFailed({ reason: res.code, sub: res.sub }); return; }
         sfx.play('Game/GameIn');
         store.set(lastKey, String(c.stats.id));
         this.s.close();
@@ -1556,7 +1566,7 @@ export class LoginScene {
           const r = await this.s.selectFromAll(c.stats.id, c.world, pic, picMode);
           if (picMode === 0 && !r.wrongPic) this.picRegistered();
           if (r.wrongPic) { await this.notice(NOTICE.PIC_WRONG); return; }
-          if (r.code !== undefined) { await this.loginFailed({ reason: r.code }); return; }
+          if (r.code !== undefined) { await this.loginFailed({ reason: r.code, sub: r.sub }); return; }
           sfx.play('Game/GameIn');
           this.s.close();
           done = true;

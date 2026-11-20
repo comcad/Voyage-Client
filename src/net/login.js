@@ -41,7 +41,7 @@ export class LoginSession {
     this.ids = machineIds();
     // sent after the server list; 0xFE until LAST_CONNECTED_WORLD arrives
     this.lastWorld = 0xFE; this.recommended = [];
-    this.conn.on(S.LAST_CONNECTED_WORLD, (r) => { this.lastWorld = r.int(); });
+    this.conn.on(S.LAST_CONNECTED_WORLD, (r) => { const w = r.int(); if (w !== 0xFD) this.lastWorld = w; });   // 0xFD: keep the one we have
     this.conn.on(S.RECOMMENDED_WORLD_MESSAGE, (r) => {
       this.recommended = Array.from({ length: r.ubyte() }, () => ({ world: r.int(), text: r.string() }));
     });
@@ -133,16 +133,21 @@ export class LoginSession {
         const c = { name: r.string(), load: r.int(), world: r.ubyte(), id: r.ubyte() }; r.ubyte();
         w.channels.push(c);
       }
+      // then the world select's balloons, where and what (the last world's are the ones kept; Cosmic sends none)
+      const balloons = [];
+      for (let n = r.available >= 2 ? r.ushort() : 0; n > 0; n--) balloons.push({ x: r.short(), y: r.short(), text: r.string() });
+      this.worldBalloons = balloons;
       worlds.push(w);
     }
     return worlds;
   }
 
-  /** SERVERSTATUS for a world: 0 normal, 1 busy, 2 full. */
+  /** SERVERSTATUS for a world: status 0 normal, 1 busy, 2 full; channel, the one its channel window opens on (-1 none). */
   async serverStatus(world) {
     const p = this.conn.expect(S.SERVERSTATUS);
     this.conn.send(new PacketWriter(C.SERVERSTATUS_REQUEST).short(world));
-    return (await p).ubyte();
+    const r = await p, status = r.ubyte();
+    return { status, channel: r.available ? r.ubyte() : -1 };
   }
 
   async chars(world, channel) {
@@ -151,7 +156,7 @@ export class LoginSession {
     const r = await p;
     if (r.op === S.SERVERSTATUS) return { full: true };
     const status = r.ubyte();
-    if (status !== 0) return { status };
+    if (status !== 0 && status !== 0x0C && status !== 0x17) return { status };   // 0x0C and 0x17 list the characters too
     const chars = [];
     for (let n = r.ubyte(); n > 0; n--) chars.push(readCharEntry(r));
     this.picFlag = r.ubyte();
@@ -247,9 +252,10 @@ export class LoginSession {
     this.conn.send(packet);
     const r = await p;
     if (r.op === S.CHECK_SPW_RESULT) return { wrongPic: true };
-    if (r.op === S.SELECT_CHARACTER_BY_VAC) return { code: r.short() };
+    // SERVER_IP, and SELECT_CHARACTER_BY_VAC laid out the same: 0 goes in, and so do 0x0C and 0x17 when the second
+    // byte is 0x0B or 0x0D (other second bytes pick their notice)
     const result = r.ubyte(), sub = r.ubyte();
-    if (result !== 0) return { code: result, sub };
+    if (result !== 0 && !((result === 0x0C || result === 0x17) && (sub === 0x0B || sub === 0x0D))) return { code: result, sub };
     const ip = Array.from(r.bytes(4)).join('.');
     // then a byte whose bit 1 says you play from an Internet café
     const port = r.ushort(), charId = r.int(), cafe = r.available ? (r.ubyte() >> 1) & 1 : 0;

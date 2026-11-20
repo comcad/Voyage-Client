@@ -411,7 +411,8 @@ export class ChannelSession {
       const stats = {};
       for (let bit = 1; bit <= 0x200000; bit *= 2) {
         if (!(mask & bit)) continue;
-        if (bit === 0x8 || bit === 0x80000 || bit === 0x100000) { r.long(); continue; } // pet uids
+        if (bit === 0x80000 || bit === 0x100000) continue;   // pets 2 and 3: read with pet 1, after hair
+        if (bit === 0x8) { for (const pet of [0x8, 0x80000, 0x100000]) if (mask & pet) r.long(); continue; }   // the pets' uids
         if (bit === 0x1) stats.skin = r.ubyte();
         else if (bit <= 0x4) stats[STAT_KEYS[bit]] = r.int();
         else if (bit < 0x20) stats[STAT_KEYS[bit]] = r.ubyte();
@@ -440,10 +441,13 @@ export class ChannelSession {
       else if (mode === 9) this.emit('notice', { type: 5, msg: r.string() });
       else if (mode === 3) {
         // EXP: white, amount, in chat (a quest's: a grey log line), then the bonuses shown with a monster's
+        // the every-3rd-monster bonus % comes with the hours hunted when it is on; in chat, the Spirit Week bonus %
+        // and, when that is on, how many quests still get event EXP
         const white = r.bool(), amount = r.int(), inChat = r.bool(), b = {};
         try {
-          b.event = r.int(); r.ubyte(); r.ubyte(); b.wedding = r.int();
-          if (inChat) r.ubyte();
+          b.event = r.int(); b.third = r.ubyte(); r.ubyte(); b.wedding = r.int();
+          if (b.third > 0) b.hours = r.ubyte();
+          if (inChat) { b.spirit = r.ubyte(); if (b.spirit) b.quests = r.ubyte(); }
           b.partyRate = r.ubyte(); b.party = r.int(); b.equip = r.int(); b.cafe = r.int(); b.rainbow = r.int();
         } catch { /* a shorter form: the amount alone */ }
         this.emit('status', { type: 'exp', amount, white, inChat, bonus: b });
@@ -699,30 +703,34 @@ export class ChannelSession {
     });
     // ---- buddy list (CWvsContext::OnFriendResult)
     const fixed = (r, n) => { const b = r.bytes(n); let s = ''; for (const c of b) { if (!c) break; s += String.fromCharCode(c); } return s; };
+    // a buddy's 39-byte record; flag 1: a request still waiting for an answer
+    const buddy = (r) => ({ id: r.int(), name: fixed(r, 13), pending: r.ubyte() === 1, channel: r.int(), group: fixed(r, 17) });
     on(S.BUDDYLIST, (r) => {
       const op = r.ubyte();
       if (op === 7 || op === 10 || op === 0x12) {
-        // flag 1: a request still waiting for an answer
+        // the records, then whether each one is in the Cash Shop
         const list = [];
-        for (let n = r.ubyte(); n > 0 && r.available >= 39; n--) {
-          const id = r.int(), name = fixed(r, 13), pending = r.ubyte() === 1;
-          const channel = r.int(), group = fixed(r, 17);
-          list.push({ id, name, channel, group, pending });
-        }
+        for (let n = r.ubyte(); n > 0 && r.available >= 39; n--) list.push(buddy(r));
+        for (const b of list) b.inShop = r.available >= 4 && r.int() !== 0;
         this.emit('buddies', list);
+      } else if (op === 8) {
+        // one buddy's record again, and whether it is in the Cash Shop
+        const id = r.int();
+        if (r.available < 40) return;
+        const entry = buddy(r);
+        entry.inShop = r.ubyte() !== 0;
+        this.emit('buddyUpdate', id, entry);
       } else if (op === 9) {
         // a request: who it's from, then their buddy record (the list keeps it as a pending entry) and an in-shop byte
         const id = r.int(), name = r.string();
         let entry = null;
-        if (r.available >= 40) {
-          entry = { id: r.int(), name: fixed(r, 13), pending: r.ubyte() === 1, channel: r.int(), group: fixed(r, 17) };
-          r.ubyte();
-        }
+        if (r.available >= 40) { entry = buddy(r); entry.inShop = r.ubyte() !== 0; }
         this.emit('buddyRequest', { id, name, entry });
       } else if (op === 0x14) {
-        const id = r.int(); r.ubyte();
-        this.emit('buddyChannel', id, r.int());
+        const id = r.int(), inShop = r.ubyte() !== 0;
+        this.emit('buddyChannel', id, r.int(), inShop);
       } else if (op === 0x15) this.emit('buddyCapacity', r.ubyte());
+      else if (op === 0x10 || op === 0x11 || op === 0x13 || op === 0x16) this.emit('buddyMessage', op, r.available && r.ubyte() ? r.string() : null);   // the server's reason, if it gives one
       else this.emit('buddyMessage', op);
     });
     // ---- party (CWvsContext::OnPartyResult)
@@ -777,7 +785,7 @@ export class ChannelSession {
     on(S.PARTY_OPERATION, (r) => {
       const op = r.ubyte();
       if (op === 8) this.emit('party', { kind: 'created', id: r.int() });
-      else if (op === 4) { const id = r.int(), name = r.string(); this.emit('partyInvite', { id, name, autoJoin: r.available ? r.ubyte() !== 0 : false }); }
+      else if (op === 4) { const id = r.int(), name = r.string(); this.emit('partyInvite', { id, name, autoJoin: r.available ? r.ubyte() : 0 }); }   // autoJoin: Party Search's byte, sent back as it came
       else if (op === 7 || op === 0x22) { const id = r.int(); this.emit('party', { kind: 'update', id, ...partyStatus(r) }); }
       else if (op === 0x0F) { const id = r.int(), name = r.string(); this.emit('party', { kind: 'join', id, name, ...partyStatus(r) }); }
       else if (op === 0x0C) {
@@ -2166,7 +2174,8 @@ export class ChannelSession {
   messengerLeave() { this.send(new PacketWriter(C.MESSENGER).byte(2)); }
   messengerInvite(name) { this.send(new PacketWriter(C.MESSENGER).byte(3).string(name)); }
   /** A Messenger invitation turned down; one refused by the Game Option or the Blacklist adds your name and 1. */
-  messengerDecline(from, me = null) { const w = new PacketWriter(C.MESSENGER).byte(5).string(from); if (me !== null) w.string(me).byte(1); this.send(w); }
+  /** MESSENGER 5: who asked, your name, then 1 when turned down by itself (Game Option or Blacklist), 0 when you said no. */
+  messengerDecline(from, me, auto) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from).string(me).byte(auto ? 1 : 0)); }
   messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
   merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
   /** The Owl of Minerva: OWL_ACTION (5 when its search opens), OWL_WARP (a store's owner and map), the Use-tab owl's search */
@@ -2239,7 +2248,7 @@ export class ChannelSession {
   bbsReplyDelete(id, reply) { this.send(new PacketWriter(C.BBS_OPERATION).byte(5).int(id).int(reply)); }
   guildRank(cid, rank) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0E).int(cid).byte(rank)); }
   guildEmblem(e) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x0F).short(e.bg).byte(e.bgColor).short(e.logo).byte(e.logoColor)); }
-  guildAgree(ok) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(0).byte(ok ? 1 : 0)); }
+  guildAgree(ok, charId) { this.send(new PacketWriter(C.GUILD_OPERATION).byte(0x1E).int(charId).byte(ok ? 1 : 0)); }
   /** ALLIANCE_OPERATION 4: take a guild alliance's invitation (its id, and the inviter's guild name). */
   allianceAccept(id, guildName = '') { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(4).int(id).string(guildName)); }
   /**
@@ -2259,7 +2268,13 @@ export class ChannelSession {
   /** PARTY_SEARCH_START: level range, how many members, the job bits; PARTY_SEARCH_UPDATE ends the search */
   partySearchStart(min, max, members, jobs) { this.send(new PacketWriter(C.PARTY_SEARCH_START).int(min).int(max).int(members).int(jobs)); }
   partySearchStop() { this.send(new PacketWriter(C.PARTY_SEARCH_UPDATE)); }
-  partyDeny(name) { this.send(new PacketWriter(C.DENY_PARTY_REQUEST).byte(0).string(name)); }
+  /**
+   * DENY_PARTY_REQUEST: why, who asked, your name. 0x15 turned down by itself (Game Option or Blacklist), 0x16 with a
+   * party invitation already open, 0x17 you said no.
+   */
+  partyDeny(inviter, me, why) { this.send(new PacketWriter(C.DENY_PARTY_REQUEST).byte(why).string(inviter).string(me)); }
+  /** PARTY_OPERATION 3, joining a party you were invited to: 0 from the invitation, or Party Search's byte. */
+  partyJoin(partyId, b = 0) { this.send(new PacketWriter(C.PARTY_OPERATION).byte(3).int(partyId).byte(b)); }
   /** ITEM_PICKUP: field key, tick, where you stand, the drop, then a 0 checksum. */
   pickup(oid, pos) { this.send(new PacketWriter(C.ITEM_PICKUP).byte(0).int(Date.now() | 0).pos(pos).int(oid).int(0)); }
   /** The Cash Shop: entering is a bare ENTER_CASHSHOP, leaving a bare CHANGE_MAP (the server answers with a channel change) */

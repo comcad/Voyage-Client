@@ -4,6 +4,7 @@ import { CharacterLook, drawParts, lookCanvases } from '../character.js';
 import { lookEquipIds } from '../net/proto.js';
 import { jobName } from '../data.js';
 import { el, modal, toast } from './dom.js';
+import { TERMS } from './terms.js';
 
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -19,6 +20,13 @@ export function bridgeUrl(server, port) {
  * Drives the login server from the title screen to SERVER_IP.
  * Resolves with { server, charId, port, channel, world } when a character is chosen.
  */
+/** Voyage's terms as one scrolling block for the plain login's box. */
+function termsBody() {
+  return el('div', { style: 'max-height:50vh;overflow:auto;text-align:left' }, ...TERMS.map((l) => (l.startsWith('# ')
+    ? el('strong', { style: 'display:block;margin-top:4px' }, l.slice(2))
+    : l.startsWith('- ') ? el('div', { style: 'padding-left:12px' }, `• ${l.slice(2)}`) : l === '' ? el('div', { style: 'height:6px' }) : el('div', {}, l))));
+}
+
 export class LoginFlow {
   constructor(root, assets) {
     this.root = root; this.assets = assets;
@@ -67,7 +75,11 @@ export class LoginFlow {
     this.s = new LoginSession(wsTransport(bridgeUrl(server, 8484)));
     await this.s.ready();
     let res = await this.s.login(user, password);
-    if (!res.ok && res.reason === 23) res = await this.s.acceptTos();
+    if (!res.ok && res.reason === 23) {
+      // the terms first, as the game's login shows them: OK agrees, Cancel turns them down (the server closes the session)
+      if ((await modal({ title: 'Terms of Service', body: termsBody(), buttons: ['OK', 'Cancel'] })) !== 0) { this.s.declineTos(); return null; }
+      res = await this.s.acceptTos();
+    }
     if (!res.ok) { await modal({ title: 'Login failed', body: res.message, buttons: ['OK'] }); return null; }
     let account = res.account;
     if (account.gender === 10) {

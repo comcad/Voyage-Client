@@ -128,15 +128,28 @@ export class Hud {
   async status(s) {
     const grey = (t) => this.message(t, CHAT_COLOR.grey), red = (t) => this.message(t, CHAT_COLOR.error);
     if (s.type === 'exp') {
-      const line = `You have gained experience (+${s.amount})`;
-      if (s.inChat) { grey(line); return; }
+      const line = `You have gained experience (+${s.amount})`, b = s.bonus || {};
+      if (s.inChat) {
+        grey(line);
+        if (b.spirit) grey(`Earned 'Spirit Week Event' bonus EXP. (+${Math.trunc((b.spirit * s.amount) / 100)})`);
+        if (b.spirit && b.quests) grey(`The next ${b.quests} completed quests will include additional Event Bonus EXP.`);
+        return;
+      }
       this.gain(line, s.white ? '#fff' : '#ffef9a');
-      const b = s.bonus || {}, extra = [
+      // the hours-hunted bonus is that % of a white gain
+      const hunted = b.hours && s.white ? Math.trunc(((b.third || 0) * s.amount) / 100) : 0;
+      const extra = [
         [b.equip, `Equip Item Bonus EXP (+${b.equip})`], [b.wedding, `Bonus Wedding EXP (+${b.wedding})`],
         [b.party, b.partyRate > 0 ? `Bonus Event Party EXP (+${b.party}) x${b.partyRate / 100}` : `Bonus EXP for PARTY (+${b.party})`],
-        [b.cafe, `Internet Cafe EXP Bonus (+${b.cafe})`], [b.event, `Bonus Event EXP (+${b.event})`], [b.rainbow, `Rainbow Week Bonus EXP (+${b.rainbow})`],
+        [b.cafe, `Internet Cafe EXP Bonus (+${b.cafe})`], [b.hours && s.white ? 1 : 0, `Bonus EXP for hunting over ${b.hours} hrs. (+${hunted})`],
+        [b.event, `Bonus Event EXP (+${b.event})`], [b.rainbow, `Rainbow Week Bonus EXP (+${b.rainbow})`],
       ];
       for (const [v, t] of extra) if (v > 0) this.gain(t, '#ffef9a');
+      // the every-3rd-monster bonus told once each time its % changes
+      if (b.third > 0 && this.thirdBonus !== b.third) {
+        this.thirdBonus = b.third;
+        this.game.notice(`A bonus EXP ${b.third}% is awarded for every 3rd monster defeated.`);
+      }
     } else if (s.type === 'meso') {
       if (s.inChat) { grey(s.amount < 0 ? `You have lost mesos. (${s.amount})` : `You have gained mesos (+${s.amount})`); return; }
       this.gain(s.amount < 0 ? `You have lost mesos (${s.amount})` : `You have gained mesos (+${s.amount})`);
