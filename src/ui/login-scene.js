@@ -348,7 +348,11 @@ export class LoginScene {
       if (typeof text === 'number' && N.text[text]) d.sprites.push(new WzSprite(N.text[text], x + 119, y + 21));
       else {
         const lines = String(text).replace(/\r\n?/g, '\n');
-        d.drawFront = (ctx) => wrapText(ctx, lines, 215).slice(0, 7).forEach((ln, i) => uiText(ctx, ln, x + 121, y + 30 + i * 15, { color: '#5a3200' }));
+        // centred top to bottom in the box the notice's own text pictures fill (221x109 at +119, +21)
+        d.drawFront = (ctx) => {
+          const ls = wrapText(ctx, lines, 215).slice(0, 7), top = y + 21 + Math.round((109 - ls.length * 15) / 2);
+          ls.forEach((ln, i) => uiText(ctx, ln, x + 121, top + i * 15, { color: '#5a3200' }));
+        };
       }
       const close = (v) => { this.closeDialog(d); resolve(v); };
       if (kind === 'yesno' || kind === 'nexon') {
@@ -747,7 +751,8 @@ export class LoginScene {
       } catch (e) {
         if (!(e instanceof BackToTitle)) {
           console.error(e);
-          await this.notice(NOTICE.CANT_CONNECT);
+          // turned away by the game server (not the client made for it), or the connection failed
+          await this.notice(e?.refused ? 'This client is not made for this server.' : NOTICE.CANT_CONNECT);
         }
       }
       this.s?.close();

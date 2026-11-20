@@ -49,6 +49,36 @@ Server.Host = "0.0.0.0"
 Server.Port = 3000
 
 #
+#     Server.AuthenticatedClient
+#        Description: For a game server that only lets its own Voyage client in (Voyage-Server's
+#                     AUTHENTICATED_CLIENT).
+#                     false - no key is sent: for a plain Cosmic server, or Voyage-Server with
+#                             AUTHENTICATED_CLIENT off.
+#                     true  - the relay sends Server.ClientKey to the game server first on every
+#                             connection, and only relays pages this web server served, so a copy of
+#                             the client hosted on another site can't borrow it.
+#                     WARNING: turning AUTHENTICATED_CLIENT on in Voyage-Server means the ORIGINAL
+#                     MAPLESTORY CLIENT CAN NO LONGER CONNECT, nor can any copy of this client
+#                     hosted elsewhere: only players coming through this web server get in.
+#                     Both sides must agree. True here with AUTHENTICATED_CLIENT off still works
+#                     (the key is ignored); false here with it on, or a different key on each side,
+#                     and players see "This client is not made for this server."
+#                     A change takes a restart of this server.
+#        Default:     false
+
+Server.AuthenticatedClient = false
+
+#
+#     Server.ClientKey
+#        Description: The key sent when Server.AuthenticatedClient is true. It must be the same as
+#                     CLIENT_KEY in Voyage-Server's config.yaml. It stays on this server - pages and
+#                     players never see it - so keep this file private. Use a long random key (32
+#                     characters or more), and change it on both sides together.
+#        Default:     ""
+
+Server.ClientKey = ""
+
+#
 #     Server.AssetsDir
 #        Description: The assets folder the Voyage extractor made (JSON + PNG), relative to the
 #                     folder server.js is in. Voyage-Server and Voyage-Editor point at the same one.

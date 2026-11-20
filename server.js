@@ -39,6 +39,24 @@ const ASSETS_DIR = ServerConfigs.ASSETS_DIR;
 const SERVERS = ServerConfigs.SERVERS;
 const CLIENT_CONFIG = clientConfigs(ConfigMgr);
 const portAllowed = (p) => p === 8484 || (p >= 7575 && p <= 7699);
+/**
+ * Server.AuthenticatedClient: a game server that only lets its own Voyage client in (Voyage-Server's
+ * AUTHENTICATED_CLIENT) wants Server.ClientKey first on every connection, as "VOYAGEKEY", its length (two bytes, little
+ * endian) and the key. Pages never see it.
+ */
+const CLIENT_KEY = ServerConfigs.AUTHENTICATED_CLIENT ? ServerConfigs.CLIENT_KEY : '';
+if (ServerConfigs.AUTHENTICATED_CLIENT && !CLIENT_KEY) console.warn('Server.AuthenticatedClient is true but Server.ClientKey is empty: no key is sent');
+const KEY_PREAMBLE = CLIENT_KEY ? (() => {
+  const key = Buffer.from(CLIENT_KEY, 'utf8'), len = Buffer.alloc(2);
+  len.writeUInt16LE(key.length);
+  return Buffer.concat([Buffer.from('VOYAGEKEY', 'ascii'), len, key]);
+})() : null;
+/** The close code a page gets when the game server turned the connection away: this client isn't the one for it. */
+const NOT_THIS_SERVER = 4001;
+/** A page's origin is this server: the host it was served from, as this request came to it (or a proxy says). */
+const sameOrigin = (req) => {
+  try { return !!req.headers.origin && new URL(req.headers.origin).host === (req.headers['x-forwarded-host'] || req.headers.host); } catch { return false; }
+};
 
 const app = express();
 // The assets' customs folder (customs.mjs): its files are served in place of the assets' own.
@@ -153,8 +171,13 @@ wss.on('connection', (ws, req) => {
   const host = SERVERS[q.get('server')] ?? Object.values(SERVERS)[0];
   const port = Number(q.get('port'));
   if (!portAllowed(port)) { ws.close(1008, 'port not allowed'); return; }
+  // with a key, only this server's own pages may use it
+  if (KEY_PREAMBLE && !sameOrigin(req)) { ws.close(NOT_THIS_SERVER, 'This client is not made for this server.'); return; }
 
   const sock = net.connect(port, host);
+  if (KEY_PREAMBLE) sock.write(KEY_PREAMBLE);
+  // closed by the game server before it said anything: it turned this client away (no key, or the wrong one)
+  let heard = false, failed = false;
   sock.setNoDelay(true);
   let held = [], heldBytes = 0, timer = null, sentAt = 0;
   const flush = () => {
@@ -165,14 +188,18 @@ wss.on('connection', (ws, req) => {
     if (ws.readyState === ws.OPEN) ws.send(out);
   };
   sock.on('data', (d) => {
+    heard = true;
     held.push(d); heldBytes += d.length;
     if (heldBytes >= RELAY_BYTES) { flush(); return; }
     if (timer) return;
     const wait = RELAY_MS - (Date.now() - sentAt);
     if (wait <= 0) flush(); else timer = setTimeout(flush, wait);
   });
-  sock.on('close', () => { flush(); ws.close(); });
-  sock.on('error', (e) => { console.log(`bridge ${host}:${port} ${e.message}`); ws.close(1011, e.message); });
+  sock.on('close', () => {
+    flush();
+    if (!heard && !failed) ws.close(NOT_THIS_SERVER, 'This client is not made for this server.'); else ws.close();
+  });
+  sock.on('error', (e) => { failed = true; console.log(`bridge ${host}:${port} ${e.message}`); ws.close(1011, e.message); });
   ws.on('message', (d) => sock.write(d));
   ws.on('close', () => { if (timer) clearTimeout(timer); sock.destroy(); });
 });

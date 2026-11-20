@@ -22,7 +22,9 @@ export class Connection {
     transport.onData = (d) => this._data(d);
     transport.onClose = () => {
       this.closed = true;
-      const err = new Error('connection closed');
+      // turned away (the relay's close code 4001): this client isn't the one made for that server
+      const err = new Error(transport.refused ? 'this client is not made for this server' : 'connection closed');
+      if (transport.refused) err.refused = true;
       this._fail(err);
       // pending replies can't come any more
       for (const w of this.waiters.splice(0)) { clearTimeout(w.timer); w.rej(err); }
@@ -145,7 +147,7 @@ export function wsTransport(url) {
     else t.onData?.(new Uint8Array(e.data));
     seen = performance.now();
   };
-  ws.onclose = closed;
+  ws.onclose = (e) => { if (e.code === 4001) t.refused = true; closed(); };
   ws.onerror = closed;
   return t;
 }

@@ -41,5 +41,9 @@ export const ServerConfigs = {
   },
 
   // ----------------------------BUILD------------------------------
+  /** Server.AuthenticatedClient: the relay sends Server.ClientKey first on every connection. */
+  get AUTHENTICATED_CLIENT() { return ConfigMgr.getBoolean('Server.AuthenticatedClient', false); },
+  /** Server.ClientKey: what it sends (Voyage-Server's CLIENT_KEY). */
+  get CLIENT_KEY() { return ConfigMgr.getString('Server.ClientKey', ''); },
   get OBFUSCATE() { return ConfigMgr.getBoolean('Build.Obfuscate', false); },
 };
