@@ -506,7 +506,7 @@ export class MobileSheets {
     if (this.move) {
       const from = this.move.slot;
       this.move = null;
-      if (from !== slot && inv[from]) { if (g.dead) g.notice("You can't do it once you're dead."); else g.net?.moveItem(tab, from, slot, inv[from].quantity || 1); }
+      if (from !== slot && inv[from]) g.moveSlot(tab, from, slot);
       this.sel = null; this.render();
       return;
     }

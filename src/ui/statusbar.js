@@ -178,6 +178,14 @@ export class StatusBar {
     if (prefix && !this.chat.value) this.chat.value = prefix;
     this.chat.focus();
   }
+  /** Enter or '/' in the field: the input opens (state 1 to 2) emptied, and a '/' types itself into it. */
+  openChatKey(slash) {
+    if (this.hidden) return;
+    if (settings.mobileUi) { this.game.mobileHud?.openSay(slash ? '/' : ''); return; }
+    if (this.chatState === 1) this.setChatState(2);
+    this.chat.value = slash ? '/' : '';
+    this.chat.focus();
+  }
   closeChat() {
     this.chat.el.blur();
     if (this.chatState === 2) this.setChatState(1);
@@ -404,7 +412,7 @@ export class StatusBar {
     const W = this.W[name], bg = W.backgrnd;
     // the frame's pointer (bottom centre) touches the top of the button that opened it
     const x = Math.round(from.x + 27 - bg._w / 2), y = this.y + 36 - bg._h;
-    const [bx, by] = name === 'GameMenu' ? [6, 23] : [6, 24];
+    const [bx, by] = [6, 24];
     const buttons = MENU_ITEMS[name].map((b, i) => new WzButton(W[b], x + bx, y + by + i * 26, () => {
       sfx.play('UI/BtMouseClick'); this.menu = null; this.menuAction(b);
     }));
@@ -426,7 +434,7 @@ export class StatusBar {
       case 'BtMessenger': g.windows.toggle('messenger'); break;
       case 'BtGameOpt': if (!g.mobileHud?.openSheet('gameopt')) g.windows.toggle('gameopt'); break;   // MOBILE UI: its own sheet
       case 'BtSysOpt': if (!g.mobileHud?.openSheet('sysopt')) g.windows.toggle('sysopt'); break;   // MOBILE UI: its own sheet
-      case 'BtQuit': g.windows.confirm('Are you sure you want to quit the game?').then((ok) => { if (ok) g.leave(); }); break;
+      case 'BtQuit': g.leave(); break;   // straight back to the login screen, asking nothing
       default: g.notice('This feature is not available yet.');
     }
   }

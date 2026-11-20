@@ -103,6 +103,13 @@ export class WorldFx {
     this.assets.preload(anim.frames);
     this.anims.push({ anim, ent });
   }
+  /** An animation node played once at a spot on the map, placed by its own origin. */
+  async at(node, x, y) {
+    if (!node) return;
+    const anim = new Anim(node, false);
+    await this.assets.preload(anim.frames);
+    this.anims.push({ anim, ent: { x, y } });
+  }
   /** Any WZ animation by path ("UI/tutorial.img/28"), played once on `ent`, placed by its own origin. */
   async playPath(path, ent) {
     const at = path.indexOf('.img');

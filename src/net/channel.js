@@ -457,7 +457,6 @@ export class ChannelSession {
         else if (sub === 0xFE) this.emit('status', { type: 'text', text: 'This item is unavailable for the pick-up.' });
         else if (sub === 0xFD) this.emit('status', { type: 'text', text: 'You cannot acquire any items.' });
         else this.emit('status', { type: 'text', text: "You can't get anymore items." });
-        this.emit('pickupAnswered');
       } else if (mode === 4) this.emit('status', { type: 'fame', amount: r.int() });
       else if (mode === 5) this.emit('status', { type: 'meso', amount: r.int(), inChat: true });
       else if (mode === 6) this.emit('status', { type: 'gp', amount: r.int() });
@@ -1701,6 +1700,10 @@ export class ChannelSession {
       if (t === 5) { this.emit('bossHp', { oid: r.int(), hp: r.int(), maxHp: r.int(), tag: r.ubyte(), bg: r.ubyte() }); return; }
       // 2: a named map object plays its current state again (state -1)
       if (t === 2) { this.emit('objectStates', [{ name: r.string(), state: -1 }]); return; }
+      // 0: a summon effect (n, x, y); 1: the screen trembles (heavy, delay ms); 7: three numbers (the miro boards)
+      if (t === 0) { this.emit('fieldEffect', t, '', { n: r.ubyte(), x: r.int(), y: r.int() }); return; }
+      if (t === 1) { this.emit('fieldEffect', t, '', { heavy: r.ubyte() !== 0, delay: r.int() }); return; }
+      if (t === 7) { this.emit('fieldEffect', t, '', { a: r.int(), b: r.int(), c: r.int() }); return; }
       this.emit('fieldEffect', t, r.available ? r.string() : '');
     });
     // map objects by tag: a count, then each tag and 1 to show / 0 to hide
@@ -2199,7 +2202,7 @@ export class ChannelSession {
   tradeConfirm() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x11)); }
   tradeChat(text) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(6).string(text)); }
   tradeExit() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
-  charInfo(cid) { this.send(new PacketWriter(C.CHAR_INFO_REQUEST).int(Date.now() | 0).int(cid)); }
+  charInfo(cid) { this.send(new PacketWriter(C.CHAR_INFO_REQUEST).int(Date.now() | 0).int(cid).byte(0)); }
   /** GIVE_FAME: target char id + direction (0 drop, 1 raise). */
   giveFame(cid, mode) { this.send(new PacketWriter(C.GIVE_FAME).int(cid).byte(mode)); }
   /** GUILD_OPERATION: 2 create, 5 invite, 6 join, 7 leave, 8 expel, 0xD rank titles, 0xE rank, 0xF emblem, 0x10 notice, 0x1E agree */

@@ -1451,6 +1451,25 @@ function equipTip(ctx, mgr, it, info, mx, my) {
   tipLimited(ctx, it, x, y + H0, W);
 }
 
+/**
+ * Scissors of Karma's list, at the end of its description: each of your items it can be used on (tradeAvailable in its
+ * info, and not done already: an equip's flag 0x10, another item's 0x02, a pet's karma bit), each id once, in this
+ * order: the Equip inventory, what you wear (not the cash slots), then Use, Set-up, Etc and Cash.
+ */
+function tipKarmaList(g, mgr) {
+  const inv = g.inventory || {}, seen = new Set(), names = [];
+  const add = (it, equip) => {
+    if (!it || seen.has(it.id) || !tipNum(mgr.info(it.id)?.tradeAvailable)) return;
+    const f = tipNum(it.flag);
+    if (equip ? f & 0x10 : it.pet ? (it.pet.attr2 ?? 0) & 1 : f & 0x02) return;
+    seen.add(it.id); names.push(mgr.itemName(it.id) || '');
+  };
+  const slots = (o) => Object.keys(o || {}).map(Number).filter((k) => k > 0).sort((a, b) => a - b);
+  for (const s of slots(inv[1])) add(inv[1][s], true);
+  for (let p = 1; p <= 51; p++) add(inv.equipped?.[-p], true);
+  for (const t of [2, 3, 4, 5]) for (const s of slots(inv[t])) add(inv[t][s], false);
+  return names.length ? `\n-#cItems that can be used#-${names.map((n) => `\n${n}`).join('')}` : '';
+}
 function itemTip(ctx, mgr, it, info, mx, my) {
   const g = mgr.game, T = mgr.W.ToolTip?.Equip || {}, id = it.id, name = mgr.itemName(id) || '...';
   const pet = Math.floor(id / 10000) === 500, f = tipNum(it.flag);
@@ -1463,6 +1482,14 @@ function itemTip(ctx, mgr, it, info, mx, my) {
   const owner = !pet && it.owner && Math.floor(id / 10000) !== 430 && id !== 4031406 && id !== 4031407 ? String(it.owner) : '';
   const gift = it.from ? `A GIFT FROM '${it.from}'` : '';
   let text = mgr.desc(id) || '';
+  const type = Math.floor(id / 10000);
+  // a New Year card: who your card went to (4300000) or came from (4301000), by the card number in its owner field
+  if (type === 430) {
+    const sn = parseInt(String(it.owner ?? '').trimStart(), 10) || 0, from = Math.floor((id % 10000) / 1000) !== 0;
+    const card = (g.newYearCards || []).find((c) => c.id === sn && c.senderId === g.player?.id);
+    if (card) text += `\n(${from ? `From.${card.sender}` : `To.${card.receiver}`})`;
+  }
+  if (type === 552) text += tipKarmaList(g, mgr);
   if (!pet && it.flag !== undefined && tipNum(info.tradeAvailable) && !(f & 0x02)) text += (text ? '\n' : '') + TIP_SCISSORS;
   const reqLv = pet ? 0 : tipNum(info.reqLevel), showReq = reqLv > 0 || Math.floor(id / 10000) === 301;
   const W = Math.max(290, Math.ceil(tipW(ctx, title, TIP_FONT.title)) + 20, tipLimitedW(ctx, it));

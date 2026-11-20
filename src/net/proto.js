@@ -82,7 +82,7 @@ export function readItem(r, withPosition = true, equipSlotShort = false) {
   item.expiration = r.long();
   if (item.type === 3) { // pet
     item.pet = { name: r.paddedString(13), level: r.ubyte(), closeness: r.short(), fullness: r.ubyte(), dead: r.long() };
-    item.pet.attribute = r.short(); item.pet.skill = r.ushort(); item.pet.life = r.int(); r.short();
+    item.pet.attribute = r.short(); item.pet.skill = r.ushort(); item.pet.life = r.int(); item.pet.attr2 = r.short();   // bit 0: Scissors of Karma used
     return item;
   }
   if (item.type !== 1) {

@@ -498,6 +498,7 @@ class InventoryWin extends Win {
   /** The coin button: drop 10 ~ 50,000 mesos (at most what you have); one request at a time, 200ms apart. */
   async dropMesos() {
     if (!this.g.handsFree(false)) return;
+    if (this.g.admin & 0x80) { this.mgr.notice("The Admin account can't throw away the money."); return; }
     const max = Math.min(50000, this.g.meso || 0);
     const v = await this.mgr.askNumber('How many will you drop? (A portion of the amount may be lost if picked up by another user.)', 10, 10, max);
     if (!(v >= 10) || !this.g.canExclusive(200)) return;
@@ -596,8 +597,7 @@ class InventoryWin extends Win {
       this.g.unequip(c.slot, to || 0);
       return;
     }
-    if (this.g.dead) { this.g.notice("You can't do it once you're dead."); return; }
-    if (c.tab === this.tab && to && to !== c.slot) this.g.net?.moveItem(this.tab, c.slot, to, this.g.inventory[this.tab][c.slot]?.quantity || 1);
+    if (c.tab === this.tab && to && to !== c.slot) this.g.moveSlot(this.tab, c.slot, to);
   }
   /** Dragged onto the field: dropped, after the client's checks and questions (see Game.dropItem). */
   dropOutside(c) { if (c.kind === 'item' && typeof c.tab === 'number') this.g.dropItem(c.tab, c.slot); }

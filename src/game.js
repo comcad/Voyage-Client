@@ -1340,7 +1340,12 @@ export class Game {
     this.vfx?.play(onRope ? 'Transform' : 'TransformOnLadder', ent);
     if (sound) sfx.play('Game/Transform');
   }
-  requestCharInfo(id) { this.net?.charInfo(id); }
+  /** Character Info: one request at a time (200ms apart, alive), not on a fieldType 22 map; the lock until it comes. */
+  requestCharInfo(id) {
+    if (!this.canExclusive(200) || Number(this.map?.info?.fieldType) === 22) return;
+    this.net?.charInfo(id);
+    this.lockExclusive();
+  }
   /**
    * Raise (1) or drop (0) a character's fame from the info window, as Send_GIVE_FAME does: the character must be
    * on this map ("Unable to find the character."), and a request goes at most once every 5 minutes (300000 ms;
@@ -2627,9 +2632,13 @@ export class Game {
   }
   petRing(pet, ring) { return pet.mine ? !!this.inventory?.equipped?.[PET_SLOTS[pet.slot]?.[ring]] : ring === 'label' ? pet.nameTagOn : pet.balloonOn; }
 
-  /** Double-click a pet: send it home, or summon it (with Follow the Lead, asking whether it becomes the Boss Pet). */
+  /**
+   * Double-click a pet: send it home, or summon it (with Follow the Lead, asking whether it becomes the Boss Pet).
+   * One request at a time (200ms apart, alive), not on a ladder, not out of breath (said); the lock until the answer.
+   */
   async summonPet(slot, it) {
-    if (this.player.ladder) return;
+    if (!this.canExclusive(200) || this.player.ladder) return;
+    if (this.outOfBreath()) { this.windows.notice("You can't do it right now.\r\nCatch your breath and then try again."); return; }
     const n = await this.assets.json(`Item/Pet/${it.id}.img`), info = n?.info || {};
     const dead = Number(info.limitedLife) ? it.pet.life < 1 : BigInt(it.pet.dead ?? 0) >= PET_DOLL_TIME;
     if (dead) {
@@ -2645,6 +2654,7 @@ export class Game {
       lead = await this.windows.confirm('Would you like to change your Boss Pet?\r\n (The "Item Ignore" skill, as well as \r\nthe stats for speed and jump will \r\nfollow that of the Lead Pet)');
     }
     this.net.spawnPet(slot, lead);
+    this.lockExclusive();
   }
 
   // ------------------------------------------------------------------ cash items
@@ -2779,9 +2789,11 @@ export class Game {
     }
   }
 
-  /** Pet food: the server feeds the hungriest; it is the one heard eating. */
+  /** Pet food: one request at a time (200ms apart, alive), then the lock; the server feeds the hungriest, the one heard eating. */
   feedPet(slot, id) {
+    if (!this.canExclusive(200)) return;
     this.net.petFood(slot, id);
+    this.lockExclusive();
     let pet = null;
     for (const p of this.myPets()) if (!pet || (this.petItem(p)?.pet?.fullness ?? 100) < (this.petItem(pet)?.pet?.fullness ?? 100)) pet = p;
     if (pet) sfx.play(`Pet/${pet.id}/eat`);
@@ -2789,10 +2801,10 @@ export class Game {
 
   /**
    * A chat line said to your pets: each one standing still (and not busy) checks it, after its name if it has been
-   * named, against the command words of its level; a match asks the server how it went.
+   * named, against the command words of its level; a match asks the server how it went. Out of breath, they don't listen.
    */
   petCommandWord(text) {
-    if (typeof this.petDialog !== 'object' || !this.petDialog || this.dead) return;
+    if (typeof this.petDialog !== 'object' || !this.petDialog || this.dead || this.outOfBreath()) return;
     for (const pet of this.myPets()) {
       if (pet.forced || pet.cmdWaiting || pet.idleMs <= 499 || !pet.data) continue;
       let line = text.trim(), called = false;
@@ -3214,7 +3226,6 @@ export class Game {
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });
       },
       stats: (s, enable) => this.onStats(s, enable),
-      pickupAnswered: () => this.pickupAnswered(),
       gmHide: (on) => { this.gmHidden = on; },
       // ADMIN_RESULT 0x1C / 0x1B and MINIMAP_ON_OFF: off until the next map, check again, or the on/off flag
       minimap: (v) => { if (v === 'off') this.minimapOff = this.map; else if (v === 'check') this.minimapOff = null; else this.minimapFlag = v; },
@@ -3416,7 +3427,7 @@ export class Game {
         if (t) this.windows.notice(t);
       },
       charBox: later((id, box) => { const ent = id === this.player.id ? this.player : this.others.get(id); if (ent) ent.box = box; }),
-      charInfo: (i) => { if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i), null); },
+      charInfo: (i) => { this.releaseExclusive(); if (this.infoWin) this.windows.close(this.infoWin); this.infoWin = this.windows.show(new CharInfoWin(this.windows, i), null); },
       // a Party Search invitation comes as "PS: <leader>"
       // refused at once with party invites switched off, from someone on the Blacklist, or while another is up;
       // an auto-join one (Party Search) joins straight away
@@ -3500,7 +3511,16 @@ export class Game {
         const note = this.cutOffNote = { text, open: true };
         this.windows.notice(text).then(() => { note.open = false; if (this.leaving === true) this.leave(); });
       },
-      fieldEffect: later((type, str) => {
+      fieldEffect: later((type, str, d) => {
+        // 0: Effect/Summon.img/<n> once at (x, y) on the map, and Sound/Summon.img/<n> by how far it is from you
+        if (type === 0) {
+          this.assets.json('Effect/Summon.img').then((s) => this.vfx.at(s?.[d.n], d.x, d.y));
+          const p = this.player, dist = p ? Math.hypot(d.x - p.x, d.y - p.y) : Infinity;
+          sfx.play(`Summon/${d.n}`, { volume: (dist < 250 ? 100 : dist <= 1000 ? Math.trunc(120 - 0.08 * dist) : 40) / 100 });
+        }
+        if (type === 1) this.shakeScreen(30, d.heavy, d.delay);   // 1: the tremble (with the shake option on)
+        // 7: Map/Effect.img/miro/RR1/<a>, RR2/<b> and RR3/<c> on the screen
+        if (type === 7) { this.vfx.screen(`miro/RR1/${d.a}`); this.vfx.screen(`miro/RR2/${d.b}`); this.vfx.screen(`miro/RR3/${d.c}`); }
         if (type === 3 && str) this.vfx.screen(str);   // 3: Map/Effect.img/<str> on the screen
         if (type === 4 && str) sfx.play(`Field/${str}`);
         if (type === 6 && str) { this.fieldBgm = str.replace(/^Sound\//, '').replace('.img', ''); music.play(this.fieldBgm); }
@@ -3717,7 +3737,7 @@ export class Game {
         if (dmg) this.vfx?.damage(e, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red');
         if (maxHp > 0 && Number(e.src?.info?.damagedByMob)) { e.hp = Math.round((e.maxHp * hp) / maxHp); e.hpPct = Math.floor((hp * 100) / maxHp); }
       }),
-      mobHp: later((oid, pct) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { e.hp = Math.round((e.maxHp * pct) / 100); e.hpPct = pct; e.hpShownUntil = performance.now() + 5000; } }),
+      mobHp: later((oid, pct) => this.onMobHp(oid, pct)),
       bossHp: later((d) => this.vfx?.bossHp(d)),
       // level up, job change, quest clear, a monster card, an item levelling up: everyone hears it in full
       foreignEffect: later((chrId, effect) => {
@@ -4271,7 +4291,7 @@ export class Game {
   }
   onStats(s, enable) {
     if (!this.stats) return;
-    if (enable) { this.apPending = false; this.scriptPending = 0; this.cashBusy = false; this.pickupAnswered(); }
+    if (enable) { this.apPending = false; this.scriptPending = 0; this.cashBusy = false; }
     const before = this.stats.level, exp0 = this.stats.exp, job0 = this.stats.job;
     Object.assign(this.stats, s);
     if (s.level > before) this.petEvent('e_levelup');
@@ -4973,7 +4993,6 @@ export class Game {
   }
 
   removeDrop(oid, anim, chr, petSlot = -1, delay = 0) {
-    if (chr === this.player.id && (anim === 2 || anim === 5)) this.pickupAnswered();
     const d = this.drops.get(oid);
     // still held or loading: it stays in pendingDrops, marked gone, so a repeat announcement of it is ignored too
     if (!d) { const p = this.pendingDrops.get(oid); if (p) p.gone = true; return; }
@@ -5163,7 +5182,7 @@ export class Game {
     if (tab === 2 && isPetFood(it.id)) { this.feedPet(slot, it.id); return; }
     if (tab === 2) { this.useConsume(slot, it.id); return; }
     else if (tab === 1) {
-      if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+      if (!this.handsFree()) return;
       if (isPetEquip(it.id)) { this.equipPet(slot, it); return; }
       const dst = this.equipDest(it.id, it.cash);
       if (!dst) return;
@@ -5212,7 +5231,7 @@ export class Game {
   }
   /** Pet equipment dropped on a cell of the Equip window's pet panel: it only goes into the cell it belongs in, for the pet shown. */
   equipPetCell(slot, it, cell, pet) {
-    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (!this.handsFree()) return;
     if (equipSlotFor(it.id, pet) === cell) this.equipChecked(slot, it, cell);
   }
   /** Whether an accessory (1802000-1802099) is made for a pet: its Character/PetEquip img has a node for one with the same id % 1000. */
@@ -5372,12 +5391,24 @@ export class Game {
   /** The slot an equip goes to: a cash one (info/cash) covers the regular slot from its cash slot, 100 below. */
   /** A ring put on a ring slot of your choice (dragged onto its cell): the cash slot over it for a cash ring. */
   equipRing(slot, it, cell) {
-    if (this.dead) { this.windows.notice("You can't do it once you're dead."); return; }
+    if (!this.handsFree()) return;
     if (this.forcedRefusal('equipment')) return;
     const cash = it.cash || !!this.windows?.info(it.id)?.cash, dst = cash ? cell - 100 : cell, clash = this.ringClash(it.id, dst, true);
     if (clash) { this.windows.notice(clash); return; }
     if (!this.canEquip(it.id)) { this.windows.notice('Your stats are too low to equip this item.'); return; }
-    this.net.moveItem(1, slot, dst, 1);
+    this.itemMove(1, slot, dst, 1);
+  }
+  /** ITEM_MOVE: one request at a time (500ms apart, alive), then the lock until the inventory answers. */
+  itemMove(tab, from, to, qty) {
+    if (!this.canExclusive(500)) return false;
+    this.net?.moveItem(tab, from, to, qty);
+    this.lockExclusive();
+    return true;
+  }
+  /** An item dragged to another slot of its tab: not out of breath nor dead (said), then ITEM_MOVE with the whole stack (-1). */
+  moveSlot(tab, from, to) {
+    if (!this.handsFree()) return;
+    this.itemMove(tab, from, to, -1);
   }
   /**
    * Putting on an equip from the inventory (double-click / drop), in this order: one of each Unique Equipped Item,
@@ -5411,7 +5442,7 @@ export class Game {
     if (dst === -118 && !worn[-18]) return refuse('You must have a tamed monster\nin order to equip this.');
     if (dst === -119 && !worn[-19]) return refuse('You must be equipped with a saddle\nto equip this.');
     if (Number(info.equipTradeBlock) && !(it.flag & 0x08) && !(await this.windows.confirm("You cannot trade this item after equipping.\n Do you still wish to equip?"))) return;
-    this.net.moveItem(1, slot, dst, 1);
+    this.itemMove(1, slot, dst, 1);
   }
   /**
    * Only one couple ring, one friendship ring and one wedding ring can be worn: the refusal, or null. Put on by
@@ -6360,11 +6391,32 @@ export class Game {
     }
   }
   /** Heracle's guild name prompt: 4-12 characters; Cancel sends nothing. */
-  askGuildName() {
-    this.windows.askText('Please type the name of the guild.', '', { max: 12 }).then((n) => {
-      const name = n?.trim();
-      if (name && name.length >= 4) this.net.guildOp(2, name);
-    });
+  /**
+   * The guild's name, asked until it passes or is cancelled: 4-12 characters (fewer is refused in the box itself), then
+   * guildNameOk, else "It cannot be used. Please check it again." and the question again.
+   */
+  async askGuildName() {
+    for (;;) {
+      const name = await this.windows.askText('Please type the name of the guild.', '', { max: 12, minLen: 4 });
+      if (name == null) return;
+      if (await this.guildNameOk(name)) { this.net.guildOp(2, name); return; }
+      await this.windows.notice('It cannot be used. Please check it again.');
+    }
+  }
+  /**
+   * A guild name as the client checks it: 4-12 long, no space, letters and digits only, no forbidden name
+   * (Etc/ForbiddenName.img) or curse (Etc/Curse.img, up to its comma, trimmed) anywhere in it ignoring case, and
+   * fewer than four I / l.
+   */
+  async guildNameOk(name) {
+    if (name.length < 4 || name.length > 12 || name.includes(' ') || !/^[A-Za-z0-9]+$/.test(name)) return false;
+    this.badWords ??= await Promise.all([this.assets.json('Etc/ForbiddenName.img'), this.assets.json('Etc/Curse.img')]).then(([f, c]) => [
+      ...Object.values(f || {}).filter((w) => typeof w === 'string').map((w) => w.toLowerCase()),
+      ...Object.values(c || {}).filter((w) => typeof w === 'string').map((w) => w.split(',')[0].trim().toLowerCase()),
+    ].filter(Boolean));
+    const low = name.toLowerCase();
+    if (this.badWords.some((w) => low.includes(w))) return false;
+    return (name.match(/[Il]/g) || []).length < 4;
   }
   /** A modal window with its art loaded first. */
   showModal(w) { this.assets.preload(w.frames()).then(() => this.windows.show(w)); }
@@ -6605,6 +6657,7 @@ export class Game {
     if (this.net) this.friendlyMobHit();
     if (this.net) this.hypnoTouch();
     for (const e of this.map.life) if (e.kind === 'Mob' && e.chat && (e.chat.t -= dt) <= 0) e.chat = null;   // monsters' lines run out
+    for (const e of this.map.life) if (e.kind === 'Mob' && (e.hpQueue?.length || e.hpGauge)) this.takeMobHp(e, performance.now());
     if (this.net && this.petMpArmed) this.petAutoPot('mp');
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
@@ -10171,9 +10224,46 @@ export class Game {
     for (const f of this.fx) if (f.under && f.follow === ent) this.drawFxEntry(ctx, cam, f);
   }
 
+  /**
+   * SHOW_MONSTER_HP: ignored for a boss (info/boss) without HPgaugeHide; a 0 first drops what is still waiting. The %
+   * waits keyed 500ms ahead and the monster's next update takes it (takeMobHp). The small bar shows only for 5s after
+   * your own last hit, so this alone shows nothing.
+   */
+  onMobHp(oid, pct) {
+    const e = this.lifeByOid.get(oid);
+    if (!e || e.pending) return;
+    const info = e.src?.info || {};
+    if (Number(info.boss) && !Number(info.HPgaugeHide)) return;
+    if (pct === 0) e.hpQueue = [];
+    (e.hpQueue ??= []).push({ at: performance.now() + 500, pct });
+  }
+  /**
+   * A monster's update taking its waiting HP %: the first waiting, and any whose time has passed, the latest of them
+   * applied (none for a monster only monsters hurt). With HPgaugeHide it goes to the tagged gauge at the top instead
+   * (hpTagColor / hpTagBgcolor), which goes 20s after your own last hit on it.
+   */
+  takeMobHp(e, now) {
+    const info = e.src?.info || {};
+    if (Number(info.damagedByMob)) { e.hpQueue = []; return; }
+    let at = -Infinity, pct = null;
+    e.hpQueue = (e.hpQueue || []).filter((q, i) => {
+      if (i > 0 && q.at >= now) return true;
+      if (q.at > at) { at = q.at; pct = q.pct; }
+      return false;
+    });
+    const gauge = Number(info.HPgaugeHide);
+    if (pct !== null) {
+      e.hpPct = pct; e.hp = Math.round((e.maxHp * pct) / 100);
+      if (gauge) { this.vfx?.bossHp({ oid: Number(e.spawn.id), hp: Math.floor((e.maxHp * pct) / 100), maxHp: e.maxHp, tag: Number(info.hpTagColor) || 0, bg: Number(info.hpTagBgcolor) || 0 }); e.hpGauge = true; }
+    }
+    if (e.hpGauge && now - (e.myHitAt ?? -Infinity) > 20000) {
+      e.hpGauge = false;
+      if (this.vfx?.boss?.oid === Number(e.spawn.id)) this.vfx.bossHp({ oid: Number(e.spawn.id), hp: -1 });
+    }
+  }
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
   damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0, scale = 1) {
-    if (mine && target.kind === 'Mob') target.hpShownUntil = performance.now() + 5000;
+    if (mine && target.kind === 'Mob') { target.myHitAt = performance.now(); target.hpShownUntil = target.myHitAt + 5000; }
     // a monster's numbers are red (crit art on a crit) whoever struck it; blue is only for one being healed
     this.vfx?.damage(target, dmgs, target.kind === 'Mob' || mine ? 'red' : 'blue', skillId, crits, weaponId, scale);
   }
@@ -10957,16 +11047,16 @@ export class Game {
 
   /** Pick up the item you are standing on: your feet within its width, on the same ground. */
   /**
-   * The pickup key: one request at a time (until the server answers, then 30ms; released after 1.5s if it never
-   * does), for the first drop in arrival order whose landing point is within x-25..x+25, y-50..y+10 of your feet,
-   * that has landed, came as a pickable drop, isn't pickUpBlock, is yours (or your party's, or anyone's, or 15s old)
-   * and wasn't asked for in the last 3s.
+   * The pickup key: the shared one request at a time (alive, 30ms after the last answer), then the lock until the
+   * server answers; an admin account is refused, hidden is silent. It goes for the first drop in arrival order whose
+   * landing point is within x-25..x+25, y-50..y+10 of your feet, that has landed, came as a pickable drop, isn't
+   * pickUpBlock, is yours (or your party's, or anyone's, or 15s old) and wasn't asked for in the last 3s.
    */
   tryPickup() {
+    if (!this.canExclusive(30)) return;
+    if (this.admin & 0x80) { this.hud.message('Not available with an Admin account.', CHAT_COLOR.error); return; }
     if (this.hidden()) return;
     const now = performance.now();
-    if (this.pickupBusy && now - this.pickupBusy < 1500) return;
-    if (now < (this.pickupFree || 0)) return;
     const p = this.player, me = p.id;
     for (const [oid, d] of this.drops) {
       if (d.pickedBy || !d.landed || (d.mode !== 1 && d.mode !== 2 && !d.pickable)) continue;
@@ -10975,13 +11065,12 @@ export class Game {
       if (!d.meso && Number(this.windows.info(d.id)?.pickUpBlock)) continue;
       const ours = !d.dropper || d.type >= 2 || (d.type === 0 && d.owner === me) || (d.type === 1 && d.owner === this.party?.id) || now - (d.freeAt ?? d.born ?? 0) > 15000;
       if (!ours) continue;
-      d.tryAt = now; this.pickupBusy = now;
+      d.tryAt = now;
       this.net.pickup(oid, { x: Math.round(p.x), y: Math.round(p.y) });
+      this.lockExclusive();
       return;
     }
   }
-  /** The server answered an exclusive request: pickup may go again 30ms later. */
-  pickupAnswered() { if (this.pickupBusy) { this.pickupBusy = 0; this.pickupFree = performance.now() + 30; } }
 
   handleClicks() {
     for (const c of this.input.clicks) {
