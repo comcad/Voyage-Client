@@ -62,14 +62,14 @@ export function readRingLook(r) {
   return { couple, friend, marriage: r.ubyte() ? { id: r.int(), partner: r.int(), item: r.int() } : null };
 }
 
-/** viewAll: View All Characters entries have no view-all flag byte. */
+/** family: in a family (its delete warning says so; a plain Cosmic server always sends 0). View All entries have no such byte. */
 export function readCharEntry(r, viewAll = false) {
   const stats = readCharStats(r);
   const look = readCharLook(r);
-  if (!viewAll) r.ubyte(); // view-all flag
+  const family = viewAll ? false : r.ubyte() !== 0;
   const ranked = r.ubyte();
   const rank = ranked ? { world: r.int(), worldMove: r.int(), job: r.int(), jobMove: r.int() } : null;
-  return { stats, look, rank };
+  return { stats, look, rank, family };
 }
 
 export function readItem(r, withPosition = true, equipSlotShort = false) {

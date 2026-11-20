@@ -493,7 +493,8 @@ export class ChannelSession {
         else if (type === 10) {
           n.lines = [n.msg];
           for (let k = r.ubyte(); k > 1; k--) n.lines.push(r.string());
-          n.channel = r.ubyte() + 1; r.skip(9); n.ear = r.bool();
+          // the channel, then the ear; a plain Cosmic server repeats the channel ten times, so its ear comes 9 later
+          n.channel = r.ubyte() + 1; if (r.available > 1) r.skip(9); n.ear = r.bool();
         }
       } catch { /* an older server's shorter form: the text alone */ }
       // a server with USE_DEBUG on reports every hit ("Hitted MOB 100100, OID 1234"): not for the chat log
@@ -988,6 +989,8 @@ export class ChannelSession {
       const flag = r.ubyte();
       if (flag === 0x12) { this.emit('whisper', { from: r.string(), channel: r.ubyte(), gm: r.bool(), text: r.string() }); return; }
       if (flag === 0x0A) { this.emit('whisperResult', { to: r.string(), ok: r.bool() }); return; }
+      // the one you whispered had whispers off or you on their Blacklist (a plain Cosmic server never sends it)
+      if (flag === 0x22) { this.emit('whisperBlocked', { name: r.string(), notFound: r.bool() }); return; }
       if (flag === 0x09 || flag === 0x48) {
         const name = r.string(), type = r.ubyte(), where = r.int();
         this.emit('findResult', { name, type, where, buddy: flag === 0x48 });

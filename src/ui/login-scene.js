@@ -64,7 +64,7 @@ const WORLD_TAGS = 15, TAG_STEP = 27;
 export const NOTICE = {
   WRONG_PASSWORD: 3, NOT_REGISTERED: 20, BLOCKED: 16, ALREADY_LOGGED_IN: 17, UNKNOWN: 18, TOO_MANY: 19,
   CANT_LOG_GAME: 22, CANT_CONNECT: 23, CONNECT_ERROR: 24, NAME_IN_USE: 5, NAME_OK: 6, BAD_NAME: 10,
-  NO_MORE_CHARS: 9, DELETE_CONFIRM: 13, DELETE_CONFIRM_CASH: 55, BAD_ID: 28, CREATE_BLOCKED: 36,
+  NO_MORE_CHARS: 9, DELETE_CONFIRM: 13, DELETE_CONFIRM_CASH: 55, DELETE_CONFIRM_FAMILY: 57, DELETE_CONFIRM_FAMILY_CASH: 58, BAD_ID: 28, CREATE_BLOCKED: 36,
   PIC_WRONG: 93, NO_PIC: 94, RETURN_TO_TITLE: 7, LAUNCHER: 15,
 };
 // LOGIN_STATUS (and CHARLIST / SERVER_IP) result -> Notice/text
@@ -1371,11 +1371,13 @@ export class LoginScene {
         if (sel < 0) return;
         const c = list.chars[sel];
         if (list.picFlag !== 1) { await this.notice(NOTICE.NO_PIC, 'info'); return; }
-        // the PIC first, then the question (Cygnus and Aran warn about their Cash items)
+        // the PIC first, then the question (Cygnus and Aran warn about their Cash items, a family member that the
+        // family is left)
         const pic = await this.softKey();
         if (pic === null) return;
-        const race = Math.floor(c.stats.job / 1000);
-        if (!(await this.notice(race === 1 || race === 2 ? NOTICE.DELETE_CONFIRM_CASH : NOTICE.DELETE_CONFIRM, 'yesno'))) return;
+        const race = Math.floor(c.stats.job / 1000), cash = race === 1 || race === 2;
+        const ask = c.family ? (cash ? NOTICE.DELETE_CONFIRM_FAMILY_CASH : NOTICE.DELETE_CONFIRM_FAMILY) : cash ? NOTICE.DELETE_CONFIRM_CASH : NOTICE.DELETE_CONFIRM;
+        if (!(await this.notice(ask, 'yesno'))) return;
         // the selection is cleared as the request goes out
         sel = -1; rollPanel(); refresh();
         const state = await this.s.deleteChar(c.stats.id, pic);

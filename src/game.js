@@ -3304,6 +3304,7 @@ export class Game {
         if (t) this.windows.notice(t);
       },
       whisperResult: (r) => this.onWhisperResult(r),
+      whisperBlocked: (b) => this.hud.message(b.notFound ? `Unable to find '${b.name}'` : `'${b.name}' have currently disabled whispers.`, b.notFound ? CHAT_COLORS.notice : CHAT_COLORS.whisper),
       findResult: (f) => this.onFindResult(f),
       buddies: (list) => { this.buddies = list; },
       // a buddy coming online gets its balloon (a guildmate's comes from the guild); one moving onto your channel gets the same-channel one
@@ -6517,8 +6518,9 @@ export class Game {
     if (text && !this.optionAllowed('whisper')) this.hud.message('Since the character has the whispers blocked at this point, you may not receive an answer.', CHAT_COLOR.result);
   }
   onWhisper(w) {
-    // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so
-    if (!this.optionAllowed('whisper') || this.windows.wins.userlist?.blacklisted(w.from)) { this.net?.whisperBlock(w.from); return; }
+    // whispers off in the Game Option, or from someone on the Blacklist: not shown, and they are told so (a GM's
+    // always shows)
+    if (!w.gm && (!this.optionAllowed('whisper') || this.windows.wins.userlist?.blacklisted(w.from))) { this.net?.whisperBlock(w.from); return; }
     // who whispered you is your latest contact (what /whisper alone goes to, and first in the Whisper box's list)
     const sb = this.statusBar;
     if (sb) sb.whisperNames = [w.from, ...(sb.whisperNames || []).filter((n) => n !== w.from)].slice(0, 10);
