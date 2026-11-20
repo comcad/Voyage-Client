@@ -8,7 +8,7 @@ import { ACTION } from '../keymap.js';
 import { nameTag } from '../map.js';
 import { EMOTES, setExpression, stepExpression } from '../game.js';
 import { uiText, TextField, wrapText } from './wzui.js';
-import { Win, allCanvases } from './windows.js';
+import { Win, allCanvases, prepaidOnly } from './windows.js';
 import { UI_W, UI_H } from '../view.js';
 import { config } from '../config.js';
 
@@ -97,9 +97,10 @@ const isCoupleRing = (id) => Math.floor(id / 100) === 11120 && id !== 1112000;
 const isFriendRing = (id) => Math.floor(id / 100) === 11128 && id % 10 < 3;
 /** A pet accessory (1802xxx, not the Pet Collar): the one piece of pet equipment the preview pet can try on. */
 const isPetAcc = (id) => Math.floor(id / 10000) === 180 && id !== 1802100;
-const prepaidOnly = (id) => id === 5400000 || id === 5401000 || Math.floor(id / 10) === 520000 || Math.floor(id / 1000) === 549 || id === 5221001 || id === 5222000;
 /** Items a character must reach a level to buy (BUY and RESERVE are greyed below it). */
 const LEVEL_GATE = { 507: 11, 539: 11, 503: 16, 514: 16, 520: 16, 504: 7 };
+/** Hired Merchants, Shop Permits and 539 can't be bought in an account's first 14 days (20160 minutes). */
+const NEW_ACCOUNT_GATE = new Set([503, 514, 539]);
 const INV_SHORT = ['', 'Eqp', 'Use', 'Setup', 'Etc'];
 const isMesoSN = (sn) => Math.floor(sn / 10000000) === 8;
 const fmt = (n) => Number(n || 0).toLocaleString('en-US');
@@ -257,14 +258,19 @@ export class CashShopWin extends Win {
   }
 
   // ---------------------------------------------------------------- server events
+  /**
+   * The NX amounts (0x144), which end every request: the gift run's next recipient, the multi-buy's next item, then
+   * (with neither still going) a wish-list gift waiting, and a wish bought or given coming off the list.
+   */
   setCash(c) {
     this.cash = c;
     this.busy = false; clearTimeout(this.busyTimer);
-    if (this.giftRun) { this.nextGift(); return; }
-    if (this.queue.length) { this.sendBuy(this.queue.shift(), true); return; }
-    if (this.multiBuy) { this.multiBuy = false; this.alert('You have successfully made the purchase.'); }
+    if (this.giftRun) this.nextGift();
+    else if (this.multi) this.nextMulti();
+    else if (this.queue.length) { this.sendBuy(this.queue.shift(), true); return; }
     this.cashKnown = true;
     this.maybeWishGift();
+    if (this.giftRun || this.multi) return;
     if (this.wishAfterBuy) {   // bought from the wish list: it comes off the list
       const sn = this.wishAfterBuy; this.wishAfterBuy = null;
       if (this.wish.includes(sn)) this.sendWish(this.wish.filter((s) => s !== sn), true);
@@ -294,20 +300,17 @@ export class CashShopWin extends Win {
   bought(item) {
     this.inv.push(item);
     this.showLockerEnd();
-    if (this.multiBuy) return;
+    if (this.multi) { this.multi.got.push(item.itemId); return; }   // counted for the multi-buy's ending
     sfx.play('UI/BuyShopItem');
     this.alert('You have successfully made the purchase.');
   }
-  /** Gifts waiting for us: the server already moved them into the Cash Inventory. */
   /**
    * Gifts waiting for you (0x4D): each opens its thank-you note in turn; OK answers the sender (NOTE_ACTION 0) and
-   * says so. The gift also goes into the locker here, which the client leaves to the server's refresh (the game server sends one
-   * only after a reply, so an unanswered gift would stay hidden until you came back).
+   * says so. Nothing goes into the locker here: that is the locker list's (0x4B) to bring.
    */
   async receivedGifts(gifts) {
     for (let i = 0; i < gifts.length; i++) {
       const g = gifts[i];
-      if (!this.inv.some((c) => String(c.cashId) === String(g.cashId))) this.inv.push(g);
       const reply = await new Promise((done) => { const w = new CsGiftNoteDialog(this, g, done); this.mgr.assets.preload(w.frames()).then(() => this.mgr.show(w)); });
       if (reply === null) continue;
       this.g.net?.giftReply(g.from, reply, i, g.cashId);
@@ -334,10 +337,26 @@ export class CashShopWin extends Win {
     this.alert(`You have given '${r.to}'\n ${r.count} [ ${await this.name(r.itemId)} ].`);
   }
   mesoBought() { sfx.play('UI/BuyShopItem'); this.alert('You have successfully made the purchase.'); }
-  coupon(c) {
+  /**
+   * A coupon used (0x59): its locker items in, then "You have received" with each item ("%d %s" on its own line; an
+   * inventory item counted 0 is 1 but for Use, Set-up and Etc), "and" before the Maple Points and mesos given, and
+   * "using the coupon.".
+   */
+  async coupon(c) {
     this.done();
     this.inv.push(...c.items);
-    this.alert(`You have received ${c.items.length + c.got.length} item(s), ${fmt(c.maplePoints)} MaplePoints and ${fmt(c.mesos)} mesos using the coupon.`);
+    let text = '';
+    for (const it of c.items) text += `\n${it.quantity ?? 1} ${await this.name(it.itemId)}`;
+    for (const it of c.got) {
+      const n = it.count || (![2, 3, 4].includes(Math.floor(it.itemId / 1000000)) ? 1 : 0);
+      text += `\n${n} ${await this.name(it.itemId)}`;
+    }
+    const mp = c.maplePoints || 0, mesos = c.mesos || 0;
+    if (text && mp + mesos !== 0) text += 'and \n';
+    if (mp) { text += `${mp} MaplePoints`; if (mesos) text += 'and \n'; }
+    if (mesos) text += `${mesos} mesos`;
+    sfx.play('UI/BuyShopItem');
+    this.alert(`You have received${text}\nusing the coupon.`);
   }
   /** A cash item deleted from the locker (CASHSHOP_OPERATION 0x6C, or 0x85 with the Maple Points it was worth). */
   deleted(cashId, mp) {
@@ -430,13 +449,26 @@ export class CashShopWin extends Win {
     }
     this.alert(kind === 'character' ? 'You have added a new character slot.' : 'You have added slots to your item inventory.');
   }
+  /**
+   * A failure. A gift's (0x5F) says why and, in a gift run, the next recipient's goes out; a multi-buy's item (0x58)
+   * goes on to the next item without a word unless it must leave (0xA2 - 0xA4). Anything else (0x5C among them, which
+   * a run waits past for the next NX amounts) says why.
+   */
   error(reason, op, sn) {
     this.busy = false; this.queue = []; clearTimeout(this.busyTimer);
-    // a failed gift in the gift window's run goes on to the next recipient (the server may answer with 0x5C)
-    if (this.giftRun && (op === 0x5F || op === 0x5C)) { this.alert(ERRORS[reason] || UNKNOWN_ERROR); this.nextGift(); return; }
-    if (this.multiBuy) { this.multiBuy = false; this.alert('The purchase has failed.'); return; }
+    const leaveNow = reason === 0xA2 || reason === 0xA3 || reason === 0xA4;
+    if (op === 0x5F && this.giftRun) {
+      this.alert(ERRORS[reason] || UNKNOWN_ERROR).then(() => { if (leaveNow) this.g.leaveCashShop(); });
+      if (!leaveNow) this.nextGift();
+      return;
+    }
+    if (op === 0x58 && this.multi) {
+      if (leaveNow) { this.multi = null; this.alert(ERRORS[reason] || UNKNOWN_ERROR).then(() => this.g.leaveCashShop()); return; }
+      this.nextMulti();
+      return;
+    }
     if (sn && (reason === 0xBF || reason === 0xC0)) this.stock.set(sn, reason === 0xC0 ? 1 : 2);
-    const leave = reason === 0xA2 || reason === 0xA3 || reason === 0xA4 || reason === 0xB1 || op === 0x4C || op === 0x4E || op === 0x50;
+    const leave = leaveNow || reason === 0xB1 || op === 0x4C || op === 0x4E || op === 0x50;
     this.alert(ERRORS[reason] || UNKNOWN_ERROR).then(() => { if (leave) this.g.leaveCashShop(); });
   }
 
@@ -480,6 +512,7 @@ export class CashShopWin extends Win {
     if (id === 5400000 || id === 5401000 || id === 5222000) r.gift = false;
     if (isMesoSN(c.SN) || !c.Price) r.gift = r.wish = false;
     if (LEVEL_GATE[k] && (st.level || 0) < LEVEL_GATE[k]) r.buy = r.wish = false;
+    if (NEW_ACCOUNT_GATE.has(k) && this.newAccount()) r.buy = r.wish = false;
     if (k === 911 || Math.floor(id / 1000) === 5430 || k === 555) r.gift = false;
     if (this.stock.get(c.SN)) r.buy = r.gift = false;
     if (c.OnSale !== 1) r.buy = r.gift = false;
@@ -558,6 +591,7 @@ export class CashShopWin extends Win {
     if (!c || this.busy) return;
     if (isCoupleRing(c.ItemId) || isFriendRing(c.ItemId)) { this.buyRing(c); return; }
     if (c.ItemId === 5400000 || c.ItemId === 5401000) { this.buyTransfer(c, c.ItemId === 5400000 ? 'name' : 'world'); return; }
+    if (Math.floor(c.ItemId / 1000) === 5430) { this.buyCharSlot(c); return; }
     if (isMesoSN(c.SN)) {
       if ((this.g.meso || 0) < c.Price) { this.alert('You do not have enough mesos.'); return; }
       const ok = await this.dialog({ mode: 0, items: [c], text: 'Are you sure you want to buy this item?', wallets: 0 });
@@ -757,11 +791,12 @@ export class CashShopWin extends Win {
     const message = await new Promise((done) => this.mgr.show(new CsWishGiftDialog(this, to, done)));
     if (message === null) return;
     const name = this.mgr.itemName(c.ItemId) || '';
-    if (!(await this.alert(`${name} (${c.Price} NX)\nWill you buy this item as a gift for\n'${to}'?`, true))) return;
+    // the purchase dialog asks it (mode 2, NX Prepaid)
+    if (!(await this.dialog({ mode: 2, items: [c], text: `${name} (${c.Price} NX)\nWill you buy this item as a gift for\n'${to}'?`, wallets: 4 }))) return;
     const id = c.ItemId, ring = Math.floor(id / 100);
     const mode = ring === 11128 && id % 10 < 3 ? 0x23 : ring === 11120 && id !== 1112000 ? 0x1D : Math.floor(id / 10000) === 910 ? 0x1F : 4;
     if (this.tab === WISH) this.wishAfterBuy = c.SN;
-    this.giftRun = { birthday, sn, to: [to], message, i: 1, sent: [], total: 0, name: '' };
+    // one gift, no run: each answer (0x5E, 0x57, 0x87 / 0x91, 0x8B) says its own words
     this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
     this.g.net?.csWishGift(mode, birthday, sn, to, message);
   }
@@ -843,6 +878,18 @@ export class CashShopWin extends Win {
     this.sendWish([...this.wish, c.SN]);
   }
   removeWish(c) { if (c) this.sendWish(this.wish.filter((s) => s !== c.SN), true); }
+  /**
+   * A character slot (5430xxx): enough cash (free: Maple Points only), no more past 15 slots, then its own question in
+   * the no-item purchase dialog.
+   */
+  async buyCharSlot(c) {
+    if (this.busy) return;
+    const mask = this.walletsFor(c.Price);
+    if (!mask) { this.alert("You don't have enough cash."); return; }
+    if ((this.g.charSlots ?? 0) >= 15) { this.alert('You may not add any more character slots.'); return; }
+    const wallet = await this.dialog({ mode: 3, items: [], text: `Add a character slot (${c.Price} NX)\nAre you sure you want to add another\ncharacter slot?`, wallets: mask });
+    if (wallet && this.begin()) this.g.net?.csBuy(wallet, c.SN, c.ItemId);
+  }
   /** The +Slot buttons: 4 more slots for 4,000 NX. */
   async addSlots(type) {
     if (this.busy) return;
@@ -1102,9 +1149,26 @@ export class CashShopWin extends Win {
     }
     const wallet = await this.dialog({ mode: 1, items, text: `Total ${total} NX.\nMake purchase?`, wallets: mask });
     if (!wallet || !this.begin()) return;
-    this.multiBuy = true;
-    this.queue = items.slice(1).map((c) => ({ c, wallet }));
-    this.g.net?.csBuy(wallet, items[0].SN, items[0].ItemId);
+    // the last item goes first; each NX amount sends the one before it, and each 0x57 counts as bought
+    this.multi = { items, wallet, left: items.length, got: [] };
+    const c = items[--this.multi.left];
+    this.g.net?.csBuy(wallet, c.SN, c.ItemId);
+  }
+  /** The multi-buy's next item, or its ending: all bought, the ones bought (some weren't), or none. */
+  async nextMulti() {
+    const m = this.multi;
+    if (m.left > 0) {
+      const c = m.items[--m.left];
+      this.busy = true; clearTimeout(this.busyTimer); this.busyTimer = setTimeout(() => { this.busy = false; }, 8000);
+      this.g.net?.csBuy(m.wallet, c.SN, c.ItemId);
+      return;
+    }
+    this.multi = null;
+    if (m.got.length === m.items.length) { this.alert('You have successfully made the purchase.'); return; }
+    if (!m.got.length) { this.alert('The purchase has failed.'); return; }
+    const names = [];
+    for (const id of m.got) names.push(`${await this.name(id)}\n`);
+    this.alert(`${names.join('')}\nYou have purchased the following items.\n(Some items weren't purchased)`);
   }
 
   /** The purchase dialog (CSNotice/0): resolves with the wallet chosen (or true when none is asked for), or 0. */
@@ -1413,12 +1477,18 @@ export class CashShopWin extends Win {
     else if (h.item && h.icon) this.tryOn(h.item);
     else if (h.best) this.buyBest(h.best);
   }
-  /** Best Item: a double-click buys, after the level checks. */
+  /** Within 14 days (20160 minutes) of the account's creation. */
+  newAccount() { const t = this.g.created || 0; return t > 0 && (Date.now() - t) / 60000 < 20160; }
+  /**
+   * Best Item: a double-click buys, after its checks: a megaphone (507) below level 11, a Hired Merchant or Shop
+   * Permit (503 / 514) below level 16 or in the account's first 14 days, a Teleport Rock (504) at level 6 or under.
+   */
   buyBest(c) {
     const k = Math.floor(c.ItemId / 10000), lv = this.stats.level || 0;
-    if (k === 503 && lv < 16) { this.alert("Hired Merchant's Shop is only available for characters that are over Level 15."); return; }
-    if (k === 504 && lv < 7) { this.alert('This teleport rock is only available for characters that are over level 6.'); return; }
-    if (LEVEL_GATE[k] && lv < LEVEL_GATE[k]) return;
+    if (k === 507 && lv < 11) { this.alert('This megaphone is only available for \ncharacters that are over Level 10.'); return; }
+    if ((k === 503 || k === 514) && lv < 16) { this.alert("Hired Merchant's Shop is only available for \ncharacters that are over Level 15."); return; }
+    if ((k === 503 || k === 514) && this.newAccount()) { this.alert("This item can only be used 15 days \nafter the account's registration."); return; }
+    if (k === 504 && lv <= 6) { this.alert('This teleport rock is only available for \ncharacters that are over level 6.'); return; }
     this.buy(c);
   }
   wheel(dy) {
@@ -1753,7 +1823,7 @@ class CsGiftNoteDialog extends Win {
     this.msg = at < 0 ? [msg, ''] : [msg.slice(0, at).replace(/\r$/, ''), msg.slice(at + 1)];
   }
   async ok() {
-    const t = this.box.value.trim();
+    const t = this.box.value;
     if (t.length > 200) return;
     if (await this.shop.g.cursed(t)) { this.shop.alert('Cursing is not allowed.'); return; }
     this.finish(t);

@@ -27,7 +27,9 @@ function readAuth(r) {
   r.skip(6); // result, regStatus, int 0
   const a = { id: r.int(), gender: r.ubyte(), gm: r.bool() };
   a.admin = r.ubyte(); r.ubyte();   // the admin byte (0x80: an admin account), then the country code
-  a.name = r.string(); r.ubyte(); r.ubyte(); r.long(); r.long(); r.int();
+  a.name = r.string(); r.ubyte(); r.ubyte(); r.long();
+  // the account's creation (a FILETIME: 100ns since 1601), as ms since 1970
+  a.created = Number(r.long() / 10000n) - 11644473600000; r.int();
   a.pinMode = r.ubyte(); a.picMode = r.ubyte();
   return a;
 }

@@ -3369,6 +3369,13 @@ export class Game {
       messenger: later((e) => this.onMessenger(e)),
       family: later((e) => this.onFamily(e)),
       shopSold: later((i, qty, buyer) => this.playerShop?.soldUpdate(i, qty, buyer)),
+      shopBuyResult: later((code) => this.playerShop?.buyResult(code)),
+      shopRowGone: later((count, idx) => this.playerShop?.rowGone(count, idx)),
+      // an invitation's answer, as a line in the chat log
+      inviteReply: later((code, name) => {
+        const t = { 1: 'Unable to find the character.', 2: `'${name}' is doing something else right now.`, 3: `'${name}' have denied invitation.`, 4: `'${name}' is currently not accepting any invitation.` }[code];
+        if (code !== 0) this.hud.message(t ?? '', CHAT_COLOR.error);
+      }),
       shopVisitor: later((slot, name, look) => this.playerShop?.visitor(slot, name, look)),
       shopChat: later((slot, text) => this.playerShop?.seatSay(slot, slot === this.playerShop.slot ? text : this.maskedLine(text))),
       shopOrganized: later((mesos) => this.playerShop?.organized(mesos)),

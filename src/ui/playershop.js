@@ -34,6 +34,28 @@ import { config } from '../config.js';
 const ROWS = 5, ROW_Y = 157, ROW_H = 40, SPOTS = [285, 378, 472];
 const COL = 126, BAN_X = [317, 409, 505];
 const SEAT_COLORS = ['#000000', '#006699', '#CC0066', '#336600'];
+const FT_PERMANENT = 150842304000000000n, FT_EPOCH = 116444736000000000n;
+/** A FILETIME (100ns since 1601) as ms since 1970. */
+const ftMs = (ft) => Number((BigInt(ft ?? 0) - FT_EPOCH) / 10000n);
+/** Unlocked by a Scissors of Karma (tradeable once more): an equip's flag 0x10, another item's 0x02. */
+const karmaed = (it) => !!((it.flag || 0) & (invType(it.id) === 1 ? 0x10 : 0x02));
+/** Sold one at a time: anything but Use / Set-up / Etc, stars and bullets (207 / 233), and anything with a time limit. */
+const singleUnit = (it) => {
+  const t = Math.floor(it.id / 1000000), k = Math.floor(it.id / 10000), exp = BigInt(it.expiration ?? 0);
+  return ![2, 3, 4].includes(t) || k === 207 || k === 233 || (exp > 0n && exp < FT_PERMANENT);
+};
+const CASH_BUY_WARNING = 'Cash Items become untradable\r\nonce they have been traded and \r\nMaple Points cannot be accumulated\r\nusing Item Deletions in the Cash Shop.\r\n\r\nDo you really want to buy?';
+const LOW_LEVEL_LIMIT = 'Players that are Level 15 and below \r\nmay only trade 1 million mesos per day. \r\nYou have reached the limit today,\r\nplease try again tomorrow.';
+/** PLAYER_INTERACTION 0x18: why a purchase failed. */
+const BUY_RESULTS = {
+  1: "You don't have enough in stock.", 2: 'You do not have enough mesos.', 3: 'The price of the item is too high for the trade.',
+  4: 'The buyer does not possess enough money to trade anymore.', 5: 'Please check if your inventory is full or not.',
+  6: 'You cannot carry more than one for this item.', 7: 'Cannot be traded due to gender inconsistencies.',
+  8: 'This item cannot be\r\npurchased by anyone under 7.', 9: 'Purchase was canceled because there was an item\r\nthat disappeared because it expired.',
+  10: 'A cash item purchase was canceled\r\ndue to a server check.', 11: 'This character is unable to do it.',
+  12: 'The game file has been damaged\r\nso you cannot participate in an item trade. Please try again\r\nafter reinstalling the game.',
+  14: 'Players that are Level 15 and below \r\nmay only trade 1 million mesos per day. \r\nYou have reached the limit today,\r\nplease try again tomorrow.',
+};
 const STAY = 3600000;   // a shop's owner sends a visitor out after an hour
 /** The shop's fee on a sale, as the fee table in the window's art shows it (truncated). */
 const shopFee = (g) => Math.trunc(g * (g >= 1e8 ? 0.03 : g >= 2.5e7 ? 0.025 : g >= 1e7 ? 0.02 : g >= 5e6 ? 0.015 : g >= 1e6 ? 0.009 : g >= 1e5 ? 0.004 : 0));
@@ -223,33 +245,95 @@ export class PlayerShopWin extends Win {
     this.open = true;
     if (this.startBtn) this.startBtn.enabled = false;
   }
-  /** An item dragged in from the inventory: ask how it is sold, then put it up. */
+  /**
+   * An item dragged in from the inventory, as the client checks it: sealed; a cash, quest or untradeable item (one a
+   * Scissors of Karma unlocked passes), a party quest or account-shared item can't be traded; only the owner; a player
+   * shop already open can't take more; one request at a time (500ms); a Hired Merchant takes one of an "only" item.
+   * Then the put box (PutBoxWin) and PLAYER_INTERACTION 0x16 (0x21 in a Hired Merchant).
+   */
   async drop(lx, ly, c) {
-    if (!this.owner || this.open || c.kind !== 'item' || typeof c.tab !== 'number') return;
-    const it = this.g.inventory?.[c.tab]?.[c.slot];
+    if (c.kind !== 'item' || typeof c.tab !== 'number') return;
+    const g = this.g, it = g.inventory?.[c.tab]?.[c.slot];
     if (!it) return;
     if (it.flag & 1) { this.mgr.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }   // sealed by an Item Guard
-    const qty = it.quantity || 1, recharge = [207, 233].includes(Math.floor(it.id / 10000));
-    let per = 1, bundles = 1;
-    if (!recharge && invType(it.id) !== 1 && qty > 1) {
-      per = await this.mgr.askNumber(`How many #t${it.id}# in each bundle?\n(1 ~ ${qty})`, 1, 1, qty);
-      if (!per) return;
-      const most = Math.floor(qty / per);
-      bundles = most > 1 ? await this.mgr.askNumber(`How many bundles?\n(1 ~ ${most})`, most, 1, most) : 1;
-      if (!bundles) return;
-    }
-    const price = await this.mgr.askNumber(`The price of one bundle of #t${it.id}#?`, 1, 1, 2147483647);
-    if (!price) return;
-    this.g.net?.pshopPut(c.tab, c.slot, bundles, per, price);
+    const info = (await itemInfo(g.assets, it.id)) || {}, karma = karmaed(it), cash = Number(info.cash) > 0 || BigInt(it.cashId ?? 0) !== 0n;
+    const blocked = (it.flag & 0x08) || Number(info.tradeBlock);
+    if (((cash || Number(info.quest) || blocked) && !karma) || Number(info.pquest) || Number(info.accountSharable)) { this.mgr.notice('This item is unavailable to trade with others.'); return; }
+    if (!this.owner) return;
+    if (this.open && !this.merchant) { this.mgr.notice("You can't sell it anymore."); return; }
+    if (!g.canExclusive(500)) return;
+    if (this.merchant && Number(info.only) && this.items.some((r) => r.item.id === it.id)) { this.mgr.notice('You may only sell one of this item.'); return; }
+    const single = singleUnit(it), max = [207, 233].includes(Math.floor(it.id / 10000)) ? 1 : it.quantity || 1;
+    const r = await new Promise((done) => { const w = new PutBoxWin(this.mgr, max, single, cash, done); this.mgr.assets.preload(w.frames()).then(() => this.mgr.show(w)); });
+    if (!r) return;
+    let bundles = r.qty / r.per, per = r.per;
+    if (single && !cash) { bundles = 1; per = 1; }
+    if (bundles * r.price >= 2 ** 31) { this.mgr.notice('The total price for the items exceeded\r\nthe maximum amount of mesos that can be sold.'); return; }
+    if (!g.canExclusive(500)) return;
+    g.net?.pshopPut(c.tab, c.slot, bundles, per, r.price, !!this.merchant);
+    g.lockExclusive();
   }
+  /**
+   * BUY ITEM (or a row double-clicked), as the client checks it: not the owner; one request at a time (500ms, alive);
+   * a row sold out says so; a cash item with a time limit asks whether its time was checked (its name and time left),
+   * one a Scissors of Karma unlocked asks whether it may stop being tradeable; an expired one says so. An equip, cash
+   * item, star or bullet, or anything with a time limit is one at a time and asked to be sure (a cash item with its
+   * warning); anything else asks how many items (a whole number of bundles) and confirms the total. At level 15 or
+   * under, more than a million mesos refuses. Then PLAYER_INTERACTION 0x17 (0x22 in a Hired Merchant) with the
+   * bundles and the item's check value (sent as 0: the client's own file hash, which the server doesn't read).
+   */
   async buy(idx = this.sel) {
-    const row = this.items[idx];
-    if (!row || row.bundles <= 0) return;
-    const most = Math.min(row.bundles, Math.floor((this.g.meso || 0) / Math.max(1, row.price)));
-    if (most < 1) { this.mgr.notice('You do not have enough mesos.'); return; }
-    const n = most > 1 ? await this.mgr.askNumber(`How many bundles of #t${row.item.id}# will you buy?\n(1 ~ ${most})`, 1, 1, most)
-      : (await this.mgr.confirm(`Buy #t${row.item.id}# for ${row.price.toLocaleString('en-US')} mesos?`)) ? 1 : 0;
-    if (n) this.g.net?.pshopBuy(idx, n);
+    const row = this.items[idx], g = this.g;
+    if (this.owner || !row || !g.canExclusive(500)) return;
+    if (row.bundles <= 0) { this.mgr.notice('The item has been sold already.'); return; }
+    const it = row.item, cash = BigInt(it.cashId ?? 0) !== 0n, own = BigInt(it.expiration ?? 0), limited = own > 0n && own < FT_PERMANENT;
+    if (cash && (it.pet || limited)) {
+      const left = ftMs(it.pet ? it.pet.dead : own) - Date.now();
+      const when = left > 0 ? `${Math.floor(left / 864e5)}days, ${Math.floor(left / 36e5) % 24}hours, and ${Math.floor(left / 6e4) % 60}minutes left` : 'Time Limit Expired';
+      if (!(await this.mgr.confirm(`#t${it.id}#(${when})\r\n\r\nHave you checked the\r\ntime limit on the item?`))) return;
+    } else if (!cash && karmaed(it)) {
+      if (!(await this.mgr.confirm('Once purchased, the item cannot be traded.\r\nWould you still like to purchase it?'))) return;
+    }
+    if (limited && ftMs(own) < Date.now()) { this.mgr.notice('The time limit has expired.'); return; }
+    let bundles = 1;
+    if (singleUnit(it)) {
+      if (!(await this.mgr.confirm(cash ? CASH_BUY_WARNING : 'Are you sure you want to buy it?'))) return;
+    } else {
+      const n = await this.mgr.askNumber('How many are you willing to buy?', 1, 1, row.bundles * row.perBundle);
+      if (!n) return;
+      if (n % row.perBundle) { this.mgr.notice('The number of items should be based\r\non the number of items in a bundle.'); return; }
+      bundles = n / row.perBundle;
+      if (row.price * bundles >= 2 ** 31) { this.mgr.notice('It has exceeded the limit that system allows.'); return; }
+      if (!(await this.mgr.confirm(`The total price is ${row.price * bundles} mesos.\r\nWill you make the purchase?`))) return;
+    }
+    if ((g.stats?.level || 0) <= 15 && row.price * bundles > 1000000) { this.mgr.notice(LOW_LEVEL_LIMIT); return; }
+    if (!g.canExclusive(500)) return;
+    g.net?.pshopBuy(idx, bundles, !!this.merchant, 0);
+    g.lockExclusive();
+  }
+  /** A purchase's failure (0x18), by code. */
+  buyResult(code) {
+    const t = BUY_RESULTS[code] ?? (code === 0 ? null : 'Due to an error, the trade did not happen.');
+    if (t) this.mgr.notice(t);
+  }
+  /** One row taken off (0x1B): the ones after it move up. */
+  rowGone(count, idx) {
+    if (idx >= 0 && idx < this.items.length) this.items.splice(idx, 1);
+    this.items.length = Math.min(this.items.length, count);
+    if (this.sel >= this.items.length) this.sel = -1;
+  }
+  /**
+   * A row dragged onto the inventory (showing its tab): taken back - one request at a time (500ms), a row with
+   * something in it, and a Hired Merchant's "only" item not while you hold one; 0x1B (0x26 in a Hired Merchant).
+   */
+  async takeBack(idx) {
+    const g = this.g, row = this.items[idx];
+    if (!this.owner || !row || !g.canExclusive(500) || row.bundles < 1) return;
+    if (this.merchant && Number((await itemInfo(g.assets, row.item.id))?.only) && [1, 2, 3, 4, 5].some((t) => Object.values(g.inventory?.[t] || {}).some((x) => x.id === row.item.id))) {
+      this.mgr.notice('You may only possess one of this item.'); return;
+    }
+    if (this.merchant) g.net?.merchantTakeBack(idx); else g.net?.pshopRemove(idx);
+    g.lockExclusive();
   }
 
   // ---------------------------------------------------------------- frame
@@ -330,13 +414,13 @@ export class PlayerShopWin extends Win {
     if (s !== null) { this.first = s; return; }
     const r = this.rowAt(lx, ly);
     if (r >= 0) this.sel = r;
+    if (r >= 0 && this.owner && (!this.open || this.merchant)) { const id = this.items[r].item.id; this.mgr.startCarry({ kind: 'shoprow', idx: r, tab: invType(id), id }, this.mgr.icon(id)); }
   }
   dblclick(lx, ly) {
     const r = this.rowAt(lx, ly);
     if (r < 0) return;
     this.sel = r;
-    if (this.owner && !this.open) { if (this.merchant) this.g.net?.merchantTakeBack(r); else this.g.net?.pshopRemove(r); }
-    else if (!this.owner) this.buy(r);
+    if (!this.owner) this.buy(r);
   }
   wheel(dy) { this.first = Math.max(0, Math.min(this.items.length - ROWS, this.first + Math.sign(dy))); }
   tooltip(lx, ly) {
@@ -498,4 +582,69 @@ export class SalesWin extends Win {
   }
   down(lx, ly) { const f = this.scrollClick(lx, ly, 211, 32, 227, this.first, this.max + 1, 1); if (f !== null) this.first = f; }
   wheel(dy) { this.first = Math.max(0, Math.min(this.max, this.first + Math.sign(dy))); }
+}
+
+/**
+ * The put box (PersonalShop/backgrnd2, 233x143, centred): # OF ITEMS TO SELL (the total, at most what you have; fixed
+ * for an item sold one at a time or a cash item), PRICE PER ITEM and # OF ITEMS PER BUNDLE (1 unless SELL IN A
+ * BUNDLE is ticked) in the art's three boxes (x 118-224 at y 32, 52 and 72). Its tick box, OK and CANCEL are placed by
+ * the art (their places are not known). OK checks each box ("Only numbers are allowed.", at least / at most), and that
+ * the total is whole bundles; then resolves { qty, price, per }, or null.
+ */
+class PutBoxWin extends Win {
+  constructor(mgr, max, single, cash, done) {
+    const P = mgr.W.PersonalShop;
+    super(mgr, P.backgrnd2, (800 - 233) >> 1, (600 - 143) >> 1);
+    this.P = P; this.C = mgr.B.CheckBox; this.max = max; this.single = single; this.cash = cash; this.done = done;
+    this.closeBtn.visible = false; this.bundled = false;
+    this.button(P.BtOK, 152, 119, () => this.ok());
+    if (mgr.B.BtCancel) this.button(mgr.B.BtCancel, 190, 119, () => this.finish(null));
+    const field = (y, value) => {
+      const f = new TextField(mgr.game.statusBar.layer, 119, 0, 104, 14, { max: 10, color: '#000' });
+      f.rect.x0 = 119; f.y0 = y; f.value = value;
+      f.el.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') this.ok(); else if (e.key === 'Escape') this.finish(null); });
+      f.show(false);
+      return f;
+    };
+    this.fields = [field(32, String(max)), field(52, ''), field(72, '1')];
+  }
+  frames() { return [...super.frames(), ...allCanvases(this.P), ...allCanvases(this.C)]; }
+  /** Each box's number, or the client's refusal for it. */
+  read(f, lo, hi) {
+    const t = f.value.trim();
+    if (!/^\d+$/.test(t)) return 'Only numbers are allowed.';
+    const v = Number(t);
+    if (v < lo) return `You may only enter a number \r\nequal to or higher than ${lo}.`;
+    if (v > hi) return `You may only enter a number \r\nequal to or lower than ${hi}.`;
+    return v;
+  }
+  async ok() {
+    const [q, p, b] = this.fields;
+    const per = this.single ? this.max : this.bundled ? this.read(b, 1, this.max) : 1;
+    const qty = this.read(q, 1, this.max), price = this.read(p, 1, 2147483647);
+    for (const v of [per, qty, price]) if (typeof v === 'string') { await this.mgr.notice(v); return; }
+    if (qty % per) { await this.mgr.notice('The number of items should be based\r\non the number of items in a bundle.'); return; }
+    this.finish({ qty, price, per });
+  }
+  finish(v) {
+    if (this.answered) return;
+    this.answered = true;
+    for (const f of this.fields) f.remove();
+    this.mgr.close(this); this.done(v);
+  }
+  onClose() { if (!this.answered) { this.answered = true; for (const f of this.fields) f.remove(); this.done(null); } }
+  draw(ctx) {
+    const [q, , b] = this.fields;
+    if (!this.shown) { this.shown = true; for (const f of this.fields) f.show(true); setTimeout(() => this.fields[1].el.focus(), 0); }
+    q.el.disabled = this.single || this.cash;
+    b.el.disabled = this.single || !this.bundled;
+    super.draw(ctx);
+    const scale = this.g.canvas.clientWidth / UI_W;
+    for (const f of this.fields) { f.rect.x = this.x + f.rect.x0; f.rect.y = this.y + f.y0; f.layout({ left: 0, top: 0 }, scale); }
+  }
+  body(ctx) {
+    const im = this.mgr.image(this.C?.[this.bundled ? 1 : 0]);
+    if (im) ctx.drawImage(im, 12, 95);
+  }
+  down(lx, ly) { if (!this.single && lx >= 10 && lx < 100 && ly >= 92 && ly < 108) this.bundled = !this.bundled; }
 }

@@ -927,6 +927,9 @@ export class ChannelSession {
         let partner = null, look = null;
         if (me === 1) { r.ubyte(); look = readCharLook(r); partner = r.string(); }
         this.emit('tradeOpen', { slot: me, partner, look });
+      } else if (op === 3) {                              // an invitation's answer: 1 not found, 2 busy, 3 declined, 4 not accepting
+        const code = r.ubyte();
+        this.emit('inviteReply', code, code >= 2 && code <= 4 && r.available >= 2 ? r.string() : '');
       } else if (op === 2) {                              // INVITE
         const type = r.ubyte();   // 3 a trade, 6 a cash item trade
         if (type === 3 || type === 6) { const name = r.string(); this.emit('tradeInvite', name, r.available >= 4 ? r.int() : 0, type === 6); }
@@ -2016,6 +2019,8 @@ export class ChannelSession {
     if (op === 0x19) { const mesos = this.roomType === 5 ? r.int() : undefined; this.emit('shopItems', readShopItems(r), mesos); return true; }   // UPDATE_MERCHANT: (mesos) the stock
     if (op === 0x2A) { this.roomType = 0; this.emit('shopClosed', 0, r.available ? r.ubyte() : null); return true; }   // REAL_CLOSE_MERCHANT: closed, and what came back
     if (op === 0x1A) { this.emit('shopSold', r.ubyte(), r.short(), r.string()); return true; } // UPDATE_PLAYERSHOP: sold (owner)
+    if (op === 0x18) { this.emit('shopBuyResult', r.ubyte()); return true; }                 // a purchase's failure, by code
+    if (op === 0x1B) { const count = r.ubyte(); this.emit('shopRowGone', count, r.short()); return true; }   // one row taken off
     // a Hired Merchant's owner: ORGANIZE's answer (its mesos, sold-out rows dropped), the mesos withdrawn, the visit list
     // (name, ms there) and the blacklist
     if (op === 0x28) { this.emit('shopOrganized', r.int()); return true; }
@@ -2074,9 +2079,11 @@ export class ChannelSession {
   pshopOpenStore() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0B).byte(1)); }
   pshopOpenCash(type, birthday) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(0x0B).byte(type).int(birthday)); }
   /** ADD_ITEM: inventory tab, slot, how many bundles, how many in each, the price of one bundle */
-  pshopPut(tab, slot, bundles, perBundle, price) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x16).byte(tab).short(slot).short(bundles).short(perBundle).int(price)); }
+  /** An item put up: 0x16 in a player shop, 0x21 in a Hired Merchant. */
+  pshopPut(tab, slot, bundles, perBundle, price, merchant = false) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(merchant ? 0x21 : 0x16).byte(tab).short(slot).short(bundles).short(perBundle).int(price)); }
   pshopRemove(index) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x1B).short(index)); }
-  pshopBuy(index, bundles) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x17).byte(index).short(bundles)); }
+  /** A row bought: 0x17 in a player shop, 0x22 in a Hired Merchant, with the bundles and the item's check value. */
+  pshopBuy(index, bundles, merchant = false, check = 0) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(merchant ? 0x22 : 0x17).byte(index).short(bundles).int(check)); }
   pshopExit() { this.roomType = 0; this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
   // ---- your Hired Merchant: HIRED_MERCHANT_REQUEST asks whether one may open here (ENTRUSTED_SHOP_CHECK_RESULT answers);
   // in its room TAKE_ITEM_BACK 0x26, MERCHANT_ORGANIZE 0x28 (collect the mesos, drop sold-out rows), CLOSE_MERCHANT 0x29
