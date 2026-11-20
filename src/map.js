@@ -1415,7 +1415,7 @@ export class Life {
     if (this.walks && (this.onNpcAction || !this.online)) { this.actT -= dt; this.playPath(dt); return; }
     if (this.walks) { this.playPath(dt); return; }
     if (this.onNpcAction) this.npcAsk(dt);
-    else if ((this.actT -= dt) <= 0 && !this.chat && !this.acting && this.picks.length) {
+    else if (!this.online && (this.actT -= dt) <= 0 && !this.chat && !this.acting && this.picks.length) {
       this.actT = 3 + Math.random() * 6;
       const p = this.picks[Math.floor(Math.random() * this.picks.length)];
       if (this.anims[p.action]) { this.acting = p.action; this.setState(p.action); }

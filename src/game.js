@@ -3588,9 +3588,7 @@ export class Game {
         if (Number(hit.attach)) this.fx.push({ anim, follow: sm, flip: !!sm.facingRight });
         else this.fx.push({ anim, x: sm.x - 15 + Math.random() * 30, y: sm.y - 40 + Math.random() * 40, flip: !!dir });
       }),
-      summonSkill: later((owner, skill, stance) => {
-        for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === skill) sm.play(`skill${(stance & 0x7f) || 1}`);
-      }),
+      summonSkill: later((owner, oid, action, cosmic) => this.summonPose(owner, oid, action, cosmic)),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
       spawnMob: later(async (m) => {
         await this.spawnLife('Mob', m, false);
@@ -3754,13 +3752,14 @@ export class Game {
         if (FOREIGN_SOUND[effect]) sfx.play(FOREIGN_SOUND[effect]);
       }),
       portalSound: () => sfx.play('Game/Portal'),
-      spawnNpc: later((n, controlled) => this.spawnLife('Npc', n, !!controlled)),
+      spawnNpc: later((n) => this.npcSeen(n)),
+      controlNpc: later((on, n) => this.controlNpc(on, n)),
       npcAction: later((oid, action, chat, start, moves) => this.lifeByOid.get(oid)?.npcActed?.(action, chat, start, moves)),
       forcedMapEquip: later(() => this.forceMapEquip()),
       forcedStats: (f) => { this.forcedStats = f; },
       // a change to what you wear, your buffs or skills: goes out with your next movement
       moveElement: (b) => { (this.moveBuf ??= []).push({ cmd: 10, equip: b }); },
-      removeNpc: later((oid) => this.killLife(oid, 0)),
+      removeNpc: later((oid) => this.npcGone(oid, 1)),
       imitatedNpcs: later((list) => this.imitateNpcs(list)),
       blocked: (kind, type) => this.blocked(kind, type),
       drop: later((d) => this.spawnDrop(d)),
@@ -5550,7 +5549,7 @@ export class Game {
     const rand = (a, b) => { const lo = Math.min(a, b), hi = Math.max(a, b); return lo + Math.random() * (hi - lo); };
     let d;
     if (!magic) {
-      if (this.accuracyMiss(info, over) || guarded(m)) d = 0;
+      if (this.accuracyMiss(info, over, m) || guarded(m)) d = 0;
       else if (immuneTo(m, WEAPON_IMMUNE)) d = 1;
       else {
         const job = this.stats?.job || 0, cyg = Math.floor(job / 1000) === 1 ? Math.floor((job % 1000) / 100) : 0;
@@ -9364,7 +9363,7 @@ export class Game {
     // a GM's swings never miss and ignore the level gap (not a touch attack's)
     const exempt = !shot && !touch && Math.floor((job % 1000) / 100) === 9;
     const over = exempt ? 0 : Math.max(0, (info.level || 0) - (this.stats?.level || 1));
-    if (!exempt && this.accuracyMiss(info, over)) return { d: 0, c: false };
+    if (!exempt && this.accuracyMiss(info, over, m)) return { d: 0, c: false };
     if (skillId === SHADOW_MESO) return this.shadowMesoHit(info, ld, over);
     // Aran's blows are all swings; Rush and Blast swing three times in five; Brandish's second blow swings
     const aran = Math.floor(job / 100) === 21 || job === 2000;
@@ -9395,7 +9394,7 @@ export class Game {
       const cv = new RegExp(`${held.elem}(\\d)`).exec(info.elemAttr || '')?.[1], p = (held.ld.z || 0) / 100;
       d = cv === '1' ? d * (1 - p) : cv === '2' ? d * (1 - p * 0.5) : cv === '3' ? Math.min(199999, Math.max(d, d * (1 + p * 0.5))) : d;
     }
-    const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, info.PDDamage || 0));
+    const pdd = IGNORE_DEFENCE.has(skillId) ? 0 : Math.min(1999, Math.max(0, (info.PDDamage || 0) + this.mobBuff(m, 1)));
     const base = Math.trunc(d - rand(pdd * 0.5, pdd * 0.6));
     // Flamethrower and Ice Splitter add Elemental Boost's damage % to their own once it is learned
     let pct = Number(ld?.damage) || 0;
@@ -9409,6 +9408,7 @@ export class Game {
     if (stun) { rate += Math.max(0, Math.min(100, stun.prop || 0)); extra += stun.damage || 0; }
     const c = rate > 0 && extra > 0 && skillId !== BLIZZARD && Math.random() * 100 < rate;
     if (c) d += ((extra - 100) * base) / 100;
+    if (this.mobBuff(m, 14) && skillId !== 1311005) d = (d * this.mobBuff(m, 14)) / 100;   // its weapon defence up (%), but for Sacrifice
     // Assassinate: x(seconds in Dark Sight, up to its time, / 3 + 1)
     if (skillId === ASSASSINATE) d *= Math.floor(Math.min(this.assassinSec || 0, ld?.time || 0) / 3) + 1;
     // Wind Walk and Vanish (out of Dark Sight) strike harder
@@ -9451,7 +9451,7 @@ export class Game {
     if (ld?.fixdamage) return { d: this.fixedMiss(m) ? 0 : ld.fixdamage, c: false };
     const INT = this.totalStat('int'), LUK = this.totalStat('luk'), lv = this.stats?.level || 1;
     const over = Math.max(0, (info.level || 0) - lv), acc = ((Math.floor(INT / 10) + Math.floor(LUK / 10)) * 5 * 100) / (over * 10 + 255);
-    if (rand(acc * 0.5, acc * 1.2) < clamp(info.eva || 0, 0, 999)) return { d: 0, c: false };
+    if (rand(acc * 0.5, acc * 1.2) < clamp((info.eva || 0) + this.mobBuff(m, 5), 0, 999)) return { d: 0, c: false };
     const soul = sb.level(DRAGON_SOUL) ? num(sb.levelData(DRAGON_SOUL)?.mad) : 0;
     const MAD = clamp(clamp(INT + this.equipStat('matk') + soul, 0, 1999) + buff('matk'), 0, 1999);
     const k = (num(sb.level(EVAN_MAGIC_MASTERY) ? sb.levelData(EVAN_MAGIC_MASTERY)?.mastery : ld?.mastery) * 5 + 10) * 0.009;
@@ -9467,8 +9467,9 @@ export class Game {
     if (skillId === FP_COMPOSITION) d = vs(d / 2, digit('F')) + vs(d / 2, digit('S'));
     else if (skillId === IL_COMPOSITION) d = vs(d / 2, digit('L')) + vs(d / 2, digit('I'));
     else d = vs(d, digit(elem));
-    const mdd = clamp(info.MDDamage || 0, 0, 1999);
+    const mdd = clamp((info.MDDamage || 0) + this.mobBuff(m, 3), 0, 1999);
     d -= rand(mdd * 0.5, mdd * 0.6);
+    if (this.mobBuff(m, 15)) d *= this.mobBuff(m, 15) * 0.01;   // its magic defence up (%)
     const se = (this.buffs || []).find((b) => b.sharpEyes && b.until > now)?.sharpEyes;
     let rate = clamp(se?.rate || 0, 0, 100), cdmg = se?.dmg || 0;
     if ((Math.floor(job / 100) === 22 || job === 2001) && sb.level(CRITICAL_MAGIC)) { const cm = sb.levelData(CRITICAL_MAGIC); rate += num(cm?.prop); cdmg += num(cm?.damage); }
@@ -9486,10 +9487,10 @@ export class Game {
     return { d: Math.trunc(clamp(d, 1, 199999)), c };
   }
   /** Your accuracy x 100 / (255 + 10 a level the monster has over you), x 0.7-1.3, under its avoid: a miss. */
-  accuracyMiss(info, over) {
+  accuracyMiss(info, over, m = null) {
     const now = Date.now(), accBuff = Math.max(0, ...(this.buffs || []).filter((b) => b.acc && b.until > now).map((b) => b.acc));
     const acc = Math.min(999, Math.max(0, this.accuracy() + accBuff)), hit = (acc * 100) / (over * 10 + 255);
-    return hit * (0.7 + Math.random() * 0.6) < Math.min(999, Math.max(0, info.eva || 0));
+    return hit * (0.7 + Math.random() * 0.6) < Math.min(999, Math.max(0, (info.eva || 0) + (m ? this.mobBuff(m, 5) : 0)));
   }
   /** A Shadow Partner line: pct% of the line it follows, then Wind Walk and Vanish over again. */
   partnerHit(src, pct) {
@@ -10268,6 +10269,52 @@ export class Game {
       if (this.vfx?.boss?.oid === Number(e.spawn.id)) this.vfx.bossHp({ oid: Number(e.spawn.id), hp: -1 });
     }
   }
+  /** SUMMON_SKILL: another player's summon plays a pose (0 stand ... 6-11 skill1-skill6, 12 hit, 13 die, 14 say), facing by bit 7. */
+  summonPose(owner, oid, action, cosmic = false) {
+    // a plain Cosmic server names the summon by its skill and sends the skill pose's number
+    if (cosmic) { for (const sm of this.summons.values()) if (sm.owner === owner && sm.skill === oid) sm.play(`skill${(action & 0x7f) || 1}`); return; }
+    const POSES = ['stand', 'move', 'fly', 'summoned', 'attack1', 'attack2', 'skill1', 'skill2', 'skill3', 'skill4', 'skill5', 'skill6', 'hit', 'die', 'say'];
+    for (const sm of this.summons.values()) {
+      if (sm.oid !== oid || sm.owner !== owner) continue;
+      sm.facingRight = !(action & 0x80);
+      const pose = POSES[action & 0x7f];
+      if (pose) sm.play(pose);
+    }
+  }
+  /**
+   * An NPC is on the map by SPAWN_NPC (flag 1) and/or because we control it (flag 2, SPAWN_NPC_REQUEST_CONTROLLER); it
+   * goes when neither is left. SPAWN_NPC for one we already have only marks it.
+   */
+  npcSeen(n) {
+    const e = this.lifeByOid.get(n.oid);
+    if (e && !e.pending) { e.npcFlags = (e.npcFlags || 0) | 1; return; }
+    this.spawnLife('Npc', n, false).then(() => { const s = this.lifeByOid.get(n.oid); if (s && !s.pending) s.npcFlags = (s.npcFlags || 0) | 1; });
+  }
+  npcGone(oid, flag) {
+    const e = this.lifeByOid.get(oid);
+    if (!e || e.pending) { if (flag === 1) this.killLife(oid, 0); return; }
+    e.npcFlags = (e.npcFlags || 1) & ~flag;
+    if (!e.npcFlags) this.killLife(oid, 0);
+  }
+  /**
+   * SPAWN_NPC_REQUEST_CONTROLLER: we run this NPC's actions and walks now (each sent to the server, done when it comes
+   * back) - one already here changes hands, its stand-in starting again from where it stands - or no longer.
+   */
+  controlNpc(on, n) {
+    const e = this.lifeByOid.get(n.oid);
+    if (!on) {
+      if (e && !e.pending && e.controlled) { e.controlled = false; e.onNpcAction = null; e.npcSim = null; e.npcWaiting = false; }
+      this.npcGone(n.oid, 2);
+      return;
+    }
+    if (e && !e.pending) {
+      e.npcFlags = (e.npcFlags || 1) | 2;
+      e.controlled = true; e.npcSim = null; e.npcWaiting = false;
+      e.onNpcAction = (m, action, chat, start, moves) => this.net?.npcAction(m.oid, action, chat, start, moves);
+      return;
+    }
+    this.spawnLife('Npc', n, true).then(() => { const s = this.lifeByOid.get(n.oid); if (s && !s.pending) s.npcFlags = (s.npcFlags || 0) | 2; });
+  }
   /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
   damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0, scale = 1) {
     if (mine && target.kind === 'Mob') { target.myHitAt = performance.now(); target.hpShownUntil = target.myHitAt + 5000; }
@@ -10643,29 +10690,36 @@ export class Game {
    * then Invincible's x% of what is left. Magic: its magic attack x 0.75-0.80 x itself / 100, less (DEX / 6 + STR / 7 + LUK / 5 + magic defence) x 0.3 (a
    * magician's) or 0.25. Either is held to 1-199999: a blow that isn't dodged does at least 1.
    */
+  /** A monster's buff value while its bit is on (0 otherwise; for bits 12-15 a % where 0 means none). */
+  mobBuff(m, bit) {
+    if (config.cosmic) return 0;   // a plain Cosmic server sends these bits its own way: not applied
+    return m.status?.second & (1 << bit) ? Number(m.buffVal?.[bit]) || 0 : 0;
+  }
   damageTaken(m, power, magic) {
     const info = m.src?.info || {}, s = this.stats || {}, lv = s.level || 1, cls = Math.floor(((s.job || 0) % 1000) / 100);
     const rand = (lo, hi) => lo + Math.random() * (hi - lo), clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v)), now = Date.now();
     const buff = (k) => Math.max(0, ...(this.buffs || []).filter((b) => b[k] && b.until > now).map((b) => b[k]));
     const T = (k) => this.totalStat(k);   // your stats with equipment and Maple Warrior
-    const mobLv = info.level || 0, acc = clamp(info.acc || 0, 0, 999);
+    const mobLv = info.level || 0, acc = clamp((info.acc || 0) + this.mobBuff(m, 4), 0, 999);
     let avoid = clamp(this.avoidability() + buff('avoid'), 0, 999);
     if (mobLv > lv) avoid = Math.max(0, avoid - Math.trunc((mobLv - lv) / 2));
     if (magic) {
       if (acc <= rand(avoid * 0.1, avoid)) return 0;
-      const mad = clamp(info.MADamage ?? power, 0, 1999), mdd = clamp(this.equipStat('mdef') + buff('mdef'), 0, 1999);
-      const d = rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (T('dex') / 6 + T('str') / 7 + T('luk') / 5 + mdd) * (cls === 2 ? 0.3 : 0.25);
+      const mad = clamp((info.MADamage ?? power) + this.mobBuff(m, 2), 0, 1999), mdd = clamp(this.equipStat('mdef') + buff('mdef'), 0, 1999);
+      let d = rand(mad * 0.75, mad * 0.8) * mad * 0.01 - (T('dex') / 6 + T('str') / 7 + T('luk') / 5 + mdd) * (cls === 2 ? 0.3 : 0.25);
+      if (this.mobBuff(m, 13)) d *= this.mobBuff(m, 13) * 0.01;   // its magic attack up (%)
       return Math.trunc(clamp(d, 1, 199999));
     }
     const chance = (avoid / (acc * 4.5)) * 100;
     if (Math.random() * 100 < (cls === 4 ? clamp(chance, 5, 95) : clamp(chance, 2, 80))) return 0;
-    const pad = clamp(power, 0, 1999), pdd = clamp(this.equipStat('wdef') + buff('wdef'), 0, 1999), std = this.standardPdd(cls, lv);
+    const pad = clamp(power + this.mobBuff(m, 0), 0, 1999), pdd = clamp(this.equipStat('wdef') + buff('wdef'), 0, 1999), std = this.standardPdd(cls, lv);
     const k = Math.trunc(cls === 1 ? (T('luk') + T('dex')) * 0.25 + T('int') / 9 + (T('str') * 2) / 7 : T('luk') * 0.25 + T('int') / 9 + (T('dex') * 2) / 7 + T('str') * 0.4);
     let d = rand(pad * 0.8, pad * 0.85) * pad * 0.01 - (k * 0.00125 + 0.28) * pdd;
     if (pdd >= std) d -= (pdd - std) * (k / 900 + lv / 1300 + 0.28) * 0.7;
     else if (mobLv <= lv) d -= ((pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 13) / (lv - mobLv + 13);
     else d -= (pdd - std) * (lv / 550 + k * 0.00125 + 0.28) * 1.3;
     d -= buff('invincible') * d * 0.01;
+    if (this.mobBuff(m, 12)) d *= this.mobBuff(m, 12) * 0.01;   // its weapon attack up (%)
     return Math.trunc(clamp(d, 1, 199999));
   }
   /** The standard weapon defence for a class (0 beginner .. 5 pirate) at a level, from Base/StandardPDD.img (gaps take the last value). */
@@ -10765,6 +10819,10 @@ export class Game {
    * bubbles, a stun's stars), or a monster skill's `mob` animation and `icon` (its own attack / defence up...).
    */
   async applyMobStatus(m, s) {
+    // the buffs' values: bits 0-5 add to its attack, defence, magic, magic defence, accuracy and avoid; bits 12-15 are
+    // % on the physical / magic damage it deals and the physical / magic damage it takes (see mobBuff)
+    const bit = s.second ? 31 - Math.clz32(s.second) : -1;
+    if ((bit >= 0 && bit <= 5) || (bit >= 12 && bit <= 15)) (m.buffVal ??= {})[bit] = s.value;
     // values the damage rolls read: bit 31's guard, bit 34's damage taken (%)
     if (s.second & 0x80000000) { m.guardValue = s.value; m.disableValue = s.value2 || 0; }
     if (s.first & 0x4) m.takenPct = s.value;

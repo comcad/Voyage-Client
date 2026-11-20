@@ -1,6 +1,7 @@
 import { Connection } from './connection.js';
 import { PacketWriter } from './packet.js';
 import { C, S, S_NAMES } from './opcodes.js';
+import { config } from '../config.js';
 import { readCharacterInfo, readMarriage, readNewYearCard, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
 
 /** CashShop item records (addCashItemInformation): cash id, account, item, SN, count, gift sender, expiry. */
@@ -1325,12 +1326,15 @@ export class ChannelSession {
     });
     // a summon struck: its owner, oid, the attack index (-2 and down: no monster), the damage, then the monster and
     // which way it was hit
-    on(S.DAMAGE_SUMMON, (r) => {
+    // (a plain Cosmic server, Server.Cosmic, sends these two the other way round: 0xB3 the damage, 0xB4 the pose by skill)
+    const summonDamageOp = config.cosmic ? S.SUMMON_SKILL : S.DAMAGE_SUMMON, summonPoseOp = config.cosmic ? S.DAMAGE_SUMMON : S.SUMMON_SKILL;
+    on(summonDamageOp, (r) => {
       const owner = r.int(), oid = r.int(), attack = r.byte(), damage = r.int();
       const mobId = attack > -2 && r.available >= 4 ? r.int() : 0, dir = mobId && r.available ? r.ubyte() : 0;
       this.emit('summonDamaged', owner, oid, damage, attack, mobId, dir);
     });
-    on(S.SUMMON_SKILL, (r) => this.emit('summonSkill', r.int(), r.int(), r.ubyte()));
+    // SUMMON_SKILL: a summon's pose - its owner, the summon's object id (plain Cosmic: its skill), the action (bit 7 its side)
+    on(summonPoseOp, (r) => this.emit('summonSkill', r.int(), r.int(), r.ubyte(), config.cosmic));
     // SHOW_SCROLL_EFFECT: who, success, cursed (the item was destroyed), Legendary Spirit, White Scroll
     // (success is signed: -1 "cannot use", 0 failed, else it worked)
     on(S.SHOW_SCROLL_EFFECT, (r) => this.emit('scrollEffect', { id: r.int(), success: r.byte(), cursed: r.bool(), legendary: r.bool(), white: r.bool() }));
@@ -1558,9 +1562,10 @@ export class ChannelSession {
     // The game server sends f != 1 in the direction byte; the client mirrors the art only when it is 0
     const readNpc = (r) => ({ oid: r.int(), id: r.int(), x: r.short(), y: r.short(), facingRight: !r.bool(), fh: r.short(), rx0: r.short(), rx1: r.short() });
     on(S.SPAWN_NPC, (r) => this.emit('spawnNpc', readNpc(r)));
+    // control of an NPC given (its whole entry follows, only used when we don't have the NPC yet) or taken back
     on(S.SPAWN_NPC_REQUEST_CONTROLLER, (r) => {
-      if (r.ubyte() === 0) { this.emit('removeNpc', r.int()); return; }
-      this.emit('spawnNpc', readNpc(r), true);   // one we control: it asks the server before it acts
+      if (r.ubyte() === 0) { this.emit('controlNpc', false, { oid: r.int() }); return; }
+      this.emit('controlNpc', true, readNpc(r));
     });
     on(S.REMOVE_NPC, (r) => this.emit('removeNpc', r.int()));
     // the map dresses you in its own clothes (what in, the map's type decides)

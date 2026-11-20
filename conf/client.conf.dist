@@ -79,6 +79,22 @@ Server.AuthenticatedClient = false
 Server.ClientKey = ""
 
 #
+#     Server.Cosmic
+#        Description: The game server is a plain Cosmic server rather than Voyage-Server.
+#                     Voyage-Server sends some packets the way the original game did, where plain
+#                     Cosmic still sends them its own way. With this true the client reads them
+#                     Cosmic's way:
+#                     - summons: the pose and damage packets (0xB3 / 0xB4) the other way round, the
+#                       pose found by the summon's skill;
+#                     - monsters' attack and defence buffs: their values are not applied to damage
+#                       (plain Cosmic sends two of the % buffs swapped, and its flat ones as %).
+#                     Everything else works the same on either server. Leave it false for
+#                     Voyage-Server.
+#        Default:     false
+
+Server.Cosmic = false
+
+#
 #     Server.AssetsDir
 #        Description: The assets folder the Voyage extractor made (JSON + PNG), relative to the
 #                     folder server.js is in. Voyage-Server and Voyage-Editor point at the same one.

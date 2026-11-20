@@ -24,6 +24,8 @@ export function clientConfigs(c) {
     // ----------------------------SKILLS------------------------------
     skillCooldownTime: c.getBoolean('Skills.ShowCooldownTime', false),
     // ----------------------------SERVER------------------------------
+    // a plain Cosmic game server (Server.Cosmic): the few packets Voyage-Server sends the original game's way, read Cosmic's way
+    cosmic: c.getBoolean('Server.Cosmic', false),
     sheets: true,
     // what the assets' customs folder changes, each with its version (customs.mjs)
     custom: {},
