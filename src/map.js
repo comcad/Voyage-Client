@@ -1785,7 +1785,7 @@ export class Life {
   }
 }
 
-const TAG_FONT = '12px Arial';
+export const TAG_FONT = '12px Arial';
 const argb = (clr) => `#${((Number(clr) >>> 0) & 0xffffff).toString(16).padStart(6, '0')}`;
 
 /**

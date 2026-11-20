@@ -1,5 +1,5 @@
 import { isCanvas, frames } from './assets.js';
-import { Anim } from './map.js';
+import { Anim, TAG_FONT } from './map.js';
 import { itemIcon } from './data.js';
 import { uiText, timeLeft, overlayText } from './ui/wzui.js';
 import { richText } from './ui/richtext.js';
@@ -75,12 +75,12 @@ export class WorldFx {
 
   async load() {
     const a = this.assets;
-    [this.E, this.T, this.CB, this.W] = await Promise.all([
-      a.json('Effect/BasicEff.img'), a.json('Effect/Tomb.img'), a.json('UI/ChatBalloon.img'), a.json('UI/UIWindow.img')]);
+    [this.E, this.T, this.CB, this.W, this.B] = await Promise.all([
+      a.json('Effect/BasicEff.img'), a.json('Effect/Tomb.img'), a.json('UI/ChatBalloon.img'), a.json('UI/UIWindow.img'), a.json('UI/Basic.img')]);
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
     this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
     await a.preload([...sets, ...deepCanvases(this.E.Combo), ...deepCanvases(this.E.ComboCommand), this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
-      ...deep(this.W.MobGage, 3), ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
+      ...deep(this.W.MobGage, 3), ...deep(this.B?.ShowLevel, 2), ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
   }
 
   // ---------------------------------------------------------------- triggers
@@ -215,7 +215,7 @@ export class WorldFx {
       // the bar shows the HP % the server last sent (an escort starts full), not what our own hits took off
       const pct = e.hpPct ?? (escort ? 100 : null);
       if (pct !== null && (escort || !(Number(info.hideHP) || Number(info.HPgaugeHide)))) mobHpBar(ctx, e, cam, pct, escort ? '#f00' : '#0f0');
-      if (shown && settings.mobInfo === 2 && !Number(info.hideName) && e.name) mobNameTag(ctx, e, cam, info);
+      if (shown && settings.mobInfo === 2 && !Number(info.hideName) && e.name) mobNameTag(ctx, e, cam, info, this);
     }
     // quest icons above NPC heads
     for (const [e] of this.questIcons) {
@@ -543,24 +543,52 @@ function mobHpBar(ctx, e, cam, pct, color) {
   ctx.fillStyle = color; ctx.fillRect(x + 3, y + 3, w, 3);
   ctx.fillStyle = '#a00300'; ctx.fillRect(x + 3, y + 6, w, 1);
 }
-/** Its level and name in yellow under its feet, each in its own see-through dark tag: the name centred, its level left of it. */
-function mobNameTag(ctx, e, cam, info) {
+/**
+ * Its name in a dark tag (1px cut corners) centred under its feet, 2px down, and joined on its left, 1px apart, its
+ * level in the UI/Basic.img ShowLevel art: "Lv." (left), its digits and Bracket/right, 2px down. Set 2 for a monster 20
+ * or more levels over you, set 1 for one 20 or more under you, set 0 otherwise; the name is in that set's colour
+ * (12px Arial: white, ffff20, be3c03). No level for a boss, one with hideLevel, hideHP or hideName, or a 9xxxxxx
+ * monster outside 94xxxxx and 96xxxxx.
+ */
+function mobNameTag(ctx, e, cam, info, fx) {
+  const lv = Number(info.level) || 0, me = fx.game.stats?.level || 1;
+  const set = lv >= me + 20 ? 2 : lv <= me - 20 ? 1 : 0;
+  const id = Number(e.spawn?.id) || 0, series = Math.floor(id / 100000);
+  const withLevel = !(Number(info.hideLevel) || Number(info.hideHP) || Number(info.hideName) || Number(info.boss)
+    || (Math.floor(id / 1000000) === 9 && series !== 94 && series !== 96));
+  const t = mobTagSprite(fx, e.name, withLevel ? lv : -1, set);
+  if (!t) return;
   const x = snapPx(e.x - cam.x), y = snapPx(e.y - cam.y) + 2;
-  ctx.save();
-  ctx.font = '12px "Segoe UI", system-ui, sans-serif';
-  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  const width = (text) => Math.ceil(ctx.measureText(text).width) + 6;
-  const tag = (text, left, w) => {
-    ctx.fillStyle = 'rgba(0,0,0,0.67)';
-    ctx.fillRect(left + 1, y, w - 2, 13); ctx.fillRect(left, y + 1, w, 11);   // its corners rounded off
-    ctx.fillStyle = '#ff0';
-    ctx.fillText(text, left + w / 2, y);
-  };
-  const nw = width(e.name), left = x - Math.floor(nw / 2);
-  tag(e.name, left, nw);
-  if (!Number(info.hideLevel) && info.level) {
-    const lv = `Lv.${info.level}`, lw = width(lv);
-    tag(lv, left - 1 - lw, lw);
-  }
-  ctx.restore();
+  ctx.drawImage(t.c, x - Math.floor((t.w + t.lw) / 2), y, t.w, t.h);   // the name's box centred on its feet
+}
+const MOB_TAG_COLORS = ['#ffffff', '#ffff20', '#be3c03'];
+/** Each monster tag drawn once into a canvas of its own at the canvas's density, then copied, as a name tag is. */
+const mobTags = new Map();
+let mobTagMeasure = null;
+function mobTagSprite(fx, name, level, set) {
+  const S = PIXEL_SCALE, key = `${S}|${set}|${level}|${name}`;
+  let t = mobTags.get(key);
+  if (t) return t;
+  const L = fx.B?.ShowLevel, nodes = level < 0 ? [] : [L?.[set]?.left, ...String(level).split('').map((d) => L?.[set]?.[d]), L?.Bracket?.right];
+  const parts = nodes.map((n) => (n ? fx.assets.image(n) : null));
+  if (parts.some((p) => !p)) return null;   // its art still loading
+  mobTagMeasure ??= document.createElement('canvas').getContext('2d');
+  mobTagMeasure.font = TAG_FONT;
+  const nw = Math.ceil(mobTagMeasure.measureText(name).width);
+  const lw = parts.length ? parts.reduce((w, p) => w + p.width, 0) + 1 : 0, w = lw + nw + 5, h = 16;
+  const c = document.createElement('canvas');
+  c.width = w * S; c.height = h * S;
+  const o = c.getContext('2d');
+  o.scale(S, S); o.imageSmoothingEnabled = false;
+  o.fillStyle = 'rgba(0,0,0,0.667)';
+  o.fillRect(lw + 1, 0, w - lw - 2, 1); o.fillRect(lw, 1, w - lw, h - 2); o.fillRect(lw + 1, h - 1, w - lw - 2, 1);
+  let x = 0;
+  for (const p of parts) { o.drawImage(p, x, 2); x += p.width; }
+  o.font = TAG_FONT; o.fillStyle = MOB_TAG_COLORS[set];
+  o.textAlign = 'left'; o.textBaseline = 'alphabetic';
+  o.fillText(name, lw + 2, 13);
+  t = { c, w, h, lw };
+  if (mobTags.size >= 400) mobTags.delete(mobTags.keys().next().value);
+  mobTags.set(key, t);
+  return t;
 }

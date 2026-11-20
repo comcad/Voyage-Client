@@ -7613,7 +7613,7 @@ export class Game {
       for (let i = 0; i < lines; i++) {
         if (sp && i >= half) {
           const src = dmg[i - half], info = m.src?.info || {};
-          const missed = this.accuracyMiss(info, Math.max(0, (info.level || 0) - (this.stats?.level || 1)));
+          const missed = this.accuracyMiss(info, Math.max(0, (info.level || 0) - (this.stats?.level || 1)), m);
           dmg.push(src > 0 && !missed ? this.partnerHit(src, (skillId ? sp.y : sp.x) || 0) : 0); crits.push(crits[i - half]);
           continue;
         }
@@ -9336,11 +9336,14 @@ export class Game {
     const st = steps[orbs - 2];
     return Array.isArray(st) ? Math.trunc((lv * st[0] - st[0]) / 29) + st[1] + dmg : dmg + st;
   }
-  /** A fixed-damage skill misses by level alone: your level x 100 / (255 + 150 per level the monster has over you), times 0.7-1.3, under its avoid. */
+  /**
+   * A fixed-damage skill misses by level alone: your level x 100 / (255 + 150 per level the monster has over you), times
+   * 0.7-1.3, under its avoid (with its avoid buff, as every miss check).
+   */
   fixedMiss(m) {
     const info = m.src?.info || {}, lv = this.stats?.level || 1, over = Math.max(0, (info.level || 0) - lv);
     const hit = (lv * 100) / (over * 150 + 255), r = hit * (0.7 + Math.random() * 0.6);
-    return r < Math.min(999, Math.max(0, info.eva || 0));
+    return r < Math.min(999, Math.max(0, (info.eva || 0) + this.mobBuff(m, 5)));
   }
   /**
    * One damage line of a physical attack (shot or close up) on monster m:
