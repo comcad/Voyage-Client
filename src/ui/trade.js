@@ -145,7 +145,8 @@ export class TradeWin extends Win {
     for (let s = 1; s <= 9; s++) { if (this.items[0][s]) ids.push(this.items[0][s].id); if (this.items[1][s]) ids.push(this.items[1][s].id); }
     this.g.net?.tradeConfirm(ids);
   }
-  cancel() { this.g.net?.tradeExit(); this.ended(2); }
+  /** Your own cancel: the room is left and the window closes without a word (the other side is told by the server). */
+  cancel() { this.g.net?.tradeExit(); this.ended(null); }
   key(e) { if (e.key === 'Escape') this.cancel(); }
   /** An item dragged from the inventory: into your cell it was dropped on (32x32 boxes 39 apart across, 37 down). */
   drop(lx, ly, c) {

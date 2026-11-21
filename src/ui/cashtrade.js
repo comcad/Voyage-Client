@@ -136,7 +136,8 @@ export class CashTradeWin extends Win {
     this.confirmed[0] = true;
     this.g.net?.tradeConfirm(this.ids(0));
   }
-  cancel() { this.g.net?.tradeExit(); this.ended(2); }
+  /** Your own cancel: the room is left and the window closes without a word (the other side is told by the server). */
+  cancel() { this.g.net?.tradeExit(); this.ended(null); }
   key(e) { if (e.key === 'Escape') this.cancel(); }
   boxAt(lx, ly) {
     for (let n = 0; n < ROWS; n++) if (lx >= BOX_X[0] && lx < BOX_X[0] + 33 && ly >= ROW_Y(n) && ly < ROW_Y(n) + 33) return n + 1;
