@@ -8,7 +8,7 @@ import { QuestBook, TITLE_AREA } from './quests.js';
 import { MedalWin } from './ui/medal.js';
 import { MemoWin } from './ui/memo.js';
 import { ClaimNotice, ClaimForm } from './ui/claim.js';
-import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, drawItemTip, drawSkillTip, DeathNotice, UtilBox, SkillUpNotice } from './ui/dialogs.js';
+import { npcTalk, localTalk, NpcDialog, SlideMenu, PetSelectDialog, ShopWin, AdminShopWin, ADMIN_CLOSED, drawItemTip, drawSkillTip, DeathNotice, UtilBox, SkillUpNotice } from './ui/dialogs.js';
 import { npcQuestMenu, playQuestLines, questFlow } from './ui/quests-ui.js';
 import { QuestMessages } from './ui/questmsg.js';
 import { QuestAlert } from './questalert.js';
@@ -65,7 +65,7 @@ import { RaiseWin, IncubatorWin, TreasureBoxWin } from './ui/etcwins.js';
 import { RemoteGachaponWin, KarmaWin, HammerWin, VegaWin } from './ui/cashwins2.js';
 import { permanent } from './ui/itemguard.js';
 import { MapleLifeWin } from './ui/maplelife.js';
-import { OwlWin, OwlResultWin } from './ui/owl.js';
+import { OwlWin, OwlResultWin, WishWin } from './ui/owl.js';
 import { openMaker, makerOutcome } from './ui/maker.js';
 import { openLegendary } from './ui/legendary.js';
 import { CarnivalWin } from './ui/carnival.js';
@@ -1707,9 +1707,23 @@ export class Game {
   /** A shop-type window is open (NPC shop, Storage, Duey, the Item Megaphone): many cash items say "Not available". */
   tradeOpen() {
     const open = (w) => w && this.windows.order.includes(w);
-    return open(this.shopWin) || open(this.storageWin) || open(this.dueyWin) || open(this.fredrickWin)
+    return open(this.shopWin) || open(this.adminShopWin) || open(this.storageWin) || open(this.dueyWin) || open(this.fredrickWin)
       || this.windows.order.some((w) => (w instanceof MegaphoneWin && w.kind === 6) || SINGLE_WINS.some((W) => w instanceof W));
   }
+
+  /**
+   * ADMIN_SHOP: an NPC's own shop. With nothing in it the NPC says it isn't doing business (and the server hears it
+   * closed); one open already is filled again; with another shop-type window open it is let go.
+   */
+  async onAdminShop(d) {
+    if (!d.items.length) { await localTalk(this.windows, d.npc, ADMIN_CLOSED, ['OK']); this.net?.adminShopClose(); return; }
+    const w = this.adminShopWin;
+    if (w && this.windows.order.includes(w)) { w.fill(d); return; }
+    if (this.tradeOpen()) return;
+    this.adminShopWin = this.windows.show(new AdminShopWin(this.windows, d), null);
+  }
+  /** Leaving a shop that asks: the item search for what you want from it. */
+  wishSearch() { this.windows.show(new WishWin(this.windows), null); }
 
   /** Duey: talking to him sends the parcels waiting for you, which opens his window; results come back as codes. */
   async onDuey(e) {
@@ -3247,6 +3261,8 @@ export class Game {
       csWorldTransferRules: (error, x, worlds) => this.csWin?.worldTransferRules(error, x, worlds),
       csTransferBought: (kind, item) => this.csWin?.transferBought(kind, item),
       setField: (f) => {
+        // an NPC's own shop doesn't go with you (the server has let it go)
+        if (this.adminShopWin) { const w = this.adminShopWin; this.adminShopWin = null; this.windows.close(w); }
         this.setServerTime(f.serverTime);
         if (f.hp !== undefined && this.stats) this.stats.hp = f.hp;
         this.changeMap(f.mapId, { portalIdx: f.portal, pos: f.pos });
@@ -3816,6 +3832,8 @@ export class Game {
       npcTalk: (d) => this.showNpcDialog(d),
       shop: (s) => { if (this.shopWin) this.windows.close(this.shopWin); this.shopWin = this.windows.show(new ShopWin(this.windows, s), null); },
       shopResult: (code, extra) => this.shopWin?.result(code, extra),
+      adminShop: (d) => this.onAdminShop(d),
+      adminShopResult: (code) => this.adminShopWin?.result(code),
       // Fredrick: his store bank opens (one single window at a time), its results, or "not available"
       fredrick: (e) => {
         if (e.op === 'open') { if (!this.tradeOpen()) this.showSingle(new FredrickWin(this.windows, e)).then((w) => { this.fredrickWin = w; }); }

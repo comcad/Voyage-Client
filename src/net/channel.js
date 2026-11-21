@@ -1740,6 +1740,15 @@ export class ChannelSession {
       const extra = code === 0x0E || code === 0x0F ? r.int() : code === 0x11 && r.available && r.ubyte() ? r.string() : null;
       this.emit('shopResult', code, extra);
     });
+    // ADMIN_SHOP: an NPC's own shop, each row { sn, id, price (above 0 you buy it, else the NPC buys it for that), off
+    // (not traded now), max (the most at once) }, then whether leaving asks what else you want
+    on(S.ADMIN_SHOP, (r) => {
+      const npc = r.int(), items = [];
+      for (let n = r.ushort(); n > 0; n--) items.push({ sn: r.int(), id: r.int(), price: r.int(), off: r.ubyte() !== 0, max: r.ushort() });
+      this.emit('adminShop', { npc, items, wish: r.ubyte() !== 0 });
+    });
+    // ADMIN_SHOP_MESSAGE: [4][code], how a trade there went
+    on(S.ADMIN_SHOP_MESSAGE, (r) => { if (r.ubyte() === 4) this.emit('adminShopResult', r.ubyte()); });
     // STORAGE: 0x16 open, 0x0D stored / 0x09 taken out (that type's items), 0x0F arranged, 0x13 mesos, else an error
     on(S.STORAGE, (r) => {
       const op = r.ubyte(), items = () => { const out = []; for (let n = r.ubyte(); n > 0; n--) out.push(readItem(r, false)); return out; };
@@ -2548,6 +2557,11 @@ export class ChannelSession {
   shopBuy(slot, id, qty, price) { this.send(new PacketWriter(C.NPC_SHOP).byte(0).short(slot).int(id).short(qty).int(price)); }
   shopSell(slot, id, qty) { this.send(new PacketWriter(C.NPC_SHOP).byte(1).short(slot).int(id).short(qty)); }
   shopClose() { this.send(new PacketWriter(C.NPC_SHOP).byte(3)); }
+  /** An NPC's own shop: 0 its list again, 1 a trade (the row, how many, your slot when selling), 2 closed, 3 what you want. */
+  adminShopList(npc) { this.send(new PacketWriter(C.ADMIN_SHOP).byte(0).int(npc)); }
+  adminShopTrade(sn, count, slot) { this.send(new PacketWriter(C.ADMIN_SHOP).byte(1).int(sn).short(count).short(slot)); }
+  adminShopClose() { this.send(new PacketWriter(C.ADMIN_SHOP).byte(2)); }
+  adminShopWish(id) { this.send(new PacketWriter(C.ADMIN_SHOP).byte(3).int(id)); }
   /** STORAGE: 4 take out (type, index), 5 store (slot, id, qty), 6 arrange, 7 mesos (+ out / - in), 8 close */
   /** pets: summon / send home toggles by cash-inventory slot; ids are the pet's unique id (low 32 bits) */
   spawnPet(slot, lead = false) { this.send(new PacketWriter(C.SPAWN_PET).int(Date.now() | 0).short(slot).byte(lead ? 1 : 0)); }

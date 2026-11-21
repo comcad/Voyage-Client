@@ -722,10 +722,10 @@ export function potionPrice(g, price, id) {
   if (Math.trunc(x * 10) % 10 >= 5) x += 1;
   return Math.trunc(x);
 }
-/** An item name cut to the row's 152px, ending in "..". */
-function rowName(ctx, s) {
+/** An item name cut to the row's 152px (or `w`), ending in "..". */
+function rowName(ctx, s, w = 152) {
   ctx.save(); ctx.font = '12px Arial, "Segoe UI", sans-serif';
-  if (ctx.measureText(s).width > 152) { while (s && ctx.measureText(`${s}..`).width > 152) s = s.slice(0, -1); s += '..'; }
+  if (ctx.measureText(s).width > w) { while (s && ctx.measureText(`${s}..`).width > w) s = s.slice(0, -1); s += '..'; }
   ctx.restore();
   return s;
 }
@@ -791,6 +791,8 @@ export class ShopWin extends Win {
     return s.gender === 2 || gender === 2 || gender === s.gender;
   }
   buyItems() { return this.buyTab === 1 ? this.must : this.all; }
+  /** The goods side's tab labels and how many: All, and Must when equips suit you. */
+  goodsTabs() { return [this.S.TabBuy, this.must.length ? 2 : 1]; }
   get firstBuy() { return this.buyFirst[this.buyTab]; }
   set firstBuy(v) { this.buyFirst[this.buyTab] = v; }
   /**
@@ -952,7 +954,7 @@ export class ShopWin extends Win {
     this.rowText(ctx, commas(g.meso || 0), 447, 64, 'right');
     // tab strips (Basic.img Tab2): All (and Must) at a fixed 50px over the goods, Equip .. Cash over yours
     ctx.save(); ctx.translate(2, 0);
-    this.buyTabRects = drawTabStrip(ctx, m, this.S.TabBuy, this.must.length ? 2 : 1, this.buyTab, 222, SHOP_TAB_Y, 50);
+    this.buyTabRects = drawTabStrip(ctx, m, ...this.goodsTabs(), this.buyTab, 222, SHOP_TAB_Y, 50);
     ctx.restore();
     ctx.save(); ctx.translate(232, 0);
     this.sellTabRects = drawTabStrip(ctx, m, this.S.TabSell, SELL_TABS, this.tab - 1, 222, SHOP_TAB_Y);
@@ -1005,6 +1007,184 @@ export class ShopWin extends Win {
     const v = this.rowAt(lx, ly, false);
     if (v >= 0) return { item: this.sellItems()[v].it };
     return null;
+  }
+}
+
+// ==================================================================== an NPC's own shop
+const ADMIN_AGAIN = "That's not something I barter. I'll show you the list again for you to choose from.";
+/** What the NPC says to each answer (ADMIN_SHOP_MESSAGE); the ones in ADMIN_CLOSES close the window and ask for the list again. */
+const ADMIN_SAYS = {
+  1: ADMIN_AGAIN, 2: ADMIN_AGAIN, 3: ADMIN_AGAIN, 4: 'Are you begging?',
+  5: 'Why do you carry around so much Mesos? Come back after emptying your pockets.',
+  6: "Taking your precious time, huh? I don't barter this item anymore.",
+  7: "I'm done bartering this item for the day. Come back tomorrow.",
+  8: "Why are you obsessing over this item? I won't barter anymore.",
+  9: "You're greedy. How about you lower the quantity?",
+  10: "I'm a little preoccupied right now, so come back later.",
+};
+const ADMIN_CLOSES = new Set([1, 2, 3, 6, 7, 8, 10]);
+export const ADMIN_CLOSED = "I'm not doing business at this time. Don't I deserve some rest, too?";
+const ADMIN_WISH = "Isn't there anything else you want? I'll make a note of it.";
+const ADMIN_OFF = '#8c8c8c';
+/**
+ * An NPC's own shop (ADMIN_SHOP): the NPC shop's art and layout, its goods on two tabs at a fixed 50px (TabBuy "2"
+ * Sell: what it sells, "3" Buy: what it buys), each row its name at (49, +3) and "N,NNNmeso" at (49, +21) with no coin;
+ * your items on the right only where it buys them, at the price it pays. Rows it doesn't trade now are greyed, their
+ * icon faded. Either button, or a double click on the chosen row, trades it: bought or sold by the row's price; selling
+ * from the goods side takes the first such item you carry. One request at a time; the NPC answers in its dialog, and
+ * some answers close the window and ask for the list again. Exit asks first what else you want when the shop says so.
+ */
+export class AdminShopWin extends ShopWin {
+  constructor(mgr, d) {
+    super(mgr, { npc: d.npc, items: [] });
+    this.fill(d);
+  }
+  /** A list, the first or again: both choices, and a request out, start over; the tabs stay as they are. */
+  fill(d) {
+    if (this.npcId !== undefined && d.npc !== this.npcId) this.loadNpc(d.npc);
+    this.npcId = d.npc; this.wish = d.wish;
+    this.lists = [d.items.filter((e) => e.price >= 1), d.items.filter((e) => e.price < 1)].map((l) => l.map((it) => ({ it })));
+    this.selBuy = -1; this.selSell = -1; this.pending = false; this.bought = null; this.buyFirst = [0, 0];
+    Promise.all(d.items.map((it) => itemInfo(this.mgr.assets, it.id))).catch(() => {});
+  }
+  loadNpc(id) {
+    this.npc = null;
+    this.mgr.assets.json(`Npc/${pad(id, 7)}.img`).then(async (n) => {
+      if (n?.info?.link) n = (await this.mgr.assets.json(`Npc/${pad(n.info.link, 7)}.img`)) || n;
+      const anim = n?.stand ? new Anim(n.stand) : null;
+      if (!anim?.frames.length) return;
+      anim.defaultDelay = 180;
+      await this.mgr.assets.preload(anim.frames);
+      if (this.npcId === id) { this.npc = anim; this.npcT = performance.now(); }
+    });
+  }
+  get open() { return this.g.adminShopWin === this; }
+  onClose() { if (this.g.adminShopWin === this) this.g.adminShopWin = null; }
+  /** Exit: a shop that asks first asks what else you want (yes opens the item search); then it closes. */
+  async close() {
+    if (this.leaving || !this.open) return;
+    this.leaving = true;
+    const wish = this.wish && (await localTalk(this.mgr, this.npcId, ADMIN_WISH, ['Yes', 'No'])) === 'Yes';
+    if (wish && this.open) this.g.wishSearch?.();
+    this.end();
+  }
+  /** The window goes, and the server is told. */
+  end() {
+    if (!this.open) return;
+    this.mgr.close(this);
+    this.g.adminShopWin = null;
+    this.g.net?.adminShopClose();
+  }
+  goodsTabs() { const T = this.S.TabBuy; return [{ enabled: [T.enabled?.[2], T.enabled?.[3]], disabled: [T.disabled?.[2], T.disabled?.[3]] }, 2]; }
+  buyItems() { return this.lists?.[this.buyTab] || []; }
+  sellable(it) { const info = this.mgr.info(it.id); return !!info && !Number(info.quest) && !Number(info.notSale) && !Number(info.cash) && !it.cash; }
+  /** Your items of one inventory type that it buys (and you may sell), each at the price it pays for one. */
+  sellItems(type = this.tab) {
+    const inv = this.g.inventory?.[type] || {}, buys = this.lists?.[1] || [], out = [];
+    for (const [pos, it] of Object.entries(inv).sort((a, b) => a[0] - b[0])) {
+      const e = buys.find(({ it: x }) => x.id === it.id && !x.off);
+      if (e && this.sellable(it)) out.push({ pos: Number(pos), it, qty: it.quantity ?? 1, price: Math.abs(e.it.price), entry: e.it, recharge: 0 });
+    }
+    return out;
+  }
+  buy() { this.trade(); }
+  sell() { this.trade(); }
+  ask(text) { return new Promise((r) => this.mgr.show(new UtilBox(this.mgr, 'okcancel', text, r))); }
+  /** How many: the NPC dialog's number box, from 1 to `max`. */
+  async askNumber(text, def, max) {
+    const r = await npcTalk(this.mgr, { npc: this.npcId, type: 3, speaker: 0, text, def, min: 1, max });
+    return r.action === 1 ? Number(r.sel) || 0 : 0;
+  }
+  async trade() {
+    if (this.pending) return;
+    const m = this.mgr, fromGoods = this.selBuy >= 0;
+    const row = fromGoods ? this.buyItems()[this.selBuy] : this.sellItems()[this.selSell];
+    if (!row) return;
+    const e = fromGoods ? row.it : row.entry;
+    if (e.off) return;
+    let count = 1, slot = 0;
+    if (e.price < 1) {
+      let { pos, it } = row;
+      if (fromGoods) {
+        const hit = Object.entries(this.g.inventory?.[invType(e.id)] || {}).sort((a, b) => a[0] - b[0]).find(([, x]) => x?.id === e.id && this.sellable(x));
+        pos = hit ? Number(hit[0]) : 0; it = hit?.[1];
+      }
+      const qty = it ? it.quantity ?? 1 : 0;
+      if (!qty) { m.notice('You do not have the item.'); return; }
+      if (it.flag & 1) { m.notice('Sealed items cannot be\r\nsold, traded, or dropped.'); return; }
+      if (isStackable(e.id)) {
+        count = await this.askNumber('How many are you willing to sell?', qty, qty);
+        if (count < 1 || count > qty) return;
+      } else if (!(await this.ask('Are you sure you want to sell it?'))) return;
+      if (this.g.inventory?.[invType(e.id)]?.[pos] !== it) return;
+      slot = pos;
+    } else {
+      if (isStackable(e.id)) {
+        count = await this.askNumber('How many are you willing to buy?', 1, e.max);
+        if (count < 1 || count > e.max) return;
+      } else if (!(await this.ask('Are you sure you want to buy it?'))) return;
+      const cost = e.price * count;
+      if (cost <= 0 || cost > (this.g.meso || 0)) { m.notice(NO_MESOS); return; }
+    }
+    if (this.pending || !this.open) return;
+    this.g.net?.adminShopTrade(e.sn, count, slot);
+    this.pending = true;
+    const type = invType(e.id);
+    this.bought = { type, before: this.sellItems(type) };
+  }
+  /** ADMIN_SHOP_MESSAGE, only while a request is out: done, or the NPC's answer. */
+  async result(code) {
+    if (!this.pending) return;
+    this.pending = false;
+    if (code === 0) { this.showBought(); return; }
+    const text = ADMIN_SAYS[code];
+    if (!text) return;
+    const closes = ADMIN_CLOSES.has(code), npc = this.npcId;
+    if (closes) this.end();
+    await localTalk(this.mgr, npc, text, ['OK']);
+    if (closes) this.g.net?.adminShopList(npc);
+  }
+  /** After a trade: the row of your side that changed is chosen and scrolled to (on the tab that is open). */
+  showBought() {
+    const b = this.bought;
+    this.bought = null;
+    if (!b || b.type < 1 || b.type > SELL_TABS) return;
+    const now = this.sellItems(), same = (x, y) => x.it.id === y.it.id && x.pos === y.pos && x.qty === y.qty;
+    const n = Math.min(now.length, b.before.length);
+    let i = 0;
+    while (i < n && same(now[i], b.before[i])) i++;
+    if (i === n) i = now.length === b.before.length ? 0 : now.length < b.before.length ? i - 1 : i;
+    i = Math.max(0, i);
+    if (i < this.firstSell) this.firstSell = i;
+    if (i > this.firstSell + SHOP_ROWS - 1) this.firstSell = i - SHOP_ROWS + 1;
+    this.selSell = i; this.selBuy = -1;
+  }
+  rowLine(ctx, t, x, y, off) { this.text(ctx, t, x, y + 11, { size: 12, base: 'alphabetic', ...(off ? { color: ADMIN_OFF } : {}) }); }
+  goodsRow(ctx, i, { it }, selected) {
+    const m = this.mgr, y = SHOP_ROW_Y + i * SHOP_ROW_H;
+    const sel = selected && m.image(this.S.select);
+    if (sel) ctx.drawImage(sel, 43, y);
+    ctx.save();
+    if (it.off) ctx.globalAlpha = 100 / 255;
+    m.drawIcon(ctx, m.icon(it.id), 8, y + 2);
+    ctx.restore();
+    this.rowLine(ctx, rowName(ctx, m.itemName(it.id), 160), 49, y + 3, it.off);
+    this.rowLine(ctx, `${commas(Math.abs(it.price))}meso`, 49, y + 21, it.off);
+  }
+  sellRow(ctx, i, r, selected) {
+    const m = this.mgr, y = SHOP_ROW_Y + i * SHOP_ROW_H, id = r.it.id;
+    const sel = selected && m.image(this.S.select);
+    if (sel) ctx.drawImage(sel, 273, y);
+    m.drawIcon(ctx, m.icon(id), 238, y + 2);
+    if ([2, 3, 4].includes(invType(id))) m.count(ctx, r.qty, 236, y + 20);
+    this.rowLine(ctx, rowName(ctx, m.itemName(id), 160), 279, y + 3);
+    this.rowLine(ctx, `${commas(r.price)}meso`, 279, y + 21);
+  }
+  tooltip(lx, ly) {
+    const b = this.rowAt(lx, ly, true);
+    if (b >= 0) return { item: { id: this.buyItems()[b].it.id } };
+    const v = this.rowAt(lx, ly, false);
+    return v >= 0 ? { item: this.sellItems()[v].it } : null;
   }
 }
 

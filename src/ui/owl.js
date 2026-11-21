@@ -256,6 +256,22 @@ const PRICE_COLORS = ['#007af4', '#00bdc4', '#629a00', '#ff5400', '#d022c2', '#a
 const priceColor = (p) => PRICE_COLORS[p < 1e5 ? 0 : p < 1e6 ? 1 : p < 1e7 ? 2 : p < 1e8 ? 3 : p < 1e9 ? 4 : 5];
 
 /**
+ * What you want from an NPC's shop, asked on leaving one that asks: the item search, where picking an item asks
+ * "[name] Would you like to register?", tells the server (ADMIN_SHOP 3) and closes.
+ */
+export class WishWin extends OwlWin {
+  constructor(mgr) { super(mgr, null); }
+  onOpen() { setTimeout(() => this.field.focus(), 0); }
+  onClose() { this.field.remove(); }
+  async confirm(id) {
+    const name = this.mgr.itemName(id) || (await itemTable(this.g.assets)).find((e) => e.id === id)?.raw || '';
+    if (!(await this.mgr.confirm(`[${name}]\r\nWould you like to register?`))) return;
+    this.g.net?.adminShopWish(id);
+    this.close();
+  }
+}
+
+/**
  * The search's results (itemSearch/resultback, 438x430, centred): "Search results for <item> that you entered.",
  * the total, the GO rule; eight rows from y 176 every 22px - owner (21), store (87), per bundle (to 180), price (to
  * 255, coloured by size), quantity (to 287), BtInfo (304), and GO (BtLink at (368, 175 + 22i)) for stores on your
