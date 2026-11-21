@@ -4851,7 +4851,7 @@ export class Game {
     const rp = new RemotePlayer(d, look);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look; rp.team = d.team;
-    rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); rp.chalk = d.chalk && this.masked(d.chalk); rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
+    rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); if (d.ghost) this.setGhost(rp, d.ghost, true); rp.chalk = d.chalk && this.masked(d.chalk); rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
     rp.mount = d.mount || 0; if (rp.mount) this.mountData(rp.mount);
     rp.mountTired = d.mountInfo ? mountTired(d.mountInfo.level, d.mountInfo.tired) : false;
     if (rp.chair) this.chairArt(rp.chair);

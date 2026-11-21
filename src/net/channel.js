@@ -1060,11 +1060,14 @@ export class ChannelSession {
       const id = r.int(), level = r.ubyte(), name = r.string(), guild = r.string(), emblem = readEmblem(r);
       // foreign buffs: fixed layout with optional value after the first mask int
       r.int(); r.short(); r.ubyte(); r.ubyte();
-      const morph = r.int();
-      const hiMask = r.int();
+      // the second mask: its low half Morph (0x2) and Ghost (0x20000), its high half the rest; then the values in the
+      // client's order: Combo Attack's (1 + orbs), the morph's id, the ghost's (1 a ghost, 2 the spaceship)
+      const second = r.int(), hiMask = r.int();
       let combo = 0;
       let morphId = 0;
-      if (morph === 2) morphId = r.short(); else if (hiMask & 0x200000) combo = r.ubyte(); // the morph / Combo Attack's value (1 + orbs)
+      if (hiMask & 0x200000) combo = r.ubyte();
+      if (second & 0x2) morphId = r.short();
+      const ghost = second & 0x20000 ? r.short() : 0;
       r.int(); r.int(); r.short(); r.skip(4); r.int(); r.skip(11); r.short(); r.skip(9); r.int(); r.short(); r.ubyte();
       const mount = r.int(); r.int();   // Monster Riding: the mount's item id (0 on foot), the skill
       r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
@@ -1090,7 +1093,7 @@ export class ChannelSession {
           if (r.available >= 2) { r.ubyte(); team = r.byte(); }   // then another byte, and the team an event field reads (-1 none)
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, team, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, ghost, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, team, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
