@@ -9974,20 +9974,20 @@ export class Game {
   }
   /**
    * After a skill: each idle reactor with an event of type 5 for that skill whose box (lt / rb from it) holds you is
-   * set off (DAMAGE_REACTOR with the skill, its hit 800ms on).
+   * set off (DAMAGE_REACTOR with the skill, its hit 800ms on). Every such event of its state goes, each sent (the
+   * last one's the hit shown).
    */
   skillReactors(skillId) {
     if (!this.reactors?.size) return;
     const p = this.player, x = Math.round(p.x), y = Math.round(p.y), now = performance.now(), stance = this.reactorStance();
     for (const r of this.reactors.values()) {
       if (r.phase !== 0 || now < r.noHitUntil) continue;
-      r.events(r.cur).some((e, i) => {
-        if (Number(e?.type) !== 5 || !Object.values(e.activeSkillID || {}).map(Number).includes(skillId)) return false;
+      r.events(r.cur).forEach((e, i) => {
+        if (Number(e?.type) !== 5 || !Object.values(e.activeSkillID || {}).map(Number).includes(skillId)) return;
         const lt = e.lt || [0, 0], rb = e.rb || [0, 0];
-        if (!(x >= r.x + lt[0] && x < r.x + rb[0] && y >= r.y + lt[1] && y < r.y + rb[1])) return false;
+        if (!(x >= r.x + lt[0] && x < r.x + rb[0] && y >= r.y + lt[1] && y < r.y + rb[1])) return;
         r.skillStruck(stance, i);
         this.net.damageReactor(r.oid, 1, stance, 800, skillId);
-        return true;
       });
     }
   }
