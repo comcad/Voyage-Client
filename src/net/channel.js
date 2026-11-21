@@ -972,6 +972,15 @@ export class ChannelSession {
     // what the shared VISIT / EXIT / CHAT ops mean (3 trade, 4 player shop)
     on(S.PLAYER_INTERACTION, (r) => {
       const op = r.ubyte();
+      // a cash trade's birthday step answered (0x0E, room type 6): 0 inviting (then the target), 4 invited (then the
+      // invitation and a flag, with a short and 8 bytes when it's set); not ok asks for the birthday again
+      if (op === 0x0E && r.b[r.pos + 1] === 6) {
+        const e = { action: r.ubyte(), type: r.ubyte(), ok: r.ubyte() !== 0 };
+        if (e.action === 0) e.value = r.int();
+        else if (e.action === 4) { e.value = r.int(); e.f = r.ubyte(); if (e.f) { e.s = r.short(); e.buf = r.bytes(8); } }
+        this.emit('cashTradeBirthday', e);
+        return;
+      }
       if ((this.roomType === 4 || this.roomType === 5) && this.shopOp(op, r)) return;
       if ((this.roomType === 1 || this.roomType === 2) && op !== 5 && op !== 3) { this.gameOp(op, r); return; }
       if (op === 5) {                                     // ROOM
@@ -981,12 +990,12 @@ export class ChannelSession {
         if (type === 1 || type === 2) { this.emit('gameRoom', readGameRoom(r, type)); return; }
         if (type === 4) { this.emit('shopOpen', readShopRoom(r)); return; }
         if (type === 5) { this.emit('shopOpen', readMerchantRoom(r, this.selfName)); return; }
-        if (type !== 3) return;
+        if (type !== 3 && type !== 6) return;   // 6 a cash trade
         r.ubyte();
         const me = r.ubyte();
         let partner = null, look = null;
         if (me === 1) { r.ubyte(); look = readCharLook(r); partner = r.string(); }
-        this.emit('tradeOpen', { slot: me, partner, look });
+        this.emit('tradeOpen', { slot: me, partner, look, cash: type === 6 });
       } else if (op === 3) {                              // an invitation's answer: 1 not found, 2 busy, 3 declined, 4 not accepting
         const code = r.ubyte();
         this.emit('inviteReply', code, code >= 2 && code <= 4 && r.available >= 2 ? r.string() : '');
@@ -2273,7 +2282,30 @@ export class ChannelSession {
   tradeDecline(id = 0, reason = 3) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(3).int(id).byte(reason)); }
   tradeItem(tab, pos, qty, slot) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0F).byte(tab).short(pos).short(qty).byte(slot)); }
   tradeMeso(v) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x10).int(v)); }
-  tradeConfirm() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x11)); }
+  /** TRADE (0x11), and the partner's confirmation answered (0x14): item ids, each with a checksum Voyage doesn't make (0). */
+  tradeConfirm(ids = []) { const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0x11).byte(ids.length); for (const id of ids) w.int(id).int(0); this.send(w); }
+  tradeTransaction(ids = []) { const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0x14).byte(ids.length); for (const id of ids) w.int(id).int(0); this.send(w); }
+  /**
+   * A cash trade: /CashTrade asks with the target alone (0x0E, 0, 6); the birthday follows when the server asks
+   * (0x0E, action, 6, birthday, then the target or the invitation); once it's right, the room (create 6) and the
+   * invitation, or the visit. The one invited answers with the birthday and the invitation (0x0E, 4, 6).
+   */
+  cashTradeAsk(cid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(0).byte(6).int(cid)); }
+  cashTradeBirthday(e, birthday) {
+    const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(e.action).byte(6).int(birthday).int(e.value);
+    if (e.action === 4) { w.byte(e.f || 0); if (e.f) w.short(e.s).bytes(e.buf); }
+    this.send(w);
+  }
+  cashTradeAccept(birthday, sn) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0E).byte(4).byte(6).int(birthday).int(sn).byte(0)); }
+  cashTradeStart(cid) {
+    this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(6).byte(0));
+    this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(2).int(cid));
+  }
+  tradeVisit(sn, f = 0, sh = 0, buf = null) {
+    const w = new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(sn).byte(0).byte(f);
+    if (f) w.short(sh).bytes(buf);
+    this.send(w);
+  }
   tradeChat(text) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(6).string(text)); }
   tradeExit() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0A)); }
   charInfo(cid) { this.send(new PacketWriter(C.CHAR_INFO_REQUEST).int(Date.now() | 0).int(cid).byte(0)); }

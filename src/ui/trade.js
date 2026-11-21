@@ -24,14 +24,14 @@ const COLS = [[6, 45, 84], [170, 208, 248]], ROWS = [128, 166, 204];
  * sends 1 to whoever received mesos, with its own popup). A success that brought in fewer mesos than offered (the
  * fee) says how many came.
  */
-const RESULTS = { 2: 'Trade cancelled.\r\nby the other character.', 7: 'Trade successful.\r\nPlease check the results.',
+export const RESULTS = { 2: 'Trade cancelled.\r\nby the other character.', 7: 'Trade successful.\r\nPlease check the results.',
   8: 'Trade unsuccessful.', 9: 'You cannot make the trade because\r\nthere are some items which\r\nyou cannot carry more than one.',
   12: "You cannot make the trade because\r\nthe other person's on a different map.",
   13: 'The game file has been damaged\r\nso you cannot participate in an item trade. Please try again\r\nafter reinstalling the game.' };
 const UNTRADEABLE = 'This item is unavailable to trade with others.';
 const LOW_LEVEL_LIMIT = 'Players that are Level 15 and below \r\nmay only trade 1 million mesos per day. \r\nYou have reached the limit today,\r\nplease try again tomorrow.';
 /** Scissors of Karma's mark: 0x10 on equipment, 0x01 on a pet, 0x02 on anything else. */
-const karma = (it) => !!(it.flag & (it.type === 1 ? 0x10 : it.type === 3 ? 0x01 : 0x02));
+export const karma = (it) => !!(it.flag & (it.type === 1 ? 0x10 : it.type === 3 ? 0x01 : 0x02));
 
 export class TradeWin extends Win {
   constructor(mgr) {
@@ -74,7 +74,12 @@ export class TradeWin extends Win {
   // (an offer changing leaves both confirm marks as they are: once confirmed, your own offer can't change)
   setItem(side, slot, item) { this.items[side][slot] = item; }
   setMeso(side, meso) { this.meso[side] = meso; }
-  partnerConfirmed() { this.confirmed[1] = true; }
+  /** Your partner confirmed: their items as you see them go back (ids, with checksums Voyage doesn't make: 0). */
+  partnerConfirmed() {
+    this.confirmed[1] = true;
+    const ids = []; for (let s = 1; s <= 9; s++) if (this.items[1][s]) ids.push(this.items[1][s].id);
+    this.g.net?.tradeTransaction(ids);
+  }
   say(text, color = '#000') { this.lines.push({ text, color }); if (this.lines.length > 60) this.lines.shift(); }
   ended(result) {
     this.chat.remove();
@@ -135,7 +140,10 @@ export class TradeWin extends Win {
     const yes = await this.mgr.confirm(warn ? 'Some items you are trying to barter\r\ncannot be traded once received.\r\nWould you still like to proceed?' : 'Are you sure you want to trade?');
     if (!yes || this.confirmed[0] || !this.partner) return;
     this.confirmed[0] = true;
-    this.g.net?.tradeConfirm();
+    // both sides' items, box by box (yours, then your partner's)
+    const ids = [];
+    for (let s = 1; s <= 9; s++) { if (this.items[0][s]) ids.push(this.items[0][s].id); if (this.items[1][s]) ids.push(this.items[1][s].id); }
+    this.g.net?.tradeConfirm(ids);
   }
   cancel() { this.g.net?.tradeExit(); this.ended(2); }
   key(e) { if (e.key === 'Escape') this.cancel(); }

@@ -80,6 +80,7 @@ import { Summon, PUPPET_RANGE, PUPPETS, MAGIC_SUMMONS } from './summons.js';
 import { Dragon } from './dragon.js';
 import { CashShopWin } from './ui/cashshop.js';
 import { MtsWin } from './ui/mts.js';
+import { CashTradeWin } from './ui/cashtrade.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
@@ -1186,6 +1187,13 @@ export class Game {
     setWholeScreen(true); this.setResolution();   // all 800x600 of it, as large as fits the window (and no touch controls)
     if (mts) { this.inMTS = true; this.mtsWin = this.windows.show(new MtsWin(this.windows, d), null); }
     else this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
+  }
+  /** The 8-digit birthday code a cash trade asks for (year, month, day), as a number; null when cancelled. */
+  async askBirthday() {
+    if (config.skipBirthday) return config.birthdayCode;
+    const b = await this.windows.askText('For the sake of privacy,\nplease enter your 8-digit birthday code.\nex) year/month/day -> 19820911', '', { max: 8 });
+    if (b === null || b === undefined || String(b).length !== 8) return null;
+    return parseInt(String(b).trim(), 10) || 0;
   }
   /** The status bar's chat line is a page element over the canvas: hide it while the shop screen is up. */
   showChatBox(on) { const el = this.statusBar?.chat?.el; if (el) el.style.visibility = on ? '' : 'hidden';
@@ -3345,7 +3353,7 @@ export class Game {
       notifyLevel: (n) => this.hud.message(`<${n.type === 2 ? 'Guild' : 'Family'}> ${n.name} has reached Lv. ${n.level}.`, CHAT_COLOR.error),
       tradeOpen: (t) => {
         if (this.tradeWin) return;
-        const w = this.tradeWin = this.windows.show(new TradeWin(this.windows), null);
+        const w = this.tradeWin = this.windows.show(t.cash ? new CashTradeWin(this.windows) : new TradeWin(this.windows), null);
         w.slot = t.slot;
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
         if (!this.mobileHud?.shown) this.windows.open('inventory');   // (MOBILE UI opens its own beside the trade)
@@ -3360,7 +3368,20 @@ export class Game {
       // trade requests off in the Game Option, or from someone on the Blacklist: turned down at once (reason 4)
       tradeInvite: (name, id, cash) => {
         if (!this.optionAllowed('tradeRequest') || this.windows.wins.userlist?.blacklisted(name)) { this.net.tradeDecline(id, 4); return; }
-        notify(this.windows, cash ? 'cashTrade' : 'trade', name).then((ok) => (ok ? this.net.tradeAccept(id) : this.net.tradeDecline(id, 3)));
+        notify(this.windows, cash ? 'cashTrade' : 'trade', name).then(async (ok) => {
+          if (!ok) { this.net.tradeDecline(id, 3); return; }
+          if (!cash) { this.net.tradeAccept(id); return; }
+          // a cash trade: the birthday first (cancelled, it's turned down)
+          const b = await this.askBirthday();
+          if (b === null) this.net.tradeDecline(id, 3); else this.net.cashTradeAccept(b, id);
+        });
+      },
+      // a cash trade's birthday step answered (only with no room open): asked again, or on to the room / the visit
+      cashTradeBirthday: (e) => {
+        if (this.tradeWin) return;
+        if (!e.ok) { this.askBirthday().then((b) => { if (b !== null) this.net.cashTradeBirthday(e, b); }); return; }
+        if (e.action === 0) this.net.cashTradeStart(e.value);
+        else if (e.action === 4) this.net.tradeVisit(e.value, e.f, e.s, e.buf);
       },
       tradePartner: (name, look) => this.tradeWin?.partnerJoined(name, this.lookFrom(look)),
       tradeItem: (side, slot, it) => this.tradeWin?.setItem(side, slot, it),
@@ -6124,6 +6145,16 @@ export class Game {
       return;
     } else if ((a = arg('/find')) !== null) {
       if (a !== me) this.net.find(a);
+      return;
+    } else if ((a = arg('/cashtrade')) !== null) {
+      // a cash trade (Cash Shop items): the birthday, then the server's go-ahead; a plain Cosmic server has none
+      if (config.cosmic) { say('Not available'); return; }
+      if (this.player.morph) { this.transformRefusal(); return; }
+      if (this.gm) { say('Not available with an Admin account.'); return; }
+      if (this.tradeWin || this.playerShop || (this.gameRoom && this.windows.order.includes(this.gameRoom))) { say('Not available'); return; }
+      const rp = [...this.others.values()].find((o) => o.name?.toLowerCase() === a.toLowerCase());
+      if (!rp) { say('Unable to find the character.'); return; }
+      this.askBirthday().then((b) => { if (b !== null) this.net.cashTradeAsk(rp.id); });
       return;
     } else if ((a = arg('/trade') ?? arg('/game trade')) !== null) {
       if (this.player.morph) { this.transformRefusal(); return; }
