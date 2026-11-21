@@ -877,7 +877,11 @@ class MtsBuyListDlg extends MtsListDlg {
   }
 }
 
-/** Selling to someone's wanted request (Buy/Item/backgrnd): your items of its type; a double-click offers one. */
+/**
+ * Selling to someone's wanted request (Buy/Item/backgrnd, 202x302): your items of its type in the art's 4 x 6 cells
+ * (x 22 + 36n, y 70 + 34n, scrollbar at the right); a double-click offers one. Its places were lost and are the art's.
+ */
+const OFFER_GRID = { x: 22, y: 70, dx: 36, dy: 34, bar: [166, 70, 202] };
 class MtsSellToWantedDlg extends MtsDialog {
   constructor(shop, r) {
     super(shop, shop.I.Buy.Item.backgrnd, 202, 302);
@@ -886,9 +890,10 @@ class MtsSellToWantedDlg extends MtsDialog {
   }
   ok() {}
   slotAt(lx, ly) {
-    if (lx < 12 || ly < 52) return 0;
-    const c = Math.floor((lx - 12) / 36), r = Math.floor((ly - 52) / 35);
-    if (c >= 4 || r >= 6 || (lx - 12) % 36 > 31 || (ly - 52) % 35 > 31) return 0;
+    const G = OFFER_GRID;
+    if (lx < G.x || ly < G.y) return 0;
+    const c = Math.floor((lx - G.x) / G.dx), r = Math.floor((ly - G.y) / G.dy);
+    if (c >= 4 || r >= 6 || (lx - G.x) % G.dx > 31 || (ly - G.y) % G.dy > 31) return 0;
     return (this.first + r) * 4 + c + 1;
   }
   async dblclick(lx, ly) {
@@ -902,7 +907,9 @@ class MtsSellToWantedDlg extends MtsDialog {
     if (shop.begin()) shop.send(3, (n) => n?.mtsSellWanted(this.itab, slot, it, r.id));
     this.close();
   }
-  wheel(dy) { this.first = Math.max(0, Math.min(Math.ceil((this.shop.g.inventory?.limits?.[this.itab] || 24) / 4) - 6, this.first + Math.sign(dy))); }
+  rows() { return Math.ceil((this.shop.g.inventory?.limits?.[this.itab] || 24) / 4); }
+  wheel(dy) { this.first = Math.max(0, Math.min(this.rows() - 6, this.first + Math.sign(dy))); }
+  down(lx, ly) { const s = this.scrollClick(lx, ly, ...OFFER_GRID.bar, this.first, this.rows(), 6); if (s !== null) this.first = s; }
   tooltip(lx, ly) { const s = this.slotAt(lx, ly), it = s && this.shop.g.inventory?.[this.itab]?.[s]; return it ? { item: it } : null; }
   body(ctx) {
     super.body(ctx);
@@ -910,10 +917,11 @@ class MtsSellToWantedDlg extends MtsDialog {
     for (let k = 0; k < 24; k++) {
       const slot = this.first * 4 + k + 1, it = inv[slot];
       if (!it) continue;
-      const x = 12 + (k % 4) * 36, y = 52 + Math.floor(k / 4) * 35;
+      const x = OFFER_GRID.x + (k % 4) * OFFER_GRID.dx, y = OFFER_GRID.y + Math.floor(k / 4) * OFFER_GRID.dy;
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
       if (this.itab !== 1 && it.quantity > 1) m.count(ctx, it.quantity, x, y + 20);
       if (it.id !== this.r.item.id) { ctx.fillStyle = 'rgba(54,54,54,0.45)'; ctx.fillRect(x, y, 32, 32); }
     }
+    this.scrollbar(ctx, ...OFFER_GRID.bar, this.first, this.rows(), 6);
   }
 }
