@@ -135,6 +135,33 @@ export class Footholds {
   }
 
   get(id) { return this.byId.get(id); }
+  /**
+   * Where a shot from (sx, sy) to (ex, ey) is stopped: the nearest foothold it crosses from in front to behind (or onto
+   * it), between its ends. One running left to right (a floor or slope) stops it on any layer; any other only on
+   * layer 0 or the shooter's `layer`. Exactly through a corner it is stopped when it ends up behind the two footholds
+   * there (cornered); through a free end it isn't. The point is taken in whole pixels toward 0. Null: nothing stops it.
+   */
+  shotStop(sx, sy, ex, ey, layer) {
+    const dx = ex - sx, dy = ey - sy;
+    if (!dx && !dy) return null;
+    const lx = Math.min(sx, ex), hx = Math.max(sx, ex), ly = Math.min(sy, ey), hy = Math.max(sy, ey);
+    let num = 2, den = 1, found = false;
+    for (const f of this.all) {
+      if ((f.x1 < lx && f.x2 < lx) || (f.x1 > hx && f.x2 > hx) || (f.y1 < ly && f.y2 < ly) || (f.y1 > hy && f.y2 > hy)) continue;
+      const fdx = f.x2 - f.x1, fdy = f.y2 - f.y1;
+      if (fdx <= 0 && f.layer !== 0 && f.layer !== layer) continue;
+      const s0 = fdx * (sy - f.y1) - fdy * (sx - f.x1), s1 = fdx * (ey - f.y1) - fdy * (ex - f.x1);
+      if (s0 > 0 || s1 < 0 || (s0 === 0 && s1 === 0)) continue;
+      const c0 = (f.y1 - sy) * dx - (f.x1 - sx) * dy, c1 = (f.y2 - sy) * dx - (f.x2 - sx) * dy;
+      if ((c0 < 0 && c1 < 0) || (c0 > 0 && c1 > 0)) continue;
+      if (c0 === 0) { const q = this.get(f.prev); if (!q || !cornered(q, f, ex, ey)) continue; }
+      else if (c1 === 0) { const q = this.get(f.next); if (!q || !cornered(f, q, ex, ey)) continue; }
+      // how far along the shot: |s0| out of |f x d|; the nearest wins
+      const n = Math.abs(s0), d = Math.abs(fdy * dx - fdx * dy);
+      if (d * num > n * den) { num = n; den = d; found = true; }
+    }
+    return found ? { x: Math.trunc(sx + (dx * num) / den), y: Math.trunc(sy + (dy * num) / den) } : null;
+  }
 
   /**
    * Looking `dist` px ahead along the chain from `at` px along floor `f`, going `dir` (-1 or 1): the first foothold

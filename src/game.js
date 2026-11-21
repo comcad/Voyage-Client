@@ -7644,18 +7644,23 @@ export class Game {
     const mx = skillId === MESO_EXPLOSION ? this.mesoExplosionPlan(p, lv, ld) : null;
     let targets = mx?.mobs || opts.mobs || kept || (plan ? plan.targets.map((t) => t.mob) : this.findTargets(kind, skillId, lv, mobCount, pose, reach, charge));
     if (heal) targets = targets.filter((m) => m.src.info?.undead);
-    // a shot that stops at the first monster on its line doesn't go through the ground or a wall on the way there
-    // (nor do the blast or the orb's hops that start from it)
+    // a shot that stops at the first monster on its line doesn't go through the ground or a wall: from you, 28px up,
+    // to where it strikes that monster, or to the end of its range when there is none (nor do the blast or the orb's
+    // hops that start from it). Shots that strike several (rain, piercing and box shots) aren't stopped.
     const lineShot = plan && !opts.mobs && !RAIN_SHOTS.has(skillId) && !PIERCING_SHOTS.has(skillId) && !BOX_LINE_SHOTS.has(skillId);
     // (its target is dropped and the shot flies only as far as where it crosses)
     let clip = null;
-    if (lineShot && plan.targets.length) {
-      const h = plan.targets[0], c = this.shotBlocked(plan.sx, plan.sy, h.hx ?? h.x, h.hy ?? h.y);
+    if (lineShot) {
+      const h = plan.targets[0], c = this.shotBlocked(Math.round(p.x), plan.sy, h ? h.hx ?? h.x : plan.ex, h ? h.hy ?? h.y : plan.ey);
       if (c) { plan.targets = []; plan.orb = null; plan.blast = null; targets = []; plan.ex = c.x; plan.ey = c.y; }
-    } else if (kind === 'ranged' && mobCount === 1 && !plan && targets.length === 1) {
-      const b = targets[0].hitBox();
-      clip = this.shotBlocked(p.x, p.y - 28, (b.left + b.right) / 2, (b.top + b.bottom) / 2);
-      if (clip) targets = [];
+    } else if (kind === 'magic' && !opts.mobs && !AREA_SPELLS.has(skillId) && skillId !== CHAIN_LIGHTNING && sb?.node(skillId)?.ball) {
+      // a spell that flies a ball the same, to where it meets its monster's body on its line (50px out to 300px), or
+      // to 300px out; stopped, it has no monster and its ball flies to where it crossed
+      const dir = p.facingRight ? 1 : -1, x = Math.round(p.x), y = Math.round(p.y) - 28;
+      const line = { left: Math.min(x + dir * 50, x + dir * 300), right: Math.max(x + dir * 50, x + dir * 300), top: y, bottom: y + 1 };
+      const at = targets[0] ? this.hitPoint(targets[0], line) : { x: x + dir * 300, y };
+      const c = this.shotBlocked(x, y, at.x, at.y);
+      if (c) { targets = []; clip = c; } else if (!targets.length) clip = at;
     }
     // Band of Thieves: a monster in reach of your plain swing first, then the rest of its box
     if (skillId === BAND_OF_THIEVES) {
@@ -8276,8 +8281,8 @@ export class Game {
   /**
    * Let go: up to mobCount monsters (fewer the shorter it was held) whose bodies reach into a wedge in front of you,
    * from 50px out to its range, centred 28px up and spreading a quarter of the distance up and down (checked in 20px
-   * steps). Each (not a boss, nor one that can't move) is caught at its prop chance and drawn in; it does no damage.
-   * The server is told which were caught.
+   * steps), less any a foothold stands between (as a shot). Each (not a boss, nor one that can't move) is caught at
+   * its prop chance and drawn in; it does no damage. The server is told which were caught.
    */
   releaseMagnet({ id, lv, t }) {
     const p = this.player, ld = this.skills.levelData(id, lv) || {};
@@ -8291,7 +8296,11 @@ export class Game {
       }
       return false;
     };
-    const reached = this.liveMobs().filter((m) => !m.src?.info?.damagedByMob && reaches(m)).slice(0, n);   // escorted monsters can't be caught
+    // escorted monsters can't be caught; one behind the ground or a wall (from you, 28px up, to where the line meets
+    // its body) is left out
+    const x = Math.round(p.x), line = { left: Math.min(x + dir * 50, x + dir * range), right: Math.max(x + dir * 50, x + dir * range), top: Math.round(y), bottom: Math.round(y) + 1 };
+    const reached = this.liveMobs().filter((m) => !m.src?.info?.damagedByMob && reaches(m)).slice(0, n)
+      .filter((m) => { const h = this.hitPoint(m, line); return !this.shotBlocked(x, Math.round(y), h.x, h.y); });
     const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
     for (const [m, ok] of caught) if (ok) m.startPull({ x: p.x, stop: (m.node?._w || 40) + 45 });
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
@@ -9612,25 +9621,10 @@ export class Game {
     if (ammoId) w += this.windows?.info(ammoId)?.incPAD || 0;
     return Math.min(1999, w);
   }
-  /**
-   * Where a shot from (sx, sy) to (ex, ey) is stopped by a foothold (on layer 0 or yours): the nearest one it crosses
-   * from its one side to the other, its ends on either side of the shot's line (touching an end doesn't stop it
-   * here). Null when nothing stops it.
-   */
+  /** Where a shot from (sx, sy) to (ex, ey) is stopped by a foothold (Footholds.shotStop, by your layer); null when nothing stops it. */
   shotBlocked(sx, sy, ex, ey) {
     const layer = this.player.fh?.layer ?? (Number(this.player.ladder?.page) || 0);
-    let best = null;
-    for (const f of this.map.fh.all) {
-      if (f.layer !== 0 && f.layer !== layer) continue;
-      const dx = f.x2 - f.x1, dy = f.y2 - f.y1;
-      const cs = (sy - f.y1) * dx - (sx - f.x1) * dy, ce = (ey - f.y1) * dx - (ex - f.x1) * dy;
-      if (!(cs <= 0 && ce >= 0 && (cs !== 0 || ce !== 0))) continue;
-      const d1 = (f.y1 - sy) * (ex - sx) - (f.x1 - sx) * (ey - sy), d2 = (f.y2 - sy) * (ex - sx) - (f.x2 - sx) * (ey - sy);
-      if (d1 === 0 || d2 === 0 || (d1 > 0) === (d2 > 0)) continue;
-      const t = cs - ce ? cs / (cs - ce) : 0;   // how far along the shot it crosses
-      if (!best || t < best.t) best = { t, x: sx + (ex - sx) * t, y: sy + (ey - sy) * t };
-    }
-    return best && { x: Math.round(best.x), y: Math.round(best.y) };
+    return this.map.fh.shotStop(sx, sy, ex, ey, layer);
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
   liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !this.carnivalAlly(m)); }
