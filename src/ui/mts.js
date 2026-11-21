@@ -244,11 +244,12 @@ export class MtsWin extends Win {
         for (const r of e.items) this.nameOf(r.item.id);
         this.mgr.show(new MtsBuyListDlg(this, e.items));
         break;
-      case 0x3D: if (e.items >= 0 && e.nx > 0) this.mgr.notice(`The Listing period on [WANTED] items\r\nhas expired.\r\n${e.items} items and ${e.nx} NX\r\nhave been returned to your MTS account`); break;
+      case 0x3D: if (e.nx >= 0 && e.listings > 0) this.mgr.notice(`The Listing period on [WANTED] items\r\nhas expired.\r\n${e.listings} items and ${e.nx} NX\r\nhave been returned to your MTS account`); break;
       case 0x3E:
         if (e.itemId > 0) {
           const d = new Date(ftMs(e.time)), when = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${d.getMinutes()}:${d.getSeconds()}`;
-          itemName(this.mgr.assets, e.itemId).then((n) => this.mgr.notice(`${n || ''} of ${when}\r\nis ${e.kind === 1 ? 'sold' : 'bought'} for ${e.value} NX.`));
+          // the date first, then the item
+          itemName(this.mgr.assets, e.itemId).then((n) => this.mgr.notice(`${when} of ${n || ''}\r\nis ${e.kind === 1 ? 'sold' : 'bought'} for ${e.value} NX.`));
         }
         break;
       default: if (SAY[m]) this.mgr.notice(SAY[m]);

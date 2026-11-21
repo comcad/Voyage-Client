@@ -45,7 +45,7 @@ function readMtsResult(r) {
       e.items = list(); e.hidden = r.available >= 4 ? r.int() : 0; e.answered = r.available > 0 && r.ubyte() !== 0; break;
     case 0x23: case 0x2D: e.items = list(); break;   // Not Yet Sold; the wanted list's Buy List
     case 0x27: e.invType = r.int(); e.slot = r.int(); break;   // a plain Cosmic server sends the quantity first
-    case 0x3D: e.items = r.int(); e.nx = r.int(); break;
+    case 0x3D: e.nx = r.int(); e.listings = r.int(); break;   // the NX given back, then how many wanted requests ran out
     case 0x3E: e.kind = r.ubyte(); e.itemId = r.int(); if (e.itemId > 0) { e.value = r.int(); e.time = r.long(); } break;
     default: break;
   }
