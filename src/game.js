@@ -9051,8 +9051,8 @@ export class Game {
    * lands on the nearest floor over the spot, or when that is the one you stand on, the nearest under the spot within
    * the range again; with none, nothing happens. A monster that can't be passed by Teleport between you and the spot
    * stops it, and so does a map that forbids movement skills. It can be used again 600ms after it lands (3s after
-   * Meteor Shower, Blizzard or Genesis), a wait it shares with the map's own portals. The new position reaches the
-   * server through the normal movement sync; SPECIAL_MOVE charges the MP.
+   * Meteor Shower, Blizzard or Genesis), a wait it shares with the map's own portals. The move is recorded as a jump
+   * to the new place (movement element 3), then the normal movement sync goes on; SPECIAL_MOVE charges the MP.
    */
   teleport(id, lv) {
     const p = this.player, fh = this.map.fh, inp = this.input;
@@ -9095,6 +9095,10 @@ export class Game {
     // the skill has no art of its own: BasicEff Teleport plays once, where you arrive
     this.teleportLock = performance.now() + TELEPORT_DELAY;
     p.x = tx; p.y = to.y; p.fh = to.f; p.vx = 0; p.vy = 0; p.ladder = null;
+    // for those watching: a jump (3) to where you arrive, no floor and no speed, as a portal within the map records
+    // it, so they snap there rather than glide; the steps after it carry the floor you stand on
+    this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance: this.currentStance(), duration: 0 });
+    this.movePos = { x: p.x, y: p.y };
     this.playTeleportEffect(p.x, p.y);
     sfx.play(`Skill/${pad(id, 7)}/Use`);
     this.net?.specialMove(id, lv, null);
