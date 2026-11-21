@@ -9026,11 +9026,15 @@ export class Game {
 
   /**
    * Teleport: up to `range` px in the held direction, only while standing on a floor and holding a direction (left
-   * or right wins over up or down). Sideways it lands on the nearer floor within 80px above or below that spot. Up it
-   * lands on the highest floor within range above, down on the lowest within range below; with none, it goes off in
-   * place. A monster that can't be passed by Teleport between you and the spot stops it, and so does a map that
-   * forbids movement skills. It can be used again 600ms after it lands (3s after Meteor Shower, Blizzard or Genesis).
-   * The new position reaches the server through the normal movement sync; SPECIAL_MOVE charges the MP.
+   * or right wins over up or down; left and right together, or up and down, are none; Reverse turns both round).
+   * Floors are those running left to right on any layer, at their height there in whole pixels. Sideways it lands on
+   * the nearer floor at or under the spot (within 80px) or at or over it (within 80px). Up it lands on the nearest
+   * floor under the spot when a foothold lies between that floor and you (else it goes off where you stand). Down it
+   * lands on the nearest floor over the spot, or when that is the one you stand on, the nearest under the spot within
+   * the range again; with none, nothing happens. A monster that can't be passed by Teleport between you and the spot
+   * stops it, and so does a map that forbids movement skills. It can be used again 600ms after it lands (3s after
+   * Meteor Shower, Blizzard or Genesis). The new position reaches the server through the normal movement sync;
+   * SPECIAL_MOVE charges the MP.
    */
   teleport(id, lv) {
     const p = this.player, fh = this.map.fh, inp = this.input;
@@ -9038,20 +9042,29 @@ export class Game {
     if (performance.now() < (this.teleportLock || 0)) return false;
     if ((this.map.info?.fieldLimit || 0) & FIELD_NO_MOVEMENT_SKILLS) return false;
     const dist = this.skills.levelData(id, lv)?.range || 130;
-    const dy = inp.is('up') ? -1 : inp.is('down') ? 1 : 0, dx = inp.is('left') ? -1 : inp.is('right') ? 1 : 0;
+    let dx = (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0), dy = (inp.is('down') ? 1 : 0) - (inp.is('up') ? 1 : 0);
+    if (this.hasDisease(REVERSE)) { dx = -dx; dy = -dy; }
     if (!dx && !dy) return false;          // only with a direction held: no MP spent, nothing happens
-    const floorsAt = (x, lo, hi) => fh.floors.filter((f) => x >= f.x1 && x <= f.x2).map((f) => ({ f, y: Footholds.yAt(f, x) }))
-      .filter((c) => c.y >= lo && c.y <= hi);
-    let tx = p.x, to = null;
+    const x = Math.round(p.x), y = Math.round(p.y);
+    const floorsAt = (fx) => fh.floors.filter((f) => fx >= f.x1 && fx <= f.x2).map((f) => ({ f, y: f.y1 + Math.trunc(((f.y2 - f.y1) * (fx - f.x1)) / (f.x2 - f.x1)) }));
+    // the nearest floor at or under `from` and over `to`; the nearest at or over `from` and under `to`
+    const under = (fx, from, to2) => floorsAt(fx).filter((c) => c.y >= from && c.y < to2).sort((a, b) => a.y - b.y)[0] || null;
+    const over = (fx, from, to2) => floorsAt(fx).filter((c) => c.y <= from && c.y > to2).sort((a, b) => b.y - a.y)[0] || null;
+    let tx = x, to = null;
     if (dx) {
-      tx = p.x + dx * dist;
-      const below = floorsAt(tx, p.y, p.y + 79).sort((a, b) => a.y - b.y)[0];
-      const above = floorsAt(tx, p.y - 79, p.y).sort((a, b) => b.y - a.y)[0];
-      to = below && (!above || below.y - p.y <= p.y - above.y) ? below : above;
+      tx = x + dx * dist;
+      const below = under(tx, y, y + 80), above = over(tx, y, y - 80);
+      to = below && (!above || below.y - y <= y - above.y) ? below : above;
       if (!to) return false;
+    } else if (dy < 0) {
+      // (a floor with nothing between it and you is the one you stand on, or one you'd go up through: you stay)
+      to = under(x, y - dist, Infinity);
+      if (!to) return false;
+      if (to.y !== y && !this.shotBlocked(x, to.y - 1, x, y - 1)) to = { f: p.fh, y };
     } else {
-      const found = dy < 0 ? floorsAt(p.x, p.y - dist, p.y).sort((a, b) => a.y - b.y)[0] : floorsAt(p.x, p.y, p.y + dist).sort((a, b) => b.y - a.y)[0];
-      to = found || { f: p.fh, y: p.y };
+      to = over(x, y + dist, -Infinity);
+      if (!to || to.f === p.fh) to = under(x, y + dist, y + 2 * dist);
+      if (!to) return false;
     }
     // the way there: sideways from 65px up down to the held up / down direction's reach, up or down 40px wide
     const [x1, x2] = dx ? [Math.min(p.x, tx), Math.max(p.x, tx)] : [p.x - 20, p.x + 20];
