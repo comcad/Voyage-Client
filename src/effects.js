@@ -80,7 +80,7 @@ export class WorldFx {
     const sets = Object.values(SETS).flat().flatMap((k) => canvases(this.E[k]));
     this.bulb = new Anim(this.W.QuestIcon[0]); this.book = new Anim(this.W.QuestIcon[2]); this.bubble = new Anim(this.W.QuestIcon[1]);
     await a.preload([...sets, ...deepCanvases(this.E.Combo), ...deepCanvases(this.E.ComboCommand), this.E.NoCri1?.effect, ...canvases(this.CB[0]), ...canvases(this.CB.npc), ...this.bulb.frames, ...this.book.frames, ...this.bubble.frames,
-      ...deep(this.W.MobGage, 3), ...deep(this.B?.ShowLevel, 2), ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
+      ...deep(this.W.MobGage, 3), ...deep(this.B?.ShowLevel, 2), ...canvases(this.W.PartySearch?.icon0), this.W.PartySearch?.icon1, ...canvases(this.T.fall), this.W.IconBase?.[0], ...frames(this.W.Skill?.CoolTime)].filter(isCanvas));
   }
 
   // ---------------------------------------------------------------- triggers
@@ -395,12 +395,32 @@ export class WorldFx {
     if (config.bossHpPercent) overlayText(ctx, `${(k * 100).toFixed(2)}%`, x + w / 2, y + 10, 'middle');
   }
 
-  /** Buff icons, newest on the left of the row, at the top right. */
+  /** Buff icons, newest on the left of the row, at the top right (one slot further left while the Party Search marker shows). */
   buffAt(x, y) {
     const list = this.buffList();
-    const top = this.buffTop;
-    for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - i * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
+    const top = this.buffTop, first = this.searchMarker() ? 1 : 0;
+    for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - (i + first) * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
     return null;
+  }
+  /** Whether the Party Search marker shows: a search running (1) or paused (2). */
+  searchMarker() { const st = this.game.partySearch?.state; return st === 1 || st === 2; }
+  /**
+   * The Party Search marker, in the row's rightmost slot: UIWindow.img/PartySearch/icon0 frames 0-4, 200ms each, while
+   * the search runs, icon1 while it is paused. It fades in over 300ms when it first shows; a pause or a restart after
+   * that switches it at once. Nothing happens on a click.
+   */
+  drawSearchMarker(ctx) {
+    const now = performance.now();
+    if (!this.searchMarker()) { this.searchShownAt = 0; return; }
+    this.searchShownAt ||= now;
+    const P = this.W?.PartySearch, paused = this.game.partySearch.state === 2;
+    const node = paused ? P?.icon1 : P?.icon0?.[Math.floor((now - this.searchShownAt) / 200) % 5];
+    const img = node && this.assets.image(node);
+    if (!img) return;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, (now - this.searchShownAt) / 300);
+    ctx.drawImage(img, UI_W - 36, this.buffTop);
+    ctx.restore();
   }
   buffList() {
     const now = Date.now(), fp = this.game.familyPrivilege;
@@ -411,13 +431,14 @@ export class WorldFx {
   }
   get buffTop() { return this.boss ? 46 : 4; }
   drawBuffs(ctx) {
-    const g = this.game, now = Date.now();
+    const g = this.game, now = Date.now(), first = this.searchMarker() ? 1 : 0;
+    this.drawSearchMarker(ctx);
     this.buffList().forEach((b, i) => {
       const node = b.family !== undefined ? this.W?.Family?.RightIcon?.[b.family] : b.source > 0 ? g.skills?.icon(b.source) : this.itemIcon(-b.source);
       if (b.source > 0 && !node) g.skills?.ensure(b.source);
       const img = node && this.assets.image(node);
       if (!img) { if (node) this.assets.preload([node]); return; }
-      const x = UI_W - 36 - i * 34, y = this.buffTop;
+      const x = UI_W - 36 - (i + first) * 34, y = this.buffTop;
       // the Battleship's icon shows its HP (from COOLDOWN 5221999; full until the first), not time:
       // its most is (level - 120 + 2 x skill level) x 200
       const ship = b.source === 5221006;
