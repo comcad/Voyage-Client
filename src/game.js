@@ -3663,7 +3663,7 @@ export class Game {
         let e = this.lifeByOid.get(m.oid);
         if (e && !e.pending) { e.controlled = true; e.fly = null; e.moveWait = false; } else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
         if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);   // what it was already under
-        if (aggro && e && !e.pending) e.chase(this.player);      // the server wants it after us
+        if (aggro && e && !e.pending && e.aggro?.kind !== 'Mob') e.chase(this.player);      // the server wants it after us (not off a monster it was set on)
       }),
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
       reactorSpawn: later((d) => this.spawnReactor(d)),
@@ -3675,7 +3675,7 @@ export class Game {
         e.mp = r.mp;
         if (!r.stale) e.moveWait = false;   // the answer to the last move: the next path may be planned
         if (r.stale || !e.controlled) return;
-        if (r.aggro && e.aggro !== this.player) e.chase(this.player);   // (a struck monster already gives chase on its own)
+        if (r.aggro && e.aggro !== this.player && e.aggro?.kind !== 'Mob') e.chase(this.player);   // (a struck monster already gives chase on its own; one set on a monster keeps it)
       }),
       mobResetAnim: later((oid) => {
         const e = this.lifeByOid.get(oid);
@@ -7775,7 +7775,7 @@ export class Game {
         }
         t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob));
         this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
-        if (t.mob.kind === 'Mob') t.mob.chase(p);                 // a struck monster comes after you
+        if (t.mob.kind === 'Mob' && !hypnotized(t.mob)) t.mob.chase(p);   // a struck monster comes after you (not a Hypnotized one)
       };
       // the hit (or the shot) comes when the swing connects, not when it starts
       // when each lands goes to the server too (it holds the monster's drops until then)
@@ -11168,7 +11168,6 @@ export class Game {
    * each other: two MOB_DAMAGE_MOB with no attack.
    */
   hypnoTouch() {
-    if (this.lastHypnotized && !hypnotized(this.lastHypnotized)) this.lastHypnotized = null;   // its Hypnotize ended
     const h = this.lastHypnotized;
     if (!h || !h.controlled || !h.alive || h.dying || !this.map.life.includes(h) || h.attacking || (!h.flying && !h.fh)) return;
     const now = performance.now();
@@ -11199,7 +11198,8 @@ export class Game {
    * it (not a Hypnotized one, an escort or one of your Monster Carnival team) when one of its attacks reaches that
    * body or it is within 40 (a third of the height between them plus a tenth of the distance across). A monster that
    * attacks first (info/firstAttack) takes the Hypnotized one when that is no further away than you and one of its
-   * attacks reaches it or it is within 40; otherwise it goes after you as before.
+   * attacks reaches it or it is within 40; otherwise it goes after you as before. (Going after you because the server
+   * says so is a way of moving in the client, not a target: the Hypnotized one, set on you only by that, still picks.)
    */
   hypnoTargets() {
     const h = this.lastHypnotized;
@@ -11216,7 +11216,9 @@ export class Game {
       return ok;
     };
     for (const m of this.map.life) {
-      if (m.kind !== 'Mob' || !m.controlled || !m.alive || m.dying || m.oid == null || m.aggro || m.attacking || this.carnivalAlly(m)) continue;
+      if (m.kind !== 'Mob' || !m.controlled || !m.alive || m.dying || m.oid == null || m.attacking || this.carnivalAlly(m)) continue;
+      // a target of its own stays (the Hypnotized one's going after you is only the server's aggro, a way of moving)
+      if (m.aggro && !(m === h && m.aggro === p)) continue;
       if (m === h) {
         const area = { left: h.x - 300, right: h.x + 300, top: h.y - 100, bottom: h.y + 100 };
         let v = null, best = Infinity;

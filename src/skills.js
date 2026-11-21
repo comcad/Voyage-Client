@@ -191,7 +191,7 @@ export class SkillBook {
       if (ld.mad) return 'magic';
       if (isBowman(id)) return BOW_SWINGS.has(id) ? 'melee' : 'ranged';
       const cat = weaponCat(weaponId);
-      if (n.weapon === 47 || ld.bulletCount || (n.ball && RANGED_WEAPONS.has(cat))) return 'ranged';
+      if (Number(n.weapon) === 47 || ld.bulletCount || (n.ball && RANGED_WEAPONS.has(cat))) return 'ranged';
       return 'melee';
     }
     if (ld.mpCon || ld.hpCon || ld.time || n.action || ld.cooltime) return 'special';
@@ -203,7 +203,7 @@ export class SkillBook {
    * without one take a bow or a crossbow.
    */
   weaponOk(id, weaponId) {
-    const w = this.node(id)?.weapon, cat = weaponId ? Math.floor(weaponId / 10000) % 100 : 0;
+    const w = Number(this.node(id)?.weapon) || 0, cat = weaponId ? Math.floor(weaponId / 10000) % 100 : 0;
     if (SKILL_WEAPONS[id]) return SKILL_WEAPONS[id].includes(cat);
     if (!w && isBowman(id) && ['ranged', 'melee'].includes(this.kind(id, weaponId))) return cat === 45 || cat === 46;
     return !w || cat === w;
