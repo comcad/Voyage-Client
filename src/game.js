@@ -1188,6 +1188,16 @@ export class Game {
     if (mts) { this.inMTS = true; this.mtsWin = this.windows.show(new MtsWin(this.windows, d), null); }
     else this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
+  /**
+   * The inventory beside the cash trade room, which is wider than the ordinary one: right of it when the screen has
+   * room, else left of it, else over the room's fee table (the art's, nothing to click), below its chat.
+   */
+  besideCashRoom(inv, room) {
+    if (room.x + room.w + inv.w <= UI_W) { inv.x = room.x + room.w; inv.y = room.y; }
+    else if (room.x - inv.w >= 0) { inv.x = room.x - inv.w; inv.y = room.y; }
+    else { inv.x = room.x + 398 + Math.max(0, Math.floor((248 - inv.w) / 2)); inv.y = room.y + 158; }
+    this.windows.fit(inv);
+  }
   /** The 8-digit birthday code a cash trade asks for (year, month, day), as a number; null when cancelled. */
   async askBirthday() {
     if (config.skipBirthday) return config.birthdayCode;
@@ -3356,7 +3366,10 @@ export class Game {
         const w = this.tradeWin = this.windows.show(t.cash ? new CashTradeWin(this.windows) : new TradeWin(this.windows), null);
         w.slot = t.slot;
         if (t.partner) w.partnerJoined(t.partner, this.lookFrom(t.look)); else w.say('Waiting for the other player to accept...', '#555');
-        if (!this.mobileHud?.shown) this.windows.open('inventory');   // (MOBILE UI opens its own beside the trade)
+        if (!this.mobileHud?.shown) {   // (MOBILE UI opens its own beside the trade)
+          const inv = this.windows.open('inventory');
+          if (t.cash && inv) this.besideCashRoom(inv, w);
+        }
       },
       // a guild alliance's invitation: refused at once with alliance invitations off in the Game Option or while
       // another is up; O takes it
