@@ -41,17 +41,22 @@ export class Hud {
     (this.gains ??= []).push({ text, color, t: performance.now() });
     if (this.gains.length > GAIN_MAX) this.gains.shift();
   }
-  /** The server's scrolling notice (type 4): it runs across a dark strip at the top until replaced or emptied. */
+  /**
+   * The server's scrolling notice (type 4): it runs across the top until replaced or emptied, on a dark strip on the
+   * map; over the Cash Shop and the MTS screens without the strip, a little lower (as the client shows it there).
+   */
   banner(text) { this.slide = text ? { text, t: performance.now() } : null; }
-  drawBanner(ctx) {
+  drawBanner(ctx, strip = true, box = null) {
     const now = performance.now();
     if (this.slide) {
       ctx.save();
+      const W = box?.w ?? UI_W;
+      if (box) { ctx.beginPath(); ctx.rect(box.x, 0, W, 20); ctx.clip(); ctx.translate(box.x, 0); }
       ctx.font = '12px Arial, sans-serif';
-      const w = ctx.measureText(this.slide.text).width, run = UI_W + w + 40;
-      const x = UI_W - (((now - this.slide.t) / 1000) * BANNER_SPEED) % run;
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, UI_W, 18);
-      uiText(ctx, this.slide.text, x, 3, { color: '#ffff7e', size: 12 });
+      const w = ctx.measureText(this.slide.text).width, run = W + w + 40;
+      const x = W - (((now - this.slide.t) / 1000) * BANNER_SPEED) % run;
+      if (strip) { ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'; ctx.fillRect(0, 0, UI_W, 18); }
+      uiText(ctx, this.slide.text, x, strip ? 3 : 6, { color: '#ffff7e', size: 12 });
       ctx.restore();
     }
   }

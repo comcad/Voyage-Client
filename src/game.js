@@ -11474,7 +11474,10 @@ export class Game {
     const lap = (k) => { if (!P) return; const n = performance.now(); P[k] += n - tm; tm = n; };
     if (this.inCashShop) {
       ctx.fillStyle = '#000'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-      ctx.save(); ctx.scale(UI_SCALE, UI_SCALE); this.windows?.draw(ctx); ctx.restore();
+      ctx.save(); ctx.scale(UI_SCALE, UI_SCALE); this.windows?.draw(ctx);
+      // the server's scrolling notice runs over the shop screen (800 wide, centred): the text alone, near the top
+      this.hud?.drawBanner?.(ctx, false, { x: (UI_W - 800) >> 1, w: 800 });
+      ctx.restore();
       return;
     }
     // the world is drawn from the camera's whole game pixel, then moved by the rest of it (a step of the canvas's grid),
