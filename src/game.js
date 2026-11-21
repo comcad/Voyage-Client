@@ -7173,7 +7173,13 @@ export class Game {
     }
     // the portal sound once the move has gone out; types 4 and 5 go without it (and never within the map)
     const sound = portal.pt !== 4 && portal.pt !== 5;
-    if (portal.tm === map.id && sound) { this.innerTeleport(portal, map.spawnPortal(portal.tn)); sfx.play('Game/Portal'); return true; }
+    if (portal.tm === map.id && sound) {
+      // a portal within the map and Teleport share one wait: neither goes within 600ms of the last one landing (3s
+      // after Meteor Shower, Blizzard or Genesis); a refused one does nothing
+      if (performance.now() < (this.teleportLock || 0)) return true;
+      this.teleportLock = performance.now() + TELEPORT_DELAY;
+      this.innerTeleport(portal, map.spawnPortal(portal.tn)); sfx.play('Game/Portal'); return true;
+    }
     this.portalCooldown = 0.5;
     this.fadeOut();
     this.after(3000, () => { if (this.fade?.dir === 'out' && !this.loading && this.map === map) this.fade = { dir: 'in', t0: performance.now() }; });
@@ -9036,8 +9042,8 @@ export class Game {
    * lands on the nearest floor over the spot, or when that is the one you stand on, the nearest under the spot within
    * the range again; with none, nothing happens. A monster that can't be passed by Teleport between you and the spot
    * stops it, and so does a map that forbids movement skills. It can be used again 600ms after it lands (3s after
-   * Meteor Shower, Blizzard or Genesis). The new position reaches the server through the normal movement sync;
-   * SPECIAL_MOVE charges the MP.
+   * Meteor Shower, Blizzard or Genesis), a wait it shares with the map's own portals. The new position reaches the
+   * server through the normal movement sync; SPECIAL_MOVE charges the MP.
    */
   teleport(id, lv) {
     const p = this.player, fh = this.map.fh, inp = this.input;
