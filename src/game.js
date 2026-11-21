@@ -6893,10 +6893,13 @@ export class Game {
       if (sc !== undefined && this.commands.key(sc, e.down) && e.down) inp.pressed.delete(e.k);
     }
     // Seduce: your movement keys do nothing; you walk, look down and jump the way its value says
-    const sd = this.seduceInput(), held = (k) => (sd ? (k === 'down' ? sd.y > 0 : k === 'up' ? sd.y < 0 : false) : inp.is(k));
+    // Reverse turns the movement keys round, up and down as well as left and right: climbing, grabbing a ladder or
+    // rope, swimming, lying down and the down-jump (not portals, which take the Up key itself)
+    const sd = this.seduceInput(), rev = !sd && this.hasDisease(REVERSE);
+    const held = (k) => (sd ? (k === 'down' ? sd.y > 0 : k === 'up' ? sd.y < 0 : false) : inp.is(rev && k === 'up' ? 'down' : rev && k === 'down' ? 'up' : k));
     const jumpHit = () => (sd ? sd.jump : this.hitAction(ACTION.JUMP)), jumpHeld = () => (sd ? sd.jump : this.holdAction(ACTION.JUMP));
     let dir = sd ? sd.x : (inp.is('right') ? 1 : 0) - (inp.is('left') ? 1 : 0);
-    if (!sd && this.hasDisease(REVERSE)) dir = -dir;
+    if (rev) dir = -dir;
     // stunned: no walking, jumping, climbing or attacking until it wears off (you still fall and slide to a stop)
     if (this.hasDisease(STUN)) {
       const hw = this.pressedSkill();   // Hero's Will still goes
@@ -7562,7 +7565,7 @@ export class Game {
     }
     const wcat = weapon ? Math.floor(weapon / 10000) : 0;
     // lying down, a plain attack is the prone stab: a short melee jab with any weapon
-    const prone = !skillId && !!p.fh && this.input.is('down') && this.look.has('proneStab');
+    const prone = !skillId && !!p.fh && this.downHeld() && this.look.has('proneStab');
     if (prone) kind = 'melee';
     kind ??= RANGED_WEAPONS.has(wcat) ? 'ranged' : 'melee';
     if (p.ladder && kind !== 'special') return false;   // no attacks of any kind on a ladder or rope
@@ -9894,7 +9897,7 @@ export class Game {
       if (!ds.leaving) { ds.leaving = true; this.playSkillEffect(ds.source, p); this.net?.cancelBuff(ds.source); }
       return null;
     }
-    const prone = !!p.fh && this.input.is('down') && this.look.has('proneStab');
+    const prone = !!p.fh && this.downHeld() && this.look.has('proneStab');
     const pose = prone ? 'proneStab' : this.look.attackAction();
     let hit = -1;
     const s = this.afterimage?.[this.afterimageLevel()]?.[pose];
@@ -10993,6 +10996,8 @@ export class Game {
    * Seduce's pull on you (its value): 1 walk left, 2 right and jump, 3 jump, 4 down and jump, 6 left and jump, 7
    * right and jump, anything else stand; null when not seduced.
    */
+  /** Down held as the movement keys read it (lying down): under Reverse that is the Up key. */
+  downHeld() { return this.input.is(!this.seduceInput() && this.hasDisease(REVERSE) ? 'up' : 'down'); }
   seduceInput() {
     const d = (this.diseases || []).find((x) => x.skill === SEDUCE);
     if (!d) return null;
