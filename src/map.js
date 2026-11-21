@@ -1001,10 +1001,11 @@ export class Life {
   /**
    * A blow. As in the original, a monster only flinches (hit1) and recoils when the damage reaches its
    * `pushed` threshold; the recoil slides it back along its floor from 130px/s, braking at 400px/s^2 - or, for a
-   * strong recoil (the weapon's knockback chance), from 300px/s braking at 200px/s^2. One already reeling from a
-   * hit takes the damage but doesn't react again until its hit1 has played out.
+   * strong recoil (the weapon's knockback chance), from 300px/s braking at 200px/s^2 - for as long as its hit pose
+   * lasts. One already reeling from a hit takes the damage but doesn't react again until its hit1 has played out.
+   * `by`: who struck it (it goes after them), or none.
    */
-  hit(dmg, fromRight, strong = false) {
+  hit(dmg, fromRight, strong = false, by = null) {
     if (!this.alive || this.kind !== 'Mob') return;
     const stanceBefore = this.stance;
     this.hp -= dmg;
@@ -1026,39 +1027,43 @@ export class Life {
       this.hitBrake = strong ? 200 : 400; this.hitLanded = false;
       if (this.fh) { this.recoil = push; this.recoilBrake = this.hitBrake; } else { this.vx = push; this.vy = 0; }
     }
-    if (this.controlled && this.online) this.planHit((this.hitTimer || 0) * 1000, stanceBefore);
+    if (this.controlled && this.online) this.planHit(this.hitPoseMs(), stanceBefore, by);
   }
+  /** How long its hit pose plays (ms): its frames' delays, 0 with none. */
+  hitPoseMs() { return this.anims.hit1 ? this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) : 0; }
   /**
    * One we control was struck: what the client sends then, element for element - the blow's push (type 2: no time,
-   * the speed it sets off at), 300ms of sliding back, standing for the rest of its hit pose (in the air: falling
-   * through it, pushed sideways by the blow), then its own movement in its 90ms steps until at least a second is
-   * planned with some of it on the ground (55 of those steps at most) - in the stance it had before the blow. It then
+   * the speed it sets off at), then the slide back for as long as its hit pose plays, in 30ms steps braking to a stop
+   * (in the air: falling through it, pushed sideways by the blow) - none at all when the pose is under 90ms - in the
+   * stance it had before the blow. Then the one who struck it, when it wasn't after them already, becomes its target
+   * and its walking starts afresh (so it heads for them, facing the way it goes), and its own movement follows in its
+   * 90ms steps until at least a second is planned with some of it on the ground (55 of those steps at most). It then
    * plays that same plan itself, so everyone sees one thing.
    */
-  planHit(hitMs, stance) {
-    if (this.flying) { this.planFlyHit(stance); return; }
+  planHit(poseMs, stance, by = null) {
+    if (this.flying) { this.planFlyHit(stance, poseMs, by); return; }
     const sim = Object.create(this), start = { x: Math.trunc(this.x), y: Math.trunc(this.y) };
     sim.setState = function (st) { if (this.anims[st]) this.state = st; };
-    const moves = [], hold = Math.max(300, hitMs);
-    if (sim.recoil) moves.push({ cmd: 2, rx: Math.round(sim.recoil), ry: 0, stance, duration: 0 });
-    const add = (px, py, st, t) => {
-      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / 0.03), vy = Math.round((sim.y - py) / 0.03);
-      const fh = sim.fh?.id || 0, last = moves[moves.length - 1], phase = t < 300 ? 0 : sim.hitLanded ? 3 : 1;
-      if (last && last.cmd === 0 && last.phase === phase && last.fh === fh && last.stance === st && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
-        Object.assign(last, { x, y, vx, vy }); last.duration += 30;
-      } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance: st, duration: 30, phase });
+    const moves = [];
+    const add = (px, py, st, ms) => {
+      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / (ms / 1000)), vy = Math.round((sim.y - py) / (ms / 1000));
+      const fh = sim.fh?.id || 0, last = moves[moves.length - 1];
+      if (last && last.cmd === 0 && last.fh === fh && last.stance === st && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
+        Object.assign(last, { x, y, vx, vy }); last.duration += ms;
+      } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance: st, duration: ms });
     };
     let t = 0;
-    for (; t < hold; t += 30) {
-      const px = sim.x, py = sim.y;
-      if (t < 300) { if (sim.recoil && sim.fh) sim.recoilStep(0.03); else sim.hitFall(0.03); add(px, py, stance, t); continue; }
-      if (sim.hitLanded && sim.recoil && sim.fh) sim.recoilStep(0.03); else sim.hitFall(0.03);
-      add(px, py, stance, t);
+    if (poseMs >= 90) {
+      if (sim.recoil) moves.push({ cmd: 2, rx: Math.round(sim.recoil), ry: 0, stance, duration: 0 });
+      for (; t < poseMs; ) {
+        const ms = Math.min(30, poseMs - t), px = sim.x, py = sim.y;
+        if (sim.recoil && sim.fh) sim.recoilStep(ms / 1000); else sim.hitFall(ms / 1000);
+        add(px, py, stance, ms);
+        t += ms;
+      }
     }
-    // the slide ends where it got to in 300ms; standing, it no longer moves (falling, or sliding on from where it
-    // landed - phase 3 - it keeps its speed)
-    for (const m of moves) { if (m.phase === 1 && m.fh) { m.vx = 0; m.vy = 0; } delete m.phase; }
     if (sim.state === 'hit1') { sim.setState('stand'); sim.recoil = 0; }
+    if (by && sim.aggro !== by) { sim.chase(by); sim.aiT = 0; sim.aiDir = 0; }
     sim.onJump = (s) => moves.push({ cmd: 1, rx: Math.trunc(s.vx), ry: Math.trunc(s.vy), stance: s.stance, duration: 0 });
     for (let n = 0; n < 55 && !(t >= 1000 && moves.some((m) => m.cmd === 0 && m.fh)); n++, t += MOB_STEP) {
       const v0 = pathSpeed(sim);
@@ -1074,23 +1079,25 @@ export class Life {
   /**
    * A flyer we control struck: the client's plain blow for a flyer - the push sets it off at 130px/s away from the
    * blow (300 for a strong one), braking at 400px/s^2 (200), in 30ms steps of average speed inside the map's box,
-   * recorded as its path in the pose it had. It flies on from a stop. (How long the client records it isn't read:
-   * here until it stops.)
+   * recorded as its path in the pose it had, for as long as its hit pose plays (none under 90ms). It flies on from
+   * where that leaves it, after the one who struck it when it wasn't already.
    */
-  planFlyHit(stance) {
+  planFlyHit(stance, poseMs = 0, by = null) {
     const P = this.flyPush;
     this.flyPush = null;
-    if (!P || !this.canMove) return;
+    if (by && this.aggro !== by) { this.chase(by); this.aiT = 0; this.aiDir = 0; }
+    if (!P || !this.canMove || poseMs < 90) return;
     const fh = this.footholds, start = { x: Math.round(this.x), y: Math.round(this.y) }, moves = [{ cmd: 2, rx: Math.trunc(P.v), ry: 0, stance, duration: 0 }];
     let x = this.x, v = P.v;
     const y = Math.max(fh.ceiling, Math.min(fh.ground - 1, this.y));
-    for (let t = 0; t < 3000 && v !== 0; t += 30) {
-      const v0 = v;
-      v = v > 0 ? Math.max(0, v - P.brake * 0.03) : Math.min(0, v + P.brake * 0.03);
-      x = Math.max(fh.wallL, Math.min(fh.wallR - 1, x + (v0 + v) * 0.03 * 0.5));
-      const e = { cmd: 0, x: Math.trunc(x), y: Math.trunc(y), vx: Math.trunc(v), vy: 0, fh: 0, stance, duration: 30 }, l = moves[moves.length - 1];
-      if (l.cmd === 0 && Math.sign(l.vx) === Math.sign(e.vx)) Object.assign(l, { ...e, duration: l.duration + 30 });
+    for (let t = 0; t < poseMs; ) {
+      const ms = Math.min(30, poseMs - t), dt = ms / 1000, v0 = v;
+      v = v > 0 ? Math.max(0, v - P.brake * dt) : Math.min(0, v + P.brake * dt);
+      x = Math.max(fh.wallL, Math.min(fh.wallR - 1, x + (v0 + v) * dt * 0.5));
+      const e = { cmd: 0, x: Math.trunc(x), y: Math.trunc(y), vx: Math.trunc(v), vy: 0, fh: 0, stance, duration: ms }, l = moves[moves.length - 1];
+      if (l.cmd === 0 && Math.sign(l.vx) === Math.sign(e.vx)) Object.assign(l, { ...e, duration: l.duration + ms });
       else moves.push(e);
+      t += ms;
     }
     if (this.fly) { this.fly.vx = 0; this.fly.vy = 0; }
     this.queueOwn(moves);

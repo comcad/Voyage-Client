@@ -7769,11 +7769,11 @@ export class Game {
         this.linesLanded(t.mob, last);
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob)); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
+          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong, hypnotized(t.mob) ? null : p); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob)); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
           this.after(last, () => { if (t.mob.queuedKill) this.finishKill(t.mob); });   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob));
+        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong, hypnotized(t.mob) ? null : p); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob));
         this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
         if (t.mob.kind === 'Mob' && !hypnotized(t.mob)) t.mob.chase(p);   // a struck monster comes after you (not a Hypnotized one)
       };
