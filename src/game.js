@@ -3769,8 +3769,15 @@ export class Game {
         if (st.barrier) { rp.barrier = true; this.barrierShield(rp); }
       })),
       // Hypnotize: the last monster put under it is the one whose attacks count; its end clears that, whichever it was
-      mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { if (s.second & HYPNOTIZE) this.lastHypnotized = e; this.applyMobStatus(e, s); } }),
-      mobStatusCancel: later((oid, first, second) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) e.removeStatus(first, second); }),
+      // Hypnotize put on a monster makes it the one Hypnotized monster that counts, with no target; any monster's
+      // Hypnotize ending takes its target away and leaves none counting
+      mobStatus: later((oid, s) => { const e = this.lifeByOid.get(oid); if (e && !e.pending) { if (s.second & HYPNOTIZE) { this.lastHypnotized = e; e.aggro = e.chased = null; } this.applyMobStatus(e, s); } }),
+      mobStatusCancel: later((oid, first, second) => {
+        const e = this.lifeByOid.get(oid);
+        if (!e || e.pending) return;
+        if (second & HYPNOTIZE) { e.aggro = e.chased = null; this.lastHypnotized = null; }
+        e.removeStatus(first, second);
+      }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.index, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
       moveMob: later((oid, start, moves, act, skill, level) => {
@@ -6739,6 +6746,7 @@ export class Game {
     this.revealChildren();
     if (this.net) this.friendlyMobHit();
     if (this.net) this.hypnoTouch();
+    if (this.net) this.hypnoTargets();
     for (const e of this.map.life) if (e.kind === 'Mob' && e.chat && (e.chat.t -= dt) <= 0) e.chat = null;   // monsters' lines run out
     for (const e of this.map.life) if (e.kind === 'Mob' && (e.hpQueue?.length || e.hpGauge)) this.takeMobHp(e, performance.now());
     if (this.net && this.petMpArmed) this.petAutoPot('mp');
@@ -11183,6 +11191,47 @@ export class Game {
       this.mobHitsMob(v, h); this.mobHitsMob(h, v);
       this.hypnoTouchAt = now;
       return;
+    }
+  }
+  /**
+   * While a monster is Hypnotized (the last one put under it), the monsters we control with nothing to go after pick
+   * their target. That monster takes the nearest monster whose body is within 300px across and 100px up or down of
+   * it (not a Hypnotized one, an escort or one of your Monster Carnival team) when one of its attacks reaches that
+   * body or it is within 40 (a third of the height between them plus a tenth of the distance across). A monster that
+   * attacks first (info/firstAttack) takes the Hypnotized one when that is no further away than you and one of its
+   * attacks reaches it or it is within 40; otherwise it goes after you as before.
+   */
+  hypnoTargets() {
+    const h = this.lastHypnotized;
+    if (!h || !h.alive || h.dying || !this.map.life.includes(h)) return;
+    const p = this.player;
+    const score = (a, b) => Math.trunc(Math.abs(Math.round(a.y) - Math.round(b.y)) / 3) + Math.trunc(Math.abs(Math.round(a.x) - Math.round(b.x)) / 10);
+    // whether one of m's attacks reaches t's body, turned toward it
+    const reaches = (m, t) => {
+      if (!m.attacks?.length) return false;
+      const facing = m.facingRight, body = t.hitBox();
+      m.facingRight = t.x > m.x;
+      const ok = m.attacks.some((a) => m.reaches(a, body));
+      m.facingRight = facing;
+      return ok;
+    };
+    for (const m of this.map.life) {
+      if (m.kind !== 'Mob' || !m.controlled || !m.alive || m.dying || m.oid == null || m.aggro || m.attacking || this.carnivalAlly(m)) continue;
+      if (m === h) {
+        const area = { left: h.x - 300, right: h.x + 300, top: h.y - 100, bottom: h.y + 100 };
+        let v = null, best = Infinity;
+        for (const o of this.map.life) {
+          if (o === h || o.kind !== 'Mob' || !o.alive || o.dying || o.oid == null || !o.hasBody || hypnotized(o) || this.carnivalAlly(o) || Number(o.src?.info?.damagedByMob)) continue;
+          const b = o.hitBox();
+          if (b.right < area.left || b.left > area.right || b.bottom < area.top || b.top > area.bottom) continue;
+          const d = (o.x - h.x) ** 2 + (o.y - h.y) ** 2;
+          if (d < best) { best = d; v = o; }
+        }
+        if (v && (reaches(m, v) || score(m, v) <= 40)) m.chase(v);
+      } else if (Number(m.src?.info?.firstAttack)) {
+        const sh = score(m, h);
+        if (sh <= score(m, p) && (reaches(m, h) || sh <= 40)) m.chase(h);
+      }
     }
   }
   mobAttackLand(m, a, spots) {

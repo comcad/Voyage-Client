@@ -1389,11 +1389,13 @@ export class Life {
    * they are still in reach when it lands is checked then. True when it started one.
    */
   tryAttack(dt) {
-    const t = this.aggro;
+    let t = this.aggro;
+    // a monster it was set on (Hypnotize) that has died is let go
+    if (t?.kind === 'Mob' && (!t.alive || t.dying)) { this.aggro = this.chased = null; t = null; }
     // a skill the server has offered goes first, once it has someone to go after
     if (t && !t.reach && this.nextSkill) { const s = this.nextSkill; this.nextSkill = null; this.playSkill(s.skill, s.level); return true; }
     if (!t || t.reach || !this.attacks.length || (this.attackT -= dt) > 0) return false;
-    const body = { left: t.x - 22, right: t.x + 22, top: t.y - 65, bottom: t.y };
+    const body = t.kind === 'Mob' ? t.hitBox() : { left: t.x - 22, right: t.x + 22, top: t.y - 65, bottom: t.y };   // a monster: its own body
     const facing = this.facingRight;
     this.facingRight = t.x > this.x;
     const usable = this.attacks.filter((a) => this.reaches(a, body));
