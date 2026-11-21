@@ -605,13 +605,13 @@ function endDate(ft) {
   return `${d.getMonth() + 1}-${d.getDate()}-${String(d.getHours()).padStart(2, '0')}`;
 }
 /** The Item Inventory's tabs (Basic.img's Tab5 with Base/Tab2's labels) across the strip under its title. */
-function drawItemTabs(ctx, mgr, labels, selected) {
-  const T = mgr.B.Tab5, im = (n) => mgr.image(n), rects = [], y = 451, count = 4;
+function drawItemTabs(ctx, mgr, labels, selected, x0 = 17, y = 451, span = 222) {
+  const T = mgr.B.Tab5, im = (n) => mgr.image(n), rects = [], count = 4;
   if (!T) return rects;
   const left = im(T[selected === 0 ? 'left1' : 'left0']);
-  let x = 17;
+  let x = x0;
   if (left) { ctx.drawImage(left, x, y); x += left.width; }
-  const edges = (count - 1) * 12 + 6, width = Math.floor((222 - 6 - edges) / count);
+  const edges = (count - 1) * 12 + 6, width = Math.floor((span - 6 - edges) / count);
   for (let i = 0; i < count; i++) {
     const on = i === selected, last = i === count - 1;
     const fill = im(T[on ? 'fill1' : 'fill0']);
@@ -878,14 +878,16 @@ class MtsBuyListDlg extends MtsListDlg {
 }
 
 /**
- * Selling to someone's wanted request (Buy/Item/backgrnd, 202x302): your items of its type in the art's 4 x 6 cells
- * (x 22 + 36n, y 70 + 34n, scrollbar at the right); a double-click offers one. Its places were lost and are the art's.
+ * Selling to someone's wanted request (Buy/Item/backgrnd, 202x302): your items in 4 x 6 cells of 32x32 at
+ * x 21 + 36n, y 71 + 34n (the client's own cell math), the tabs preset to the wanted item's kind; a click selects
+ * (the blue frame), a double-click offers. The tabs', the scrollbar's and the close box's places were lost and
+ * are set by the art (the tabs on the strip above the cells).
  */
-const OFFER_GRID = { x: 22, y: 70, dx: 36, dy: 34, bar: [166, 70, 202] };
+const OFFER_GRID = { x: 21, y: 71, dx: 36, dy: 34, bar: [166, 70, 202] };
 class MtsSellToWantedDlg extends MtsDialog {
   constructor(shop, r) {
     super(shop, shop.I.Buy.Item.backgrnd, 202, 302);
-    this.r = r; this.itab = Math.min(4, Math.max(1, typeOf(r.item.id))); this.first = 0; this.lastAt = 0;
+    this.r = r; this.itab = Math.min(4, Math.max(1, typeOf(r.item.id))); this.first = 0; this.lastAt = 0; this.sel = 0;
     this.button(this.mgr.B.BtClose, 179, 6, () => this.close());
   }
   ok() {}
@@ -909,7 +911,14 @@ class MtsSellToWantedDlg extends MtsDialog {
   }
   rows() { return Math.ceil((this.shop.g.inventory?.limits?.[this.itab] || 24) / 4); }
   wheel(dy) { this.first = Math.max(0, Math.min(this.rows() - 6, this.first + Math.sign(dy))); }
-  down(lx, ly) { const s = this.scrollClick(lx, ly, ...OFFER_GRID.bar, this.first, this.rows(), 6); if (s !== null) this.first = s; }
+  down(lx, ly) {
+    const s = this.scrollClick(lx, ly, ...OFFER_GRID.bar, this.first, this.rows(), 6);
+    if (s !== null) { this.first = s; return; }
+    const t = (this.tabs || []).findIndex(([x, w, y]) => lx >= x && lx < x + w && ly >= y && ly < y + 21);
+    if (t >= 0 && t + 1 !== this.itab) { this.itab = t + 1; this.first = 0; this.sel = 0; sfx.play('UI/Tab'); }
+  }
+  move(lx, ly) { this.mouseAt = { x: lx, y: ly }; }
+  up() { const { x, y } = this.mouseAt || {}, s = this.slotAt(x, y); if (s && this.shop.g.inventory?.[this.itab]?.[s]) this.sel = s; }
   tooltip(lx, ly) { const s = this.slotAt(lx, ly), it = s && this.shop.g.inventory?.[this.itab]?.[s]; return it ? { item: it } : null; }
   body(ctx) {
     super.body(ctx);
@@ -921,7 +930,9 @@ class MtsSellToWantedDlg extends MtsDialog {
       m.drawIcon(ctx, m.icon(it.id), x, y, it.id);
       if (this.itab !== 1 && it.quantity > 1) m.count(ctx, it.quantity, x, y + 20);
       if (it.id !== this.r.item.id) { ctx.fillStyle = 'rgba(54,54,54,0.45)'; ctx.fillRect(x, y, 32, 32); }
+      if (slot === this.sel) { ctx.strokeStyle = 'rgba(16,48,204,0.67)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, 32, 32); ctx.lineWidth = 1; }
     }
+    this.tabs = drawItemTabs(ctx, m, this.shop.I.Base.Tab2, this.itab - 1, 17, 45, 168);
     this.scrollbar(ctx, ...OFFER_GRID.bar, this.first, this.rows(), 6);
   }
 }
