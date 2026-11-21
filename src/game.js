@@ -1642,9 +1642,9 @@ export class Game {
   /**
    * A monster's line (MOB_SPEAKING s, l, or -1, -1 by itself as it dies): entry s's line l - an info/speak entry only
    * while no balloon of its is up - or, dying, the first entry for its death action and a random line. Unless its
-   * conditions hold every run of letters comes out as one x per two. Its chatBalloon (ChatBalloon.img/mob/<n>) shows
-   * over it for 5s and fades over 0.6s (a death line for the death's length, the last fifth fading), and the chat log
-   * gets "name : line" in yellow.
+   * conditions hold, every run of characters other than space, tab, newline and . , ! ' comes out as one x per two.
+   * Its chatBalloon (ChatBalloon.img/mob/<n>) shows over it for 5s and fades over 0.6s (a death line for the death's
+   * length, the last fifth fading), and the chat log gets "name : line" in yellow.
    */
   mobSay(m, s, l) {
     const t = this.speakTable(m);
@@ -1663,7 +1663,7 @@ export class Game {
       line = e.lines[l];
     }
     if (!line) return;
-    if (!this.speakClear(m)) line = line.replace(/[^ \t\n.,!'"]+/g, (w) => 'x'.repeat(Math.ceil(w.length / 2)));
+    if (!this.speakClear(m)) line = line.replace(/[^ \t\n.,!']+/g, (w) => 'x'.repeat(Math.ceil(w.length / 2)));
     m.chat = { text: line, t: life, fade, style: Number(m.src?.info?.speak?.chatBalloon) || 0 };
     const name = this.windows.strings.mob?.[Number(m.spawn?.id)]?.name || '';
     this.hud.message(`${name} : ${line}`, '#ffff00');
@@ -8927,9 +8927,10 @@ export class Game {
   /**
    * A chair item (double-clicked, or on a key), in the client's order: one request at a time (200ms, alive); not
    * seated already (a chair or a map seat: nothing), with a skill held down, within 5s of a blow or attack, nor
-   * unless standing still on a floor; not morphed (it says why); not riding (it says why); not on a photo-booth map
-   * (field type 61: "It is not appropriate to use it here."); not below the chair's reqLevel (silently). USE_CHAIR
-   * then goes, and you sit where you stand with the chair under you at once.
+   * unless standing still on a floor; not morphed (it says why; a ghost with no morph, the spaceship, may sit and
+   * shows ghostsit); not riding (it says why); not on a photo-booth map (field type 61: "It is not appropriate to use
+   * it here."); not below the chair's reqLevel (silently). USE_CHAIR then goes, and you sit where you stand with the
+   * chair under you at once.
    */
   async sitChair(itemId) {
     const p = this.player;
@@ -9960,7 +9961,7 @@ export class Game {
     (this.reactors ??= new Map());
     const map = this.map, loaded = await loadReactorImg(this.assets, d.id);
     if (!loaded || this.map !== map) return;
-    const r = new Reactor(d, loaded.img, loaded.info, map);
+    const r = new Reactor(d, loaded.img, loaded.info, map, loaded.quest);
     r.volumeAt = (x, y) => this.volumeAt(x, y);
     await this.assets.preload(r.frames());
     if (this.map === map) this.reactors.set(d.oid, r);

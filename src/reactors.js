@@ -10,7 +10,8 @@ import { Anim } from './map.js';
  *   N/event/<i>       what moves it on: its type (0 any hit, 1 / 2 a hit facing right / left, 3 / 4 the same in the
  *                     air, 5 a skill inside lt/rb, 100... items and the rest the server's), activeSkillID
  *   N/hit             played once as it leaves that state (N/event/<i>/hit first, then the image's own hit)
- * The flags (activateByTouch, quest...) are the reactor's own info, never the linked one's.
+ * Its flags are its own, never the linked image's: activateByTouch in its info, and quest (a quest that must be in
+ * progress for a swing to take it) at the top of its image, beside info.
  *
  * Its phases: 0 idle; 1 a hit to show at playAt; 2 that hit playing; 4 destroyed. A hit plays the state being left
  * (old) - the event picked from the stance of the blow when none was named - with its Hit sound, then the current
@@ -20,11 +21,11 @@ import { Anim } from './map.js';
 const FADE_IN = 800, NEW_BLOCK = 800, DESTROY_WAIT = 400;
 
 export class Reactor {
-  constructor(d, img, info, map) {
+  constructor(d, img, info, map, quest = 0) {
     Object.assign(this, { oid: d.oid, id: d.id, x: d.x, y: d.y, cur: d.state, old: d.state, img, info: info || {} });
     this.flip = !!d.flip; this.name = d.name || '';
     this.touch = Number(this.info.activateByTouch) > 0;
-    this.quest = Number(this.info.quest) || 0;
+    this.quest = quest;
     this.layer = Reactor.layerFor(map, d.x, d.y);
     this.phase = 0; this.playAt = 0; this.idx = -2; this.stance = 0; this.noHitUntil = performance.now() + NEW_BLOCK;
     this.removed = false; this.touching = false; this.frozen = false;
@@ -177,5 +178,5 @@ export async function loadReactorImg(assets, id) {
     const linked = await assets.json(`Reactor/${pad(Number(link), 7)}.img`);
     if (linked) img = linked;
   }
-  return img ? { img, info: own?.info || {} } : null;
+  return img ? { img, info: own?.info || {}, quest: Number(own?.quest) || 0 } : null;
 }
