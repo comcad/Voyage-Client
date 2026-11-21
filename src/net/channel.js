@@ -2,7 +2,7 @@ import { Connection } from './connection.js';
 import { PacketWriter } from './packet.js';
 import { C, S, S_NAMES } from './opcodes.js';
 import { config } from '../config.js';
-import { readCharacterInfo, readMarriage, readNewYearCard, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable } from './proto.js';
+import { readCharacterInfo, readMarriage, readNewYearCard, readCharLook, writeCharLook, readRingLook, readItem, readMovement, writeMovement, isRechargeable, writeItemSlot } from './proto.js';
 
 /** CashShop item records (addCashItemInformation): cash id, account, item, SN, count, gift sender, expiry. */
 function readCashItem(r) {
@@ -13,6 +13,44 @@ function readCashItem(r) {
 }
 /** CASHSHOP_OPERATION results that carry a failure reason (each sits next to its action's success code). */
 const CS_FAILS = new Set([0x4C, 0x4E, 0x50, 0x56, 0x58, 0x5C, 0x5F, 0x61, 0x63, 0x65, 0x67, 0x69, 0x6B, 0x6D, 0x86, 0x88, 0x8A, 0x8C, 0x8E, 0x92, 0xA1]);
+/**
+ * An MTS listing: the item, its listing id, the price and the fee buyers pay on top (the list shows the two added),
+ * two strings the game keeps but doesn't show, the end date, the owner's name (own-listing checks), the name in the
+ * Seller column, a comment, the bid count and bid step (kept as shorts), the highest bid, an unused int, the buy-now
+ * price, another unused int, and the status (MY PAGE: 0 Sold, 1 Purchased, 2 Bid Lost, 3 Cancelled; for auctions
+ * 1 Exhibit, 2 Bid). A plain Cosmic server writes the fee before the price.
+ */
+function readMtsListing(r) {
+  const item = readItem(r, false), rec = { item, id: r.int(), price: r.int(), fee: r.int() };
+  r.string(); r.string();
+  rec.end = r.long(); rec.owner = r.string(); rec.seller = r.string(); rec.comment = r.string();
+  rec.bids = (r.int() << 16) >> 16; rec.step = (r.int() << 16) >> 16; rec.bid = r.int(); r.int(); rec.buyNow = r.int(); r.int();
+  rec.status = r.short();
+  if (config.cosmic) [rec.price, rec.fee] = [rec.fee, rec.price];
+  return rec;
+}
+/** MTS_OPERATION results: { mode, ...fields } (the fields each mode carries; most carry none or a reason code). */
+function readMtsResult(r) {
+  const e = { mode: r.ubyte() }, list = () => { const a = []; for (let n = r.int(); n > 0; n--) a.push(readMtsListing(r)); return a; };
+  switch (e.mode) {
+    case 0x15: case 0x17:   // a page of the list (0x15 also the sort state, then 1 when it answers a request)
+      e.total = r.int(); { const n = r.int(); e.tab = r.int(); e.type = r.int(); e.page = r.int();
+        if (e.mode === 0x15) { e.sortDir = r.ubyte(); e.sortCol = r.ubyte(); }
+        e.items = []; for (let i = 0; i < n; i++) e.items.push(readMtsListing(r)); }
+      e.answered = e.mode === 0x17 || (r.available > 0 && r.ubyte() !== 0);
+      break;
+    case 0x16: case 0x18: case 0x20: case 0x22: case 0x24: case 0x26: case 0x28: e.code = r.ubyte(); break;
+    case 0x1E: e.code = r.ubyte(); if (e.code === 0x48) e.limit = r.short(); break;
+    case 0x21:   // Transfer Inventory: the items, how many more there are than shown, then 1 when it answers a request
+      e.items = list(); e.hidden = r.available >= 4 ? r.int() : 0; e.answered = r.available > 0 && r.ubyte() !== 0; break;
+    case 0x23: case 0x2D: e.items = list(); break;   // Not Yet Sold; the wanted list's Buy List
+    case 0x27: e.invType = r.int(); e.slot = r.int(); break;   // a plain Cosmic server sends the quantity first
+    case 0x3D: e.items = r.int(); e.nx = r.int(); break;
+    case 0x3E: e.kind = r.ubyte(); e.itemId = r.int(); if (e.itemId > 0) { e.value = r.int(); e.time = r.long(); } break;
+    default: break;
+  }
+  return e;
+}
 /** A Commodity override from SET_CASH_SHOP: a flag mask, then each flagged field in this order. */
 const COMMODITY_FIELDS = [[0x1, 'ItemId', 'int'], [0x2, 'Count', 'short'], [0x10, 'Priority', 'ubyte'], [0x4, 'Price', 'int'],
   [0x8, 'Bonus', 'ubyte'], [0x20, 'Period', 'short'], [0x40, 'MaplePoint', 'int'], [0x80, 'Meso', 'int'], [0x100, 'Premium', 'ubyte'],
@@ -305,6 +343,18 @@ export class ChannelSession {
       } catch (e) { console.warn('SET_CASH_SHOP: short packet', e); }
       this.emit('cashShopOpen', d);
     });
+    // ---- the MTS: SET_ITC (character info, the account name, the listing fee in mesos, the buyers' fee (a percent
+    // and a flat NX amount), the shortest and longest auction in hours, the server's time), then its results
+    on(S.SET_ITC, (r) => {
+      const info = readCharacterInfo(r);
+      this.job = info.stats.job;
+      r.short();
+      const d = { info, account: r.string(), mesoFee: r.int(), pct: r.int(), flat: r.int(), minHours: r.int(), maxHours: r.int(), serverTime: r.long() };
+      this.emit('mtsOpen', d);
+    });
+    on(S.MTS_CHARGE_RESULT, () => this.emit('mtsCharge'));
+    on(S.MTS_OPERATION2, (r) => this.emit('mtsCash', r.int(), r.int()));   // NX, Maple Points
+    on(S.MTS_OPERATION, (r) => this.emit('mts', readMtsResult(r)));
     // MEMO_RESULT 3: notes waiting for you (gift notices and the like): id, sender, text, time, fame
     on(S.MEMO_RESULT, (r) => {
       const mode = r.ubyte();
@@ -2284,6 +2334,27 @@ export class ChannelSession {
   enterCashShop() { this.send(new PacketWriter(C.ENTER_CASHSHOP).int(Date.now() | 0)); }
   enterMTS() { this.send(new PacketWriter(C.ENTER_MTS)); }
   leaveCashShop() { this.send(new PacketWriter(C.CHANGE_MAP)); }
+  /**
+   * MTS_OPERATION: 2 sell at a fixed price (item, slot, quantity, price, then 7 and 1); 0x12 auction (item, slot,
+   * quantity, starting bid, buy-now, hours, 1, bid increment); 3 sell to someone's wanted request (inventory type,
+   * slot, item, their listing); 4 ask for an item on WANTED (item id, price, quantity, two bytes, comment); 5 a list
+   * page (tab, type, page, two bytes, search by, search text); 6 search (tab, type, 0, by, text); then one listing id
+   * for 7 cancel a sale, 8 take an item home, 9 / 0x0A put in / take out of the Cart, 0x0B / 0x0D the Offers row's
+   * buttons, 0x0C buy from a Buy List, 0x10 buy, 0x11 buy from the Cart, 0x14 buy an auction item now; 0x13 bid
+   * (listing, highest bid, added).
+   */
+  mts(mode, fill) { const w = new PacketWriter(C.MTS_OPERATION).byte(mode); fill?.(w); this.send(w); }
+  mtsSell(item, slot, qty, price) { this.mts(2, (w) => writeItemSlot(w, item).int(slot).int(qty).int(price).byte(7).byte(1)); }
+  mtsAuction(item, slot, qty, start, buyNow, hours, step) { this.mts(0x12, (w) => writeItemSlot(w, item).int(slot).int(qty).int(start).int(buyNow).byte(hours).byte(1).int(step)); }
+  mtsSellWanted(invType, slot, item, id) { this.mts(3, (w) => writeItemSlot(w.byte(invType).int(slot), item).int(id)); }
+  mtsWanted(itemId, price, qty, comment) { this.mts(4, (w) => w.int(itemId).int(price).int(qty).byte(0).byte(1).string(comment)); }
+  mtsPage(tab, type, page, b1, b2, by, text) { this.mts(5, (w) => w.int(tab).int(type).int(page).byte(b1).byte(b2).int(by).string(text)); }
+  mtsSearch(tab, type, by, text) { this.mts(6, (w) => w.int(tab).int(type).int(0).int(by).string(text)); }
+  mtsListing(mode, id) { this.mts(mode, (w) => w.int(id)); }
+  mtsBid(id, base, added) { this.mts(0x13, (w) => w.int(id).int(base).int(added)); }
+  /** The MTS Charge and Check buttons (a plain Cosmic server answers an empty MTS_OPERATION with the balance). */
+  mtsCharge() { this.send(new PacketWriter(C.MTS_CHARGE)); }
+  mtsCheckCash() { this.send(new PacketWriter(config.cosmic ? C.MTS_OPERATION : C.MTS_CHECK_CASH)); }
   checkCash() { this.send(new PacketWriter(C.CHECK_CASH)); }
   /**
    * CASHSHOP_OPERATION buys (wallet 1 NX credit / 2 maple points / 4 prepaid, each led by a "paid with Maple Points"

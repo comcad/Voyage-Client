@@ -1874,13 +1874,13 @@ class CsAlert extends Win {
 }
 
 /** An edit box for a Cash Shop dialog: Arial 12 black, the text `margin` px in from the box's left edge. */
-function editBox(shop, w, h, max, margin = 0) {
+export function editBox(shop, w, h, max, margin = 0) {
   const f = new TextField(shop.mgr.game.statusBar.layer, 0, 0, w, h, { color: '#000', max });
   f.el.style.padding = `0 ${margin}px`;
   return f;
 }
 /** Keep an edit box over its place (x, y) in a dialog. */
-function placeBox(win, f, x, y) {
+export function placeBox(win, f, x, y) {
   f.rect.x = win.x + x; f.rect.y = win.y + y;
   f.layout({ left: 0, top: 0 }, win.mgr.game.canvas.clientWidth / UI_W);
 }
@@ -1891,7 +1891,7 @@ function placeBox(win, f, x, y) {
  * and its drop-down list 1px over the box's bottom edge: 16px rows, a frame round the background, the row under
  * the mouse (or keys) filled and its text white. A row is picked when the button comes up on it.
  */
-class ComboBox {
+export class ComboBox {
   constructor(mgr, art, x, y, w, h, items, colors, font = { face: 'Arial', size: 12, hoverText: '#fff', listDy: 0 }) {
     Object.assign(this, { mgr, art, x, y, w, h, items, colors, font });
     this.value = 0; this.hover = 0; this.open = false; this.state = 'normal'; this.inside = false; this.pressedAt = 0;

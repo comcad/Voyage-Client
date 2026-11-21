@@ -72,6 +72,28 @@ export function readCharEntry(r, viewAll = false) {
   return { stats, look, rank, family };
 }
 
+/**
+ * An item as the game writes it when it sends one back (the MTS listing forms), without a position: the mirror of
+ * readItem. Fields Voyage doesn't keep go out as 0.
+ */
+export function writeItemSlot(w, item) {
+  const type = item.type ?? (Math.floor(item.id / 1000000) === 1 ? 1 : 2);
+  w.byte(type).int(item.id).bool(!!item.cash);
+  if (item.cash) w.long(item.cashId ?? 0);
+  w.long(item.expiration ?? 150842304000000000n);
+  if (type === 1) {
+    w.byte(item.slots ?? 0).byte(item.level ?? 0);
+    for (const k of ['str', 'dex', 'int', 'luk', 'hp', 'mp', 'watk', 'matk', 'wdef', 'mdef', 'acc', 'avoid', 'hands', 'speed', 'jump']) w.short(item[k] ?? 0);
+    w.string(item.owner ?? '').short(item.flag ?? 0);
+    w.byte(0).byte(item.itemLevel ?? 0).int(item.itemExp ?? 0).int(item.vicious ?? 0);
+    if (!item.cash) w.long(150842304000000000n);
+    w.long(150842304000000000n).int(0);
+  } else {
+    w.short(item.quantity ?? 1).string(item.owner ?? '').short(item.flag ?? 0);
+    if (isRechargeable(item.id)) w.zero(8);
+  }
+  return w;
+}
 export function readItem(r, withPosition = true, equipSlotShort = false) {
   const item = {};
   if (withPosition) item.pos = equipSlotShort ? r.short() : r.byte();

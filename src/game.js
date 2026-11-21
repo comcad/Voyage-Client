@@ -79,6 +79,7 @@ import { Pet, pickReaction, NO_LOOT_MAP } from './pets.js';
 import { Summon, PUPPET_RANGE, PUPPETS, MAGIC_SUMMONS } from './summons.js';
 import { Dragon } from './dragon.js';
 import { CashShopWin } from './ui/cashshop.js';
+import { MtsWin } from './ui/mts.js';
 import { ChannelSession } from './net/channel.js';
 import { wsTransport } from './net/connection.js';
 import { bridgeUrl } from './ui/login-ui.js';
@@ -1166,8 +1167,8 @@ export class Game {
     this.net.enterMTS();
     this.lockExclusive();
   }
-  /** SET_CASH_SHOP: the server took us off the map; swap the world for the shop screen. */
-  openCashShop(d) {
+  /** SET_CASH_SHOP / SET_ITC: the server took us off the map; swap the world for the shop (or MTS) screen. */
+  openCashShop(d, mts = false) {
     this.inCashShop = true;
     this.releaseExclusive();   // the answer to the request
     const info = d.info;
@@ -1183,7 +1184,8 @@ export class Game {
     this.weather.stop(false); this.skillLoop?.stop(); this.skillLoop = null;   // nothing of the map plays on in the shop
     music.play('BgmUI/ShopBgm', { fadeOut: 0, fadeIn: 0 });   // a cut, no fade
     setWholeScreen(true); this.setResolution();   // all 800x600 of it, as large as fits the window (and no touch controls)
-    this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
+    if (mts) { this.inMTS = true; this.mtsWin = this.windows.show(new MtsWin(this.windows, d), null); }
+    else this.csWin = this.windows.show(new CashShopWin(this.windows, d), null);
   }
   /** The status bar's chat line is a page element over the canvas: hide it while the shop screen is up. */
   showChatBox(on) { const el = this.statusBar?.chat?.el; if (el) el.style.visibility = on ? '' : 'hidden';
@@ -1213,7 +1215,7 @@ export class Game {
       this.setServerTime(entered.serverTime);
       const info = entered.info;
       if (info) { Object.assign(this.stats, info.stats); this.inventory = info.inventory; this.meso = info.meso; this.rings = info.rings; this.newYearCards = info.cards || []; this.myCards = this.newYearCards.map((c) => c.id); this.warmAmmoInfo(); }
-      if (fromCashShop) { this.inCashShop = false; if (this.csWin) this.windows.close(this.csWin); this.csWin = null; music.stop(600); setWholeScreen(false); this.setResolution(); }
+      if (fromCashShop) { this.inCashShop = this.inMTS = false; if (this.csWin) this.windows.close(this.csWin); if (this.mtsWin) this.windows.close(this.mtsWin); this.csWin = this.mtsWin = null; music.stop(600); setWholeScreen(false); this.setResolution(); }
       this.partySearch.restore = true;   // a search that was on is taken up again on the new channel
       const loaded = this.changeMap(entered.mapId, { portalIdx: entered.portal });
       net.flush();
@@ -3199,6 +3201,10 @@ export class Game {
     const h = this.net.h;
     Object.assign(h, {
       cashShopOpen: (d) => this.openCashShop(d),
+      mtsOpen: (d) => this.openCashShop(d, true),
+      mtsCash: (nx, mp) => this.mtsWin?.setCash(nx, mp),
+      mtsCharge: () => this.mtsWin?.charged(),
+      mts: (e) => this.mtsWin?.result(e),
       csCash: (c) => this.csWin?.setCash(c),
       // the locker's last short is your character slots: the slot item's tooltip counts them (after View All too)
       csInventory: (items, storageSlots, charSlots) => { if (charSlots !== null && charSlots !== undefined) this.charSlots = charSlots; this.csWin?.setInventory(items, storageSlots); },
