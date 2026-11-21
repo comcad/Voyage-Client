@@ -5,6 +5,7 @@ import { uiText, wrapText } from './wzui.js';
 import { Win, allCanvases } from './windows.js';
 import { UI_W, UI_H } from '../view.js';
 import { config } from '../config.js';
+import { nameTag } from '../map.js';
 import { ComboBox, editBox, placeBox } from './cashshop.js';
 
 /**
@@ -14,8 +15,9 @@ import { ComboBox, editBox, placeBox } from './cashshop.js';
  *   NX / Maple Points / mesos with Charge, Check and Exit (255,531).
  * Tabs: 1 FOR SALE, 2 WANTED, 3 AUCTION, 4 MY PAGE (sub-tabs CART, OFFERS, HISTORY, AUCTION), 5 GUIDE.
  * One request is answered at a time: while one is out the screen sends nothing else (the search and Exit aside).
- * Some places aren't known and are set by the art: the For Sale / Wanted / Auction box, the pager, the
- * scrollbars, Not Yet Sold's Cancel, the Item Inventory tabs and its Sell / Auction buttons.
+ * Places the client doesn't give are measured from the original's own screen: the For Sale / Wanted / Auction box,
+ * Not Yet Sold's Cancel, the Item Inventory's Sell / Auction and tabs, the scrollbars, the pager, and the character
+ * standing at the preview's left with its name tag; the tabs' frames are Basic.img's Tab7 (the closest art).
  */
 const FOR_SALE = 1, WANTED = 2, AUCTION = 3, MY_PAGE = 4, GUIDE = 5;
 const CART = 0, OFFERS = 1, HISTORY = 2, MY_AUCTION = 3;
@@ -23,9 +25,9 @@ const TABS_X = 272, TABS_Y = 17, SUB_X = 273, SUB_Y = 98, LIST_X = 273, LIST_Y =
 /** A top tab's hit x (left of the selected tab / right of it), 93 wide, y 19-49 in the tab art. */
 const TAB_HIT = { 1: [3, 3], 2: [100, 112], 3: [193, 205], 4: [286, 298], 5: [379, 391] };
 const SLOT = 35, ROWS = 16, ROW_H = 20;
-const NYS = { x: 19, y: 235, cols: 6, rows: 2, bar: [228, 233, 70] };
-const TRANS = { x: 20, y: 343, cols: 6, rows: 2, bar: [228, 341, 70] };
-const INV = { x: 19, y: 477, cols: 6, rows: 3, bar: [228, 476, 104] };
+const NYS = { x: 19, y: 235, cols: 6, rows: 2, bar: [228, 235, 66] };
+const TRANS = { x: 20, y: 343, cols: 6, rows: 2, bar: [228, 343, 66] };
+const INV = { x: 19, y: 477, cols: 6, rows: 3, bar: [228, 477, 102] };
 const PRICE_MIN = 110, PRICE_MAX = 9999999;
 /** Items with this end date or later never expire (2079-01-01). */
 const PERMANENT = 150842304000000000n;
@@ -102,11 +104,11 @@ export class MtsWin extends Win {
     const B = this.mgr.B;
     await a.preload([this.bg, I.Base.Preview[0], ...allCanvases(I.Base.Tab2), ...allCanvases(I.Tab), ...allCanvases(I.Sell.Tab), ...allCanvases(I.MyPage.Tab),
       ...allCanvases(I.Sort), I.PicturePlate.HowTo, I.PicturePlate.HowTo1, I.Sell.backgrnd, I.MyPage.backgrnd, I.MyPage.backgrnd1,
-      ...allCanvases(B.Tab5), ...allCanvases(B.ComboBox4), ...allCanvases(B.BtOK2), ...allCanvases(B.BtCancel2)]);
+      ...allCanvases(B.Tab7), ...allCanvases(B.ComboBox4), ...allCanvases(B.BtOK2), ...allCanvases(B.BtCancel2)]);
     // the search row: For Sale / Wanted / Auction, the category, by Character / Item, the text, SEARCH
     const colors = { back: '#eeeeee', hover: '#a5a198', frame: '#999999' };
     this.combos = [
-      new ComboBox(this.mgr, B.ComboBox4, TABS_X + 3, TABS_Y + 55, 75, 20, ['For Sale', 'Wanted', 'Auction'], colors),
+      new ComboBox(this.mgr, B.ComboBox4, TABS_X + 7, TABS_Y + 55, 75, 20, ['For Sale', 'Wanted', 'Auction'], colors),
       new ComboBox(this.mgr, B.ComboBox4, TABS_X + 82, TABS_Y + 55, 75, 20, CATEGORIES, colors),
       new ComboBox(this.mgr, B.ComboBox4, TABS_X + 217, TABS_Y + 55, 75, 20, ['Character', 'Item'], colors),
     ];
@@ -115,8 +117,8 @@ export class MtsWin extends Win {
     this.button(I.BtSearch, TABS_X + 462, TABS_Y + 55, () => this.doSearch());
     this.regBtn = this.button(I.Buy.BtRegistration, SUB_X + 422, SUB_Y + 5, () => this.openWantedSearch());
     this.cancelBtn = this.button(I.Sell.BtCancel, 159, 209, () => this.cancelSale());
-    this.button(I.BtSell, 159, 425, () => this.sell(false));
-    this.button(I.BtAuction, 195, 425, () => this.sell(true));
+    this.button(I.BtSell, 158, 425, () => this.sell(false));
+    this.button(I.BtAuction, 193, 425, () => this.sell(true));
     this.button(I.BtCharge, BAR_X + 240, BAR_Y + 10, () => this.charge());
     this.button(I.BtCheck, BAR_X + 300, BAR_Y + 10, () => this.checkCash());
     this.button(cs.CSStatus.BtExit, BAR_X + 377, BAR_Y + 7, () => this.g.leaveCashShop());
@@ -376,7 +378,9 @@ export class MtsWin extends Win {
     if (pv) ctx.drawImage(pv, 23, 34);
     if (this.look) {
       ctx.save(); ctx.beginPath(); ctx.rect(23, 34, 213, 109); ctx.clip();
-      drawParts(ctx, this.mgr.assets, this.look.compose(this.look.standAction(), 0), 130, 128, false);
+      // standing at the preview's left with its name tag under it, as the client shows it
+      drawParts(ctx, this.mgr.assets, this.look.compose(this.look.standAction(), 0), 51, 123, false);
+      nameTag(ctx, this.g.player?.name || '', 51, 125);
       ctx.restore();
     }
     uiText(ctx, maskId(this.account), 225, 151, { color: '#000', align: 'right' });
@@ -397,7 +401,7 @@ export class MtsWin extends Win {
   }
   drawInventory(ctx) {
     const m = this.mgr, inv = this.g.inventory?.[this.itab] || {}, limit = this.g.inventory?.limits?.[this.itab] || 24;
-    this.itemTabs = drawItemTabs(ctx, m, this.I.Base.Tab2, this.itab - 1);
+    this.itemTabs = drawItemTabs(ctx, m, this.I.Base.Tab2, this.itab - 1, 17, 449, 156);
     const first = this.ifirst[this.itab] * INV.cols;
     for (let k = 0; k < INV.cols * INV.rows; k++) {
       const slot = first + k + 1;
@@ -463,12 +467,11 @@ export class MtsWin extends Win {
   /** The pages: "1".."N", ten at a time, the current one marked. */
   drawPager(ctx) {
     const pages = Math.max(1, Math.ceil(this.total / ROWS)), from = Math.floor(this.page / 10) * 10, to = Math.min(pages, from + 10);
-    const n = to - from, w = 22, x0 = LIST_X + 254 - (n * w) / 2, y = LIST_Y + 337;
+    const n = to - from, w = 22, x0 = LIST_X + 206 - (n * w) / 2, y = LIST_Y + 328;
     this.pageHits = [];
     for (let p = from; p < to; p++) {
       const x = x0 + (p - from) * w, on = p === this.page;
-      if (on) { ctx.fillStyle = '#3a67aa'; ctx.fillRect(x, y - 2, w - 2, 16); }
-      uiText(ctx, String(p + 1), x + (w - 2) / 2, y, { size: 12, align: 'center', color: on ? '#fff' : '#000' });
+      uiText(ctx, String(p + 1), x + w / 2, y, { size: 12, align: 'center', bold: on, color: on ? '#fff' : '#000' });
       this.pageHits.push([p, x, w - 2, y - 2]);
     }
   }
@@ -598,20 +601,22 @@ function cut(ctx, t, width) {
   return t;
 }
 function textWidth(ctx, t, size) { ctx.save(); ctx.font = `${size}px Arial, sans-serif`; const w = ctx.measureText(String(t || '')).width; ctx.restore(); return w; }
-/** A listing's end as month-day-hour. */
+/** A listing's end as month-day-year (two digits). */
 function endDate(ft) {
   if (!ft) return '';
   const d = new Date(ftMs(ft));
-  return `${d.getMonth() + 1}-${d.getDate()}-${String(d.getHours()).padStart(2, '0')}`;
+  return `${d.getMonth() + 1}-${d.getDate()}-${String(d.getFullYear() % 100).padStart(2, '0')}`;
 }
 /** The Item Inventory's tabs (Basic.img's Tab5 with Base/Tab2's labels) across the strip under its title. */
-function drawItemTabs(ctx, mgr, labels, selected, x0 = 17, y = 451, span = 222) {
-  const T = mgr.B.Tab5, im = (n) => mgr.image(n), rects = [], count = 4;
+function drawItemTabs(ctx, mgr, labels, selected, x0 = 17, y = 449, span = 156) {
+  const T = mgr.B.Tab7, im = (n) => mgr.image(n), rects = [], count = 4;
   if (!T) return rects;
+  const lw = im(T.left0)?.width || 4, mw = im(T.middle0)?.width || 9, rw = im(T.right0)?.width || 4, h = im(T.fill0)?.height || 20;
   const left = im(T[selected === 0 ? 'left1' : 'left0']);
   let x = x0;
-  if (left) { ctx.drawImage(left, x, y); x += left.width; }
-  const edges = (count - 1) * 12 + 6, width = Math.floor((span - 6 - edges) / count);
+  if (left) ctx.drawImage(left, x, y);
+  x += lw;
+  const width = Math.floor((span - lw - (count - 1) * mw - rw) / count);
   for (let i = 0; i < count; i++) {
     const on = i === selected, last = i === count - 1;
     const fill = im(T[on ? 'fill1' : 'fill0']);
@@ -619,9 +624,9 @@ function drawItemTabs(ctx, mgr, labels, selected, x0 = 17, y = 451, span = 222) 
     const edge = im(T[last ? (on ? 'right1' : 'right0') : `middle${on ? 1 : i + 1 === selected ? 2 : 0}`]);
     if (edge) ctx.drawImage(edge, x + width, y);
     const label = im(labels?.[on ? 'Enable' : 'Disable']?.[i]);
-    if (label) ctx.drawImage(label, x + Math.trunc((width + 6) / 2) - Math.trunc(label.width / 2), y + 11 - Math.trunc(label.height / 2));
-    rects.push([x - 6, width + 12, y]);
-    x += width + (last ? 6 : 12);
+    if (label) ctx.drawImage(label, x + Math.trunc(width / 2) - Math.trunc(label.width / 2), y + Math.trunc(h / 2) - Math.trunc(label.height / 2));
+    rects.push([x - Math.trunc(mw / 2), width + mw, y]);
+    x += width + (last ? rw : mw);
   }
   return rects;
 }
@@ -932,7 +937,7 @@ class MtsSellToWantedDlg extends MtsDialog {
       if (it.id !== this.r.item.id) { ctx.fillStyle = 'rgba(54,54,54,0.45)'; ctx.fillRect(x, y, 32, 32); }
       if (slot === this.sel) { ctx.strokeStyle = 'rgba(16,48,204,0.67)'; ctx.lineWidth = 2; ctx.strokeRect(x, y, 32, 32); ctx.lineWidth = 1; }
     }
-    this.tabs = drawItemTabs(ctx, m, this.shop.I.Base.Tab2, this.itab - 1, 17, 45, 168);
+    this.tabs = drawItemTabs(ctx, m, this.shop.I.Base.Tab2, this.itab - 1, 17, 45, 156);
     this.scrollbar(ctx, ...OFFER_GRID.bar, this.first, this.rows(), 6);
   }
 }
