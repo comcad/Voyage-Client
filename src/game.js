@@ -10414,7 +10414,8 @@ export class Game {
 
   /**
    * Your Puppet: the monsters you control near it go after it, and one that runs into it hits it
-   * (DAMAGE_SUMMON; the server takes it down when its HP runs out). Out of range they come back to you.
+   * (DAMAGE_SUMMON; the server takes it down when its HP runs out), unless it is one that doesn't hurt you either (a
+   * Hypnotized one, or one on your Monster Carnival team). Out of range they come back to you.
    */
   puppetAggro(dt) {
     let pp = null;
@@ -10429,7 +10430,7 @@ export class Game {
     // what a monster runs into: its body this frame, with where it was the tick before
     const box = pp.hitBox() || { left: pp.x - pp.reach - 8, right: pp.x + pp.reach + 8, top: pp.y - 60, bottom: pp.y + 5 };
     for (const m of this.map.life) {
-      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
+      if (m.kind !== 'Mob' || !m.alive || m.dying || m.oid === null || !m.hasBody || m.src.info?.bodyAttack === 0 || this.friendlyToYou(m)) continue;
       const b = m.hitBox();
       if (b.right < box.left || b.left > box.right || b.bottom < box.top || b.top > box.bottom) continue;
       const pad = m.src.info?.PADamage || 1, damage = Math.max(1, Math.round(pad * (0.85 + Math.random() * 0.15)));
