@@ -1479,7 +1479,7 @@ export function drawItemTip(ctx, mgr, it, mx, my) {
  */
 const TIP_LEVEL_FONT = '11px Tahoma, Verdana, sans-serif';
 const BLESSINGS = new Set([12, 10000012, 20000012, 20010012]);
-export function drawSkillTip(ctx, mgr, id, mx, my) {
+export function drawSkillTip(ctx, mgr, id, mx, my, noLevels = false) {
   const g = mgr.game, sb = g.skills, node = sb?.node(id);
   if (!node) { sb?.ensure(id); return; }
   ctx.save();
@@ -1495,9 +1495,10 @@ export function drawSkillTip(ctx, mgr, id, mx, my) {
     if (d) text += `\r\n#cExpiration Date: ${d.getUTCFullYear()}Year ${d.getUTCMonth() + 1}Month ${d.getUTCDate()}Day ${d.getUTCHours()}Hour ${d.getUTCMinutes()}Minute#`;
   }
   const hs = (l) => sb.hint(id, l).replace(/\\r\\n|\\n|\r\n|\r|\n/g, ' ');
+  // (a buff icon's shows no level lines, nor the line over them)
   const levels = [];
-  if (lv > 0) levels.push([true, `[Current Level ${lv}]`], [false, hs(lv)]);
-  if (lv < sb.wzMax(id)) levels.push([true, `[Next Level ${lv + 1}]`], [false, hs(lv + 1)]);
+  if (!noLevels && lv > 0) levels.push([true, `[Current Level ${lv}]`], [false, hs(lv)]);
+  if (!noLevels && lv < sb.wzMax(id)) levels.push([true, `[Next Level ${lv + 1}]`], [false, hs(lv + 1)]);
   const reqs = Object.entries(node.req || {});
   const W = Math.ceil(Math.max(320, ...levels.map(([, s]) => tipW(ctx, s, TIP_LEVEL_FONT) + 20)));
   const H = 128 + 16 * n + (reqs.length ? 34 * reqs.length + 20 : 0) + 15 * levels.length, sep = 114 + 16 * n;
@@ -1518,7 +1519,7 @@ export function drawSkillTip(ctx, mgr, id, mx, my) {
   let top = 32;
   if (sb.mastered(id)) { say(`[Master Level : ${sb.levels[id]?.master || 0}]`, 87, 32, TIP_FONT.body, '#fff'); top = 47; }
   tipDrawWrap(ctx, tipWrap(ctx, text, 218), x + 87, y + top + T);
-  ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, y + sep, W - 12, 1);
+  if (!noLevels) { ctx.fillStyle = '#fff'; ctx.fillRect(x + 6, y + sep, W - 12, 1); }
   levels.forEach(([head, s], i) => {
     const ly = sep + 7 + 15 * i;
     if (head) { tipSprite(ctx, mgr, D?.[1], x + 10, y + ly + T + 2); say(s, 16, ly, TIP_LEVEL_FONT, TIP_LABEL); }

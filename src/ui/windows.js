@@ -258,7 +258,7 @@ export class WindowManager {
     if (type === 'wheel') this.tipHeld = true;
     else if (type === 'move' && (x !== this.tipAt?.x || y !== this.tipAt?.y)) this.tipHeld = false;
     this.tipAt = { x, y };
-    this.tip = this.carry || this.tipHeld ? null : w ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : this.bar?.quickTip?.(x, y) ?? this.game?.kiteTip?.(x, y) ?? null;
+    this.tip = this.carry || this.tipHeld ? null : w ? (over ? over.tip?.() ?? null : w.tooltip?.(x - w.x, y - w.y)) : this.bar?.quickTip?.(x, y) ?? this.game?.buffTip?.(x, y) ?? this.game?.kiteTip?.(x, y) ?? null;
     if (w) w.move?.(x - w.x, y - w.y);
 
     if (type === 'down') {
@@ -341,7 +341,7 @@ export class WindowManager {
     }
     const ty = this.tip?.above ? { bottom: this.tip.above } : null;
     if (this.tip?.item) this.drawItemTip?.(ctx, this, this.tip.item, this.mouse.x + 14, ty ?? this.mouse.y + 18);
-    else if (this.tip?.skill) this.drawSkillTip?.(ctx, this, this.tip.skill, this.mouse.x, ty ?? this.mouse.y + 20);
+    else if (this.tip?.skill) this.drawSkillTip?.(ctx, this, this.tip.skill, this.mouse.x, ty ?? this.mouse.y + 20, !!this.tip.noLevels);
     else if (this.tip?.draw) this.tip.draw(ctx, this.mouse.x + 14, this.mouse.y + 18);   // a tooltip that draws itself
     else if (this.tip) drawTip(ctx, this.tip, this.mouse.x + 14, this.mouse.y + 18);
   }

@@ -397,12 +397,16 @@ export class WorldFx {
     if (config.bossHpPercent) overlayText(ctx, `${(k * 100).toFixed(2)}%`, x + w / 2, y + 10, 'middle');
   }
 
-  /** Buff icons, newest on the left of the row, at the top right (one slot further left while the Party Search marker shows). */
+  /**
+   * Buff icons, as the client lays them out: a row of 32px slots ending 3px from the right edge, 23px down (under the
+   * scrolling notice), the oldest on the left and each new one (a buff cast again too) joining at the right end; one
+   * slot further left while the Party Search marker shows. The icon under (x, y), or null.
+   */
   buffAt(x, y) {
-    const list = this.buffList();
-    const top = this.buffTop, first = this.searchMarker() ? 1 : 0;
-    for (let i = 0; i < list.length; i++) { const bx = UI_W - 36 - (i + first) * 34; if (x >= bx && x < bx + 32 && y >= top && y < top + 32) return list[i]; }
-    return null;
+    const list = this.buffList(), n = list.length, top = this.buffTop, right = UI_W - 3 - (this.searchMarker() ? 32 : 0);
+    if (!(y > top - 1 && y < top + 32)) return null;
+    const i = Math.floor((x - (right - 32 * n)) / 32);
+    return x >= right - 32 * n && i >= 0 && i < n ? list[i] : null;
   }
   /** Whether the Party Search marker shows: a search running (1) or paused (2). */
   searchMarker() { const st = this.game.partySearch?.state; return st === 1 || st === 2; }
@@ -421,7 +425,7 @@ export class WorldFx {
     if (!img) return;
     ctx.save();
     ctx.globalAlpha = Math.min(1, (now - this.searchShownAt) / 300);
-    ctx.drawImage(img, UI_W - 36, this.buffTop);
+    ctx.drawImage(img, UI_W - 35, this.buffTop);
     ctx.restore();
   }
   buffList() {
@@ -431,16 +435,17 @@ export class WorldFx {
     if (fp && fp.until > now) list.push({ source: 0, family: fp.type, until: fp.until, dur: fp.dur });
     return list;
   }
-  get buffTop() { return this.boss ? 46 : 4; }
+  get buffTop() { return this.boss ? 65 : 23; }
   drawBuffs(ctx) {
-    const g = this.game, now = Date.now(), first = this.searchMarker() ? 1 : 0;
+    const g = this.game, now = Date.now(), right = UI_W - 3 - (this.searchMarker() ? 32 : 0);
     this.drawSearchMarker(ctx);
-    this.buffList().forEach((b, i) => {
+    const list = this.buffList(), n = list.length;
+    list.forEach((b, i) => {
       const node = b.family !== undefined ? this.W?.Family?.RightIcon?.[b.family] : b.source > 0 ? g.skills?.icon(b.source) : this.itemIcon(-b.source);
       if (b.source > 0 && !node) g.skills?.ensure(b.source);
       const img = node && this.assets.image(node);
       if (!img) { if (node) this.assets.preload([node]); return; }
-      const x = UI_W - 36 - (i + first) * 34, y = this.buffTop;
+      const x = right - 32 * (n - i), y = this.buffTop;
       // the Battleship's icon shows its HP (from COOLDOWN 5221999; full until the first), not time:
       // its most is (level - 120 + 2 x skill level) x 200
       const ship = b.source === 5221006;
@@ -451,10 +456,11 @@ export class WorldFx {
       if (low) ctx.globalAlpha = Math.floor(now / 500) % 2 ? 64 / 255 : 210 / 255;   // pulses once it runs low
       // an item's buff: its raw icon centred on UIWindow.img/IconBase/0; a skill's icon is its own box
       const base = b.source < 0 && this.assets.image(this.W?.IconBase?.[0]);
+      // (each centred in its slot, as the client places them)
       if (b.source < 0) {
         if (base) ctx.drawImage(base, x, y);
-        ctx.drawImage(img, x + Math.floor((32 - img.width) / 2), y + Math.floor((32 - img.height) / 2));
-      } else ctx.drawImage(img, x, y + 32 - img.height);
+        ctx.drawImage(img, x + Math.trunc((32 - img.width) / 2), y + Math.trunc((32 - img.height) / 2));
+      } else ctx.drawImage(img, x + Math.trunc((32 - img.width) / 2), y + Math.trunc((32 - img.height) / 2));
       // the time left on UIWindow.img/Skill/CoolTime, the quick slots' cover: 15 (clear) at the start down to 0 as it runs out
       const step = Math.max(0, Math.min(15, Math.floor(left / (total / 16)))), cool = this.W?.Skill?.CoolTime?.[step], cim = cool && this.assets.image(cool);
       if (cim) ctx.drawImage(cim, x, y);

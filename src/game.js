@@ -685,6 +685,8 @@ const AMPLIFIED = new Set([2001004, 2001005, 2101004, 2101005, 2111002, 2111003,
 /** Three Snails, and the skills that say "This skill cannot be used with the equipped item." for the wrong weapon. */
 const THREE_SNAILS = new Set([1000, 10001000, 20001000, 20011000]), EQUIPPED_ITEM_SAY = new Set([11101004, 11111006, 12101006, 12111005, 12111006]);
 const MYSTIC_DOOR = 2311002, SMOKESCREEN = 4221006;
+/** Magic Armor (the Magician's and the Blaze Wizard's) and the Dawn Warrior's Iron Body: their cast is the character (lookFlash). */
+const LOOK_FLASH = new Set([2001003, 12001002, 11001001]);
 /** Buffs whose request waits 1000ms after the last one (others 300): Smokescreen and Recovery Aura. */
 const SLOW_REQUESTS = new Set([SMOKESCREEN, 22161003]);
 const DASHES = [5001005, 15001003];
@@ -2149,6 +2151,14 @@ export class Game {
     this.sendCashItem(slot, id, (w) => w.string(text));
   }
   /** Over a kite: its owner's name and the item's msg. */
+  /** The tooltip over a buff icon: a skill's (its name, icon, master level and description - no level lines), an item's. */
+  buffTip(ux, uy) {
+    const b = this.vfx?.buffAt(ux, uy);
+    if (!b) return null;
+    if (b.source > 0) return { skill: b.source, noLevels: true };
+    if (b.source < 0) return { item: { id: -b.source } };
+    return null;
+  }
   kiteTip(ux, uy) {
     if (!this.kites?.kites.size) return null;
     const [x, y] = this.unzoom(ux * VIEW_W / UI_W, uy * VIEW_H / UI_H), k = this.kites.at(x + this.cam.x, y + this.cam.y);
@@ -8669,6 +8679,8 @@ export class Game {
     // its request waits its turn: nothing waiting for an answer, and 300ms from the last request sent or answered
     // (Mystic Door 200, Smokescreen and Recovery Aura 1000)
     if (!this.canExclusive(id === MYSTIC_DOOR ? 200 : SLOW_REQUESTS.has(id) ? 1000 : 300)) return false;
+    // a buff with a pose of its own doesn't go while the last pose (a cast, a swing) is still playing
+    if (this.skills.action(id) && p.attack) return false;
     if (BUFF_SPOT.has(id) && !this.spotAllows('buff', 20)) return false;
     const action = p.ladder ? (p.ladder.l ? 'ladder2' : 'rope2') : this.skills.action(id) || 'alert2';
     if (this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
@@ -9422,6 +9434,29 @@ export class Game {
     const anim = new Anim(node, false);
     await this.assets.preload(anim.frames);
     this.fx.push({ anim, x, y, flip });
+  }
+  /**
+   * Magic Armor's cast (the Blaze Wizard's too, and the Dawn Warrior's Iron Body), as the client draws it - no art of
+   * its own: the character as they look the moment it's cast, kept as one picture that moves with them (turned the way
+   * they faced), shown 400ms while it fades from 212 to 0 and grows from its size to three times it about their feet.
+   * (The client gives the growth as -100 to -300; what the sign changes isn't in its code - the size is read as 100%
+   * to 300%, the way Mystic Door's art grows from 100 to 300.)
+   */
+  lookFlash(ent) {
+    const local = ent === this.player, look = local ? this.look : ent.look;
+    if (!look || ent.morphView?.node()) return;
+    const parts = look.compose(ent.action, ent.frame, ent.expr), mirror = drawnRight(ent), t0 = performance.now();
+    this.fx.push({
+      anim: { update() {}, done: false, node: null }, keep: () => performance.now() - t0 < 400,
+      paint: (ctx, cam) => {
+        const k = Math.min(1, (performance.now() - t0) / 400), z = 1 + 2 * k;
+        ctx.save();
+        ctx.translate(snapPx(ent.x - cam.x), snapPx(ent.y - cam.y));
+        ctx.scale(z, z);
+        drawParts(ctx, this.assets, parts, 0, 0, mirror, (212 - 212 * k) / 255, false, null);
+        ctx.restore();
+      },
+    });
   }
   async playTeleportEffect(x, y) {
     const node = (this.basicEff ??= await this.assets.json('Effect/BasicEff.img'))?.Teleport;
@@ -10496,6 +10531,7 @@ export class Game {
       const use = id === GRENADE ? 'Use2' : id === BLAST ? BLAST_USE[this.activeCharge()?.id] || 'Use' : 'Use';
       sfx.play(`Skill/${pad(id, 7)}/${use}`);
     }
+    if (branch === 'effect' && LOOK_FLASH.has(id)) { this.lookFlash(ent); return; }
     const node = this.byCharLevel(await this.skills?.ensure(id), ent);
     // a skill with screen art (Bamboo Rain, Rage of Pharaoh...) plays it once over the whole view as its effect shows
     if (branch === 'effect' && node?.screen) this.vfx?.screen('', Game.fxNode(node.screen));
@@ -10691,6 +10727,7 @@ export class Game {
   }
   /** One effect: on whom it follows (or the end of their gun), else where it was left; each frame's own fade and zoom. */
   drawFxEntry(ctx, cam, f) {
+    if (f.paint) { f.paint(ctx, cam); return; }   // one that draws itself (lookFlash)
     const node = f.anim.node;
     if (!node) return;
     if (f.pin) { const q = f.pin(); this.drawFxNode(ctx, cam, node, q.x, q.y, f.flip, (f.alpha ?? 1) * f.anim.alpha, f.anim.zoom, f.angle || 0); return; }
