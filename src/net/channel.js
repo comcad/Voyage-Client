@@ -1888,7 +1888,7 @@ export class ChannelSession {
    * Attack packets (AbstractDealDamageHandler.parseDamage). kind: melee | ranged | magic.
    * targets: [{oid, x, y, dmg:[...]}]; stance = body action id; facingLeft -> direction bit.
    */
-  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0, at = null }) {
+  attack(kind, { targets, lines, display = 0, stance, facingLeft, speed = 4, skill = 0, charge = 0, mesos, pos, delay = 0, at = null, attackType = 0 }) {
     const op = kind === 'ranged' ? C.RANGED_ATTACK : kind === 'magic' ? C.MAGIC_ATTACK : C.CLOSE_RANGE_ATTACK;
     const w = new PacketWriter(op).byte(0).byte((targets.length << 4) | lines).int(skill);
     if (CHARGE_SKILLS.has(skill)) w.int(charge); // keydown skills carry how long they were held (ms)
@@ -1906,16 +1906,20 @@ export class ChannelSession {
       // The game server passes the 4th byte on in the action's high byte for Hurricane-type skills, so it carries the facing too
       w.byte(0).byte(speed).byte(0).byte(((stance >> 8) & 0x7f) | (facingLeft ? 0x80 : 0)).zero(7);
       if ([3121004, 3221001, 5221004, 13111002].includes(skill)) w.int(charge); // Hurricane / Rapid Fire, Piercing's charge (ms)
+    } else if (kind === 'melee') {
+      w.byte(attackType).byte(speed).int(Date.now() | 0);   // as the client: the weapon's attack type, the speed, the tick
     } else {
       w.byte(0).byte(speed).zero(4);
     }
     for (const t of targets) {
-      w.int(t.oid).zero(4).pos(t).pos(t).short(Math.max(0, Math.min(0x7fff, Math.round(t.delay || 0))));   // when it lands (ms)
+      w.int(t.oid).zero(4).pos(t).pos(t).short(Math.max(0, Math.min(0x7fff, Math.round(t.wire ?? t.delay ?? 0))));   // its time (ms)
       for (const d of t.dmg) w.int(d);
       w.int(0); // per-target trailer (mob CRC in the real client); parseDamage skips 4 bytes per target
     }
     if (skill === 14111006) w.int(0).pos({ x: 0, y: 0 }); // Poison Bomb: position
-    if (at) w.pos({ x: Math.round(at.x), y: Math.round(at.y) });   // an event field's swing: where you stand
+    // a close-range attack ends, as the client's does, with where you stand
+    const here = at || (kind === 'melee' ? pos : null);
+    if (here) w.pos({ x: Math.round(here.x), y: Math.round(here.y) });
     this.send(w);
   }
   closeRangeAttack(o) { this.attack('melee', o); }
