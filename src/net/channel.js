@@ -1863,15 +1863,16 @@ export class ChannelSession {
     this.send(w);
   }
   /**
-   * `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else). `nibbles`: the first byte
-   * (Mob.moveNibbles).
+   * `fly`: a flyer's AI, whose spot goes in the packet (0x00FFDDCC twice for anything else; false for a flyer with
+   * none yet); the word before it is 0 for a flyer, 1 for anything else. `nibbles`: the first byte
+   * (Mob.moveNibbles). `option`: with a skill, how long its pose plays (ms).
    */
-  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null, nibbles = 0) {
+  moveMob(oid, start, moves, activity = -1, skill = 0, level = 0, fly = null, nibbles = 0, option = 0) {
     // each monster counts its own moves
     const id = (((this.mobMoveIds ??= new Map()).get(oid) ?? 0) + 1) & 0x7fff;
     this.mobMoveIds.set(oid, id);
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
-      .byte(nibbles).byte(activity).byte(skill).byte(level).short(0).byte(0).int(1).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
+      .byte(nibbles).byte(activity).byte(skill).byte(level).short(option).byte(0).int(fly === null ? 1 : 0).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
     writeMovement(w, moves);
     // then, as the client sends it, a 0 and the box around the start and every point of the path
     let px = start.x, py = start.y, l = px, t = py, r = px, b = py;

@@ -11003,11 +11003,13 @@ export class Game {
     const n = s.action || 1;
     sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/Skill${n === 17 ? 'F' : n}`, { volume: this.volumeAt(m.x, m.y) });
     if (m.controlled && this.net && m.oid != null) {
-      const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
-      this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
-        (20 + (s.action || 1)) * 2 + facing, s.skill, s.level, null, m.moveNibbles());
-      m.moveWait = true;
+      // as the client sends a cast: its movement starts afresh, and the path goes with it (planAction) - standing
+      // still through the cast's pose, whose length goes with the skill
+      const facing = m.facingRight ? 0 : 1, pose = m.animMs(`skill${n}`);
       m.restartAI(this.player); m.vx = 0;
+      const { start, moves } = m.planAction(pose, m.actionStance ?? m.stance);
+      this.net.moveMob(m.oid, start, moves, (20 + n) * 2 + facing, s.skill, s.level, m.flying ? (m.fly ?? false) : null, m.moveNibbles(), pose);
+      m.moveWait = true;
     }
     const lv = await this.mobSkillLevel(s.skill, s.level), fx = lv?.effect && Game.fxNode(lv.effect);
     if (fx) this.after(Number(s.effectAfter) || 0, async () => {
@@ -11098,10 +11100,13 @@ export class Game {
       }
     });
     if (!m.controlled || !this.net || m.oid == null || m.deathAttack) return;
-    const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
-    this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing, 0, 0, null, m.moveNibbles());
-    m.moveWait = true;
+    // as the client sends an attack: its movement starts afresh, and the path goes with it (planAction) - standing
+    // still through the attack's pose
+    const facing = m.facingRight ? 0 : 1;
     m.restartAI(this.player); m.vx = 0;
+    const { start, moves } = m.planAction(m.animMs(`attack${a.n}`), m.actionStance ?? m.stance);
+    this.net.moveMob(m.oid, start, moves, (12 + a.index) * 2 + facing, 0, 0, m.flying ? (m.fly ?? false) : null, m.moveNibbles());
+    m.moveWait = true;
   }
   /**
    * effect0 of effectType 1 (Papulatus's lightning): across the lt/rb box around the monster, every effectDistance

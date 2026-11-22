@@ -1209,6 +1209,7 @@ export class Life {
     if (this.kind === 'Npc') { this.npcStep(dt); return; }
     if (this.appearing) return;   // still being summoned in: unseen, and it doesn't act
     if (this.attacking) {
+      if (this.online && this.path) this.playPath(dt, true);
       const at = this.attacking;
       at.t += dt * 1000;
       if (!at.landed && at.t >= (Number(at.a.info.attackAfter) || 0)) { at.landed = true; this.onAttackLand?.(this, at.a, at.spots); }
@@ -1254,7 +1255,8 @@ export class Life {
     // a chase lasts 3-4 minutes from the last time it was set on someone
     if (this.aggro !== this.chased) { this.chased = this.aggro; this.chaseT = 180 + Math.random() * 60; }
     if (this.aggro && (this.chaseT -= dt) <= 0) this.aggro = this.chased = null;
-    if ((this.fh || this.flying) && this.tryAttack(dt)) { this.cutPath(); return; }   // an attack cuts its path short
+    // an attack cuts its path short (online, one we control has just been given the attack's own path: planAction)
+    if ((this.fh || this.flying) && this.tryAttack(dt)) { if (!this.online) this.cutPath(); return; }
     // one we control (or any, offline) plays the paths it plans
     this.playPath(dt);
   }
@@ -1306,6 +1308,40 @@ export class Life {
   restartAI(by = null) {
     this.dir = 0; this.aiT = 0; this.aiDir = 0; this.jumpAsked = false; this.jumpKey = false;
     if (by) this.chase(this.aggro || by);
+  }
+  /** How long animation `name` plays (ms): its frames' delays, 0 without it. */
+  animMs(name) { const a = this.anims[name]; return a ? a.frames.reduce((t, f) => t + (f.delay || 100), 0) : 0; }
+  /**
+   * One we control starts an attack or a skill (its AI already started afresh): the path the client sends with it -
+   * a blow's element with no push (where it stands), then standing still in `stance` (the pose it had) for as long as
+   * the action's pose plays (none under 90ms), then its own movement in 90ms steps until at least a second is planned
+   * with some of it on the ground (55 steps at most; a flyer: none). Queued as its own path, which it plays underneath
+   * the pose. Returns where it starts and the moves.
+   */
+  planAction(poseMs, stance) {
+    const sim = Object.create(this), start = { x: Math.trunc(this.x), y: Math.trunc(this.y) }, moves = [];
+    sim.setState = function (st) { if (this.anims[st]) this.state = st; };
+    const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: 'chase' }[stance >> 1];
+    sim.state = sim.anims[pose] ? pose : sim.flying ? 'fly' : 'stand'; sim.facingRight = !(stance & 1); sim.vx = 0;
+    let t = 0;
+    if (this.canMove && poseMs >= 90) {
+      moves.push({ cmd: 2, rx: 0, ry: 0, stance, duration: 0 });
+      moves.push({ cmd: 0, x: start.x, y: start.y, vx: 0, vy: 0, fh: this.fh?.id || 0, stance, duration: poseMs });
+      t = poseMs;
+    }
+    if (!this.flying) {
+      sim.onJump = (s) => moves.push({ cmd: 1, rx: Math.trunc(s.vx), ry: Math.trunc(s.vy), stance: s.stance, duration: 0 });
+      for (let n = 0; n < 55 && !(t >= 1000 && moves.some((m) => m.cmd === 0 && m.fh)); n++, t += MOB_STEP) {
+        sim.mobStep();
+        recordStep(moves, sim, sim.stance, MOB_STEP);
+      }
+      delete sim.onJump;
+      for (const k of Object.keys(sim)) if (!PLAYED.has(k)) this[k] = sim[k];
+    }
+    if (!moves.length) moves.push({ cmd: 0, x: start.x, y: start.y, vx: 0, vy: 0, fh: this.fh?.id || 0, stance, duration: 0 });
+    this.cutPath();
+    this.queueOwn(moves);
+    return { start, moves };
   }
 
   /** Where attack `a` reaches, facing as it does now: its box, or (types 1 and 2) its start point and radius. */
@@ -1438,6 +1474,7 @@ export class Life {
     const entry = this.mobSkills.find((s) => s.skill === skill && (s.level === level || !level)) || { skill, level, action: 1 };
     const anim = this.anims[`skill${entry.action || 1}`];
     this.recoil = 0;
+    this.actionStance = this.stance;
     if (anim) { this.setState(`skill${entry.action || 1}`); anim.reset(); this.attacking = { a: { info: { attackAfter: Infinity } }, t: 0, landed: true }; }
     this.onSkill?.(this, entry);
   }
@@ -1446,6 +1483,7 @@ export class Life {
     const a = this.attacks.find((x) => x.index === index) || { n: index + 1, index, info: this.src[`attack${index + 1}`]?.info || {}, type: 0 };
     if (!this.anims[`attack${a.n}`]) return;
     this.recoil = 0;
+    this.actionStance = this.stance;
     this.setState(`attack${a.n}`); this.anims[`attack${a.n}`].reset();
     this.attacking = { a, t: 0, landed: false, spots: a.type >= 3 ? this.areaSpots(a, true) : null };
     this.onAttack?.(this, a, this.attacking.spots);
@@ -1754,6 +1792,8 @@ export class Life {
    * Turning round only turns it when its AI means to go somewhere.
    */
   walkOn(dt, type, dx, v1, t0 = 0) {
+    // its floor is the one under it (watching another's path, it can still have the floor its next point is on)
+    if (this.x < this.fh.x1 || this.x > this.fh.x2) { const f = this.footholds.below(this.x, this.y - 5, 60); if (f) this.fh = f; }
     const turn = () => { this.vx = 0; if (this.aiDir) this.setInput(dx <= 0 ? 1 : -1); this.shortenChase(); };
     const was = { x: this.x, y: this.y, fh: this.fh, zMass: this.zMass, vx: this.vx };
     const whole = Math.abs(dx) || 1;
@@ -1786,7 +1826,7 @@ export class Life {
       if (onward) {
         // the point the client ends where it walks onto the next floor: there, after its share of the step
         const [cvx, cvy] = pathSpeed(this);
-        (this.crossings ??= []).push({ ms: t0 + Math.round(dt * 1000 * (1 - Math.abs(dx) / whole)), x: Math.trunc(this.x), y: Math.trunc(this.y), vx: cvx, vy: cvy, fh: f.id });
+        (this.crossings ??= []).push({ ms: t0 + Math.round(dt * 1000 * Math.min(1, Math.max(0, 1 - Math.abs(dx) / whole))), x: Math.trunc(this.x), y: Math.trunc(this.y), vx: cvx, vy: cvy, fh: f.id });
         this.fh = nb; continue;
       }
       if (nb && nb.x1 === nb.x2 && (right ? nb.y2 < nb.y1 : nb.y1 < nb.y2)) { this.vx = 0; return; }   // a rising wall
