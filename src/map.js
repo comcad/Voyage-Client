@@ -623,22 +623,27 @@ function pathSpeed(s) {
   return [Math.trunc(v), Math.trunc(f ? (f.x2 > f.x1 ? (v * (f.y2 - f.y1)) / (f.x2 - f.x1) : 0) : s.vy || 0)];
 }
 /**
- * A step of a planned path, `ms` long: where it ends (whole pixels, cut toward zero) with the speed it has there,
- * merged into the point before while its floor, pose and the signs of its speeds stay the same. A step on the ground
- * over which its speed changed (`v0` at its start: a landing, a change of slope, setting off, stopping) is a point of
- * its own, and nothing after is merged into it: played as one stretch with what follows, the speed it had would carry
- * it on through the floor or past where it stopped.
+ * A step of a planned path, `ms` long, as the client records it: where it ends (whole pixels, cut toward zero) with
+ * the speed it has then, merged into the point before while its floor, pose and the signs of its speeds stay the
+ * same (so setting off goes with the walking after it, and stopping with the standing). A floor it walked onto during
+ * the step (`s.crossings`, from walkOn) ends a point there: at that floor's end, after the part of the step it took
+ * to get there.
  */
-const ALONE = Symbol('alone');
 /** Skills whose blow makes even a monster that can't move take its hit pose: Homing Beacon, Bullseye, Killer Wings. */
 const POSE_ONLY_HITS = new Set([5211006, 5220011, 22151002]);
 
-function recordStep(moves, s, v0, stance, ms) {
-  const x = Math.trunc(s.x), y = Math.trunc(s.y), [vx, vy] = pathSpeed(s), fh = s.fh?.id || 0, last = moves[moves.length - 1];
-  const alone = !!s.fh && (vx !== v0[0] || vy !== v0[1]);
-  if (!alone && last && last.cmd === 0 && !last[ALONE] && last.fh === fh && last.stance === stance && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
-    Object.assign(last, { x, y, vx, vy }); last.duration += ms;
-  } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance, duration: ms, [ALONE]: alone });
+function recordStep(moves, s, stance, ms) {
+  const put = (x, y, vx, vy, fh, st, dur) => {
+    const last = moves[moves.length - 1];
+    if (last && last.cmd === 0 && last.fh === fh && last.stance === st && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
+      Object.assign(last, { x, y, vx, vy }); last.duration += dur;
+    } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance: st, duration: dur });
+  };
+  let used = 0;
+  for (const c of s.crossings || []) { put(c.x, c.y, c.vx, c.vy, c.fh, c.stance ?? stance, c.ms - used); used = c.ms; }
+  s.crossings = null;
+  const [vx, vy] = pathSpeed(s);
+  put(Math.trunc(s.x), Math.trunc(s.y), vx, vy, s.fh?.id || 0, stance, ms - used);
 }
 
 /**
@@ -874,9 +879,8 @@ export class Life {
     sim.setState = function (st) { if (this.anims[st]) this.state = st; };
     sim.onJump = (s) => moves.push({ cmd: 1, rx: Math.trunc(s.vx), ry: Math.trunc(s.vy), stance: s.stance, duration: 0 });
     for (let t = 0, n = 0; n < 55 && !(t >= 1000 && moves.some((m) => m.cmd === 0 && m.fh)); n++, t += MOB_STEP) {
-      const v0 = pathSpeed(sim);
       sim.mobStep();
-      recordStep(moves, sim, v0, sim.stance, MOB_STEP);
+      recordStep(moves, sim, sim.stance, MOB_STEP);
     }
     delete sim.onJump;
     for (const k of Object.keys(sim)) if (!PLAYED.has(k)) this[k] = sim[k];
@@ -1072,10 +1076,13 @@ export class Life {
     if (this.flying) { this.planFlyHit(stance, poseMs, by); return; }
     const sim = Object.create(this), start = { x: Math.trunc(this.x), y: Math.trunc(this.y) };
     sim.setState = function (st) { if (this.anims[st]) this.state = st; };
-    const moves = [];
+    if (sim.fh && this.pb?.cur) sim.vx = this.pb.cur.vx || 0;   // (no slide: it goes on at the speed it is shown with)
+    const moves = [], fh0 = sim.fh?.id || 0;
     const add = (px, py, st, ms) => {
-      const x = Math.round(sim.x), y = Math.round(sim.y), vx = Math.round((sim.x - px) / (ms / 1000)), vy = Math.round((sim.y - py) / (ms / 1000));
-      const fh = sim.fh?.id || 0, last = moves[moves.length - 1];
+      const fh = sim.fh?.id || 0, x = Math.trunc(sim.x), y = Math.trunc(sim.y);
+      const [vx, vy] = sim.fh ? pathSpeed({ fh: sim.fh, vx: sim.recoil || 0 }) : [Math.trunc(sim.vx || 0), Math.trunc(sim.vy || 0)];
+      if (fh0 && fh && fh !== fh0) st = (2 << 1) | (st & 1);
+      const last = moves[moves.length - 1];
       if (last && last.cmd === 0 && last.fh === fh && last.stance === st && Math.sign(last.vx) === Math.sign(vx) && Math.sign(last.vy) === Math.sign(vy)) {
         Object.assign(last, { x, y, vx, vy }); last.duration += ms;
       } else moves.push({ cmd: 0, x, y, vx, vy, fh, stance: st, duration: ms });
@@ -1089,6 +1096,7 @@ export class Life {
         add(px, py, stance, ms);
         t += ms;
       }
+      if (sim.fh) sim.vx = sim.recoil || 0;   // it goes on at the speed the slide left it with
     }
     sim.recoil = 0;
     const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: 'chase' }[stance >> 1];
@@ -1096,9 +1104,8 @@ export class Life {
     sim.restartAI(by);
     sim.onJump = (s) => moves.push({ cmd: 1, rx: Math.trunc(s.vx), ry: Math.trunc(s.vy), stance: s.stance, duration: 0 });
     for (let n = 0; n < 55 && !(t >= 1000 && moves.some((m) => m.cmd === 0 && m.fh)); n++, t += MOB_STEP) {
-      const v0 = pathSpeed(sim);
       sim.mobStep();
-      recordStep(moves, sim, v0, sim.stance, MOB_STEP);
+      recordStep(moves, sim, sim.stance, MOB_STEP);
     }
     delete sim.onJump;
     for (const k of Object.keys(sim)) if (!PLAYED.has(k) && k !== 'recoil') this[k] = sim[k];
@@ -1267,12 +1274,25 @@ export class Life {
       // one that jumps is kept over its ground in the air (see jumpRange); in water it sinks (no gravity), still
       // pushed the way it was going
       const lim = type === 2 ? this.jumpRange(this.zMass) : null, hold = (x) => this.holdInRange(x, lim);
-      if (this.swimming()) { swimVelocity(this, this.dir || 0, 0, dt); this.footholds.fall(this, dt, null, true, null, hold); }
-      else this.footholds.fall(this, dt, null, false, null, hold);
-      if (this.fh) { this.vx = 0; this.walkState(); }
+      const air = this.stance;
+      let at;
+      if (this.swimming()) { swimVelocity(this, this.dir || 0, 0, dt); at = this.footholds.fall(this, dt, null, true, null, hold); }
+      else at = this.footholds.fall(this, dt, null, false, null, hold);
+      if (this.fh) {
+        // landing, as the client has it: a point where it touched down (still in the air's pose, half its speed
+        // across, none up or down), then the rest of the step along the floor at that half speed, in the pose its
+        // way gives it
+        const done = at ?? 1, ms = Math.round(done * MOB_STEP), vh = (this.vx || 0) / 2, rest = dt * (1 - done);
+        (this.crossings ??= []).push({ ms, x: Math.trunc(this.x), y: Math.trunc(this.y), vx: Math.trunc(vh), vy: 0, fh: 0, stance: air });
+        this.vx = vh; this.walkState();
+        if (rest > 0 && vh) this.walkOn(rest, type, vh * rest, vh, ms);
+      }
       return;
     }
-    if (this.dir) this.walkOn(dt, type);
+    // the step's speed is set at once (its way times its walking speed, or nothing), and it moves by the average of
+    // that and the speed it had: setting off, stopping or turning round takes half a step's way
+    const v1 = this.dir * this.walkSpeed * (this.swimming() ? PHYS.swimDec : 1), dx = (((this.vx || 0) + v1) / 2) * dt;
+    if (dx || v1) this.walkOn(dt, type, dx, v1);
     else this.vx = 0;
   }
   /** Set it on `target` (or a fresh 3-4 minutes on the same one). */
@@ -1733,11 +1753,11 @@ export class Life {
    *   walks on (and off).
    * Turning round only turns it when its AI means to go somewhere.
    */
-  walkOn(dt, type) {
-    let dx = this.dir * this.walkSpeed * (this.swimming() ? PHYS.swimDec : 1) * dt;
+  walkOn(dt, type, dx, v1, t0 = 0) {
     const turn = () => { this.vx = 0; if (this.aiDir) this.setInput(dx <= 0 ? 1 : -1); this.shortenChase(); };
     const was = { x: this.x, y: this.y, fh: this.fh, zMass: this.zMass, vx: this.vx };
-    this.vx = dx / dt;
+    const whole = Math.abs(dx) || 1;
+    this.vx = v1;
     for (let guard = 0; guard < 16; guard++) {
       const f = this.fh, nx = this.x + dx, right = dx > 0;
       const nb = this.footholds.get(right ? f.next : f.prev), onward = !!nb && nb.ux > 0;
@@ -1756,14 +1776,19 @@ export class Life {
         if (lim && (nx < f.x1 || nx > f.x2)) {
           const t = this.aggro, tz = t && (t.fh ? t.fh.zMass : t.zMass);
           const ledge = !!nb && !onward && nb.uy * dx > 0 && (!t || tz === f.zMass) && ((!right && lim[0] < f.x1) || (right && f.x2 < lim[1]));
-          if (!onward && !ledge && (!t || t.y <= this.y || rnd(2) === 0)) { Object.assign(this, was); this.askJump(false); return; }
+          if (this.dir && !onward && !ledge && (!t || t.y <= this.y || rnd(2) === 0)) { Object.assign(this, was); this.askJump(false); return; }
         }
       }
       if (nx >= f.x1 && nx <= f.x2) { this.x = nx; this.y = Footholds.yAt(f, nx); this.zMass = f.zMass; return; }
       // to this floor's end, then on
       const endX = right ? f.x2 : f.x1;
       this.x = endX; this.y = right ? f.y2 : f.y1; dx = nx - endX;
-      if (onward) { this.fh = nb; continue; }
+      if (onward) {
+        // the point the client ends where it walks onto the next floor: there, after its share of the step
+        const [cvx, cvy] = pathSpeed(this);
+        (this.crossings ??= []).push({ ms: t0 + Math.round(dt * 1000 * (1 - Math.abs(dx) / whole)), x: Math.trunc(this.x), y: Math.trunc(this.y), vx: cvx, vy: cvy, fh: f.id });
+        this.fh = nb; continue;
+      }
       if (nb && nb.x1 === nb.x2 && (right ? nb.y2 < nb.y1 : nb.y1 < nb.y2)) { this.vx = 0; return; }   // a rising wall
       this.fh = null; this.x += dx; this.vy = 0; return;   // off the ledge
     }

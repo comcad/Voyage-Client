@@ -1871,8 +1871,15 @@ export class ChannelSession {
     const id = (((this.mobMoveIds ??= new Map()).get(oid) ?? 0) + 1) & 0x7fff;
     this.mobMoveIds.set(oid, id);
     const w = new PacketWriter(C.MOVE_LIFE).int(oid).short(id)
-      .byte(nibbles).byte(activity).byte(skill).byte(level).short(0).byte(0).int(0).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
+      .byte(nibbles).byte(activity).byte(skill).byte(level).short(0).byte(0).int(1).int(fly ? fly.tx : 0xFFDDCC).int(fly ? fly.ty : 0xFFDDCC).pos(start);
     writeMovement(w, moves);
+    // then, as the client sends it, a 0 and the box around the start and every point of the path
+    let px = start.x, py = start.y, l = px, t = py, r = px, b = py;
+    for (const m of moves) {
+      if (m.x !== undefined) { px = m.x; py = m.y; }
+      l = Math.min(l, px); t = Math.min(t, py); r = Math.max(r, px); b = Math.max(b, py);
+    }
+    w.byte(0).short(l).short(t).short(r).short(b);
     this.send(w);
   }
 

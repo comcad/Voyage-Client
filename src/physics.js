@@ -294,6 +294,7 @@ export class Footholds {
    * old: the speeds before this step's push (steering, swimming); without it, the speeds as they are now.
    * ent.zMass is the group of the floor it last stood on (walk and landing keep it), for meets.
    * hold: where across it may end up (given where it would), before anything it meets (a jumping monster's range).
+   * Landing, it returns how far through the step it touched down (0-1, by the way it went).
    */
   fall(ent, dt, ignore = null, swimming = false, old = null, hold = null) {
     // moved by the average of the speed before and after the step's push and gravity, on both axes, so a jump peaks
@@ -302,6 +303,7 @@ export class Footholds {
     if (!swimming) ent.vy = Math.min(ent.vy + PHYS.gravity * dt, PHYS.maxFall);
     let x0 = ent.x, y0 = ent.y, nx = ent.x + ((vx0 + ent.vx) / 2) * dt, ny = ent.y + ((vy0 + ent.vy) / 2) * dt;
     if (hold) nx = hold(nx);
+    const sx = ent.x, sy = ent.y, way = Math.hypot(nx - sx, ny - sy) || 1;
     // the map's sides are walls for what is inside them
     if (x0 >= this.wallL && nx < this.wallL) { nx = this.wallL; ent.vx = 0; }
     else if (x0 <= this.wallR && nx > this.wallR) { nx = this.wallR; ent.vx = 0; }
@@ -312,7 +314,7 @@ export class Footholds {
       const hit = this.meets(x0, y0, nx, ny, (vx0 + ent.vx) / 2, (vy0 + ent.vy) / 2, ent.zMass, ignore);
       if (!hit) break;
       const f = hit.f;
-      if (f.x1 < f.x2) { ent.x = hit.x; ent.y = hit.y; ent.vy = 0; ent.fh = f; ent.zMass = f.zMass; return; }
+      if (f.x1 < f.x2) { ent.x = hit.x; ent.y = hit.y; ent.vy = 0; ent.fh = f; ent.zMass = f.zMass; return Math.min(1, Math.hypot(hit.x - sx, hit.y - sy) / way); }
       const along = f.ux * ent.vx + f.uy * ent.vy;
       ent.vx = f.ux * along; ent.vy = f.uy * along;
       x0 = hit.x; y0 = hit.y;

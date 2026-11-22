@@ -11005,7 +11005,7 @@ export class Game {
       this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
         (20 + (s.action || 1)) * 2 + facing, s.skill, s.level, null, m.moveNibbles());
       m.moveWait = true;
-      m.restartAI(this.player);
+      m.restartAI(this.player); m.vx = 0;
     }
     const lv = await this.mobSkillLevel(s.skill, s.level), fx = lv?.effect && Game.fxNode(lv.effect);
     if (fx) this.after(Number(s.effectAfter) || 0, async () => {
@@ -11099,7 +11099,7 @@ export class Game {
     const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
     this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing, 0, 0, null, m.moveNibbles());
     m.moveWait = true;
-    m.restartAI(this.player);
+    m.restartAI(this.player); m.vx = 0;
   }
   /**
    * effect0 of effectType 1 (Papulatus's lightning): across the lt/rb box around the monster, every effectDistance
