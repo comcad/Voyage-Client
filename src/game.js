@@ -3801,7 +3801,12 @@ export class Game {
       moveMob: later((oid, start, moves, act, skill, level) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending || e.controlled) return;
-        e.applyMovement(start, moves, act);
+        // a path that opens with a blow's push is its controller's hit move. The server passes its act on as -1 (none),
+        // so it would queue behind what was still to play - the monster walking on, then thrown back from where it
+        // was struck: here it is taken as the hit it is, played at once with the hit pose, facing the blow
+        const push = act < 0 && moves[0]?.cmd === 2 && (moves[0].rx || moves[0].ry) ? moves[0] : null;
+        e.applyMovement(start, moves, push ? 12 : act);
+        if (push) e.hitPose(push.rx < 0);
         // activity (12 + attack) * 2 + facing: its controller made it attack
         if (act >= 12 && act <= 17) e.hitPose(!(act & 1));   // its controller struck it (hit1..hitF, facing)
         else if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }

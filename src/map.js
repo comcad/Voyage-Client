@@ -1234,7 +1234,7 @@ export class Life {
       if (this.recoil && this.fh) this.recoilStep(dt);
       if (this.state === 'hit1') {
         this.hitTimer -= dt;
-        if (this.controlled && this.path) this.playPath(dt, true);   // its planned slide, keeping the hit pose
+        if (this.path) this.playPath(dt, true);   // its slide (planned here, or its controller's), keeping the hit pose
         if (this.hitTimer <= 0) this.setState(this.flying ? 'fly' : 'stand');
         return;
       }
