@@ -336,6 +336,8 @@ const BOOSTERS = new Set([1101004, 1101005, 1201004, 1201005, 1301004, 1301005, 
 /** Drop motion runs on the client's 8ms physics tick. */
 /** Getting hit: the original's ordinary knockback impulse (px/s, both ways) and how long you are then protected (s). */
 const KNOCKBACK = 270, HIT_PROTECTION = 1.5;
+/** Blows that restart a monster's hit pose while it still plays: Barrage (both) and Vampire. */
+const HIT_AGAIN = new Set([5121007, 15111004, 14101006]);
 /**
  * Power Stance (Hero, Paladin, Dark Knight) and Freeze Standing (Aran): a hit that would throw you back doesn't at the
  * buff's % chance (its prop), and the skill's effect plays; not on maps that forbid movement skills.
@@ -3127,6 +3129,20 @@ export class Game {
   /** In Dark Sight or Wind Walk: monsters don't touch you, you don't regenerate or pick up, and you're drawn see-through. */
   hidden() { const now = Date.now(); return !!this.buffs?.some((b) => (DARK_SIGHTS.includes(b.source) || b.source === WIND_WALK) && b.until > now); }
   /** What spaces an attacker's damage lines: their weapon and their attack's speed scale. */
+  /**
+   * A blow's lines on a monster, each at its own time (as its number shows): each that reaches the monster's `pushed`
+   * may make it flinch (Mob.flinch), the strong recoil rolled for each. Barrage, Vampire and an Aran's blows restart a
+   * hit pose already playing.
+   */
+  flinchLines(mob, lines, fromRight, knockback, by, skillId) {
+    const job = this.stats?.job || 0, again = HIT_AGAIN.has(skillId) || Math.floor(job / 100) === 21 || job === 2000;
+    const [weapon, scale] = this.lineTiming(this.player);
+    lines.forEach((d, i) => {
+      const go = () => mob.flinch(d, fromRight, Math.random() * 100 < knockback, by, { skill: skillId, again });
+      const at = lineDelay(skillId, i, weapon, scale);
+      if (at > 0) this.after(at, go); else go();
+    });
+  }
   lineTiming(who) { return [this.weaponOf(who), who === this.player ? this.attackScale() : who?.attackScale || 1]; }
   /** What your worn equipment adds to a stat; the second and third pets' accessory, label and quote slots don't count. */
   equipStat(key) {
@@ -3786,7 +3802,8 @@ export class Game {
         if (!e || e.pending || e.controlled) return;
         e.applyMovement(start, moves, act);
         // activity (12 + attack) * 2 + facing: its controller made it attack
-        if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }
+        if (act >= 12 && act <= 17) e.hitPose(!(act & 1));   // its controller struck it (hit1..hitF, facing)
+        else if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
       }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
@@ -4986,7 +5003,7 @@ export class Game {
         if (!e || e.pending) continue;
         e.pendingHits = (e.pendingHits || 0) + 1;
         const land = () => {
-          e.hit(t.dmg.reduce((s, x) => s + x, 0), !!rp && rp.x < e.x);
+          e.takeDamage(t.dmg.reduce((s, x) => s + x, 0));   // the flinch is its controller's to show
           this.damageNumbers(e, t.dmg, false, a.skill, t.crit, ...this.lineTiming(rp));
           this.playHitEffect(a.skill, e, rp, t.dmg, looks[i] ?? null, a.kind === 'ranged' && [5020, 5021].includes(Math.floor(a.projectile / 1000)) ? a.projectile : 0);
           const last = lineDelay(a.skill, t.dmg.length - 1, ...this.lineTiming(rp));
@@ -7766,15 +7783,15 @@ export class Game {
     for (const [i, t] of out.entries()) {
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
-        const strong = Math.random() * 100 < knockback, last = lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p));
+        const last = lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p));
         this.linesLanded(t.mob, last);
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong, hypnotized(t.mob) ? null : p); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob)); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
+          t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob)); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
           this.after(last, () => { if (t.mob.queuedKill) this.finishKill(t.mob); });   // it dies after its last line lands
           return;
         }
-        t.mob.hit(t.dmg.reduce((a, b) => a + b, 0), !p.facingRight, strong, hypnotized(t.mob) ? null : p); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob));
+        t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob));
         this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
         if (t.mob.kind === 'Mob' && !hypnotized(t.mob)) t.mob.chase(p);   // a struck monster comes after you (not a Hypnotized one)
       };
@@ -10596,7 +10613,7 @@ export class Game {
       const p = this.player, ld = this.skills.levelData(skill, level(skill)), wcat = Math.floor(this.weaponId() / 10000);
       const h = this.physicalHit(m, wcat % 100, skill, ld, false, null, 0, critical(this, wcat, false), 0, 0, true);
       this.net?.touchAttack({ skill, mob: m, dmg: h.d, facingLeft: !p.facingRight, speed: this.attackSpeed(skill), pos: p });
-      m.hit(h.d, !p.facingRight, false);
+      m.hit(h.d, !p.facingRight, false, p, { skill });
       this.damageNumbers(m, [h.d], true, skill, [h.c]);
       this.aranComboHit(h.d);
     }
@@ -10787,7 +10804,7 @@ export class Game {
       if (vy < 0) { p.fh = null; p.ladder = null; }
       p.vx = vx; if (vy) p.vy = vy;
     }
-    p.attack = null;
+    // (an attack under way goes on: being hit neither ends it nor lets you turn before it's over)
     this.invincible = HIT_PROTECTION; this.missed = false;
   }
   /**
@@ -10917,11 +10934,8 @@ export class Game {
       p.fh = null; p.ladder = null;
       p.vx = impact(p.vx || 0, knock * KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
     }
-    if (p.attack) {   // a hit doesn't shorten the attack delay
-      const k = p.attackScale || 1, n = this.look.frameCount(p.attack);
-      this.attackLock = performance.now() + Math.max(0, (this.frameTime(p.attack, n) - this.frameTime(p.attack, p.frame)) * k - p.frameT);
-    }
-    p.attack = null;
+    // an attack under way goes on (thrown with it, if knocked back): being hit neither ends it nor lets you turn
+    // before it's over
     this.invincible = HIT_PROTECTION; this.missed = false;
   }
 

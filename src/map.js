@@ -630,6 +630,9 @@ function pathSpeed(s) {
  * it on through the floor or past where it stopped.
  */
 const ALONE = Symbol('alone');
+/** Skills whose blow makes even a monster that can't move take its hit pose: Homing Beacon, Bullseye, Killer Wings. */
+const POSE_ONLY_HITS = new Set([5211006, 5220011, 22151002]);
+
 function recordStep(moves, s, v0, stance, ms) {
   const x = Math.trunc(s.x), y = Math.trunc(s.y), [vx, vy] = pathSpeed(s), fh = s.fh?.id || 0, last = moves[moves.length - 1];
   const alone = !!s.fh && (vx !== v0[0] || vy !== v0[1]);
@@ -999,23 +1002,40 @@ export class Life {
   }
 
   /**
-   * A blow. As in the original, a monster only flinches (hit1) and recoils when the damage reaches its
-   * `pushed` threshold; the recoil slides it back along its floor from 130px/s, braking at 400px/s^2 - or, for a
-   * strong recoil (the weapon's knockback chance), from 300px/s braking at 200px/s^2 - for as long as its hit pose
-   * lasts. One already reeling from a hit takes the damage but doesn't react again until its hit1 has played out.
-   * `by`: who struck it (it goes after them), or none.
+   * Damage it took: its HP goes down (offline it dies at 0; online the server decides, with KILL_MONSTER). False
+   * when it can't take any (dead, not a monster, or just died offline).
    */
-  hit(dmg, fromRight, strong = false, by = null) {
-    if (!this.alive || this.kind !== 'Mob') return;
-    const stanceBefore = this.stance;
+  takeDamage(dmg) {
+    if (!this.alive || this.kind !== 'Mob') return false;
     this.hp -= dmg;
-    if (this.online) this.hp = Math.max(0, this.hp); // the server decides death (KILL_MONSTER)
-    else if (this.hp <= 0) { this.setState('die1'); return; }
+    if (this.online) this.hp = Math.max(0, this.hp);
+    else if (this.hp <= 0) { this.setState('die1'); return false; }
+    return true;
+  }
+  /** A blow: its damage, then how it reacts (flinch). */
+  hit(dmg, fromRight, strong = false, by = null, opts = {}) {
+    if (this.takeDamage(dmg)) this.flinch(dmg, fromRight, strong, by, opts);
+  }
+  /**
+   * How a monster reacts to a line of damage `dmg`, as the client has it. It flinches (hit1) and recoils only when
+   * the line reaches its `pushed`; not while it attacks or casts (it keeps that pose); not while a hit pose of its
+   * own still plays, unless the blow is one that restarts it (`opts.again`: Barrage, Vampire, an Aran's). One that
+   * can't move (no move or fly) only takes the pose, and only from Homing Beacon, Bullseye or Killer Wings
+   * (`opts.skill`). Online, only one we control reacts here, and its hit move (the act, the slide, the steps after)
+   * tells everyone else; one we don't control shows its controller's. The recoil slides it back from 130px/s
+   * braking at 400px/s^2 - or, for a strong recoil (the weapon's knockback chance), from 300px/s braking at
+   * 200px/s^2 - for as long as its hit pose lasts. `by`: who struck it (it goes after them), or none.
+   */
+  flinch(dmg, fromRight, strong = false, by = null, opts = {}) {
+    if (!this.alive || this.kind !== 'Mob' || this.dying) return;
+    const stanceBefore = this.stance;
     if (dmg < (this.src.info?.pushed ?? 1)) return;
-    if (this.state === 'hit1' && this.hitTimer > 0) return;
+    if (this.state === 'hit1' && this.hitTimer > 0 && !opts.again) return;
     if (this.attacking) return;   // a monster mid-attack keeps its attack pose (the client's)
+    if (!this.canMove) { if (POSE_ONLY_HITS.has(opts.skill)) this.hitPose(fromRight); return; }
+    if (this.online && !this.controlled) return;
     this.facingRight = fromRight;
-    if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = Math.max(0.3, this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) / 1000); }
+    if (this.anims.hit1) { this.setState('hit1'); this.hitTimer = this.hitPoseMs() / 1000; }
     // fromRight: the blow came from the right, so it slides away to the left
     if (this.controlled || !this.online) this.cutPath();
     // a flyer we control is pushed straight back (see planFlyHit)
@@ -1028,6 +1048,11 @@ export class Life {
       if (this.fh) { this.recoil = push; this.recoilBrake = this.hitBrake; } else { this.vx = push; this.vy = 0; }
     }
     if (this.controlled && this.online) this.planHit(this.hitPoseMs(), stanceBefore, by);
+  }
+  /** Its hit pose alone (another's controller struck it, or one that can't move), facing `fromRight`. */
+  hitPose(fromRight) {
+    if (!this.anims.hit1 || !this.alive || this.attacking) return;
+    this.facingRight = fromRight; this.setState('hit1'); this.hitTimer = this.hitPoseMs() / 1000;
   }
   /** How long its hit pose plays (ms): its frames' delays, 0 with none. */
   hitPoseMs() { return this.anims.hit1 ? this.anims.hit1.frames.reduce((t, f) => t + (f.delay || 100), 0) : 0; }
@@ -1074,7 +1099,7 @@ export class Life {
     for (const k of Object.keys(sim)) if (!PLAYED.has(k) && k !== 'recoil') this[k] = sim[k];
     this.recoil = 0;   // the plan carries the slide
     this.queueOwn(moves);
-    this.onPath?.(this, start, moves);
+    this.onPath?.(this, start, moves, (6 << 1) | (this.facingRight ? 0 : 1));   // the act: hit1, facing
   }
   /**
    * A flyer we control struck: the client's plain blow for a flyer - the push sets it off at 130px/s away from the
@@ -1101,7 +1126,7 @@ export class Life {
     }
     if (this.fly) { this.fly.vx = 0; this.fly.vy = 0; }
     this.queueOwn(moves);
-    this.onPath?.(this, start, moves);
+    this.onPath?.(this, start, moves, (6 << 1) | (this.facingRight ? 0 : 1));
   }
   /** One we control being pulled (Rush, Monster Magnet): the server hears its whole slide at once, as with a blow. */
   startPull(pull) {
