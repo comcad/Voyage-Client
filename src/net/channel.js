@@ -2031,8 +2031,13 @@ export class ChannelSession {
   /** MONSTER_CARNIVAL: summon / use / call the row (from 0) of a tab (0 monsters, 1 skills, 2 guardians). */
   carnival(tab, index) { this.send(new PacketWriter(C.MONSTER_CARNIVAL).byte(tab).int(index)); }
   rpsAction(mode, sel = 0) { const w = new PacketWriter(C.RPS_ACTION).byte(mode); if (mode === 1) w.byte(sel); this.send(w); }
-  takeDamage({ damage, mobId, oid, direction = 0, from = -1 }) {
-    this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction));
+  /**
+   * A monster's blow on you: after its direction, as the client sends it, the share a reflection sent back (0: none),
+   * the Guardian byte (0: not guarded) and 1 when a stance kept you from being thrown.
+   */
+  takeDamage({ damage, mobId, oid, direction = 0, from = -1, stance = false }) {
+    this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction)
+      .byte(0).byte(0).byte(stance ? 1 : 0));
   }
 
   chat(text) { this.send(new PacketWriter(C.GENERAL_CHAT).string(text).byte(0)); }

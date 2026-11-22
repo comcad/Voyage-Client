@@ -10918,7 +10918,9 @@ export class Game {
       this.invincible = HIT_PROTECTION; this.missed = true;
       return;
     }
-    this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+    // the stance (Power Stance) is rolled first, as the client does: the packet says whether you stood firm
+    const stood = this.holdsStance();
+    this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from, stance: stood });
     this.catchBreath();
     // a blow ends Hurricane and Rapid Fire (not the skills being charged)
     if (this.keydown && HELD_SHOTS.has(this.keydown.id)) this.endKeydown();
@@ -10938,7 +10940,7 @@ export class Game {
     // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
     // monster you're thrown back less, and falling onto it only slows your fall
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
-    if (knock && this.holdsStance()) knock = 0;
+    if (stood) knock = 0;
     if (knock) {
       if (p.fh) p.y = Math.floor(p.y - 1);
       p.fh = null; p.ladder = null;
