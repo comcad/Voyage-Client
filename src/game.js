@@ -397,6 +397,8 @@ const CORKSCREWS = new Set([5101004, 15101003]), CHARGE_BLOWS = new Set([...CORK
 const GRENADE_SPEED = 0.6, GRENADE_REUSE = 1000, GRENADE_LIFE = 3000, GRENADE_HIT = 120;
 /** Heal heals the party and strikes the undead in its box. */
 const HEAL = 2301002, RESURRECTION = 2321006;
+/** Meteor Shower, Blizzard, Genesis and the Blaze Wizard's Meteor Shower. */
+const ULTIMATE_SPELLS = new Set([2121007, 2221007, 2321008, 12111003]);
 /** Attack spells need the ground (or water), except Heal and Explosion. */
 const AIR_SPELLS = new Set([HEAL, EXPLOSION]);
 /**
@@ -7882,23 +7884,32 @@ export class Game {
     const reachBox = opts.area || (reach0 && { left: reach0.x1, right: reach0.x2, top: reach0.top, bottom: reach0.bottom });
     const swingRange = RANGE_SWINGS.has(skillId) && this.skills.levelData(skillId, lv)?.range;
     if (reachBox && !opts.area && swingRange) { if (p.facingRight) reachBox.right = Math.max(reachBox.right, p.x + swingRange); else reachBox.left = Math.min(reachBox.left, p.x - swingRange); }
+    // (a spell's through its box or its ball's line)
+    const spellBox = kind === 'magic' && !opts.area ? this.spellStrikeBox(skillId, lv, pose, charge) : null;
     const hitAt = (i, m) => {
       const pt = plan?.targets[i];
       if (pt?.hx !== undefined) return { x: pt.hx, y: pt.hy };
-      return reachBox && typeof m.hitBox === 'function' ? this.hitPoint(m, reachBox) : null;
+      const box = reachBox || spellBox;
+      return box && typeof m.hitBox === 'function' ? this.hitPoint(m, box) : null;
     };
     for (const [i, t] of out.entries()) {
+      // where it struck, kept as the client keeps it for the hit art: from the monster as it stands as the attack goes
+      // out; and the art's facing - the way you face, Thunder Bolt's and Heal's first half of their monsters the other
+      // way, the ultimates' always the one way
+      const struck = hitAt(i, t.mob);
+      t.at = struck && { dx: struck.x - Math.round(t.mob.x), dy: struck.y - Math.round(t.mob.y) };
+      t.flip = ULTIMATE_SPELLS.has(skillId) ? false : (skillId === 2201005 || skillId === HEAL) && i < Math.trunc(out.length / 2) ? !p.facingRight : p.facingRight;
       t.mob.pendingHits = (t.mob.pendingHits || 0) + 1;
       const land = () => {
         const last = lineDelay(skillId, t.dmg.length - 1, ...this.lineTiming(p));
         this.linesLanded(t.mob, last);
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob), t.lead ? 'sound' : 'both'); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
+          t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, t.lead ? 'sound' : 'both', t.flip); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
           this.after(last, () => { if (t.mob.queuedKill) this.finishKill(t.mob); });   // it dies after its last line lands
           return;
         }
-        t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob), t.lead ? 'sound' : 'both');
+        t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, t.lead ? 'sound' : 'both', t.flip);
         this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
         if (t.mob.kind === 'Mob' && !hypnotized(t.mob)) t.mob.chase(p);   // a struck monster comes after you (not a Hypnotized one)
       };
@@ -7926,7 +7937,7 @@ export class Game {
       if (skillId === CHAIN_LIGHTNING) this.chainLink(hitDelay + hitWave(i, kind, skillId), i ? out[i - 1].mob : null, t.mob, p, skillId);
       // a hit art with a hitAfter starts that far ahead of the blow (Meteor Shower's 1800ms...), as the client queues it
       t.lead = skillId !== HEAVENS_HAMMER ? this.hitLead(skillId, looks[i] ?? null) : 0;
-      if (t.lead) this.after(Math.max(0, t.delay - t.lead), () => this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, hitAt(i, t.mob), 'art'));
+      if (t.lead) this.after(Math.max(0, t.delay - t.lead), () => this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, 'art', t.flip));
     }
     // the ultimates' rain over their box, Explosion's and Big Bang's bursts
     if (kind === 'magic') this.spellArt(skillId, lv, p, charge);
@@ -10264,15 +10275,30 @@ export class Game {
    * the party members it healed (one at least).
    */
   healTargets(lv, members) {
-    const p = this.player, ld = this.skills.levelData(HEAL, lv) || {}, x = Math.round(p.x), y = Math.round(p.y);
-    const lt = ld.lt || [0, 0], rb = ld.rb || [0, 0];
-    let l = Math.trunc(Number(lt[0] ?? lt.x) * 0.6), r = Math.trunc(Number(rb[0] ?? rb.x) * 0.6);
-    const top = y + Math.trunc(Number(lt[1] ?? lt.y) * 0.6), bottom = y + Math.trunc(Number(rb[1] ?? rb.y) * 0.6);
-    if (p.facingRight) [l, r] = [-r, -l];
-    const left = x + l, right = x + r;
+    const ld = this.skills.levelData(HEAL, lv) || {}, { left, right, top, bottom } = this.healBox(lv);
     const cap = Math.max(1, Math.max(1, Math.min(15, Number(ld.mobCount) || 1)) - members);
     const meets = (m) => { const b = m.hitBox(true); return Math.max(b.left, left) < Math.min(b.right, right) && Math.max(b.top, top) < Math.min(b.bottom, bottom); };
     return this.targetMobs().filter((m) => Number(m.src?.info?.undead)).sort((a, b) => (a.spawnSeq || 0) - (b.spawnSeq || 0)).filter(meets).slice(0, cap);
+  }
+  /** Heal's box: its lt/rb at 0.6 (each edge cut toward zero), turned the way you face, where you stand. */
+  healBox(lv) {
+    const p = this.player, ld = this.skills.levelData(HEAL, lv) || {}, x = Math.round(p.x), y = Math.round(p.y);
+    const lt = ld.lt || [0, 0], rb = ld.rb || [0, 0];
+    let l = Math.trunc(Number(lt[0] ?? lt.x) * 0.6), r = Math.trunc(Number(rb[0] ?? rb.x) * 0.6);
+    if (p.facingRight) [l, r] = [-r, -l];
+    return { left: x + l, right: x + r, top: y + Math.trunc(Number(lt[1] ?? lt.y) * 0.6), bottom: y + Math.trunc(Number(rb[1] ?? rb.y) * 0.6) };
+  }
+  /**
+   * The area a spell's blows strike its monsters through, as the client takes each one's point (the middle of where it
+   * overlaps the body, see hitPoint): Heal's box, an area spell's box, else the line its ball flies along - 28px up,
+   * 50 to 300px in front, a pixel high (Chain Lightning's too).
+   */
+  spellStrikeBox(skillId, lv, pose, charge) {
+    const p = this.player;
+    if (skillId === HEAL) return this.healBox(lv);
+    if (AREA_SPELLS.has(skillId)) { const b = this.attackBox('magic', skillId, lv, pose, charge); return { left: b.x1, right: b.x2, top: b.top, bottom: b.bottom }; }
+    const dir = p.facingRight ? 1 : -1, x = Math.round(p.x), y = Math.round(p.y) - 28;
+    return { left: Math.min(x + dir * 50, x + dir * 300), right: Math.max(x + dir * 50, x + dir * 300), top: y, bottom: y + 1 };
   }
   /** How far ahead of a blow its hit art starts (ms): the art's hitAfter (hit/<n>/hitAfter), 0 without one. */
   hitLead(skillId, variant = null) {
@@ -10291,7 +10317,7 @@ export class Game {
    *   (how the client spreads them isn't readable: its effect layer is in code the decompile can't show).
    */
   async spellArt(id, lv, p, charge = 0) {
-    const ultimate = [2121007, 2221007, 2321008, 12111003].includes(id), explosion = id === EXPLOSION, bang = BIG_BANGS.has(id);
+    const ultimate = ULTIMATE_SPELLS.has(id), explosion = id === EXPLOSION, bang = BIG_BANGS.has(id);
     if (!ultimate && !explosion && !bang) return;
     const node = await this.skills?.ensure(id), ld = this.skills.levelData(id, lv) || {};
     const x = Math.round(p.x), y = Math.round(p.y), right = p.facingRight;
@@ -10553,7 +10579,7 @@ export class Game {
    * A blow's hit art and sound, each line on its number's beat. `part`: 'sound' or 'art' alone (an art with a
    * hitAfter is started that much ahead of the blow, see hitLead), else both.
    */
-  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0, at = null, part = 'both') {
+  async playHitEffect(id, mob, by = this.player, dmgs = [1], variant = null, cash = 0, at = null, part = 'both', flip = null) {
     const node = id ? this.byCharLevel(await this.skills?.ensure(id), by) : null;
     const fx = Game.fxNode(variant !== null && node?.hit?.[variant] ? node.hit[variant] : node?.hit);
     // Corkscrew Blow and Double Uppercut: hit/0 on the first line, hit/1 on the rest; Barrage, Demolition and a few
@@ -10568,15 +10594,28 @@ export class Game {
       if (part === 'sound') return;
       const art = line ? later : fx;
       if (!art || (line && HIT_ART_ONCE.has(id))) return;
-      // the art's pos: 1 at the monster's feet, 2 at its head, 3 at the middle of its body, none where the blow struck
-      // its body (the head when that isn't known)
-      const pos = Number(art.pos ?? node?.hit?.pos), head = mob.node?.head;
-      let x = head ? mob.x + ((mob.facesRight ?? mob.facingRight) ? -head[0] : head[0]) : mob.x;
-      let y = head ? mob.y + head[1] : mob.y - (mob.node?._h || 40) / 2;
-      if (pos === 1) { x = mob.x; y = mob.y; }
-      else if (pos === 3 && typeof mob.hitBox === 'function') { const b = mob.hitBox(); x = (b.left + b.right) / 2; y = (b.top + b.bottom) / 2; }
-      else if (pos !== 2 && at) { x = at.x; y = at.y; }
-      this.fx.push({ anim: new Anim(art, false), x, y, flip: !!by?.facingRight });
+      // where it plays, as the client attaches it by the art's pos: 1 the monster's feet, 2 its head, 3 the middle of
+      // its body, 4 where the blow struck it - each moving with it; none: where the blow struck (`at`, from the monster
+      // as it stood when the attack went out) on the monster as it is now, kept within its body (joined with a frame
+      // ago), and staying there. Without a struck point, its head.
+      const pos = Number(art.pos ?? node?.hit?.pos), body = typeof mob.hitBox === 'function';
+      const head = () => {
+        const h = mob.node?.head;
+        return h ? { x: mob.x + ((mob.facesRight ?? mob.facingRight) ? -h[0] : h[0]), y: mob.y + h[1] } : { x: mob.x, y: mob.y - (mob.node?._h || 40) / 2 };
+      };
+      let pin = null, spot = null;
+      if (pos === 1) pin = () => ({ x: mob.x, y: mob.y });
+      else if (pos === 2) pin = head;
+      else if (pos === 3 && body) {
+        const b = mob.hitBox(true), ox = Math.trunc((b.left + b.right) / 2) - Math.round(mob.x), oy = Math.trunc((b.top + b.bottom) / 2) - Math.round(mob.y);
+        pin = () => ({ x: mob.x + ox, y: mob.y + oy });
+      } else if (pos === 4 && at) pin = () => ({ x: mob.x + at.dx, y: mob.y + at.dy });
+      else if (at && body) {
+        const b = mob.hitBox(true);
+        spot = { x: Math.min(Math.max(Math.round(mob.x) + at.dx, b.left), b.right), y: Math.min(Math.max(Math.round(mob.y) + at.dy, b.top), b.bottom) };
+      } else spot = head();
+      const turned = flip ?? !!by?.facingRight;
+      this.fx.push(pin ? { anim: new Anim(art, false), pin, flip: turned } : { anim: new Anim(art, false), x: spot.x, y: spot.y, flip: turned });
     }));
   }
 
@@ -10654,6 +10693,7 @@ export class Game {
   drawFxEntry(ctx, cam, f) {
     const node = f.anim.node;
     if (!node) return;
+    if (f.pin) { const q = f.pin(); this.drawFxNode(ctx, cam, node, q.x, q.y, f.flip, (f.alpha ?? 1) * f.anim.alpha, f.anim.zoom, f.angle || 0); return; }
     const at = f.follow && f.muzzle ? this.muzzlePoint(f.follow) || f.follow : f.follow;
     if (at) this.drawFxNode(ctx, cam, node, at.x, at.y, f.fixed ? false : (f.follow.facesRight ?? f.follow.facingRight), f.anim.alpha, f.anim.zoom);
     else this.drawFxNode(ctx, cam, node, f.x, f.y, f.flip, (f.alpha ?? 1) * f.anim.alpha, f.anim.zoom, f.angle || 0);
