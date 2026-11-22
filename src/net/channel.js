@@ -1226,7 +1226,7 @@ export class ChannelSession {
       this.emit('quickslots', keys);
     });
     on(S.UPDATE_SKILLS, (r) => {
-      r.ubyte();
+      if (r.ubyte()) this.emit('exclusiveAnswered');   // flagged as the answer to a request
       const list = [];
       for (let n = r.short(); n > 0; n--) list.push({ id: r.int(), level: r.int(), master: r.int(), expiration: r.long() });
       this.emit('skills', list);

@@ -683,6 +683,8 @@ const AMPLIFIED = new Set([2001004, 2001005, 2101004, 2101005, 2111002, 2111003,
 /** Three Snails, and the skills that say "This skill cannot be used with the equipped item." for the wrong weapon. */
 const THREE_SNAILS = new Set([1000, 10001000, 20001000, 20011000]), EQUIPPED_ITEM_SAY = new Set([11101004, 11111006, 12101006, 12111005, 12111006]);
 const MYSTIC_DOOR = 2311002, SMOKESCREEN = 4221006;
+/** Buffs whose request waits 1000ms after the last one (others 300): Smokescreen and Recovery Aura. */
+const SLOW_REQUESTS = new Set([SMOKESCREEN, 22161003]);
 const DASHES = [5001005, 15001003];
 const SHIFTERS = { 412: 4120002, 422: 4220002 }, MESO_GUARD = 4211005, CHAKRA = 4211001, MESO_EXPLOSION = 4211006;
 /** Shadow Partner (Hermit, Night Walker) and its buff bit (second mask). Taunt and Vampire don't get its throws. */
@@ -7537,6 +7539,9 @@ export class Game {
     const ride = this.rideRule(id);
     if (ride === 'off') { this.net?.cancelBuff(id); return true; }
     if (!ride) return false;
+    // a request still waiting for the server's answer holds back every skill (attacks too), and none goes within 200ms
+    // of the last request sent or answered
+    if (!this.canExclusive(200)) return false;
     // in Dark Sight only Assassinate goes; with Vanish learned, anything but Dark Sight itself
     if (this.darkSight() && id !== ASSASSINATE && (!sb.level(VANISH) || id === DARK_SIGHTS[1])) return false;
     if (id === ASSASSINATE && !this.darkSight()) return false;   // Assassinate only comes out of Dark Sight
@@ -8326,6 +8331,7 @@ export class Game {
       return false;
     }
     if (this.net && !this.skillCostOk(id, ld)) return false;
+    if (!this.canExclusive(300)) return false;   // the start waits its turn: nothing waiting for an answer, 300ms apart
     // a prepare pose the client has no action for ("dash") goes out as none: you stand (or fall) as you are
     const act = node?.prepare?.action, known = !act || ACTIONS.includes(act);
     const pose = !act ? 'alert' : known ? act : p.fh ? this.look.standAction() : 'jump';
@@ -8499,6 +8505,7 @@ export class Game {
     const caught = reached.map((m) => [m, !m.src.info?.boss && !!m.anims.move && Math.random() * 100 < (ld.prop ?? 100)]);
     for (const [m, ok] of caught) if (ok) m.startPull({ x: p.x, stop: (m.node?._w || 40) + 45 });
     this.net?.magnet(id, lv, caught.map(([m, ok]) => [m.oid, ok]), !p.facingRight);
+    if (this.net) this.lockExclusive();   // until the server's answer
     this.playSkillEffect(id, p);
   }
 
@@ -8519,6 +8526,7 @@ export class Game {
       }
       if (!this.skillCostOk(id, ld)) return false;
     }
+    if (!this.canExclusive(300)) return false;   // the start waits its turn: nothing waiting for an answer, 300ms apart
     // a monster within the weapon's swing gets the swing (or a Mortal Blow) and Hurricane / Rapid Fire doesn't start
     if (HELD_SHOTS.has(id) && this.swingsClose()) return this.attack(0);
     const action = sb.node(id)?.prepare?.action;
@@ -8630,6 +8638,9 @@ export class Game {
     if (id === SHADOW_STARS && !star) { this.hud.message('You do not have enough throwing stars to use this skill.', CHAT_COLOR.error); return false; }
     const p = this.player, node = this.skills.node(id);
     if (id === MYSTIC_DOOR && !this.doorOk()) return false;
+    // its request waits its turn: nothing waiting for an answer, and 300ms from the last request sent or answered
+    // (Mystic Door 200, Smokescreen and Recovery Aura 1000)
+    if (!this.canExclusive(id === MYSTIC_DOOR ? 200 : SLOW_REQUESTS.has(id) ? 1000 : 300)) return false;
     if (BUFF_SPOT.has(id) && !this.spotAllows('buff', 20)) return false;
     const action = p.ladder ? (p.ladder.l ? 'ladder2' : 'rope2') : this.skills.action(id) || 'alert2';
     if (this.look.has(action)) { p.attack = action; p.frame = 0; p.frameT = 0; p.action = action; }
@@ -8640,12 +8651,13 @@ export class Game {
       this.playSkillEffect(id, p);
       if (!mask) return true;
       this.net?.partyMove(id, lv, mask);
+      if (this.net) this.lockExclusive();   // until the server's answer
       return true;
     }
     this.playSkillEffect(id, p);
     const needsPos = node?.summon || id === 2311002; // summons and Mystic Door are placed at the caster
     this.net?.specialMove(id, lv, needsPos ? { x: Math.round(p.x), y: Math.round(p.y) } : null, star);
-    if (id === MYSTIC_DOOR) this.lockExclusive();   // until the server's answer
+    if (this.net) this.lockExclusive();   // until the server's answer
     if (id === SMOKESCREEN) this.catchBreath();
     if (id === WINGS) this.startWings(id, lv);
     return true;
@@ -9271,6 +9283,7 @@ export class Game {
       return h.right > x1 && h.left < x2 && h.bottom > top && h.top < bottom;
     }).slice(0, 15).some((m) => m.src.info?.cantPassByTeleport);
     if (blocked) return false;
+    if (!this.canExclusive(300)) return false;   // its request waits its turn, as a buff's does
     // the skill has no art of its own: BasicEff Teleport plays once, where you arrive
     this.teleportLock = performance.now() + TELEPORT_DELAY;
     p.x = tx; p.y = to.y; p.fh = to.f; p.vx = 0; p.vy = 0; p.ladder = null;
@@ -9281,6 +9294,7 @@ export class Game {
     this.playTeleportEffect(p.x, p.y);
     sfx.play(`Skill/${pad(id, 7)}/Use`);
     this.net?.specialMove(id, lv, null);
+    if (this.net) this.lockExclusive();   // until the server's answer
     return true;
   }
   /**
@@ -9293,6 +9307,7 @@ export class Game {
     if ((p.vy || 0) > 0 && !this.map.swimming(p.x, p.y)) return false;   // falling, except in water
     if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
     if (this.net && !this.skillCostOk(id, ld)) return false;
+    if (!this.canExclusive(300)) return false;   // its request waits its turn, as a buff's does
     const n = Math.floor(lv / 4), dir = p.facingRight ? 1 : -1;
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
     p.vx = impact(p.vx || 0, dir * (350 + 40 * n)); p.vy = impact(p.vy || 0, -(250 + 20 * n));
@@ -9300,6 +9315,7 @@ export class Game {
     this.playSkillEffect(id, p);
     this.playBasicEff(id === FLASH_JUMPS_NW ? 'Flying1' : 'Flying', p.x, p.y, p.facingRight);
     this.net?.specialMove(id, lv, null);
+    if (this.net) this.lockExclusive();   // until the server's answer
     return true;
   }
   /**
@@ -9313,7 +9329,9 @@ export class Game {
     if ((this.map?.info?.fieldLimit || 0) & 2) { this.notice('You cannot use that skill on this map.'); return false; }
     if (!p.fh || p.ladder || p.attack || this.fjUsed) return false;
     if (this.net && !this.skillCostOk(id, this.skills.levelData(id, lv))) return false;
+    if (!this.canExclusive(300)) return false;   // its request waits its turn, as a buff's does
     this.net?.specialMove(id, lv, null);
+    if (this.net) this.lockExclusive();   // until the server's answer
     this.fjUsed = true;
     const n = Math.floor((lv * 2) / 4), dir = p.facingRight ? 1 : -1;
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
@@ -9335,7 +9353,9 @@ export class Game {
     const tp = map.touchPortalAt(p.x, p.y);
     if (tp && (tp.pt === 12 || tp.pt === 13)) return false;
     if (this.net && !this.skillCostOk(id, ld)) return false;
+    if (!this.canExclusive(300)) return false;   // its request waits its turn, as a buff's does
     this.net?.specialMove(id, lv, null);
+    if (this.net) this.lockExclusive();   // until the server's answer
     const k = (p.facingRight ? 1 : -1) * (ld?.x || 0), v = p.vx || 0;
     p.vx = k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v);
     const action = this.skills.action(id);
@@ -9352,6 +9372,7 @@ export class Game {
     if (!this.skillKeyPressed || p.attack || this.chakra || p.ladder) return false;
     if (((this.stats?.hp || 0) * 100) / Math.max(1, this.maxHpShown()) > 49) return false;
     if (this.net && !this.skillCostOk(id, ld)) return false;
+    if (!this.canExclusive(300)) return false;   // the wind-up waits its turn, as a charge's start does
     const action = this.skills.node(id)?.prepare?.action, pose = action && this.look.has(action) ? action : 'alert';
     p.attack = pose; p.action = pose; p.frame = 0; p.frameT = 0; p.attackScale = this.attackScale();
     this.chakra = { x: ld?.x || 100 };
@@ -9360,9 +9381,10 @@ export class Game {
     this.playSkillEffect(id, p, false, 'prepare');
     this.after(this.frameTime(pose, this.look.frameCount(pose)) * p.attackScale, () => {
       this.chakra = null;
-      if (this.dead) return;
+      if (this.dead || !this.canExclusive(300)) return;
       this.playSkillEffect(id, p);
       this.net?.specialMove(id, lv, null);
+      if (this.net) this.lockExclusive();   // until the server's answer
     });
     return true;
   }
