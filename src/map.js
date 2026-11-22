@@ -1392,16 +1392,21 @@ export class Life {
   }
 
   /**
-   * Going after someone it can reach: now and then (a few seconds apart) it attacks, turning to face them. Whether
-   * they are still in reach when it lands is checked then. True when it started one.
+   * As the client's controller does it: once the server's answer to its latest move came with the go-ahead (the
+   * controller holds its aggro) and none of its own poses is playing, it tries every frame - a skill the server
+   * offered first (no one to go after needed), then an attack on the one it goes after, turning to face them. Nothing
+   * else spaces them out: each attack or skill is a move sent, and the next waits for that move's answer. (Offline,
+   * with no server to answer, a few seconds apart.) Whether they are still in reach when it lands is checked then.
+   * True when it started one.
    */
   tryAttack(dt) {
     let t = this.aggro;
     // a monster it was set on (Hypnotize) that has died is let go
     if (t?.kind === 'Mob' && (!t.alive || t.dying)) { this.aggro = this.chased = null; t = null; }
-    // a skill the server has offered goes first, once it has someone to go after
-    if (t && !t.reach && this.nextSkill) { const s = this.nextSkill; this.nextSkill = null; this.playSkill(s.skill, s.level); return true; }
-    if (!t || t.reach || !this.attacks.length || (this.attackT -= dt) > 0) return false;
+    if (this.attacking) return false;
+    if (this.online ? !this.moveAggro || this.moveWait : (this.attackT -= dt) > 0) return false;
+    if (this.nextSkill) { const s = this.nextSkill; this.nextSkill = null; this.playSkill(s.skill, s.level); return true; }
+    if (!t || t.reach || !this.attacks.length) return false;
     const body = t.kind === 'Mob' ? t.hitBox() : { left: t.x - 22, right: t.x + 22, top: t.y - 65, bottom: t.y };   // a monster: its own body
     const facing = this.facingRight;
     this.facingRight = t.x > this.x;
@@ -1410,6 +1415,15 @@ export class Life {
     this.attackT = 2.5 + Math.random() * 2;
     this.playAttack(usable[Math.floor(Math.random() * usable.length)].index);
     return true;
+  }
+  /**
+   * MOVE_LIFE's first byte, as the client fills it: 1 when it goes after someone, 7 times in 10 (every time on its
+   * first move under this controller, which also sets 0x10). The server offers a skill only with this byte 0.
+   */
+  moveNibbles() {
+    const first = !this.movedOnce;
+    this.movedOnce = true;
+    return (first ? 0x10 : 0) | (this.aggro && (first || Math.random() * 100 < 70) ? 1 : 0);
   }
 
   /**

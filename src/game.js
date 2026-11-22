@@ -3661,7 +3661,7 @@ export class Game {
       }),
       controlMob: later(async (m, aggro) => {
         let e = this.lifeByOid.get(m.oid);
-        if (e && !e.pending) { e.controlled = true; e.fly = null; e.moveWait = false; } else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
+        if (e && !e.pending) { e.controlled = true; e.fly = null; e.moveWait = false; e.moveAggro = false; e.movedOnce = false; } else { await this.spawnLife('Mob', m, true); e = this.lifeByOid.get(m.oid); }
         if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);   // what it was already under
         if (aggro && e && !e.pending && e.aggro?.kind !== 'Mob') e.chase(this.player);      // the server wants it after us (not off a monster it was set on)
       }),
@@ -3674,6 +3674,7 @@ export class Game {
         if (!e || e.pending || e.kind !== 'Mob') return;
         e.mp = r.mp;
         if (!r.stale) e.moveWait = false;   // the answer to the last move: the next path may be planned
+        e.moveAggro = !r.stale && !!r.aggro;   // with the go-ahead it may attack or cast (a stale answer takes it away)
         if (r.stale || !e.controlled) return;
         if (r.aggro && e.aggro !== this.player && e.aggro?.kind !== 'Mob') e.chase(this.player);   // (a struck monster already gives chase on its own; one set on a monster keeps it)
       }),
@@ -4671,14 +4672,14 @@ export class Game {
     const e = await map.createLife(kind, spawn);
     if (!e || this.map !== map || this.lifeByOid.get(d.oid) !== entry) return;
     if (kind === 'Mob') { e.y = d.y; e.facingRight = !(d.stance & 1); }
-    e.controlled = controlled; e.fly = null; e.moveWait = false;   // a flyer taken over starts its AI afresh; nothing is awaited yet
+    e.controlled = controlled; e.fly = null; e.moveWait = false; e.moveAggro = false; e.movedOnce = false;   // a flyer taken over starts its AI afresh; nothing is awaited yet
     if (kind === 'Mob') {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
       e.onDie = (m) => this.mobSay(m, -1, -1);   // a dying monster says its death line by itself
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
       // one we control tells the server each path it plans, as it starts on it
       // each move sent waits for the server's answer before the next path is planned
-      e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying && this.net) { this.net.moveMob(m.oid, start, moves, activity, 0, 0, m.flying ? m.fly : null); m.moveWait = true; } };
+      e.onPath = (m, start, moves, activity = -1) => { if (m.controlled && !m.dying && this.net) { this.net.moveMob(m.oid, start, moves, activity, 0, 0, m.flying ? m.fly : null, m.moveNibbles()); m.moveWait = true; } };
     }
     // an NPC we control asks the server what it does next, and does what comes back
     if (kind === 'Npc' && controlled) e.onNpcAction = (n, action, chat, start, moves) => this.net?.npcAction(n.oid, action, chat, start, moves);
@@ -10978,7 +10979,7 @@ export class Game {
     if (m.controlled && this.net && m.oid != null) {
       const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
       this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
-        (20 + (s.action || 1)) * 2 + facing, s.skill, s.level);
+        (20 + (s.action || 1)) * 2 + facing, s.skill, s.level, null, m.moveNibbles());
       m.moveWait = true;
     }
     const lv = await this.mobSkillLevel(s.skill, s.level), fx = lv?.effect && Game.fxNode(lv.effect);
@@ -11071,7 +11072,7 @@ export class Game {
     });
     if (!m.controlled || !this.net || m.oid == null || m.deathAttack) return;
     const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
-    this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing);
+    this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing, 0, 0, null, m.moveNibbles());
     m.moveWait = true;
   }
   /**
