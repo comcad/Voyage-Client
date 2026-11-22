@@ -1831,6 +1831,16 @@ export class Life {
     const p = at(this.prevX, this.prevY);
     return { left: Math.min(b.left, p.left), right: Math.max(b.right, p.right), top: Math.min(b.top, p.top), bottom: Math.max(b.bottom, p.bottom) };
   }
+  /**
+   * What of its body hurts on touch, as the client takes it: its box joined with where it was the frame before, drawn
+   * in 25px at each side, 30 at the top and 10 at the bottom, but never past its middle (2px across at the least).
+   * So a small monster's sides and top don't touch you: you can jump over a snail.
+   */
+  touchBox() {
+    const b = this.hitBox(true), l = Math.round(b.left), r = Math.round(b.right), t = Math.round(b.top), bt = Math.round(b.bottom);
+    const cx = Math.trunc((l + r) / 2), cy = Math.trunc((t + bt) / 2);
+    return { left: Math.min(l + 25, cx - 1), right: Math.max(r - 25, cx + 1), top: Math.min(t + 30, cy - 1), bottom: Math.max(bt - 10, cy + 1) };
+  }
 }
 
 export const TAG_FONT = '12px Arial';

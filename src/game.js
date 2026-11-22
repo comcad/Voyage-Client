@@ -10487,16 +10487,17 @@ export class Game {
     if (this.dead || !this.stats) return;
     const hidden = this.hidden() && !((this.map?.info?.fieldLimit || 0) & 2);
     if (performance.now() < (this.boomerangUntil || 0)) return;
-    // the original receiver: 44x65 standing, 46x31 lying down
-    const prone = p.action === 'prone' || p.action === 'proneStab';
-    const pb = prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
-    if (this.obstacleHurt(pb, dx, dy)) return;
+    if (this.obstacleHurt(this.playerBody(), dx, dy)) return;
+    // your body joined with where you were the frame before, against each monster's touch box (they must overlap,
+    // not just meet)
+    const pb = this.playerBody(last), meets = (b) => Math.max(b.left, pb.left) < Math.min(b.right, pb.right) && Math.max(b.top, pb.top) < Math.min(b.bottom, pb.bottom);
     if (isHideMorph(this.morphTpl())) return;   // in the Oak Barrel monsters walk past without touching you
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
-      const b = m.hitBox();
-      if (b.right < pb.left || b.left > pb.right || b.bottom < pb.top || b.top > pb.bottom) continue;
+      // nor one that may not attack (info/notAttack), one only monsters hurt (info/damagedByMob), or a Hypnotized one
+      if (Number(m.src.info?.notAttack) || Number(m.src.info?.damagedByMob) || hypnotized(m)) continue;
+      if (!meets(m.touchBox())) continue;
       // a monster with info/ban/banType 1 (Hogul, the Mirror Ghost...) banishes you to its banMap on touch
       if (Number(m.src.info?.ban?.banType) === 1) this.net?.mobBanishPlayer(Number(m.spawn?.id));
       // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
@@ -10872,10 +10873,17 @@ export class Game {
     if (id) this.playSkillEffect(id, this.player, false, 'special');
     return true;
   }
-  /** The receiver monster attacks are tested against: 44x65 standing, 46x31 lying down. */
-  playerBody() {
+  /**
+   * Your body as the client takes it (what monsters touch and their attacks are tested against): 44x65 standing (-22..22, -65..0); lying down 46x31 in front of your feet
+   * (-46..0 facing left, 0..46 facing right). With `last` (a position) it is joined with the same body there.
+   */
+  playerBody(last = null) {
     const p = this.player, prone = p.action === 'prone' || p.action === 'proneStab';
-    return prone ? { left: p.x - 23, right: p.x + 23, top: p.y - 31, bottom: p.y } : { left: p.x - 22, right: p.x + 22, top: p.y - 65, bottom: p.y };
+    const at = (x, y) => (prone ? { left: p.facingRight ? x : x - 46, right: p.facingRight ? x + 46 : x, top: y - 31, bottom: y } : { left: x - 22, right: x + 22, top: y - 65, bottom: y });
+    const b = at(Math.round(p.x), Math.round(p.y));
+    if (!last) return b;
+    const o = at(Math.round(last.x), Math.round(last.y));
+    return { left: Math.min(b.left, o.left), right: Math.max(b.right, o.right), top: Math.min(b.top, o.top), bottom: Math.max(b.bottom, o.bottom) };
   }
   /**
    * Monster `m` hurts you: `power` is its PADamage (MADamage when magic), less half your weapon (magic) defence.
@@ -11197,8 +11205,7 @@ export class Game {
       if (v === h || v.kind !== 'Mob' || !v.alive || v.dying || v.oid == null || hypnotized(v)) continue;
       const info = v.src?.info || {};
       if (Number(info.notAttack) || !Number(info.bodyAttack) || Number(info.damagedByMob) || this.mobDisabled(v)) continue;
-      const b = v.hitBox(), cx = (b.left + b.right) / 2, cy = (b.top + b.bottom) / 2;
-      const core = { left: Math.max(cx - 1, b.left + 25), right: Math.min(cx + 1, b.right - 25), top: Math.max(cy - 1, b.top + 30), bottom: Math.min(cy + 1, b.bottom - 10) };
+      const core = v.touchBox();
       // an attack's range (lt / rb from where it stands, mirrored when it faces right)
       const byAttack = (v.attacks || []).some((a) => {
         const r = a.info?.range;
