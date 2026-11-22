@@ -9857,10 +9857,12 @@ export class Game {
     if (ammoId) w += this.windows?.info(ammoId)?.incPAD || 0;
     return Math.min(1999, w);
   }
-  /** Where a shot from (sx, sy) to (ex, ey) is stopped by a foothold (Footholds.shotStop, by your layer); null when nothing stops it. */
+  /**
+   * Where a shot from (sx, sy) to (ex, ey) is stopped by a foothold (Footholds.shotStop, by the group of the floor you
+   * last stood on - kept in the air and on a ladder); null when nothing stops it.
+   */
   shotBlocked(sx, sy, ex, ey) {
-    const layer = this.player.fh?.layer ?? (Number(this.player.ladder?.page) || 0);
-    return this.map.fh.shotStop(sx, sy, ex, ey, layer);
+    return this.map.fh.shotStop(sx, sy, ex, ey, this.player.zMass ?? 0);
   }
   /** Monsters that can be struck: not one the server has already killed while our blows were on their way. */
   liveMobs() { return this.map.life.filter((m) => m.kind === 'Mob' && m.alive && !m.dying && !m.queuedKill && m.oid !== undefined && m.hasBody && !this.carnivalAlly(m)); }
