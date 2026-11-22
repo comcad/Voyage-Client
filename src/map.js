@@ -745,12 +745,14 @@ export class Life {
 
   /**
    * A path from its controller (MOVE_MONSTER), queued after whatever is still to play; one with an action (an attack,
-   * a skill) starts afresh from where it is shown now. The packet's start point isn't used.
+   * a skill) starts afresh from where it is shown now. As the client reads it, an element with no place of its own
+   * (a blow, a jump) is where the one before it in the packet ended, the first such at the packet's start point: so a
+   * blow's slide starts where its controller was struck, even when what was still queued here ended elsewhere.
    */
   applyMovement(start, moves, act = -1) {
     if (act >= 0) this.cutPath();
     const q = this.path?.q, last = q?.[q.length - 1];
-    this.queueKeys(pathKeys(moves, last || this.pb?.cur || { x: this.x, y: this.y }));
+    this.queueKeys(pathKeys(moves, start || last || this.pb?.cur || { x: this.x, y: this.y }));
   }
   /** Our own plan, queued for playing the same way (its first jump or blow element keeps where it is now). */
   queueOwn(moves) { this.queueKeys(pathKeys(moves, this.pb?.cur || { x: this.x, y: this.y })); }
@@ -1060,10 +1062,11 @@ export class Life {
    * One we control was struck: what the client sends then, element for element - the blow's push (type 2: no time,
    * the speed it sets off at), then the slide back for as long as its hit pose plays, in 30ms steps braking to a stop
    * (in the air: falling through it, pushed sideways by the blow) - none at all when the pose is under 90ms - in the
-   * stance it had before the blow. Then the one who struck it, when it wasn't after them already, becomes its target
-   * and its walking starts afresh (so it heads for them, facing the way it goes), and its own movement follows in its
-   * 90ms steps until at least a second is planned with some of it on the ground (55 of those steps at most). It then
-   * plays that same plan itself, so everyone sees one thing.
+   * stance it had before the blow. Then its movement starts afresh (restartAI: in that pose, pushed no way, its
+   * AI deciding again on its next step - so it walks the way it then faces), after whom it went after before or else
+   * the one who struck it, and its own movement follows in its 90ms steps until at least a second is planned with
+   * some of it on the ground (55 of those steps at most). It then plays that same plan itself, so everyone sees one
+   * thing.
    */
   planHit(poseMs, stance, by = null) {
     if (this.flying) { this.planFlyHit(stance, poseMs, by); return; }
@@ -1087,8 +1090,10 @@ export class Life {
         t += ms;
       }
     }
-    if (sim.state === 'hit1') { sim.setState('stand'); sim.recoil = 0; }
-    if (by && sim.aggro !== by) { sim.chase(by); sim.aiT = 0; sim.aiDir = 0; }
+    sim.recoil = 0;
+    const pose = { 1: 'move', 2: 'stand', 3: 'jump', 6: 'fly', 16: 'chase' }[stance >> 1];
+    sim.state = sim.anims[pose] ? pose : 'stand'; sim.facingRight = !(stance & 1);
+    sim.restartAI(by);
     sim.onJump = (s) => moves.push({ cmd: 1, rx: Math.trunc(s.vx), ry: Math.trunc(s.vy), stance: s.stance, duration: 0 });
     for (let n = 0; n < 55 && !(t >= 1000 && moves.some((m) => m.cmd === 0 && m.fh)); n++, t += MOB_STEP) {
       const v0 = pathSpeed(sim);
@@ -1272,6 +1277,16 @@ export class Life {
   }
   /** Set it on `target` (or a fresh 3-4 minutes on the same one). */
   chase(target) { this.aggro = this.chased = target; this.chaseT = 180 + Math.random() * 60; }
+  /**
+   * What the client does to one we control when it acts (takes a blow, attacks, casts): its movement starts afresh
+   * from where it is shown - pushed no way, its AI's wait and plans gone, so it decides again on its very next step
+   * (and its pose follows the way it then goes). It stays after whom it went after; `by` (struck by us, or acting
+   * with no one to go after: us) when it went after no one, with a fresh 3-4 minutes either way.
+   */
+  restartAI(by = null) {
+    this.dir = 0; this.aiT = 0; this.aiDir = 0; this.jumpAsked = false; this.jumpKey = false;
+    if (by) this.chase(this.aggro || by);
+  }
 
   /** Where attack `a` reaches, facing as it does now: its box, or (types 1 and 2) its start point and radius. */
   attackReach(a) {

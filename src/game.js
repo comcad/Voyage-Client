@@ -3681,6 +3681,7 @@ export class Game {
         if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);   // what it was already under
         if (aggro && e && !e.pending && e.aggro?.kind !== 'Mob') e.chase(this.player);      // the server wants it after us (not off a monster it was set on)
       }),
+      // (one still loading: its placeholder is marked, and it comes in not controlled)
       stopControl: later((oid) => { const e = this.lifeByOid.get(oid); if (e) { e.controlled = false; e.aggro = null; } }),
       reactorSpawn: later((d) => this.spawnReactor(d)),
       weddingProgress: later((...a) => this.weddingProgress(...a)),
@@ -4689,7 +4690,8 @@ export class Game {
     const e = await map.createLife(kind, spawn);
     if (!e || this.map !== map || this.lifeByOid.get(d.oid) !== entry) return;
     if (kind === 'Mob') { e.y = d.y; e.facingRight = !(d.stance & 1); }
-    e.controlled = controlled; e.fly = null; e.moveWait = false; e.moveAggro = false; e.movedOnce = false;   // a flyer taken over starts its AI afresh; nothing is awaited yet
+    // control taken away while it was still loading (stopControl marks the placeholder) stays taken away
+    e.controlled = controlled && entry.controlled !== false; e.fly = null; e.moveWait = false; e.moveAggro = false; e.movedOnce = false;   // a flyer taken over starts its AI afresh; nothing is awaited yet
     if (kind === 'Mob') {
       e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
       e.onDie = (m) => this.mobSay(m, -1, -1);   // a dying monster says its death line by itself
@@ -11003,6 +11005,7 @@ export class Game {
       this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }],
         (20 + (s.action || 1)) * 2 + facing, s.skill, s.level, null, m.moveNibbles());
       m.moveWait = true;
+      m.restartAI(this.player);
     }
     const lv = await this.mobSkillLevel(s.skill, s.level), fx = lv?.effect && Game.fxNode(lv.effect);
     if (fx) this.after(Number(s.effectAfter) || 0, async () => {
@@ -11096,6 +11099,7 @@ export class Game {
     const x = Math.round(m.x), y = Math.round(m.y), facing = m.facingRight ? 0 : 1;
     this.net.moveMob(m.oid, { x, y }, [{ cmd: 0, x, y, vx: 0, vy: 0, fh: m.fh?.id || 0, stance: (2 << 1) | facing, duration: 0 }], (12 + a.index) * 2 + facing, 0, 0, null, m.moveNibbles());
     m.moveWait = true;
+    m.restartAI(this.player);
   }
   /**
    * effect0 of effectType 1 (Papulatus's lightning): across the lt/rb box around the monster, every effectDistance
