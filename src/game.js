@@ -778,6 +778,12 @@ function skillHurts(m, skillId) {
 function attackElement(a) {
   return { I: 1, F: 2, L: 3, S: 4 }[String(a || '').charAt(0).toUpperCase()] || 0;
 }
+/**
+ * A spell without a pose of its own, by its weapon's attack type (info/attack): one of these at random, [action id,
+ * body pose] - for 1 and 6 (wands and staves are 6) actions 28 and 29, drawn with swingO1 and swingO3 (swings, never a
+ * stab); no other type has any.
+ */
+const SPELL_ACTIONS = { 1: [[28, 'swingO1'], [29, 'swingO3']], 6: [[28, 'swingO1'], [29, 'swingO3']] };
 /** Barrage, Double Uppercut and Corkscrew Blow: their lines' times stand in for the swing's (see lineDelay). */
 const AT_SEND = new Set([5121007, 15111004, 5101003, 5101004, 15101003]);
 /**
@@ -7726,6 +7732,17 @@ export class Game {
       if (skillId === FLAME_GEAR && this.flameGearBlocked(lv)) { this.notice('It cannot be used here.'); return false; }
     }
     if (kind === 'special') return this.castSpecial(skillId, lv);
+    // a spell's pose, as the client picks it before anything else goes: its own (skill action), else one of its
+    // weapon's two spell actions; a skillType 3 spell, or a weapon without spell actions, and it doesn't go off
+    let spellAct = null;
+    if (kind === 'magic' && skillId && !opts.held && !prone && !opts.pose) {
+      const typed = Number(sb.node(skillId)?.skillType) === 3;
+      if (typed || !sb.action(skillId)) {
+        const row = typed ? null : SPELL_ACTIONS[Number(this.windows?.info(weapon)?.attack) || 0];
+        if (!row) return false;
+        spellAct = row[Math.floor(Math.random() * row.length)];
+      }
+    }
     if (!this.spotAllows('attack', 100)) return false;
     this.petAttackReact();
     // Assassinate's first stage brings you out of Dark Sight; it strikes harder the longer you were in it
@@ -7736,7 +7753,7 @@ export class Game {
     }
 
     if (!opts.held) {
-      const action = prone ? 'proneStab' : swing || opts.pose || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
+      const action = prone ? 'proneStab' : swing || opts.pose || spellAct?.[1] || (skillId && sb.action(skillId)) || this.defaultAttackAction(kind);
       p.attack = this.look.has(action) ? action : this.look.attackAction();
       p.frame = 0; p.frameT = 0; p.action = p.attack;
       p.attackScale = this.attackScale(this.attackSpeed(skillId));
@@ -7928,7 +7945,7 @@ export class Game {
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.catchBreath();   // any attack that goes out (5s before a channel change, a chair...)
-    this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
+    this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: spellAct && !opts.stance && pose === spellAct[1] ? spellAct[0] : this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0, attackType: Number(this.windows?.info(weapon)?.attack) || 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
     if (aranPole) this.aranPlainAt = performance.now() + this.frameTime(pose, this.look.frameCount(pose)) + 400;
