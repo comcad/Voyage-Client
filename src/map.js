@@ -605,6 +605,41 @@ function findMapName(strMap, id) {
 // MonsterStatus bits (second mask) that hold a monster still
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
 /**
+ * The colour a status tints its monster with (its picture's colours multiplied by it), by the skill that put it on:
+ * poison green for Poison Breath, Poison Mist and the Fire/Poison Element Composition; grey for Paralyze; red for Fire
+ * Demon and Flamethrower; blue for Ice Demon; ice blue for the freezing skills (the White Knight's ice charges,
+ * Elquines, Cold Beam, Ice Strike, the Ice/Lightning Element Composition, Blizzard, the Sniper's Blizzard, Frostprey,
+ * Ice Splitter, Snow Charge, Combo Tempest, Ice Breath). null for any other.
+ */
+function statusTint(skillId) {
+  switch (skillId) {
+    case 2101005: case 2111003: case 2111006: return '#5b8f3b';
+    case 2121006: return '#999999';
+    case 2121003: case 5211004: return '#ffa0a0';
+    case 2221003: return '#00c0ff';
+    case 1211005: case 1211006: case 2121005: case 2201004: case 2211002: case 2211006: case 2221007: case 3211003:
+    case 3221005: case 5211005: case 21111005: case 21120006: case 22121000: return '#a9ddfe';
+    default: return null;
+  }
+}
+let tintCanvas = null;
+/** drawImage of a sprite with its colours multiplied by `color` (its transparency kept). */
+function drawTinted(ctx, img, sx, sy, w, h, dx, dy, color) {
+  tintCanvas ??= document.createElement('canvas');
+  const c = tintCanvas;
+  if (c.width < w) c.width = w;
+  if (c.height < h) c.height = h;
+  const t = c.getContext('2d');
+  t.globalCompositeOperation = 'copy';
+  t.drawImage(img, sx, sy, w, h, 0, 0, w, h);
+  t.globalCompositeOperation = 'multiply';
+  t.fillStyle = color;
+  t.fillRect(0, 0, w, h);
+  t.globalCompositeOperation = 'destination-in';
+  t.drawImage(img, sx, sy, w, h, 0, 0, w, h);
+  ctx.drawImage(c, 0, 0, w, h, dx, dy, w, h);
+}
+/**
  * Looping status art with `repeat` (not icons: Weapon / Magic Immunity) shows one at a time: every monster update
  * (one per 30ms tick) of a monster that has some counts on a counter all monsters share, and on each 22nd that
  * monster moves on to its next one. A status of that kind coming or going sets the counter to 1 and moves on at once.
@@ -1468,6 +1503,12 @@ export class Life {
   /** Frozen, stunned or caught in a Shadow Web: it can't move or attack until that wears off. */
   get held() { return !!(this.status.second & (MOB_STUN | MOB_FREEZE | MOB_WEB)); }
   get frozen() { return !!(this.status.second & MOB_FREEZE); }
+  /** Its tint now: of its statuses in the order they came, the last one whose skill tints (statusTint); null for none. */
+  get tint() {
+    let c = null;
+    for (const src of this.statusArt.keys()) c = statusTint(src) ?? c;
+    return c;
+  }
 
   /** Cast monster skill `skill` at `level`: its skillN animation (if it has one), then the server applies it. */
   playSkill(skill, level) {
@@ -1860,8 +1901,9 @@ export class Life {
     ctx.translate(sx, sy);
     // info/noFlip art (e.g. a tutorial monster carrying a key sign) is never mirrored
     if (this.facesRight) ctx.scale(-1, 1);
-    if (this.frozen) ctx.filter = 'sepia(1) hue-rotate(170deg) saturate(2.5) brightness(1.05)';   // iced over
-    ctx.drawImage(img, cx, cy, cw, ch, -o[0], -o[1], cw, ch);
+    const tint = this.statusArt.size ? this.tint : null;
+    if (tint) drawTinted(ctx, img, cx, cy, cw, ch, -o[0], -o[1], tint);
+    else ctx.drawImage(img, cx, cy, cw, ch, -o[0], -o[1], cw, ch);
     ctx.restore();
     this.drawStatus(ctx, cam, assets, node);
     // a Maple TV's two screens, their top-left corners at info/MapleTVmsg and MapleTVad from its feet
