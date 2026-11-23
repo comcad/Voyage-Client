@@ -4762,14 +4762,18 @@ export class Game {
     }
   }
 
-  placeAtPortal(portal) { this.placeAt(portal.x, portal.y - 10); }
+  /**
+   * Arriving by a portal you drop from it to the floor, as the client does: those watching were told you are at the
+   * portal, and your first path carries the fall from there (on the floor at once, they'd see you glide down to it).
+   */
+  placeAtPortal(portal) { this.placeAt(portal.x, portal.y - 10, true); }
 
-  placeAt(x, y) {
+  placeAt(x, y, fall = false) {
     const p = this.player;
     p.x = x; p.y = y; p.vx = 0; p.vy = 0; p.ladder = null; p.seat = null;
-    p.fh = this.map.fh.below(p.x, p.y, 400);
+    p.fh = fall ? null : this.map.fh.below(p.x, p.y, 400);
     if (p.fh) p.y = Footholds.yAt(p.fh, p.x);
-    this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null; this.downOfh = 0; this.moveEvent = null; this.wasAirborne = false; this.playerZ = null;
+    this.moveBuf = []; this.moveTotal = 0; this.lastSent = null; this.movePos = null; this.downOfh = 0; this.moveEvent = null; this.wasAirborne = fall; this.playerZ = null;
   }
 
   // ------------------------------------------------------------------ server entities
