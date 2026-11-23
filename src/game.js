@@ -5079,9 +5079,11 @@ export class Game {
         order = [...order].sort((p, q) => (x(p) - x(q)) * dir);
       }
       const looks = a.skill === BAND_OF_THIEVES ? this.thiefLooks(a.skill, order.length) : [];
+      let fired = 0;
       for (const [i, t] of order.entries()) {
         const e = this.lifeByOid.get(t.oid);
         if (!e || e.pending) continue;
+        fired++;
         e.pendingHits = (e.pendingHits || 0) + 1;
         const land = () => {
           e.takeDamage(t.dmg.reduce((s, x) => s + x, 0));   // the flinch is its controller's to show
@@ -5094,6 +5096,12 @@ export class Game {
         const planned = plan?.targets.find((p) => p.mob === e);
         if (planned) this.after(delay + planned.delay, land);
         else if (shoots) this.after(delay, () => this.shoot(a.skill, rp, e, a.projectile, land)); else this.after(delay + hitWave(i, a.kind, a.skill, true), land);
+      }
+      // a spell that hit nothing we can see still flies, as our own miss does: 300px ahead, stopped by a wall
+      if (rp && hasBall && !fired && !AREA_SPELLS.has(a.skill) && a.skill !== CHAIN_LIGHTNING && !SWEEPS.has(a.skill)) {
+        const x = Math.round(rp.x), y = Math.round(rp.y) - 28, at = { x: x + (rp.facingRight ? 300 : -300), y };
+        const way = this.spellFlight(rp, this.shotBlocked(x, y, at.x, at.y) || at);
+        this.after(delay, () => this.shoot(a.skill, rp, null, 0, null, way));
       }
     });
   }
