@@ -284,6 +284,12 @@ class RemotePlayer {
     this.mp = new CharPath(this.x, this.y);   // their movement, played as the client plays it (movepath.js)
     this.shown = { x: this.x, y: this.y };   // where their movement last put them
     this.pose = (e) => this.takePose(e);
+    // a Teleport they used: BasicEff Teleport plays once, where the jump (3) after it puts them, as ours does
+    this.mp.onKey = (e) => {
+      if (e.type !== 3 || !this.teleported || performance.now() - this.teleported > 3000) return;
+      this.teleported = 0;
+      this.onTeleportLand?.(e.x, e.y);
+    };
   }
   /** Movement still playing (MOVE_PLAYER), or null. */
   get path() { return this.mp.playing ? this.mp : null; }
@@ -295,7 +301,15 @@ class RemotePlayer {
     if (!this.mp.playing && (this.x !== this.shown.x || this.y !== this.shown.y)) this.mp.reset(this.x, this.y);
   }
   /** Their movement queues behind what is still playing (CharPath: 30ms ticks, curves through each element's speed). */
-  applyMovement(moves) { this.rebase(); this.mp.queue(moves); }
+  applyMovement(moves) {
+    this.rebase();
+    // the first path after a Teleport: with its teleport (4) or jump (3) it flashes where it lands; without, it failed
+    if (this.teleported && this.teleportJump === null) {
+      this.teleportJump = moves.some((m) => m.cmd === 3 || m.cmd === 4);
+      if (!this.teleportJump) { this.teleported = 0; this.onTeleportLand?.(this.x, this.y); }
+    }
+    this.mp.queue(moves);
+  }
   /** A path element's pose (bit 0 faces left) and floor: a foothold, or -id of a ladder / rope; 0 (in the air) keeps the last. */
   takePose(e) {
     if (e.fh) this.fhId = e.fh;
@@ -4016,7 +4030,12 @@ export class Game {
         // another player's skill: its art plays on them (Berserk's and Dragon Fury's go by their own packets), they take
         // its pose, and a teleport flashes where they are
         if (skillId !== BERSERK && skillId !== 22160000) this.playSkillEffect(skillId, rp);
-        if (TELEPORTS.has(skillId)) this.playTeleportEffect(rp.x, rp.y);
+        // a teleport flashes where the jump in their next path lands them; one that failed (nowhere to go) has no jump
+        // in it, and flashes where they stand, as it does when no path comes at all
+        if (TELEPORTS.has(skillId)) {
+          rp.teleported = performance.now(); rp.teleportJump = null;
+          this.after(1000, () => { if (rp.teleported && rp.teleportJump === null) { rp.teleported = 0; this.playTeleportEffect(rp.x, rp.y); } });
+        }
         this.skillPose(rp, skillId, skillLevel);
       }),
       skillPose: later((chrId, skillId, level) => this.skillPose(this.player, skillId, level)),
@@ -4948,6 +4967,7 @@ export class Game {
     if (!map || this.map !== map || !this.spawning?.has(d.id)) return;   // gone from the map (or you left it) while their look loaded
     this.assets.preload(lookCanvases(look, ['stand1', 'stand2', 'walk1', 'walk2', 'jump', 'ladder', 'rope']), null, 1);
     const rp = new RemotePlayer(d, look);
+    rp.onTeleportLand = (x, y) => this.playTeleportEffect(x, y);
     this.afterimageSet(look.weapon?.info?.afterImage);   // their swing trail, ready for their first blow
     rp.lookData = d.look; rp.team = d.team;
     rp.box = d.box; rp.rings = d.rings; rp.cards = d.cards || []; if (d.morph) this.setMorph(rp, d.morph, true); if (d.ghost) this.setGhost(rp, d.ghost, true); rp.chalk = d.chalk && this.masked(d.chalk); rp.chair = d.chair || 0; rp.combo = d.combo || 0; rp.hidden = !!d.hidden; rp.partner = !!d.partner;
@@ -9334,10 +9354,14 @@ export class Game {
     if (!this.canExclusive(300)) return false;   // its request waits its turn, as a buff's does
     // the skill has no art of its own: BasicEff Teleport plays once, where you arrive
     this.teleportLock = performance.now() + TELEPORT_DELAY;
+    const fromFh = p.fh?.id || 0, stance = this.currentStance();
     p.x = tx; p.y = to.y; p.fh = to.f; p.vx = 0; p.vy = 0; p.ladder = null;
-    // for those watching: a jump (3) to where you arrive, no floor and no speed, as a portal within the map records
-    // it, so they snap there rather than glide; the steps after it carry the floor you stand on
-    this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance: this.currentStance(), duration: 0 });
+    // for those watching, as the client records it: a teleport (4) where you were, a tick there, then a jump (3) to
+    // where you arrive, no floor and no speed, so they snap there rather than glide (a portal within the map records
+    // it the same way); the steps after it carry the floor you stand on
+    this.moveBuf.push({ cmd: 4, x, y, fh: fromFh, stance, duration: 0 }, { cmd: 0, x, y, vx: 0, vy: 0, fh: fromFh, stance, duration: 30 });
+    this.moveBuf.push({ cmd: 3, x: Math.round(p.x), y: Math.round(p.y), fh: 0, stance, duration: 0 });
+    this.moveTotal += 30;
     this.movePos = { x: p.x, y: p.y };
     this.playTeleportEffect(p.x, p.y);
     sfx.play(`Skill/${pad(id, 7)}/Use`);

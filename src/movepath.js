@@ -88,6 +88,7 @@ export class CharPath {
       if (e.type === 3) jumped = true;
       pose(e);
       this.q.shift();
+      this.onKey?.(e);   // (once a key, as it is passed)
     }
     this.total -= this.rate;
     if (this.q.length && this.total > 0) {
