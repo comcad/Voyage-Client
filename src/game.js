@@ -5061,6 +5061,7 @@ export class Game {
     const rp = this.others.get(a.id);
     let delay = 0;
     if (rp && a.level) rp.level = a.level;   // their attack's art follows the level it carries
+    if (rp) rp.mastery = a.mastery || 0;     // and their swing trail the mastery
     // a shot of Hurricane or Rapid Fire held down leaves them in the pose they hold
     const holding = !!rp && HELD_SHOTS.has(a.skill) && rp.charge?.id === a.skill;
     if (holding) {
@@ -8313,7 +8314,8 @@ export class Game {
     const local = ent === this.player;
     const name = local ? this.windows?.info(this.weaponId())?.afterImage : ent.look?.weapon?.info?.afterImage;
     const set = local ? this.afterimage : this.afterimageSet(name);
-    const lv = local ? this.afterimageLevel() : Math.min(10, Math.floor((ent.level || 1) / 10));
+    // (theirs by the mastery their attack carried, as the client picks it; ours by our mastery skills)
+    const lv = local ? this.afterimageLevel() : ent.mastery || 0;
     const own = skillId && (await this.skills?.ensure(skillId))?.afterimage;
     // a skill with its own trail (Dragon Fury's dragon) uses it instead of the weapon's, under the weapon's
     // afterImage name and the pose; with nothing there, no trail at all
@@ -8355,7 +8357,7 @@ export class Game {
   remoteAfterimage(rp, skillId, kind) {
     const action = rp.attack, look = rp.look;
     if (!action || !look) return;
-    const set = this.afterimageSet(look.weapon?.info?.afterImage), lv = Math.min(10, Math.floor((rp.level || 1) / 10));
+    const set = this.afterimageSet(look.weapon?.info?.afterImage), lv = rp.mastery || 0;
     const last = Math.max(0, look.frameCount(action) - 1);
     const keys = Object.keys(set?.[lv]?.[action] || {}).filter((k) => /^\d+$/.test(k)).map(Number);
     const frame = kind === 'ranged' ? Math.min(1, last) : kind === 'magic' ? last : keys.length ? Math.min(...keys) : last;

@@ -1182,7 +1182,8 @@ export class ChannelSession {
       const id = r.int(), nd = r.ubyte(), level = r.ubyte();   // the attacker's level
       const skillLevel = r.ubyte(); const skill = skillLevel ? r.int() : 0;
       // the action (15 bits) with facing left in the top bit, as the attacker sent it
-      const display = r.ubyte(), act = r.ushort(), speed = r.ubyte(); r.ubyte();
+      // then their weapon's mastery, which picks their swing trail (Character/Afterimage/<name>/<mastery>)
+      const display = r.ubyte(), act = r.ushort(), speed = r.ubyte(), mastery = r.ubyte();
       const action = act & 0x7fff, facingLeft = !!(act & 0x8000);
       const projectile = r.int();
       const targets = [];
@@ -1193,7 +1194,7 @@ export class ChannelSession {
         for (let j = 0; j < n; j++) { const d = r.int(); dmg.push(d < 0 ? d + 0x80000000 : d); crit.push(d < 0); }
         targets.push({ oid, dmg, crit });
       }
-      this.emit('attack', { kind, id, level, skill, skillLevel, display, action, facingLeft, speed, projectile, targets });
+      this.emit('attack', { kind, id, level, skill, skillLevel, display, action, facingLeft, speed, mastery, projectile, targets });
     };
     on(S.CLOSE_RANGE_ATTACK, readAttack('melee'));
     on(S.RANGED_ATTACK, readAttack('ranged'));
