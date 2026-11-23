@@ -8962,8 +8962,9 @@ export class Game {
   // ------------------------------------------------------------------ mists
   /**
    * A mist over a box of the map: the skill's `tile` clouds (a monster's from MobSkill.img/<skill>/level/<n>), each
-   * pulsing on its own. How the client spreads them was not recovered: here one cloud per 90x70 cell (about a
-   * cloud's size), a random one of the eight, nudged a little and started at a random point of its pulse.
+   * pulsing on its own, spread as the client spreads them (On_SPAWN_MIST's layout): columns from the box's left edge,
+   * 35-54px apart; in each, a random cloud every 0.8 of its height from the top down, within a diamond (a column |dx|
+   * from the middle keeps h * |dx| / w / 2 clear at the top and the bottom). Each starts at a random point of its pulse.
    */
   async addMist(d) {
     this.mists ??= new Map();
@@ -8975,20 +8976,26 @@ export class Game {
         : (await this.skills?.ensure(d.skill))?.tile;
     const kinds = Object.keys(node || {}).filter((k) => /^\d+$/.test(k)).map((k) => node[k]);
     if (!kinds.length) { this.mists.set(d.oid, { ...d, start, tiles: [] }); return; }
-    const w = d.right - d.left, h = d.bottom - d.top, cols = Math.max(1, Math.round(w / 90)), rows = Math.max(1, Math.round(h / 70));
+    const w = d.right - d.left, h = d.bottom - d.top, mid = Math.trunc((d.left + d.right) / 2);
     const tiles = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const anim = new Anim(kinds[Math.floor(Math.random() * kinds.length)], true);
+    for (let x = d.left; x < d.right; x += 35 + Math.floor(Math.random() * 20)) {
+      const cut = w > 0 ? h * (Math.abs(x - mid) / w) * 0.5 : 0;
+      for (let y = Math.trunc(d.top + cut); y < d.bottom - cut;) {
+        const kind = kinds[Math.floor(Math.random() * kinds.length)];
+        const anim = new Anim(kind, true);
         anim.update(Math.random() * 1500);
-        tiles.push({ anim, x: d.left + (c + 0.5) * (w / cols) + (Math.random() - 0.5) * 20, y: d.top + (r + 0.5) * (h / rows) + (Math.random() - 0.5) * 16 });
+        tiles.push({ anim, x, y });
+        y = Math.trunc(y + (Number(kind[0]?._h) || 70) * 0.8);
       }
     }
     await this.assets.preload(tiles.flatMap((t) => t.anim.frames));
     this.mists.set(d.oid, { ...d, start, tiles });
   }
   drawMists(ctx, cam) {
+    const now = performance.now();
     for (const m of this.mists?.values() || []) {
+      // nothing shows before its start (its delay x 100ms): Poison Mist's 800ms is the caster's book and frog
+      if (now < m.start) continue;
       for (const t of m.tiles) {
         const n = t.anim.node, img = n && this.assets.image(n);
         if (!img) continue;
