@@ -166,7 +166,10 @@ export class SkillBook {
   bookSkills(b) {
     const j = this.books[b];
     if (!j || j instanceof Promise) return [];
-    return Object.keys(j.skill || {}).map(Number).filter((id) => {
+    // in the order the book's img holds them, as the client lists them (its _order; an object's number-like keys would
+    // come out sorted, putting Fire Arrow before Poison Breath)
+    const keys = Array.isArray(j.skill?._order) ? j.skill._order : Object.keys(j.skill || {});
+    return keys.filter((k) => /^\d+$/.test(k)).map(Number).filter((id) => {
       const n = j.skill[pad(id, 7)];
       return id !== 1014 && id !== 10001015 && (id in this.levels || !n?.invisible) && (!n?.timeLimited || this.level(id) > 0);
     });
