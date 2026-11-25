@@ -1494,12 +1494,13 @@ export class ChannelSession {
     // another player's Grenade thrown: who, from where, how long it was held (ms), the skill and its level
     on(S.THROW_GRENADE, (r) => this.emit('foreignGrenade', r.int(), { x: r.int(), y: r.int() }, r.int(), r.int(), r.int()));
     on(S.DAMAGE_PLAYER, (r) => {
+      // as the client reads it: only a monster's blow (-1 touch, 0 and up an attack) carries the monster's part; the
+      // map's own (-2, -3, -4) is the damage, then the damage shown
       const id = r.int(), from = r.byte();
-      if (from === -3) r.int();
       const damage = r.int();
       let mobId = 0, direction = 0;
       let fake = 0;
-      if (from !== -4) { mobId = r.int(); direction = r.ubyte(); }
+      if (from > -2) { mobId = r.int(); direction = r.ubyte(); }
       if (damage === -1 && r.available >= 4) { r.skip(r.available - 4); fake = r.int(); }   // Shadow Shifter's id, last
       this.emit('playerDamaged', { id, from, damage, mobId, direction, fake });
     });
