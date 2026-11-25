@@ -169,12 +169,14 @@ function readSkills(r) {
   return { skills, cooldowns };
 }
 
-/** Matches Skill.isFourthJob on the server for v83 job ids. */
+/**
+ * Whether a skill's master level follows it in the skill list, as the client decides it: a job ending in 2 that isn't
+ * a first job, and of the Evan's only his 9th and 10th (2217, 2218).
+ */
 export function isFourthJob(skillId) {
   const job = Math.floor(skillId / 10000);
-  if (job === 2212) return false;
-  if ([22170001, 22171003, 22171004, 22181002, 22181003].includes(skillId)) return true;
-  return job % 10 === 2;
+  if (Math.floor(job / 100) === 22 || job === 2001) return job === 2217 || job === 2218;
+  return job % 100 !== 0 && job % 10 === 2;
 }
 
 function readQuests(r) {
