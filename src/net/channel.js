@@ -206,11 +206,12 @@ function readMobStats(r, has) {
  * Homing Beacon, Undead), each a value, a reason (the skill), a time (byte + int) and a little more for some.
  * Index i of the 128-bit mask: 0-31 the second long's high half, 32-63 its low half, 64-95 / 96-127 the first long's.
  */
-const REMOTE_STATS = [[7, 1, 'speed'], [21, 1, 'combo'], [22, 4, 'weaponCharge'], [17, 4, 'stun'], [20, 4, 'darkness'],
+// (the bits as SecondaryStat::DecodeForRemote tests them, in its order; -1 a signed byte)
+const REMOTE_STATS = [[7, -1, 'speed'], [21, 1, 'combo'], [22, 4, 'weaponCharge'], [17, 4, 'stun'], [20, 4, 'darkness'],
   [19, 4, 'seal'], [30, 4, 'weakness'], [31, 4, 'curse'], [18, 'poison', 'poison'], [26, 0, 'shadowPartner'],
-  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [49, 2, 'ghost'], [39, 4, 'attract'], [41, 4, 'spiritJavelin'],
-  [47, 4], [50, 4, 'barrier'], [51, 4, 'reverseInput'], [54, 4], [55, 4], [56, 4], [57, 4], [58, 0], [59, 0], [64, 0],
-  [71, 4], [75, 4], [76, 4], [77, 4]];
+  [10, 0, 'darkSight'], [16, 0, 'soulArrow'], [33, 2, 'morph'], [49, 2, 'ghost'], [39, 4, 'attract'], [40, 4, 'spiritJavelin'],
+  [46, 4], [50, 4, 'barrier'], [62, 4], [51, 4, 'reverseInput'], [53, 4], [54, 4], [55, 4], [56, 4], [59, 0], [60, 0],
+  [66, 0, 'windWalk'], [73, 4], [75, 4], [76, 4], [77, 4]];
 const TWO_STATE_NAMES = ['energyCharged', 'dashSpeed', 'dashJump', 'ride', 'partyBooster', 'guidedBullet', 'undead'];
 /**
  * Each two-state stat's size in a buff packet (first mask bits 50-56, after the plain stats and two bytes, in this order):
@@ -233,6 +234,7 @@ function readRemoteStats(r, m1, m2) {
     if (!bit(i)) continue;
     let v = true;
     if (size === 1) v = can(1) ? r.ubyte() : 0;
+    else if (size === -1) v = can(1) ? r.byte() : 0;
     else if (size === 2) v = can(2) ? r.short() : 0;
     else if (size === 4) v = can(4) ? r.int() : 0;
     else if (size === 'poison') { v = can(2) ? r.short() : 0; const src = can(4) ? r.int() : 0; disease(name, i, src); continue; }
@@ -1058,19 +1060,10 @@ export class ChannelSession {
 
     on(S.SPAWN_PLAYER, (r) => {
       const id = r.int(), level = r.ubyte(), name = r.string(), guild = r.string(), emblem = readEmblem(r);
-      // foreign buffs: fixed layout with optional value after the first mask int
-      r.int(); r.short(); r.ubyte(); r.ubyte();
-      // the second mask: its low half Morph (0x2) and Ghost (0x20000), its high half the rest; then the values in the
-      // client's order: Combo Attack's (1 + orbs), the morph's id, the ghost's (1 a ghost, 2 the spaceship)
-      const second = r.int(), hiMask = r.int();
-      let combo = 0;
-      let morphId = 0;
-      if (hiMask & 0x200000) combo = r.ubyte();
-      if (second & 0x2) morphId = r.short();
-      const ghost = second & 0x20000 ? r.short() : 0;
-      r.int(); r.int(); r.short(); r.skip(4); r.int(); r.skip(11); r.short(); r.skip(9); r.int(); r.short(); r.ubyte();
-      const mount = r.int(); r.int();   // Monster Riding: the mount's item id (0 on foot), the skill
-      r.int(); r.skip(8); r.int(); r.ubyte(); r.int(); r.short(); r.skip(9); r.int(); r.int(); r.skip(9); r.int(); r.short(); r.short();
+      // their buffs as the client reads them on someone appearing (the same as GIVE_FOREIGN_BUFF's, no delay): Combo
+      // Attack's count (1 + orbs), the morph, the ghost (1 a ghost, 2 the spaceship), riding's vehicle (0 on foot)...
+      const m1 = r.long(), m2 = r.long(), st = readRemoteStats(r, m1, m2);
+      const combo = st.combo || 0, morphId = st.morph || 0, ghost = st.ghost || 0, mount = st.ride?.value || 0;
       const job = r.short();
       const look = readCharLook(r);
       const hearts = r.int(), itemEffect = r.int(), chair = r.int();   // Heart-Shaped Chocolates: n / 10 big, n % 10 small
@@ -1093,7 +1086,7 @@ export class ChannelSession {
           if (r.available >= 2) { r.ubyte(); team = r.byte(); }   // then another byte, and the team an event field reads (-1 none)
         } catch { berserk = false; }
       }
-      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, ghost, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, team, hidden: !!(hiMask & 0x400), partner: !!(hiMask & 0x4000000) });
+      this.emit('spawnPlayer', { id, level, name, guild, emblem, job, look, morph: morphId, ghost, itemEffect, hearts, chair, mount, mountInfo, x: pos.x, y: pos.y, stance, fh, pets, box, chalk, rings, cards, combo, berserk, team, hidden: !!(st.darkSight || st.windWalk), partner: !!st.shadowPartner });
     });
     on(S.REMOVE_PLAYER_FROM_MAP, (r) => this.emit('removePlayer', r.int()));
     // another player sat on a chair item (0: stood up); yours: 0 makes you stand, 1 + a seat confirms a map seat
@@ -1306,7 +1299,9 @@ export class ChannelSession {
       if (pick === normal && (mask & (SPEED | JUMP | WATK | ACC | WDEF | MATK | MDEF | AVOID | HANDS | BOOSTER | INVINCIBLE))) {
         r.pos = start;
         const values = Array.from({ length: n }, () => { const v = r.short(); r.int(); r.int(); return v; });
-        const at = (bit) => popcount(mask & (bit - 1n));   // the game server lists the plain stats (WATK..JUMP) first
+        // (these are all client bits 0-31, the mask's high half, which the client reads first: a stat's place is the
+        // number set below it there; the low half, Concentrate's, Morph's and the like, comes after)
+        const at = (bit) => popcount((mask >> 32n) & ((bit >> 32n) - 1n));
         if (mask & SPEED) b.speed = values[at(SPEED)];
         if (mask & JUMP) b.jump = values[at(JUMP)];
         if (mask & WATK) b.watk = values[at(WATK)];
