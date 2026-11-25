@@ -2379,7 +2379,7 @@ export class ChannelSession {
   allianceLeader(cid) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(7).int(cid)); }
   allianceRank(cid, up) { this.send(new PacketWriter(C.ALLIANCE_OPERATION).byte(9).int(cid).byte(up ? 1 : 0)); }
   /** DENY_ALLIANCE_REQUEST 0x16: turn a guild alliance's invitation down (the inviter, your guild's name). */
-  allianceDeny(from, guildName = '') { this.send(new PacketWriter(C.DENY_ALLIANCE_REQUEST).byte(0x16).string(from).string(guildName)); }
+  allianceDeny(from, guildName = '', reason = 0x16) { this.send(new PacketWriter(C.DENY_ALLIANCE_REQUEST).byte(reason).string(from).string(guildName)); }
   /** DENY_GUILD_REQUEST: 0x37 refused, 0x36 busy with another invitation, 0x35 not taking invitations. */
   guildDeny(from, code = 0x37, me = '') { this.send(new PacketWriter(C.DENY_GUILD_REQUEST).byte(code).string(from).string(me)); }
   /** PARTY_SEARCH_START: level range, how many members, the job bits; PARTY_SEARCH_UPDATE ends the search */

@@ -1587,8 +1587,10 @@ export class Game {
       refresh();
     }
     else if (e.op === 'invite') {
-      // Family invitations off in the Game Option, or from someone on the Blacklist: ignored
-      if (!this.optionAllowed('familyInvite') || this.windows.wins.userlist?.blacklisted(e.name)) return;
+      // Family invitations off in the Game Option, from someone on the Blacklist, or with another one up: declined at
+      // once (ACCEPT_FAMILY with 0), as the client does, so the inviter hears of it
+      const familyBusy = this.windows.order.some((w) => w.kind === 'family' && !w.closing);
+      if (!this.optionAllowed('familyInvite') || this.windows.wins.userlist?.blacklisted(e.name) || familyBusy) { this.net?.familyAnswer(e.id, e.name, false); return; }
       const ok = await notify(this.windows, 'family', e.name);
       this.net?.familyAnswer(e.id, e.name, ok);
     } else if (e.op === 'joined') {
@@ -1605,7 +1607,7 @@ export class Game {
     }
     else if (e.op === 'summon') {
       const ok = await notify(this.windows, 'familySummon', e.from);
-      this.net?.familySummonAnswer(e.family, ok);
+      this.net?.familySummonAnswer(e.from, ok);   // the request's first string, as the client echoes it
     }
   }
   async familyAddJunior() {
@@ -3491,8 +3493,10 @@ export class Game {
       // another is up; O takes it
       allianceInvite: later((id, from, guildName) => {
         const mine = this.guild?.name || '';
-        if (!this.optionAllowed('allianceInvite') || this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine); return; }
-        notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, guildName) : this.net.allianceDeny(from, mine)));
+        // refusals as the client sends them: 0x14 alliance invitations off, 0x15 another one up, 0x16 declined
+        if (!this.optionAllowed('allianceInvite')) { this.net.allianceDeny(from, mine, 0x14); return; }
+        if (this.windows.order.some((w) => w.kind === 'alliance')) { this.net.allianceDeny(from, mine, 0x15); return; }
+        notify(this.windows, 'alliance', from).then((ok) => (ok ? this.net.allianceAccept(id, mine) : this.net.allianceDeny(from, mine, 0x16)));
       }),
       // trade requests off in the Game Option, or from someone on the Blacklist: turned down at once (reason 4)
       tradeInvite: (name, id, cash) => {
@@ -6560,7 +6564,11 @@ export class Game {
           .then((ok) => (ok ? this.net.guildOp(6, d.id, me) : this.net.guildDeny(d.from, 0x37, this.player.name)));
         break;
       }
-      case 'info': this.guild = d.guild; if (!d.guild) this.leftAlliance(); break;
+      case 'info':
+        this.guild = d.guild;
+        if (!d.guild) this.leftAlliance();
+        else if (d.guild.alliance) this.net?.allianceOp(1);   // the client asks for its alliance's data on every guild info with one
+        break;
       case 'join':
         if (d.member.id === me) { msg('You have entered the guild.'); this.net.guildOp(0); break; }
         if (!g) break;
