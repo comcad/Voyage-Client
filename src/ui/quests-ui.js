@@ -99,7 +99,7 @@ export async function questFlow(game, npc, id) {
   if (!(await askLines(game, npcId, id, d, phase))) return;
   const sel = d.lines.length ? await rewardPage(game, npcId, id, d.lines[d.lines.length - 1]) : -1;
   if (sel === null) return;
-  game.net.questAction(2, id, npcId, pos(game), sel);   // with a position, so the choice isn't read as one
+  game.net.questAction(2, id, npcId, where, sel);   // a position only when not autoStart / autoComplete, as the client sends it
 }
 
 /** Every line but the last, with Prev / Next; an 'ask' quest's #L choices are checked against stop/<line>/<choice>. */
