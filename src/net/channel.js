@@ -1257,6 +1257,8 @@ export class ChannelSession {
         return;
       }
       if (BigInt.asUintN(64, m1) & RIDING) {
+        // (after any plain stats riding brings, the Battleship's: 10 bytes each) the two bytes, then the vehicle and skill
+        r.skip((n - popcount(two)) * 10);
         r.short(); const a = r.int(), b = r.int(), k = Math.floor(a / 10000);
         if (k === 190 || k === 193) this.emit('buff', { m1, m2, source: b, duration: 2 ** 31, mount: a });
         else this.emit('buff', { m1, m2, source: a, duration: 2 ** 31 });
@@ -1264,7 +1266,8 @@ export class ChannelSession {
       }
       const start = r.pos;
       // Energy Charge (first mask): its bar, the value (10000 and over: charged)
-      if (BigInt.asUintN(64, m1) & 0x4000000000000n && r.available >= 2) { this.emit('energyCharge', r.short()); return; }
+      // (the two bytes, then its value as an int, then its reason, time and term)
+      if (BigInt.asUintN(64, m1) & 0x4000000000000n && r.available >= 6) { r.skip(2); this.emit('energyCharge', r.int()); return; }
       // giveBuff: per stat (short value, int source, int duration ms)
       r.pos = start + 2;
       const normal = { source: r.int(), duration: r.int() };
