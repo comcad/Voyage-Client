@@ -554,7 +554,13 @@ export class ChannelSession {
       this.emit('notice', n);
     });
     // SPOUSE_CHAT: a line between husband and wife (5: from whom, 5, the text), echoed to both
-    on(S.SPOUSE_CHAT, (r) => { const mode = r.ubyte(); const from = mode === 5 ? r.string() : ''; r.ubyte(); this.emit('spouseChat', from, r.string()); });
+    // 4: a byte, then your own line only when it is set (0: not married, or the spouse is offline); 5: from, a byte, the text
+    on(S.SPOUSE_CHAT, (r) => {
+      const mode = r.ubyte();
+      if (mode === 5) { const from = r.string(); r.ubyte(); this.emit('spouseChat', from, r.string()); return; }
+      if (r.ubyte()) this.emit('spouseChat', '', r.string());
+      else this.emit('notice', { type: 5, msg: 'You are not married or your spouse is currently offline.' });
+    });
     // PARCEL (Duey): 8 the parcels waiting for you (opens Duey), 0x17 one was taken or deleted, 0x19 / 0x1B a parcel
     // arrived for you, anything else a result code (0x12 sent, 0x0A not enough mesos, 0x0C no such character...)
     // PARCEL: 8 Duey opens (quick byte, the parcels, then the expired ones), 0x17 claimed / deleted (id, 3 deleted),
@@ -2471,8 +2477,9 @@ export class ChannelSession {
     const w = new PacketWriter(C.NOTE_ACTION).byte(1).byte(notes.length).byte(notes.filter((n) => n.fame === 3).length).byte(freeEtc);
     let slots = freeEtc;
     for (const n of notes) {
+      if (n.fame === 3 && slots <= 0) continue;   // a wedding invitation with no Etc slot for it: left out, as the client does
       w.int(n.id).byte(n.fame);
-      if (n.fame === 3 && slots > 0) { w.int(parseInt(String(n.text).split('_')[0], 10) || 0); slots--; }
+      if (n.fame === 3) { w.int(parseInt(String(n.text).split('_')[0], 10) || 0); slots--; }
     }
     this.send(w);
   }
