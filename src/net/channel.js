@@ -167,7 +167,7 @@ function readMerchantRoom(r, selfName) {
 function readShopRoom(r) {
   r.ubyte();
   const slot = r.ubyte(), sold = [];
-  for (let n = r.ubyte(); n > 0; n--) sold.push({ id: r.int(), qty: r.short(), mesos: r.int(), buyer: r.string() });
+  r.ubyte();   // the owner's seat (0): a player shop's room has no sold list
   const people = [{ slot: 0, look: readCharLook(r), name: r.string() }];
   for (let s = r.ubyte(); s !== 0xFF; s = r.ubyte()) people.push({ slot: s, look: readCharLook(r), name: r.string() });
   const title = r.string();
@@ -2186,7 +2186,7 @@ export class ChannelSession {
   }
   /** CREATE type 4 (a Shop Permit) or 5 (a Hired Merchant): the title and the item that opens it */
   pshopCreate(title, itemId, type = 4) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(type).string(title).byte(0).short(0).int(itemId)); }
-  pshopVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid)); }
+  pshopVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid).byte(0).byte(0)); }   // (no password, then a 0, as the client sends it)
   /** VISIT a Hired Merchant: the client adds two 0 bytes. */
   merchantVisit(oid) { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(4).int(oid).byte(0).byte(0)); }
   pshopOpenStore() { this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0x0B).byte(1)); }
@@ -2277,7 +2277,7 @@ export class ChannelSession {
   /** MESSENGER 5: who asked, your name, then 1 when turned down by itself (Game Option or Blacklist), 0 when you said no. */
   messengerDecline(from, me, auto) { this.send(new PacketWriter(C.MESSENGER).byte(5).string(from).string(me).byte(auto ? 1 : 0)); }
   messengerChat(text) { this.send(new PacketWriter(C.MESSENGER).byte(6).string(text)); }
-  merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST)); }
+  merchantRequest() { this.send(new PacketWriter(C.HIRED_MERCHANT_REQUEST).byte(0).int(0).int(0)); }   // a 0 and 8 bytes, as the client sends it
   /** The Owl of Minerva: OWL_ACTION (5 when its search opens), OWL_WARP (a store's owner and map), the Use-tab owl's search */
   owlAction(mode) { this.send(new PacketWriter(C.OWL_ACTION).byte(mode)); }
   owlWarp(ownerId, mapId) { this.send(new PacketWriter(C.OWL_WARP).int(ownerId).int(mapId)); }
@@ -2311,7 +2311,7 @@ export class ChannelSession {
   pshopBlacklistNames(names) { const w = new PacketWriter(C.PLAYER_INTERACTION).byte(0x1E).short(names.length); for (const n of names) w.string(n); this.send(w); }
   /** PLAYER_INTERACTION: 0 create (type 3 = trade), 2 invite, 3 decline, 4 visit, 6 chat, 0xA exit, 0xF item, 0x10 meso, 0x11 confirm */
   tradeStart(cid) {
-    this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3));
+    this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(0).byte(3).byte(0));   // create a trade room: 0, 3, 0, as the client sends it
     this.send(new PacketWriter(C.PLAYER_INTERACTION).byte(2).int(cid));
   }
   /** A trade invitation taken: visit (4) its room, then two zero bytes. */
