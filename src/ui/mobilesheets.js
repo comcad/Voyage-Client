@@ -7,7 +7,8 @@
  *     scroll onto something you wear (Game.useScroll), dropping mesos (InventoryWin.dropMesos);
  *   - equipment: taking something off (Game.unequip);
  *   - stats: AP one at a time or AUTO (StatWin.raise / autoAssign);
- *   - skills: SP (SkillWin.canRaise / raiseId);
+ *   - skills: SP (SkillWin.canRaise / raiseId); its Macros tab is the Skill Macro editor's five macros (their names,
+ *     SHOUT SKILL NAME and three skills each), saved through SkillWin.saveMacros, and Key Setting puts one on a button;
  *   - quests: the Quest window's lists; a picked quest slides out a panel to the left, as the window's detail panel
  *     does: the quest giver standing (its own frames), the level line, a chain's parts, the text in its own names for
  *     NPCs, items and monsters, the summary and rewards, the time left, and its buttons (give up, Quest Helper, Mark NPC);
@@ -75,7 +76,11 @@ const FAMILY_PLACES = [['leader', 'Leader'], ['grand', "Senior's Senior"], ['sen
 const GAME_OPTS = [['whisper', 'Whisper'], ['friends', 'Friends'], ['chatInvite', 'Chat Invite'], ['tradeRequest', 'Trade Request'],
   ['partyInvite', 'Party Invite'], ['partySearch', 'Party Search'], ['gameInvite', 'Game Invite'], ['guildChat', 'Guild Chat'],
   ['guildInvite', 'Guild Invite'], ['allianceTournament', 'Alliance Tournament'], ['allianceInvite', 'Alliance Invite'], ['familyInvite', 'Family Invite']];
-const KEY_SOURCES = [['fn', 'Functions'], ['skill', 'Skills'], ['item', 'Items']];
+const KEY_SOURCES = [['fn', 'Functions'], ['skill', 'Skills'], ['item', 'Items'], ['macro', 'Macros']];
+/** The Skills sheet's tab after the books: the skill macros. */
+const MACROS = 'macros';
+/** A skill that goes on a key or in a macro: a learned one, not an x0xxx passive or an x9xxx one (as SkillWin lets you drag). */
+const keySkill = (id, lv) => lv > 0 && ![0, 9].includes(Math.floor(id / 1000) % 10);
 const sameBinding = (a, b) => !!a && !!b && a.type === b.type && a.action === b.action;
 const X_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
 
@@ -145,6 +150,14 @@ const CSS = `
 .mhud .mh-li .mh-li-name { font-size: 12px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mhud .mh-li .mh-li-sub { font-size: 10px; color: rgba(225, 232, 248, 0.6); }
 .mhud .mh-li.mh-off .mh-li-name { color: rgba(225, 232, 248, 0.45); }
+.mhud .mh-li .mh-li-name.mh-dim { color: rgba(225, 232, 248, 0.45); font-weight: 600; }
+.mhud .mh-mac-sk { display: flex; gap: 3px; margin-top: 2px; }
+.mhud .mh-mac-sk span { width: 22px; height: 22px; border-radius: 5px; background: rgba(0, 0, 0, 0.32); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  display: grid; place-items: center; overflow: hidden; }
+.mhud .mh-li .mh-mac-sk img { width: 32px; height: 32px; transform: scale(0.65); }
+.mhud .mh-mac-cells { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.mhud .mh-mac-cells .mh-cell { width: 44px; flex: none; }
+.mhud .mh-mac-cells .mh-cta { margin-left: auto; }
 .mhud .mh-qd { position: absolute; top: 50px; bottom: calc(6px + env(safe-area-inset-bottom)); right: calc(10px + min(400px, 62%));
   width: min(330px, calc(100% - min(400px, 62%) - 18px - env(safe-area-inset-left))); display: flex; flex-direction: column;
   opacity: 0; transform: translateX(56px) scale(0.98); transform-origin: right center; pointer-events: none;
@@ -293,6 +306,9 @@ export class MobileSheets {
     this.kpick = null;   // Key Setting: the touch button's id or controller button picked
     this.ksrc = 'fn';    // Key Setting: what the bindings to choose from are (functions, skills, items)
     this.sel = null;     // the item slot, equipment slot, skill or quest picked
+    this.mdraft = null;  // the skill macros being edited (Save sends them), taken from the game's on opening the tab
+    this.msel = null;    // the macro picked
+    this.mcell = 0;      // its cell (0-2) the next skill tapped goes into
     this.move = null;    // an item being moved: the next slot tapped takes it
     this.pick = null;    // a scroll being put on: the next thing worn tapped takes it
     this.descs = new Map();
@@ -316,6 +332,7 @@ export class MobileSheets {
       this.leaving();
       if (!keep) this.wm.wins[WINDOW_OF[kind]]?.onOpen?.();   // as its window opens: what CANCEL goes back to, and the like
       this.sel = null; this.move = null; this.kpick = null; if (kind !== 'equip') this.pick = null; this.p.body.scrollTop = 0;
+      this.mdraft = null; this.msel = null; this.mcell = 0;
     }
     this.kind = kind;
     this.el.classList.add('mh-open'); this.hud.el.classList.add('mh-sheeting');
@@ -331,7 +348,7 @@ export class MobileSheets {
   }
   close() {
     this.leaving();
-    this.kind = null; this.sel = null; this.move = null; this.pick = null; this.kpick = null;
+    this.kind = null; this.sel = null; this.move = null; this.pick = null; this.kpick = null; this.mdraft = null; this.msel = null;
     this.el.classList.remove('mh-open'); this.hud.el.classList.remove('mh-sheeting');
     this.showQuest(false);
   }
@@ -347,7 +364,12 @@ export class MobileSheets {
     if (this.kind === 'items') { const t = this.tab.items, inv = g.inventory?.[t] || {}; return `${base}|${t}|${g.meso}|${g.inventory?.limits?.[t]}|${Object.entries(inv).map(([k, it]) => `${k}:${it?.id}:${it?.quantity}`).join(',')}|${!!g.tradeWin}`; }
     if (this.kind === 'equip') return `${base}|${this.tab.equip}|${Object.entries(g.inventory?.equipped || {}).map(([k, it]) => `${k}:${it?.id}`).join(',')}`;
     if (this.kind === 'stats') return `${base}|${JSON.stringify([s.level, s.job, s.hp, s.mp, s.exp, s.fame, s.ap, s.str, s.dex, s.int, s.luk, g.maxHpShown(), g.maxMpShown(), g.guild?.name, g.statWindow?.()])}`;
-    if (this.kind === 'skills') { const w = this.wm?.wins.skill; this.book ??= w?.books?.[w.books.length - 1]; if (w && this.book) w.book = this.book; return `${base}|${this.book}|${s.sp}|${(w?.list || []).map((id) => g.skills.level(id)).join(',')}|${!!g.skills?.strings}`; }
+    if (this.kind === 'skills') {
+      const w = this.wm?.wins.skill; this.book ??= w?.books?.[w.books.length - 1]; if (w && this.book && this.book !== MACROS) w.book = this.book;
+      // (the macros' names left out: typing one doesn't draw the sheet again under the field)
+      const mac = this.book === MACROS ? JSON.stringify([this.msel, this.mcell, (this.mdraft || []).map((m) => [m.shout, m.skills]), Object.keys(g.skills?.levels || {}).length]) : '';
+      return `${base}|${this.book}|${s.sp}|${(w?.list || []).map((id) => g.skills.level(id)).join(',')}|${!!g.skills?.strings}|${mac}`;
+    }
     if (this.kind === 'quests') {
       const w = this.wm?.wins.quest;
       if (!w) return base;
@@ -588,9 +610,13 @@ export class MobileSheets {
     const g = this.g, sb = g.skills, w = this.wm.wins.skill, list = el('div', 'mh-list');
     if (!sb || !w) return list;
     const books = w.books;
-    this.book = books.includes(this.book) ? this.book : books[books.length - 1];
-    w.book = this.book;
-    this.tabs(books.map((b) => [b, sb.bookName(b)]), this.book, (b) => { this.book = b; w.book = b; });
+    this.book = books.includes(this.book) || this.book === MACROS ? this.book : books[books.length - 1];
+    if (this.book !== MACROS) w.book = this.book;
+    this.tabs([...books.map((b) => [b, sb.bookName(b)]), [MACROS, 'Macros']], this.book, (b) => {
+      this.book = b;
+      if (b === MACROS) { this.mdraft = null; this.msel = null; this.mcell = 0; } else w.book = b;
+    });
+    if (this.book === MACROS) return this.macros();
     this.p.extra.append(el('span', 'mh-pill', `SP ${w.sp}`));
     const ids = w.list;
     if (!ids.length) list.append(el('div', 'mh-empty', 'No skills in this book.'));
@@ -615,6 +641,80 @@ export class MobileSheets {
       d.append(head, el('div', 'mh-dt-text', plain(sb.desc(id))));
     }
     return list;
+  }
+
+  // ---------------------------------------------------------------- Skill macros
+  /**
+   * The Skill Macro editor's five macros: each with its icon (Macroicon/<n>), name and three skills. One picked opens
+   * below: its name (12 letters), SHOUT SKILL NAME, its three cells (tap one, then a skill for it; Clear empties it)
+   * and the skills that go in one. Save is the editor's own (SkillWin.saveMacros): the names checked for cursing,
+   * SKILL_MACRO sent, "It is saved."; leaving the tab unsaved drops the changes, as closing the editor does.
+   */
+  macros() {
+    const g = this.g, sb = g.skills, M = this.wm.W.SkillMacro, list = el('div', 'mh-list');
+    this.mdraft ??= Array.from({ length: 5 }, (_, i) => {
+      const m = g.macros?.[i];
+      return m ? { ...m, skills: [...m.skills] } : { name: '', shout: false, skills: [0, 0, 0] };
+    });
+    this.mdraft.forEach((m, i) => {
+      const row = el('div', `mh-li${this.msel === i ? ' mh-sel' : ''}`), main = el('div', 'mh-li-main'), cells = el('div', 'mh-mac-sk');
+      row.append(this.img(M?.Macroicon?.[i]?.icon));
+      main.append(el('div', `mh-li-name${m.name ? '' : ' mh-dim'}`, m.name || `Macro ${i + 1}`));
+      for (const id of m.skills) { const c = el('span'); if (id) c.append(this.img(sb?.icon(id))); cells.append(c); }
+      main.append(cells);
+      row.append(main);
+      this.hud.tap(row, () => { this.msel = this.msel === i ? null : i; this.mcell = 0; this.render(); });
+      list.append(row);
+    });
+    const ctas = el('div', 'mh-ctas');
+    ctas.append(this.button('Save', () => this.saveMacros(), 'mh-main'));
+    list.append(ctas);
+    if (this.msel !== null && this.mdraft[this.msel]) this.macroDetail(this.mdraft[this.msel], this.msel);
+    return list;
+  }
+  macroDetail(m, i) {
+    const sb = this.g.skills, M = this.wm.W.SkillMacro, out = this.p.detail, head = el('div', 'mh-dt-head');
+    head.append(this.img(M?.Macroicon?.[i]?.icon));
+    const name = el('input', 'mh-in');
+    Object.assign(name, { type: 'text', maxLength: 12, value: m.name, placeholder: `Macro ${i + 1}`, autocomplete: 'off', spellcheck: false });
+    name.addEventListener('input', () => { m.name = name.value; });
+    name.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter' || e.key === 'Escape') name.blur(); });
+    for (const t of ['keyup', 'keypress', 'pointerdown']) name.addEventListener(t, (e) => e.stopPropagation());
+    head.append(name);
+    out.append(head);
+    const shout = el('div', 'mh-kv mh-opt'), em = el('em');
+    em.append(this.switch(m.shout, () => { m.shout = !m.shout; }));
+    shout.append(el('span', null, 'Shout skill name'), em);
+    out.append(shout);
+    const cells = el('div', 'mh-mac-cells');
+    m.skills.forEach((id, k) => {
+      const c = el('div', `mh-cell${this.mcell === k ? ' mh-sel' : ''}`);
+      if (id) { c.append(this.img(sb?.icon(id))); c.title = sb?.name(id) || ''; } else c.append(el('i', null, String(k + 1)));
+      this.hud.tap(c, () => { this.mcell = k; this.render(); });
+      cells.append(c);
+    });
+    cells.append(this.button('Clear', () => { m.skills[this.mcell] = 0; this.render(); }));
+    out.append(cells);
+    out.append(el('div', 'mh-sec', `Skill for cell ${this.mcell + 1}`));
+    const ids = Object.entries(sb?.levels || {}).filter(([id, v]) => keySkill(Number(id), v?.level || 0)).map(([id]) => Number(id)).sort((a, b) => a - b);
+    if (!ids.length) { out.append(el('div', 'mh-empty', 'No skills that go in a macro yet.')); return; }
+    const grid = el('div', 'mh-grid');
+    for (const id of ids) {
+      const c = el('div', `mh-cell${m.skills[this.mcell] === id ? ' mh-sel' : ''}`);
+      c.title = sb.name(id);
+      if (!sb.icon(id)) sb.ensure?.(id);
+      c.append(this.img(sb.icon(id)));
+      this.hud.tap(c, () => { sfx.play('UI/BtMouseClick'); m.skills[this.mcell] = id; this.mcell = Math.min(2, this.mcell + 1); this.render(); });
+      grid.append(c);
+    }
+    out.append(grid);
+  }
+  async saveMacros() {
+    const w = this.wm.wins.skill;
+    if (!w || !this.mdraft) return;
+    w.draft = this.mdraft.map((m) => ({ ...m, skills: [...m.skills] }));
+    await w.saveMacros();
+    this.render();
   }
 
   // ---------------------------------------------------------------- System Options
@@ -829,15 +929,16 @@ export class MobileSheets {
     if (b.type === 1) return this.g.skills?.name(b.action) || 'Skill';
     if (b.type === 2 || b.type === 3 || b.type === 7) return this.wm.itemName(b.action) || 'Item';
     if (b.type === 6) return `Face ${b.action - 99}`;
+    if (b.type === 8) return this.g.macros?.[b.action]?.name || `Macro ${b.action + 1}`;
     return bindingLabel(b) || 'Function';
   }
   /** What can go on a button: the functions with their icons, the skills you have that go on a key, your key items. */
   bindables(src) {
     const g = this.g;
     if (src === 'skill') {
-      return Object.entries(g.skills?.levels || {}).filter(([id, s]) => (s?.level || 0) > 0 && ![0, 9].includes(Math.floor(id / 1000) % 10))
-        .map(([id]) => ({ type: 1, action: Number(id) }));
+      return Object.entries(g.skills?.levels || {}).filter(([id, s]) => keySkill(Number(id), s?.level || 0)).map(([id]) => ({ type: 1, action: Number(id) }));
     }
+    if (src === 'macro') return Array.from({ length: 5 }, (_, i) => ({ type: 8, action: i }));   // (a key type 8: the macro's number)
     if (src === 'item') {
       const out = [], seen = new Set();
       for (const tab of [2, 3, 4, 5]) {
