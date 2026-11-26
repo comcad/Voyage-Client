@@ -10965,13 +10965,22 @@ export class Game {
     // your body joined with where you were the frame before, against each monster's touch box (they must overlap,
     // not just meet)
     const pb = this.playerBody(last), meets = (b) => Math.max(b.left, pb.left) < Math.min(b.right, pb.right) && Math.max(b.top, pb.top) < Math.min(b.bottom, pb.bottom);
-    if (isHideMorph(this.morphTpl())) return;   // in the Oak Barrel monsters walk past without touching you
+    const barrel = isHideMorph(this.morphTpl());
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.alive || m.dying || !m.hasBody || m.src.info?.bodyAttack === 0) continue;
       if (hidden && Number(m.spawn?.id) !== 9400594) continue;   // only the Master Guardian finds you in Dark Sight
       // nor one that may not attack (info/notAttack), one only monsters hurt (info/damagedByMob), or a Hypnotized one
       if (Number(m.src.info?.notAttack) || Number(m.src.info?.damagedByMob) || hypnotized(m)) continue;
       if (!meets(m.touchBox())) continue;
+      // in the Oak Barrel a touch doesn't hurt: every 2s one rolls its prop (in 100, that number too) to break it
+      if (barrel) {
+        const now = performance.now();
+        if (now - (this.barrelRollAt ?? -Infinity) > 1999) {
+          this.barrelRollAt = now;
+          if (Math.floor(Math.random() * 100) <= (Number(this.skills.levelData(5101007)?.prop) || 0)) this.net?.cancelBuff(5101007);
+        }
+        return;
+      }
       // a monster with info/ban/banType 1 (Hogul, the Mirror Ghost...) banishes you to its banMap on touch
       if (Number(m.src.info?.ban?.banType) === 1) this.net?.mobBanishPlayer(Number(m.spawn?.id));
       // thrown the way the monster moved relative to you; climbing up a ladder or rope, it doesn't knock you off
@@ -11265,7 +11274,7 @@ export class Game {
   }
   /**
    * A blow from the field itself (an obstacle, a Snowball snowman): TAKE_DAMAGE -3 with its disease, shown in violet,
-   * and you're thrown (vx, vy) unless you hold your stance; then the usual protection after a hit.
+   * and you're thrown (vx, vy) - Power Stance doesn't hold against it; then the usual protection after a hit.
    */
   fieldHurt(d, vx, vy, disease = 0) {
     const p = this.player;
@@ -11274,7 +11283,7 @@ export class Game {
     this.vfx?.damage(p, [d], 'violet');
     setExpression(p, 1, HIT_FACE_TIME);
     if (d > 0) this.askStandUp(0);   // a blow that does damage asks to stand up
-    if ((vx || vy) && !this.holdsStance()) {
+    if (vx || vy) {   // (no stance roll: that is only for monsters' blows)
       if (vy < 0 && p.fh) p.y = Math.floor(p.y - 1);
       if (vy < 0) { p.fh = null; p.ladder = null; }
       p.vx = vx; if (vy) p.vy = vy;
@@ -11356,14 +11365,25 @@ export class Game {
     }
     return Array.isArray(this.stdPdd) && cls >= 0 && cls <= 5 && lv >= 0 && lv <= 200 ? this.stdPdd[cls][lv] : 0;
   }
-  /** Power Stance's roll on a hit that would throw you back (see STANCES): true when you stand firm. */
+  /**
+   * The stance roll on a monster's blow that would throw you back: under Power Stance (see STANCES) at its rate; failing
+   * that, with a full Energy Charge at that skill's prop (the same roll). True when you stand firm. Not where the map
+   * bars it.
+   */
   holdsStance() {
+    if ((this.map?.info?.fieldLimit || 0) & 2) return false;
     const now = Date.now(), b = (this.buffs || []).find((x) => (x.stance || Object.values(STANCES).includes(x.source)) && x.until > now);
-    if (!b || ((this.map?.info?.fieldLimit || 0) & 2)) return false;
-    const rate = Math.max(0, Math.min(100, b.stance ?? this.skills.levelData(b.source)?.prop ?? 0));
-    if (Math.floor(Math.random() * 100) >= rate) return false;
-    const id = STANCES[this.stats?.job] || b.source;
-    if (id) this.playSkillEffect(id, this.player, false, 'special');
+    const roll = Math.floor(Math.random() * 100);
+    const rate = b ? Math.max(0, Math.min(100, b.stance ?? this.skills.levelData(b.source)?.prop ?? 0)) : 0;
+    if (roll < rate) {
+      const id = STANCES[this.stats?.job] || b.source;
+      if (id) this.playSkillEffect(id, this.player, false, 'special');
+      return true;
+    }
+    if ((this.energy || 0) < FULL_ENERGY) return false;
+    const ec = Math.floor((this.stats?.job || 0) / 1000) === 1 ? THUNDER_ENERGY_CHARGE : ENERGY_CHARGE;
+    if (!this.skills.level(ec) || roll >= Math.max(0, Math.min(100, Number(this.skills.levelData(ec)?.prop) || 0))) return false;
+    this.playSkillEffect(ec, this.player, false, 'special');
     return true;
   }
   /**
@@ -11385,33 +11405,44 @@ export class Game {
    */
   hurtBy(m, power, magic, from, knock = m.x > this.player.x ? -1 : 1, attack = null) {
     const p = this.player;
-    if (this.friendlyToYou(m)) return;
-    if (performance.now() < (this.boomerangUntil || 0)) return;   // mid Boomerang Step
+    if (this.friendlyToYou(m)) return false;
+    if (performance.now() < (this.boomerangUntil || 0)) return false;   // mid Boomerang Step
+    if (this.inSmokescreen()) return false;
     let damage = this.damageTaken(m, power, magic, attackElement(attack?.elemAttr));
-    // a deadly attack leaves you 1 HP
+    // a deadly attack leaves you 1 HP; one that burns MP does 1
     if (damage > 0 && attack?.deadlyAttack) damage = Math.max(1, (this.stats?.hp || 1) - 1);
+    if (damage > 0 && Number(attack?.mpBurn)) damage = 1;
+    const element = magic ? attackElement(attack?.elemAttr) : 0;
     const fromRight = m.x > p.x;
     // while Chakra winds up, blows do only its x%
     if (damage > 0 && this.chakra) damage = Math.max(1, Math.trunc((damage * this.chakra.x) / 100));
     // Shadow Shifter: at its prop chance the blow (hit or miss) is dodged - no number, no knock-back
     const shifter = SHIFTERS[this.stats?.job];
     if (shifter && this.skills.level(shifter) && !((this.map?.info?.fieldLimit || 0) & 2) && Math.random() * 100 < (this.skills.levelData(shifter)?.prop || 0)) {
-      this.net.takeDamage({ damage: -1, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.net.takeDamage({ damage: -1, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from, element });
       this.playSkillEffect(shifter, p, false, 'special');
       setExpression(p, 2, HIT_FACE_TIME);
       this.invincible = HIT_PROTECTION; this.missed = true;
-      return;
+      return true;
     }
     if (damage <= 0) {   // MISS: no knockback or blinking, but the same 1.5s before the next blow as a hit
-      this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from });
+      this.net.takeDamage({ damage: 0, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from, element });
       this.petHitPots(m, 0, from);
       this.vfx?.damage(p, [0], 'violet');
       this.invincible = HIT_PROTECTION; this.missed = true;
-      return;
+      return true;
+    }
+    // Guardian: a Hero's or Paladin's shield blocks the blow at its prop (in 1000): no damage, no knock-back
+    const guardian = this.guardianBlocks();
+    if (guardian) {
+      this.net.takeDamage({ damage: -1, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from, element });
+      this.playSkillEffect(guardian, p, false, 'special');
+      this.invincible = HIT_PROTECTION; this.missed = true;
+      return true;
     }
     // the stance (Power Stance) is rolled first, as the client does: the packet says whether you stood firm
     const stood = this.holdsStance();
-    this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from, stance: stood });
+    this.net.takeDamage({ damage, mobId: m.spawn.id, oid: m.oid, direction: fromRight ? 1 : 0, from, stance: stood, element });
     this.catchBreath();
     // a blow ends Hurricane and Rapid Fire (not the skills being charged)
     if (this.keydown && HELD_SHOTS.has(this.keydown.id)) this.endKeydown();
@@ -11425,7 +11456,6 @@ export class Game {
     }
     this.petHitPots(m, lost, from, damage - lost);
     this.vfx?.damage(p, [lost], 'violet');
-    if (CHAR_DAM[from]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[from]}`);
     setExpression(p, 1, HIT_FACE_TIME);
     this.askStandUp(0);   // a blow that does damage asks to stand up
     // the 270/270 impulse adds to how you were already moving, up to 270 each way: walking or jumping into the
@@ -11433,13 +11463,42 @@ export class Game {
     const impact = (v, k) => (k > 0 ? (v < k ? Math.min(v + k, k) : v) : (v > k ? Math.max(v + k, k) : v));
     if (stood) knock = 0;
     if (knock) {
+      // an attack with info/knockback pushes you straight away from the monster, 1900 on a floor (900 in the air);
+      // a touch under Power Guard throws you 200 each way
+      const push = Number(attack?.knockback) ? (p.fh ? 1900 : 900) : 0;
+      const kb = from === -1 && this.buffs?.some((b) => POWER_GUARDS.includes(b.source) && b.until > Date.now()) ? 200 : KNOCKBACK;
       if (p.fh) p.y = Math.floor(p.y - 1);
       p.fh = null; p.ladder = null;
-      p.vx = impact(p.vx || 0, knock * KNOCKBACK); p.vy = impact(p.vy || 0, -KNOCKBACK);
+      if (push) p.vx = impact(p.vx || 0, (fromRight ? -1 : 1) * push);
+      else { p.vx = impact(p.vx || 0, knock * kb); p.vy = impact(p.vy || 0, -kb); }
     }
     // an attack under way goes on (thrown with it, if knocked back): being hit neither ends it nor lets you turn
     // before it's over
     this.invincible = HIT_PROTECTION; this.missed = false;
+    return true;
+  }
+  /**
+   * Inside a Smokescreen that has begun, yours or a party member's (your feet in its box): monsters' blows and
+   * touches don't reach you.
+   */
+  inSmokescreen() {
+    const p = this.player, me = p?.id, now = performance.now(), party = this.party?.members?.map((x) => x.id) || [];
+    for (const d of this.mists?.values() || []) {
+      if (d.kind !== 2 || now < d.start || (d.owner !== me && !party.includes(d.owner))) continue;
+      if (p.x >= d.left && p.x < d.right && p.y >= d.top && p.y < d.bottom) return true;
+    }
+    return false;
+  }
+  /**
+   * Guardian's roll on a blow: a Hero (1120005) or Paladin (1220006) who has it, with a shield on, not on a map that
+   * bars it and not riding a mount (190xxxx / 193xxxx), blocks at its prop in 1000. The skill when it blocks, else 0.
+   */
+  guardianBlocks() {
+    const job = this.stats?.job, id = job === 112 ? 1120005 : job === 122 ? 1220006 : 0;
+    if (!id || !this.skills.level(id) || !this.inventory?.equipped?.[-10]) return 0;
+    const ride = Math.floor((this.riding?.item || 0) / 10000);
+    if (((this.map?.info?.fieldLimit || 0) & 2) || ride === 190 || ride === 193) return 0;
+    return Math.floor(Math.random() * 1000) < (Number(this.skills.levelData(id)?.prop) || 0) ? id : 0;
   }
 
   /**
@@ -11803,13 +11862,28 @@ export class Game {
     const b = this.playerBody(this.prevPos);
     if (x >= b.left && x < b.right && y >= b.top && y < b.bottom) { l.hitYou = true; this.mobAttackHurts(m, l.a); }
   }
-  /** A monster's attack hurts you: its damage (MADamage when magic, else PADamage), and its hit art on you. */
+  /**
+   * A monster's attack strikes you: its damage (MADamage when magic, else PADamage); then, hit or miss, its hit art and
+   * its CharDam sound - the art on you (hit/attach, turned your way; hit/attachfacing, turned toward the monster) or at
+   * a random point of your body (joined with where you were a tick before), turned away from the monster.
+   */
   mobAttackHurts(m, a) {
-    const p = this.player, magic = !!a.info.magic;
+    const p = this.player, magic = !!a.info.magic, knock = m.x > p.x ? -1 : 1;
     const power = Number(magic ? a.info.MADamage ?? m.src.info?.MADamage : a.info.PADamage ?? m.src.info?.PADamage) || 1;
-    this.hurtBy(m, power, magic, a.index, undefined, a.info);
-    const hit = a.info.hit && Game.fxNode(a.info.hit);
-    if (hit) { const anim = new Anim(hit, false); this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p })); }
+    if (!this.hurtBy(m, power, magic, a.index, knock, a.info)) return;
+    const node = a.info.hit, hit = node && Game.fxNode(node);
+    if (hit) {
+      const anim = new Anim(hit, false);
+      let e;
+      if (Number(node.attach)) e = { anim, follow: p };
+      else if (Number(node.attachfacing)) e = { anim, pin: () => ({ x: p.x, y: p.y }), flip: m.x > p.x };
+      else {
+        const b = this.playerBody(this.prevPos), r = (n) => (n > 0 ? Math.floor(Math.random() * n) : 0);
+        e = { anim, x: b.left + r(b.right - b.left), y: b.top + r(b.bottom - b.top), flip: knock > 0 };
+      }
+      this.assets.preload(anim.frames).then(() => this.fx.push(e));
+    }
+    if (CHAR_DAM[a.index]) sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/${CHAR_DAM[a.index]}`);
   }
   /**
    * A shot's target in your game, for its start check: your body (aimed at you), a monster's (kind 3, by its oid);

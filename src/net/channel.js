@@ -2047,8 +2047,9 @@ export class ChannelSession {
    * A monster's blow on you: after its direction, as the client sends it, the share a reflection sent back (0: none),
    * the Guardian byte (0: not guarded) and 1 when a stance kept you from being thrown.
    */
-  takeDamage({ damage, mobId, oid, direction = 0, from = -1, stance = false }) {
-    this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(0).int(damage).int(mobId).int(oid).byte(direction)
+  /** TAKE_DAMAGE: the time, which attack (-1 a touch), its element (a magic attack's), the damage... the stance roll. */
+  takeDamage({ damage, mobId, oid, direction = 0, from = -1, stance = false, element = 0 }) {
+    this.send(new PacketWriter(C.TAKE_DAMAGE).int(Date.now() | 0).byte(from).byte(element).int(damage).int(mobId).int(oid).byte(direction)
       .byte(0).byte(0).byte(stance ? 1 : 0));
   }
 
