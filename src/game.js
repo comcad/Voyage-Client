@@ -4502,7 +4502,10 @@ export class Game {
     if (!this.stats) return;
     if (enable) { this.apPending = false; this.scriptPending = 0; this.cashBusy = false; }
     const before = this.stats.level, exp0 = this.stats.exp, job0 = this.stats.job;
+    const restyled = ['skin', 'face', 'hair'].some((k) => s[k] !== undefined && s[k] !== this.stats[k]);
     Object.assign(this.stats, s);
+    // a new skin, face or hair (a stylist, a coupon, KIN) shows on you at once, not only after the next equip change
+    if (restyled && this.inventory) this.rebuildLook();
     if (s.level > before) this.petEvent('e_levelup');
     else if (s.exp > exp0 && s.exp >= (EXP[this.stats.level] || Infinity) * 0.9 && performance.now() - (this.petPreLevelT ?? -Infinity) >= 420000) { this.petPreLevelT = performance.now(); this.petEvent('e_prelevelup'); }
     this.petAutoPot('mp');
