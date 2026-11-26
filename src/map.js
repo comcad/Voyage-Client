@@ -604,6 +604,39 @@ function findMapName(strMap, id) {
 
 // MonsterStatus bits (second mask) that hold a monster still
 const MOB_SPEED = 0x40, MOB_STUN = 0x80, MOB_FREEZE = 0x100, MOB_WEB = 0x20000;
+const MOB_DOOM_BIT = 0x10000;   // Doom (second mask): it is the Blue Snail, which has no attacks
+/** Whether two boxes share some area, as IntersectRect takes it (an empty or turned-over box shares none). */
+export function boxesMeet(a, b) { return Math.max(a.left, b.left) < Math.min(a.right, b.right) && Math.max(a.top, b.top) < Math.min(a.bottom, b.bottom); }
+/**
+ * An area attack's spots chosen, as the client draws them: `most` numbers from start .. start + count - 1 at random,
+ * none twice within a round of `count` (more rounds when most is larger).
+ */
+function areaPicks(start, count, most) {
+  const out = [];
+  for (let left = most; left > 0;) {
+    const take = Math.min(left, count), pool = [];
+    for (let i = 0; i < count; i++) pool.push(start + i);
+    for (let i = 0; i < take; i++) out.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+    left -= take;
+    if (!count) break;
+  }
+  return out;
+}
+/**
+ * Whether a shot's reach from (sx, sy) out to ex meets a body, as the client tests it: 20px slices outward, each a
+ * quarter of its distance from the start tall up and down (and 1 more below), the first one 1px high.
+ */
+function wedgeMeets(sx, ex, sy, body) {
+  let x = sx, d = 0;
+  for (;;) {
+    if (sx <= ex ? !(x < ex) : !(ex < x)) return false;
+    let s, h;
+    if (sx <= ex) { h = Math.trunc((x - sx) / 4); s = { left: x, right: Math.min(x + 20, ex) }; x += 20; }
+    else { h = Math.trunc(d / 4); s = { left: Math.max(x - 20, ex), right: x }; x -= 20; d += 20; }
+    s.top = sy - h; s.bottom = sy + h + 1;
+    if (boxesMeet(s, body)) return true;
+  }
+}
 /**
  * The colour a status tints its monster with (its picture's colours multiplied by it), by the skill that put it on:
  * poison green for Poison Breath, Poison Mist and the Fire/Poison Element Composition; grey for Paralyze; red for Fire
@@ -755,6 +788,7 @@ export class Life {
       if (type <= 4 && info.range) this.attacks.push({ n, index: n - 1, info, type });
     }
     this.attackT = 1 + Math.random() * 2;
+    this.lands = [];   // what its attacks have still to strike (registerAttack)
     // its skills (info/skill: skill, level, which skillN animation, effectAfter); the server offers one at a time
     this.mobSkills = Object.values(src.info?.skill || {}).filter((s) => s?.skill);
     for (let n = 1; kind === 'Mob' && src[`skill${n}`]; n++) this.anims[`skill${n}`] = new Anim(src[`skill${n}`], false);
@@ -1024,7 +1058,7 @@ export class Life {
   kill(type = 1) {
     this.status = { first: 0, second: 0 }; this.statusArt.clear();
     this.dying = true;
-    if (type !== 1 && type !== 3 && this.anims.attack1) { this.deathAttack = true; this.attacking = null; this.playAttack(0); return; }
+    if (type !== 1 && type !== 3 && this.anims.attack1) { this.deathAttack = true; this.attacking = null; this.playAttack(0, this.attackFacing, 0); return; }
     const dies = Object.keys(this.src).filter((k) => k.startsWith('die')).length;
     const name = type === 3 ? 'skill1' : ['die1', 'die2', 'dieF'][Math.floor(Math.random() * dies)];
     if (name && name !== 'die1' && this.src[name]) this.anims.die1 = new Anim(this.src[name], false);
@@ -1243,20 +1277,17 @@ export class Life {
     if (this.state === 'regen') { if (anim.done) this.setState(this.flying ? 'fly' : 'stand'); return; }
     if (this.kind === 'Npc') { this.npcStep(dt); return; }
     if (this.appearing) return;   // still being summoned in: unseen, and it doesn't act
+    // what its attacks will strike, each at its own time from the attack's start, whatever pose it is in by then
+    if (this.lands.length && (this.state !== 'die1' || this.deathAttack)) this.stepLands(dt * 1000);
     if (this.attacking) {
       if (this.online && this.path) this.playPath(dt, true);
-      const at = this.attacking;
-      at.t += dt * 1000;
-      if (!at.landed && at.t >= (Number(at.a.info.attackAfter) || 0)) { at.landed = true; this.onAttackLand?.(this, at.a, at.spots); }
+      this.attacking.t += dt * 1000;
       const posing = this.state.startsWith('attack') || this.state.startsWith('skill');
       if (posing && (!anim || anim.done)) {
-        if (this.deathAttack) { if (!at.landed) this.onAttackLand?.(this, at.a, at.spots); this.removed = true; return; }
+        if (this.deathAttack) { this.landNow(); this.removed = true; return; }
         this.setState(this.flying ? 'fly' : 'stand');
-        // an area attack's spots erupt on its own clock (attackAfter), even after the monster has finished its pose
-        if (at.a.type >= 3 && !at.landed) return;
-        if (!at.landed) this.onAttackLand?.(this, at.a, at.spots);
         this.attacking = null;
-      } else if (!posing && at.landed) this.attacking = null;
+      } else if (!posing) this.attacking = null;
       return;
     }
     if (this.pull && this.state !== 'die1') {
@@ -1379,40 +1410,151 @@ export class Life {
     return { start, moves };
   }
 
-  /** Where attack `a` reaches, facing as it does now: its box, or (types 1 and 2) its start point and radius. */
-  attackReach(a) {
-    const r = a.info.range, s = this.facesRight ? -1 : 1;
-    if (a.type === 0) {
-      const x1 = this.x + s * r.lt[0], x2 = this.x + s * r.rb[0];
-      return { box: { left: Math.min(x1, x2), right: Math.max(x1, x2), top: this.y + r.lt[1], bottom: this.y + r.rb[1] } };
+  /** Its facing as the client takes it for attacks: 1 to the left (always, for one that is noFlip), 0 to the right. */
+  get attackFacing() { return Number(this.src?.info?.noFlip) || !this.facingRight ? 1 : 0; }
+  /** Attack `a`'s box from where it stands: facing `f` 1 (left) its lt/rb as they are, 0 (right) mirrored. */
+  attackBox(a, f) {
+    const r = a.info.range || {}, lt = r.lt || [0, 0], rb = r.rb || [0, 0], x = Math.round(this.x), y = Math.round(this.y);
+    return f ? { left: x + lt[0], right: x + rb[0], top: y + lt[1], bottom: y + rb[1] } : { left: x - rb[0], right: x - lt[0], top: y + lt[1], bottom: y + rb[1] };
+  }
+  /** The first floor's height at x between y1 and y2 (both included), as the client looks for a spot's ground; null for none. */
+  floorNear(x, y1, y2) {
+    for (const f of this.footholds?.floors || []) {
+      if (x < f.x1 || x > f.x2) continue;
+      const y = Math.trunc(((f.y2 - f.y1) * (x - f.x1)) / (f.x2 - f.x1)) + f.y1;
+      if (y >= y1 && y <= y2) return y;
     }
-    return { sx: this.x + s * (r.sp?.[0] || 0), sy: this.y + (r.sp?.[1] || 0), r: r.r || 0 };
+    return null;
   }
   /**
-   * An area attack's spots: `areaCount` boxes side by side, each as wide as its lt/rb, numbered from `start` (so
-   * start -6 with 12 spots runs from six to the left to five to the right; mirrored as it faces). Type 3 spots sit on
-   * the ground under them, type 4 at its own height. `pick` of them (attackCount, chosen at random) erupt, or all.
+   * The client's pick of an attack on `t` (you, a summon or a monster), each time it may attack. Of its attacks in
+   * order, it passes over one that is inactive, needs more MP (conMP) than it has, is a specialAttack (allowed only
+   * by a packet this server never sends), is not doFirst while that is all it may do (after RESET_MONSTER_ANIMATION,
+   * until its next attack or skill), or is a physical one on you while you are in Dark Sight or Wind Walk (Master
+   * Guardian aside); a monster that blows itself up never picks its last. Then whether it reaches `t`'s body, the way
+   * it faces first, then (unless it is noFlip) the other way - which is the way it then faces: a box (type 0); a
+   * shot's reach (types 1 and 2, wedgeMeets) from its start point out its range r; for an area attack (3, 4) only
+   * when facing left (or noFlip) and 2.5s after its last spot, the spots' span across and their height, and of
+   * attackCount spots chosen at random from areaCount, those with a floor within 100px up or down (type 3) or all
+   * (type 4). One of those that pass, at random: { a, facing, data } - data is what it aims at, for everyone's game
+   * (a shot: the target's id << 2 | its kind; a ball: the point to fly at, x low and y high; area: the spots' bits).
+   * Doomed, or notAttack: none.
    */
-  areaSpots(a, pick = false) {
-    const r = a.info.range, w = r.rb[0] - r.lt[0], s = this.facesRight ? -1 : 1, spots = [];
-    for (let i = 0; i < (r.areaCount || 1); i++) {
-      const col = (r.start || 0) + i;
-      const x1 = this.x + s * (r.lt[0] + col * w), x2 = this.x + s * (r.rb[0] + col * w);
-      let base = this.y;
-      if (a.type === 3) { const f = this.footholds?.below((x1 + x2) / 2, this.y - 60, 400); if (f) base = Footholds.yAt(f, (x1 + x2) / 2); }
-      spots.push({ left: Math.min(x1, x2), right: Math.max(x1, x2), top: base + r.lt[1], bottom: base + r.rb[1], x: (x1 + x2) / 2, y: base });
+  pickAttack(t) {
+    const info = this.src?.info || {};
+    if ((this.status.second & MOB_DOOM_BIT) || Number(info.notAttack) || !this.attacks.length) return null;
+    const body = this.bodyOf?.(t) ?? (t.kind === 'Mob' ? t.hitBox() : { left: t.x - 22, right: t.x + 22, top: t.y - 65, bottom: t.y });
+    if (!body) return null;
+    const kind = t.kind === 'Mob' ? 2 : t.puppet !== undefined ? 1 : 0;
+    const f = this.attackFacing, noFlip = !!Number(info.noFlip), x = Math.round(this.x), y = Math.round(this.y);
+    const mp = this.mp ?? (Number(info.maxMP) || 0);
+    let total = 0;
+    while (this.src[`attack${total + 1}`]) total++;
+    const ok = [];
+    for (const a of this.attacks) {
+      const ai = a.info, r = ai.range || {};
+      if (this.doFirstOnly && !Number(ai.doFirst)) continue;
+      if (Number(ai.inactive) || (Number(ai.conMP) || 0) > mp || Number(ai.specialAttack)) continue;
+      if (kind === 0 && !Number(ai.magic) && Number(this.spawn?.id) !== 9400594 && this.targetHidden?.(t)) continue;
+      if (info.selfDestruction && a.index === total - 1) continue;
+      let side = null, data = 0;
+      if (a.type === 0) {
+        const L = this.attackBox(a, 1), R = this.attackBox(a, 0);
+        side = f ? (boxesMeet(L, body) ? 1 : !noFlip && boxesMeet(R, body) ? 0 : null) : boxesMeet(R, body) ? 0 : boxesMeet(L, body) ? 1 : null;
+      } else if (a.type === 1 || a.type === 2) {
+        const spx = Number(r.sp?.[0]) || 0, sy = y + (Number(r.sp?.[1]) || 0), range = Number(r.r) || 0;
+        const L = () => wedgeMeets(x + spx, x + spx - range, sy, body), R = () => wedgeMeets(x - spx, x - spx + range, sy, body);
+        side = f ? (L() ? 1 : !noFlip && R() ? 0 : null) : R() ? 0 : L() ? 1 : null;
+        if (side !== null && a.type === 1) data = this.aimData?.(t) ?? 0;
+        if (side !== null && a.type === 2) {
+          // the near side of its body, 10px in (its middle when that is nearer), at the start point's height kept
+          // 10px inside its top and bottom - its middle when the start is between those
+          const mid = Math.trunc((body.left + body.right) / 2);
+          const tx = f ? Math.max(body.right - 10, mid) : Math.min(body.left + 10, mid);
+          const ty = sy < body.top + 10 ? body.top + 10 : sy > body.bottom - 10 ? body.bottom - 10 : Math.trunc((body.top + body.bottom) / 2);
+          data = ((ty & 0xffff) << 16) | (tx & 0xffff);
+        }
+      } else if ((a.type === 3 || a.type === 4) && performance.now() - (this.areaAt ?? -Infinity) > 2499) {
+        const start = Number(r.start) || 0, count = Number(r.areaCount) || 0, most = Number(r.attackCount) || 0;
+        const lt = r.lt || [0, 0], rb = r.rb || [0, 0], w = rb[0] - lt[0], s = f ? 1 : -1;
+        // (facing right the span comes out turned over, and meets nothing)
+        const span = { left: x + s * w * start, right: x + s * (start + count) * w, top: y + lt[1], bottom: y + rb[1] };
+        if (!boxesMeet(span, body)) continue;
+        for (const k of areaPicks(start, count, most)) {
+          const cx = s * (k * w + Math.trunc(w / 2)) + x;
+          if (a.type === 4 || this.floorNear(cx, y - 100, y + 100) !== null) data |= 1 << ((k - start) & 31);
+        }
+        if (data) side = f;
+      }
+      if (side !== null) ok.push({ a, facing: noFlip ? 1 : side, data });
     }
-    if (!pick) return spots;
-    for (let i = spots.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [spots[i], spots[j]] = [spots[j], spots[i]]; }
-    return spots.slice(0, Math.max(1, r.attackCount || 1));
+    return ok.length ? ok[Math.floor(Math.random() * ok.length)] : null;
   }
-  /** Whether attack `a` reaches a body (a box): overlapping its reach, or its middle within the radius in front. */
-  reaches(a, body, spots = null) {
-    if (a.type >= 3) return (spots || this.areaSpots(a)).some((q) => q.right >= body.left && q.left <= body.right && q.bottom >= body.top && q.top <= body.bottom);
-    const q = this.attackReach(a);
-    if (q.box) return q.box.right >= body.left && q.box.left <= body.right && q.box.bottom >= body.top && q.box.top <= body.bottom;
-    const cx = (body.left + body.right) / 2, cy = (body.top + body.bottom) / 2;
-    return (cx - this.x) * (this.facesRight ? 1 : -1) >= -10 && Math.hypot(cx - q.sx, cy - q.sy) <= q.r;
+  /**
+   * An attack starting, its own or its controller's (as the client takes either), facing `f`, aimed by `data`: what
+   * it will strike, each at its time from now (stepLands). A box at attackAfter (type 0, its lt/rb from where it
+   * stands); a shot (1) at attackAfter on the one it was aimed at, if at the start that one was within its range
+   * (+10) of its start point; a ball (2, only with ball art) flying from its start point toward data's point for its
+   * whole range r, from attackAfter for r x 600 / bulletSpeed ms, held to a slope of 0.6 when it would climb or drop
+   * one whole step or more for each across; area spots (3, 4) for data's bits, at most attackCount, each centred
+   * (start + i + 1/2) widths out, on a floor within 100px up or down (type 3; none, no spot) or at its height. None
+   * while Doomed.
+   */
+  registerAttack(a, f, data) {
+    const out = [], info = a.info, r = info.range || {}, at = Number(info.attackAfter) || 0;
+    if (this.status.second & MOB_DOOM_BIT) return out;
+    const x = Math.round(this.x), y = Math.round(this.y), sx = x + (f ? 1 : -1) * (Number(r.sp?.[0]) || 0), sy = y + (Number(r.sp?.[1]) || 0);
+    if (a.type === 0) out.push({ a, type: 0, at, rect: this.attackBox(a, f), age: 0 });
+    else if (a.type === 1) {
+      const b = this.aimedBody?.(data);
+      if (b) {
+        const mid = Math.trunc((b.left + b.right) / 2);
+        const nx = f ? Math.max(b.right - 10, mid) : Math.min(b.left + 10, mid), ny = Math.min(Math.max(sy, b.top), b.bottom);
+        if (Math.hypot(nx - sx, ny - sy) > Math.abs(Number(r.r) || 0) + 10) return out;
+      }
+      out.push({ a, type: 1, at, data, age: 0 });
+    } else if (a.type === 2) {
+      if (!info.ball) return out;
+      let tx = (data << 16) >> 16, ty = data >> 16, fwd = f ? sx - tx : tx - sx, dy = ty - sy;
+      if (fwd <= 0) { tx = f ? sx - 1 : sx + 1; ty = sy; dy = 0; fwd = 1; }
+      if (Math.abs(Math.trunc(dy / fwd)) > 0.6) { ty = Math.trunc(sy + (dy > 0 ? fwd : -fwd) * 0.6); dy = ty - sy; }
+      const range = Number(r.r) || 0, k = range / Math.sqrt(fwd * fwd + dy * dy);
+      const ex = Math.trunc((tx - sx) * k + sx), ey = Math.trunc(dy * k + sy);
+      const ms = Math.trunc((range * 600) / (Number(info.bulletSpeed) || 100));
+      out.push({ a, type: 2, ball: true, start: at, end: at + ms, sx, sy, ex, ey, age: 0 });
+    } else if (a.type === 3 || a.type === 4) {
+      const start = Number(r.start) || 0, count = Number(r.areaCount) || 0, most = Number(r.attackCount) || 0;
+      const lt = r.lt || [0, 0], rb = r.rb || [0, 0], w = rb[0] - lt[0];
+      for (let i = 0, n = 0; i < count && n < most; i++) {
+        if (!(data & (1 << (i & 31)))) continue;
+        const cx = x + ((start + i) * w + Math.trunc(w / 2)) * (f ? 1 : -1);
+        const fy = a.type === 3 ? this.floorNear(cx, y - 100, y + 100) : y;
+        if (fy === null) continue;
+        const rect = f ? { left: cx + lt[0], right: cx + rb[0], top: fy + lt[1], bottom: fy + rb[1] } : { left: cx - rb[0], right: cx - lt[0], top: fy + lt[1], bottom: fy + rb[1] };
+        out.push({ a, type: a.type, at, rect, warn: { x: rect.left + Math.trunc(w / 2), y: rect.bottom }, age: 0 });
+        this.areaAt = performance.now(); n++;
+      }
+    }
+    return out;
+  }
+  /** Its attacks' strikes come due: a ball is where it is along its line while it flies (onBall), the rest land once (onAttackLand). */
+  stepLands(ms) {
+    for (const e of this.lands) {
+      e.age += ms;
+      if (e.ball) {
+        if (e.age >= e.end) e.done = true;
+        else if (e.age >= e.start) {
+          const k = (e.age - e.start) / Math.max(1, e.end - e.start);
+          this.onBall?.(this, e, Math.round(e.sx + (e.ex - e.sx) * k), Math.round(e.sy + (e.ey - e.sy) * k));
+        }
+      } else if (e.age >= e.at) { e.done = true; this.onAttackLand?.(this, e); }
+    }
+    this.lands = this.lands.filter((e) => !e.done);
+  }
+  /** Gone in its own blast: what has yet to land lands now (a ball still to fly goes with it). */
+  landNow() {
+    for (const e of this.lands) if (!e.ball && !e.done) { e.done = true; this.onAttackLand?.(this, e); }
+    this.lands = [];
   }
   /**
    * Statuses (CMob's temporary stats): `first` / `second` are MonsterStatus mask bits, all from skill `source`,
@@ -1516,18 +1658,23 @@ export class Life {
     const anim = this.anims[`skill${entry.action || 1}`];
     this.recoil = 0;
     this.actionStance = this.stance;
-    if (anim) { this.setState(`skill${entry.action || 1}`); anim.reset(); this.attacking = { a: { info: { attackAfter: Infinity } }, t: 0, landed: true }; }
+    if (anim) { this.setState(`skill${entry.action || 1}`); anim.reset(); this.attacking = { a: null, t: 0 }; }
     this.onSkill?.(this, entry);
   }
-  /** Start attack number `index` (0 = attack1): its animation plays, and at its attackAfter it lands. */
-  playAttack(index) {
+  /**
+   * Start attack number `index` (0 = attack1), facing `facing` (1 left, 0 right), aimed by `data` (pickAttack): its
+   * animation plays, and what it will strike is set going (registerAttack).
+   */
+  playAttack(index, facing = this.attackFacing, data = 0) {
     const a = this.attacks.find((x) => x.index === index) || { n: index + 1, index, info: this.src[`attack${index + 1}`]?.info || {}, type: 0 };
     if (!this.anims[`attack${a.n}`]) return;
     this.recoil = 0;
     this.actionStance = this.stance;
     this.setState(`attack${a.n}`); this.anims[`attack${a.n}`].reset();
-    this.attacking = { a, t: 0, landed: false, spots: a.type >= 3 ? this.areaSpots(a, true) : null };
-    this.onAttack?.(this, a, this.attacking.spots);
+    this.attacking = { a, t: 0, facing, data };
+    const lands = a.info.range ? this.registerAttack(a, facing, data) : [];
+    this.lands.push(...lands);
+    this.onAttack?.(this, a, lands);
   }
 
   /**
@@ -1535,8 +1682,8 @@ export class Life {
    * controller holds its aggro) and none of its own poses is playing, it tries every frame - a skill the server
    * offered first (no one to go after needed), then an attack on the one it goes after, turning to face them. Nothing
    * else spaces them out: each attack or skill is a move sent, and the next waits for that move's answer. (Offline,
-   * with no server to answer, a few seconds apart.) Whether they are still in reach when it lands is checked then.
-   * True when it started one.
+   * with no server to answer, a few seconds apart.) The attack is the client's pick (pickAttack), turned the way it
+   * reached. True when it started one.
    */
   tryAttack(dt) {
     let t = this.aggro;
@@ -1544,15 +1691,14 @@ export class Life {
     if (t?.kind === 'Mob' && (!t.alive || t.dying)) { this.aggro = this.chased = null; t = null; }
     if (this.attacking) return false;
     if (this.online ? !this.moveAggro || this.moveWait : (this.attackT -= dt) > 0) return false;
-    if (this.nextSkill) { const s = this.nextSkill; this.nextSkill = null; this.playSkill(s.skill, s.level); return true; }
+    if (this.nextSkill) { const s = this.nextSkill; this.nextSkill = null; this.doFirstOnly = false; this.playSkill(s.skill, s.level); return true; }
     if (!t || t.reach || !this.attacks.length) return false;
-    const body = t.kind === 'Mob' ? t.hitBox() : { left: t.x - 22, right: t.x + 22, top: t.y - 65, bottom: t.y };   // a monster: its own body
-    const facing = this.facingRight;
-    this.facingRight = t.x > this.x;
-    const usable = this.attacks.filter((a) => this.reaches(a, body));
-    if (!usable.length) { this.facingRight = facing; this.attackT = 0.3; return false; }
+    const pick = this.pickAttack(t);
+    if (!pick) { this.attackT = 0.3; return false; }
     this.attackT = 2.5 + Math.random() * 2;
-    this.playAttack(usable[Math.floor(Math.random() * usable.length)].index);
+    this.doFirstOnly = false;
+    this.facingRight = pick.facing === 0;
+    this.playAttack(pick.a.index, pick.facing, pick.data);
     return true;
   }
   /**

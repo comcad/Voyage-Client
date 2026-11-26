@@ -1526,10 +1526,11 @@ export class ChannelSession {
       this.emit('controlMob', readMob(r, mode), mode === 2);
     });
     on(S.MOVE_MONSTER, (r) => {
-      // oid, 0, skill possible, activity, skill id, skill level, option (short), start position, the moves
-      const oid = r.int(); r.ubyte(); r.bool(); const act = r.byte(), skill = r.ubyte(), level = r.ubyte(); r.short();
+      // oid, 0, skill possible, activity, then a data word (a skill: its id and level; an attack: what it aims at,
+      // read whole), start position, the moves
+      const oid = r.int(); r.ubyte(); r.bool(); const act = r.byte(), skill = r.ubyte(), level = r.ubyte(), opt = r.short();
       const start = r.pos2();
-      this.emit('moveMob', oid, start, readMovement(r), act, skill, level);
+      this.emit('moveMob', oid, start, readMovement(r), act, skill, level, (skill | (level << 8) | (opt << 16)) | 0);
     });
     on(S.KILL_MONSTER, (r) => this.emit('killMob', r.int(), r.ubyte()));
     on(S.CATCH_MONSTER_WITH_ITEM, (r) => { const oid = r.int(); this.emit('catchMob', r.int(), r.ubyte() !== 0, oid); });   // mob, item, caught

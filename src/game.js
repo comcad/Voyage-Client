@@ -1,4 +1,4 @@
-import { GameMap, nameTag, artTag, Anim } from './map.js';
+import { GameMap, nameTag, artTag, Anim, boxesMeet } from './map.js';
 import { Footholds, PHYS, accelerate, approach, groundVelocity, swimVelocity } from './physics.js';
 import { CharacterLook, drawParts, lookCanvases, equipPath, composeMounted, mountCanvases, mountPose, charSprites, setCharSprites, spriteFrame, makeSprite, holdFrame } from './character.js';
 import { weaponMultiplier, itemIcon, itemRewardIcon, itemSpec, itemReward, itemInfo, mesoIcon, invType, isScroll, scrollFits, ACTIONS, EXP, itemName, advanceName } from './data.js';
@@ -610,6 +610,8 @@ const ENERGY_MASK = 1n << 50n, DASH_MASK = 3n << 51n, INFUSION_MASK = 1n << 54n;
 const BARRIER_MASK = 0x40000n;
 // Hypnotize (monster status bit 28): the monster is on the other side
 const HYPNOTIZE = 0x10000000, hypnotized = (m) => !!(m?.status?.second & HYPNOTIZE);
+/** A summon's kind, as a monster's shot aimed at it names it: 1 the Puppets and Summon Dragon, 2 Silver Hawk and Golden Eagle, else 0. */
+const summonKind = (skill) => ([2311006, 3111002, 3211002, 13111004].includes(skill) ? 1 : skill === 3111005 || skill === 3211005 ? 2 : 0);
 // Weapon / Magic Immunity (bits 18 / 19): a blow of that kind does 1, unless its roll (0-99) comes up 0
 const WEAPON_IMMUNE = 0x40000, MAGIC_IMMUNE = 0x80000, immuneTo = (m, bit) => !!(m?.status?.second & bit) && Math.floor(Math.random() * 100) > 0;
 // Hard Skin (bit 21): only a critical line does damage; bit 31's guard: no blow does any; bit 34: magic takes value% more
@@ -3787,6 +3789,7 @@ export class Game {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending) return;
         e.appearing = false; delete e.fadeInAt; e.state = ''; e.setState(e.flying ? 'fly' : 'stand');
+        e.doFirstOnly = true;   // until its next attack or skill, only its doFirst attacks
       }),
       // the Monster Carnival (fieldmodes.js, ui/carnival.js)
       carnivalStart: later((d) => (this.fieldMode?.carnivalStart ? this.fieldMode.carnivalStart(d) : this.setCarnivalTeam(d.team))),
@@ -3886,7 +3889,7 @@ export class Game {
       }),
       reactorHit: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.hit(d.state, d.delay, d.index, d.block); }),
       reactorDestroy: later((d) => { const r = this.reactors?.get(d.oid); if (r) r.destroy(d.state); }),
-      moveMob: later((oid, start, moves, act, skill, level) => {
+      moveMob: later((oid, start, moves, act, skill, level, data = 0) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending || e.controlled) return;
         // a path that opens with a blow's push is its controller's hit move. The server passes its act on as -1 (none),
@@ -3897,7 +3900,7 @@ export class Game {
         if (push) e.hitPose(push.rx < 0);
         // activity (12 + attack) * 2 + facing: its controller made it attack
         if (act >= 12 && act <= 17) e.hitPose(!(act & 1));   // its controller struck it (hit1..hitF, facing)
-        else if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1); }
+        else if (act >= 24 && act <= 41) { e.facingRight = !(act & 1); e.playAttack((act - 24) >> 1, act & 1, data); }
         else if (act >= 42 && act <= 59 && skill) { e.facingRight = !(act & 1); e.playSkill(skill, level); }
       }),
       killMob: later((oid, anim) => this.killLife(oid, anim)),
@@ -4799,7 +4802,13 @@ export class Game {
     // control taken away while it was still loading (stopControl marks the placeholder) stays taken away
     e.controlled = controlled && entry.controlled !== false; e.fly = null; e.moveWait = false; e.moveAggro = false; e.movedOnce = false;   // a flyer taken over starts its AI afresh; nothing is awaited yet
     if (kind === 'Mob') {
-      e.onAttack = (m, a, spots) => this.mobAttackStart(m, a, spots); e.onAttackLand = (m, a, spots) => this.mobAttackLand(m, a, spots);
+      e.onAttack = (m, a, lands) => this.mobAttackStart(m, a, lands); e.onAttackLand = (m, l) => this.mobAttackLand(m, l);
+      e.onBall = (m, l, x, y) => this.mobBallAt(m, l, x, y);
+      // for its pick: a target's body (yours as it is, unjoined), what a shot aimed at it carries, whether you are hidden
+      e.bodyOf = (t) => (t === this.player ? this.playerBody() : t.hitBox?.() || null);
+      e.aimData = (t) => (t.kind === 'Mob' ? ((t.oid << 2) | 3) : (((this.player?.id ?? 0) << 2) | (t === this.player ? 0 : summonKind(t.skill))));
+      e.targetHidden = (t) => t === this.player && this.hidden();
+      e.aimedBody = (data) => this.aimedBody(data);
       e.onDie = (m) => this.mobSay(m, -1, -1);   // a dying monster says its death line by itself
       e.onSkill = (m, s) => this.mobSkillStart(m, s);
       // one we control tells the server each path it plans, as it starts on it
@@ -10750,6 +10759,7 @@ export class Game {
       s.t += dt; s.anim?.update(dt * 1000);
       if (s.t >= s.dur && !s.hit) { s.hit = true; s.onHit?.(); }
     }
+    for (const m of this.map.life) for (const l of m.lands || []) if (l.anim && l.age >= l.start) l.anim.update(dt * 1000);
     this.shots = this.shots.filter((s) => !s.hit);
     if (this.grenades.length) this.updateGrenades(dt);
   }
@@ -10763,6 +10773,14 @@ export class Game {
       draw(s.anim.node, s.sx + (s.tx - s.sx) * k, s.sy + (s.ty - s.sy) * k, s.flip, s.alpha);
     }
     for (const g of this.grenades) if (g.anim?.node) draw(g.anim.node, g.x, g.y, g.flip);
+    // monsters' balls in flight
+    for (const m of this.map.life) {
+      for (const l of m.lands || []) {
+        if (!l.anim?.node || l.age < l.start || l.age >= l.end) continue;
+        const k = (l.age - l.start) / Math.max(1, l.end - l.start);
+        this.drawFxNode(ctx, cam, l.anim.node, l.sx + (l.ex - l.sx) * k, l.sy + (l.ey - l.sy) * k, l.flip, 1, 1, l.angle);
+      }
+    }
   }
 
   drawFxNode(ctx, cam, node, x, y, flip, alpha = 1, zoom = 1, angle = 0) {
@@ -10937,6 +10955,7 @@ export class Game {
   checkTouchDamage(dt) {
     const p = this.player, last = this.lastPos || p;
     const dx = p.x - last.x, dy = p.y - last.y;   // how far you moved since the last check
+    this.prevPos = this.lastPos;   // (where you were a tick before: monsters' attacks take your body joined with it)
     this.lastPos = { x: p.x, y: p.y };
     if (this.invincible > 0) { this.invincible -= dt; return; }
     if (this.dead || !this.stats) return;
@@ -11552,14 +11571,27 @@ export class Game {
     }
   }
 
-  /** A monster starts an attack: its sound and effect; if we control it, the server hears which attack it was. */
-  mobAttackStart(m, a, spots) {
+  /**
+   * A monster starts an attack: its sound and effect; if we control it, the server hears which attack it was and
+   * what it aims at (for the other players' games).
+   */
+  mobAttackStart(m, a, lands = []) {
     sfx.play(`Mob/${pad(Number(m.spawn.id), 7)}/Attack${a.n === 9 ? 'F' : a.n}`, { volume: this.volumeAt(m.x, m.y) });
-    // an area attack marks the spots that will erupt with its areaWarning, on the ground of each
-    const warn = spots && a.info.areaWarning && Game.fxNode(a.info.areaWarning);
-    if (warn) {
+    // an area attack marks each spot that will erupt with its areaWarning, at the bottom middle of the spot
+    const warn = a.info.areaWarning && Game.fxNode(a.info.areaWarning), spots = lands.filter((l) => l.warn);
+    if (warn && spots.length) {
       const frames = new Anim(warn, false).frames;
-      this.assets.preload(frames).then(() => { for (const q of spots) this.fx.push({ anim: new Anim(warn, false), x: q.x, y: q.y, flip: false }); });
+      this.assets.preload(frames).then(() => { for (const l of spots) this.fx.push({ anim: new Anim(warn, false), x: l.warn.x, y: l.warn.y, flip: false }); });
+    }
+    // a ball: its art, turned along its line (flipped when it flies to the right)
+    const ballArt = a.info.ball && Game.fxNode(a.info.ball);
+    for (const l of lands) {
+      if (!l.ball || !ballArt) continue;
+      const dx = l.ex - l.sx, dy = l.ey - l.sy, deg = (Math.atan2(-dy, -dx) * 180) / Math.PI;
+      l.flip = deg > 90 || deg < -90;
+      l.angle = l.flip ? Math.atan2(dy, dx) : (deg * Math.PI) / 180;
+      l.anim = new Anim(ballArt, true);
+      this.assets.preload(l.anim.frames);
     }
     // effect, then effect0, effect1... up to the first missing one, all at effectAfter: effectType 1 strikes the floors
     this.after(Number(a.info.effectAfter) || 0, () => {
@@ -11574,10 +11606,10 @@ export class Game {
     if (!m.controlled || !this.net || m.oid == null || m.deathAttack) return;
     // as the client sends an attack: its movement starts afresh, and the path goes with it (planAction) - standing
     // still through the attack's pose
-    const facing = m.facingRight ? 0 : 1;
+    const facing = m.attacking?.facing ?? (m.facingRight ? 0 : 1), data = m.attacking?.data | 0;
     m.restartAI(this.player); m.vx = 0;
     const { start, moves } = m.planAction(m.animMs(`attack${a.n}`), m.actionStance ?? m.stance);
-    this.net.moveMob(m.oid, start, moves, (12 + a.index) * 2 + facing, 0, 0, m.flying ? (m.fly ?? false) : null, m.moveNibbles());
+    this.net.moveMob(m.oid, start, moves, (12 + a.index) * 2 + facing, data & 0xff, (data >>> 8) & 0xff, m.flying ? (m.fly ?? false) : null, m.moveNibbles(), data >> 16);
     m.moveWait = true;
   }
   /**
@@ -11629,18 +11661,25 @@ export class Game {
     return (type === 10 || type === 15) && this.carnivalTeam !== undefined && m.team === this.carnivalTeam;
   }
   /**
-   * A monster's attack landing on the monsters of the other side (one Hypnotized, the other not): up to 15 it
-   * reaches, never an escort (info/damagedByMob), each struck through mobHitsMob.
+   * A monster's strike on the monsters of the other side (one Hypnotized, the other not): up to 15 whose bodies
+   * (joined with where they were a tick before) meet its box, or the ball's point `pt`; a shot only the monster it
+   * was aimed at. Never an escort (info/damagedByMob); each struck through mobHitsMob.
    */
-  mobAttackMobs(m, a, spots) {
+  mobAttackMobs(m, l, pt = null) {
     if (!this.net || this.player?.id == null) return;
+    if (l.type === 1) {
+      const v = (l.data & 3) === 3 ? this.lifeByOid.get(l.data >>> 2) : null;
+      if (v && v !== m && v.kind === 'Mob' && v.alive && !v.dying) this.mobHitsMob(m, v, l.a);
+      return;
+    }
+    const box = pt ? { left: pt.x, right: pt.x + 1, top: pt.y, bottom: pt.y + 1 } : l.rect;
     let n = 0;
     for (const v of this.map.life) {
       if (n >= 15) break;
       if (v === m || v.kind !== 'Mob' || !v.alive || v.dying || v.oid == null || hypnotized(v) === hypnotized(m)) continue;
-      if (Number(v.src?.info?.damagedByMob) || !m.reaches(a, v.hitBox(), spots)) continue;
+      if (Number(v.src?.info?.damagedByMob) || !boxesMeet(v.hitBox(true), box)) continue;
       n++;
-      this.mobHitsMob(m, v, a);
+      this.mobHitsMob(m, v, l.a);
     }
   }
   /**
@@ -11716,15 +11755,8 @@ export class Game {
     if (!h || !h.alive || h.dying || !this.map.life.includes(h)) return;
     const p = this.player;
     const score = (a, b) => Math.trunc(Math.abs(Math.round(a.y) - Math.round(b.y)) / 3) + Math.trunc(Math.abs(Math.round(a.x) - Math.round(b.x)) / 10);
-    // whether one of m's attacks reaches t's body, turned toward it
-    const reaches = (m, t) => {
-      if (!m.attacks?.length) return false;
-      const facing = m.facingRight, body = t.hitBox();
-      m.facingRight = t.x > m.x;
-      const ok = m.attacks.some((a) => m.reaches(a, body));
-      m.facingRight = facing;
-      return ok;
-    };
+    // whether m would pick one of its attacks on t (Mob.pickAttack)
+    const reaches = (m, t) => !!m.attacks?.length && !!m.pickAttack(t);
     for (const m of this.map.life) {
       if (m.kind !== 'Mob' || !m.controlled || !m.alive || m.dying || m.oid == null || m.attacking || this.carnivalAlly(m)) continue;
       // a target of its own stays (the Hypnotized one's going after you is only the server's aggro, a way of moving)
@@ -11746,28 +11778,48 @@ export class Game {
       }
     }
   }
-  mobAttackLand(m, a, spots) {
-    const p = this.player;
+  /** The client works a monster's strikes out only from one that may attack (no notAttack, not disabled) and, when it is Hypnotized, only from the last one put under it. */
+  mobMayStrike(m) { return !((hypnotized(m) && m !== this.lastHypnotized) || Number(m.src?.info?.notAttack) || this.mobDisabled(m)); }
+  /**
+   * One strike of a monster's attack coming due (Mob.registerAttack): with info/tremble the screen shakes; the
+   * monsters of the other side it strikes are struck; and you - in its box, your body joined with where you were a
+   * tick before (a jumpAttack box only while you stand on a floor); a shot when it was aimed at you, wherever you are.
+   */
+  mobAttackLand(m, l) {
+    const a = l.a, p = this.player;
     if (Number(a.info?.tremble)) this.shakeScreen(30, true);   // Zakum's arms, Horntail, Balrog...
-    // the client works an attack out only from a monster that may attack (no info/notAttack, not disabled) and, when
-    // it is Hypnotized, only from the last one put under it
-    if ((hypnotized(m) && m !== this.lastHypnotized) || Number(m.src?.info?.notAttack) || this.mobDisabled(m)) return;
-    this.mobAttackMobs(m, a, spots);
-    if (!this.net || this.dead || !this.stats || !m.alive || this.invincible > 0 || !m.reaches(a, this.playerBody(), spots)) return;
-    const magic = !!a.info.magic;
+    if (!this.mobMayStrike(m)) return;
+    this.mobAttackMobs(m, l);
+    if (!this.net || this.dead || !this.stats || !m.alive || this.invincible > 0) return;
+    const hit = l.type === 1 ? (l.data >>> 2) === (p.id & 0x3fffffff) && (l.data & 3) === 0
+      : boxesMeet(l.rect, this.playerBody(this.prevPos)) && (l.type !== 0 || !Number(a.info.jumpAttack) || !!p.fh);
+    if (hit) this.mobAttackHurts(m, a);
+  }
+  /** A monster's ball where it is this frame: it strikes the monsters of the other side there, and you once it is within your body. */
+  mobBallAt(m, l, x, y) {
+    if (!this.mobMayStrike(m)) return;
+    this.mobAttackMobs(m, l, { x, y });
+    if (l.hitYou || !this.net || this.dead || !this.stats || !m.alive || this.invincible > 0) return;
+    const b = this.playerBody(this.prevPos);
+    if (x >= b.left && x < b.right && y >= b.top && y < b.bottom) { l.hitYou = true; this.mobAttackHurts(m, l.a); }
+  }
+  /** A monster's attack hurts you: its damage (MADamage when magic, else PADamage), and its hit art on you. */
+  mobAttackHurts(m, a) {
+    const p = this.player, magic = !!a.info.magic;
     const power = Number(magic ? a.info.MADamage ?? m.src.info?.MADamage : a.info.PADamage ?? m.src.info?.PADamage) || 1;
-    const land = () => {
-      if (this.dead || this.invincible > 0) return;
-      this.hurtBy(m, power, magic, a.index, undefined, a.info);
-      const hit = a.info.hit && Game.fxNode(a.info.hit);
-      if (hit) { const anim = new Anim(hit, false); this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p })); }
-    };
-    const ball = a.type === 2 && a.info.ball && Game.fxNode(a.info.ball);
-    if (!ball) { land(); return; }
-    const q = m.attackReach(a), anim = new Anim(ball, true);
-    this.assets.preload(anim.frames);
-    const tx = p.x, ty = p.y - 32;
-    this.shots.push({ anim, sx: q.sx, sy: q.sy, tx, ty, t: 0, dur: Math.min(0.6, Math.max(0.1, Math.hypot(tx - q.sx, ty - q.sy) / 600)), flip: tx > q.sx, onHit: land });
+    this.hurtBy(m, power, magic, a.index, undefined, a.info);
+    const hit = a.info.hit && Game.fxNode(a.info.hit);
+    if (hit) { const anim = new Anim(hit, false); this.assets.preload(anim.frames).then(() => this.fx.push({ anim, follow: p })); }
+  }
+  /**
+   * A shot's target in your game, for its start check: your body (aimed at you), a monster's (kind 3, by its oid);
+   * null for anyone else.
+   */
+  aimedBody(data) {
+    const kind = data & 3, id = data >>> 2;
+    if (kind === 0 && id === ((this.player?.id ?? -1) & 0x3fffffff)) return this.playerBody();
+    if (kind === 3) { const v = this.lifeByOid.get(id); return v?.kind === 'Mob' ? v.hitBox() : null; }
+    return null;
   }
 
   /** Pick up the item you are standing on: your feet within its width, on the same ground. */
