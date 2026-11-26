@@ -610,6 +610,8 @@ const ENERGY_MASK = 1n << 50n, DASH_MASK = 3n << 51n, INFUSION_MASK = 1n << 54n;
 const BARRIER_MASK = 0x40000n;
 // Hypnotize (monster status bit 28): the monster is on the other side
 const HYPNOTIZE = 0x10000000, hypnotized = (m) => !!(m?.status?.second & HYPNOTIZE);
+/** Poison, Ninja Ambush and Venom (second mask): their damage ticks are drawn by the client (dotTicks). */
+const DOT_BITS = 0x200 | 0x400000 | 0x1000000;
 /** A summon's kind, as a monster's shot aimed at it names it: 1 the Puppets and Summon Dragon, 2 Silver Hawk and Golden Eagle, else 0. */
 const summonKind = (skill) => ([2311006, 3111002, 3211002, 13111004].includes(skill) ? 1 : skill === 3111005 || skill === 3211005 ? 2 : 0);
 // Weapon / Magic Immunity (bits 18 / 19): a blow of that kind does 1, unless its roll (0-99) comes up 0
@@ -3925,8 +3927,11 @@ export class Game {
       mobDamaged: later((oid, dmg, hp, maxHp) => {
         const e = this.lifeByOid.get(oid);
         if (!e || e.pending) return;
-        if (dmg) this.vfx?.damage(e, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red');
-        if (maxHp > 0 && Number(e.src?.info?.damagedByMob)) { e.hp = Math.round((e.maxHp * hp) / maxHp); e.hpPct = Math.floor((hp * 100) / maxHp); }
+        this.vfx?.damage(e, [Math.abs(dmg)], dmg < 0 ? 'blue' : 'red');   // 0: MISS
+        if (Number(e.src?.info?.damagedByMob)) {
+          this.escortHitPose(e, dmg);
+          if (maxHp > 0) { e.hp = Math.round((e.maxHp * hp) / maxHp); e.hpPct = Math.floor((hp * 100) / maxHp); }
+        }
       }),
       mobHp: later((oid, pct) => this.onMobHp(oid, pct)),
       bossHp: later((d) => this.vfx?.bossHp(d)),
@@ -5190,29 +5195,29 @@ export class Game {
     if (known && (d.mode === 1 || d.mode === 2)) known.pickable = true;
     if (d.gone || this.drops.has(d.oid) || (pending.has(d.oid) && pending.get(d.oid) !== d)) return;
     pending.set(d.oid, d);
-    // the server drops loot as soon as it counts the kill; hold it until our hit lands and it dies
-    const src = this.lifeByOid.get(d.dropper) || this.dying?.get(d.dropper);
-    if (src && !src.pending && (src.pendingHits > 0 || src.queuedKill)) { (src.heldDrops ??= []).push(d); return; }
+    // it comes out at its arrival plus the packet's delay (a monster's loot: the blow's own delay), from where its
+    // monster stood when it arrived
+    const arrived = performance.now(), src = this.lifeByOid.get(d.dropper) || this.dying?.get(d.dropper);
+    const from = src?.kind === 'Mob' ? { x: src.x, y: src.y } : null, delay = d.mode !== 2 ? d.delay || 0 : 0;
     // an item with info/iconReward lies on the ground as that animation (the item with a key sign over it)
     const reward = d.meso ? null : await itemRewardIcon(this.assets, d.id);
     let node = d.meso ? await mesoIcon(this.assets, d.id) : reward || await itemIcon(this.assets, d.id, true);
     if (d.meso && node) node = mesoTiming(node, d.id);
     const anim = new Anim(node || null);
     await this.assets.preload(anim.frames);
+    const wait = arrived + delay - performance.now();
+    if (wait > 0) await new Promise((res) => this.after(wait, res));
     if (d.gone) return;   // picked up or expired meanwhile, or we left the map
     pending.delete(d.oid);
     if (!this.map) return;
     const y = d.y;
-    // monster loot leaves from where the monster is now
-    const mob = this.lifeByOid.get(d.dropper) || this.dying?.get(d.dropper);
-    const fromMob = mob?.kind === 'Mob';
-    const fromX = fromMob ? mob.x : d.fromX ?? d.x, fromY = fromMob ? mob.y : d.fromY ?? y;
+    const fromX = from ? from.x : d.fromX ?? d.x, fromY = from ? from.y : d.fromY ?? y;
     if (d.mode === 1 && performance.now() - (this.dropSoundAt || 0) > 300) { this.dropSoundAt = performance.now(); sfx.play('Game/DropItem', { volume: this.volumeAt(fromX, fromY) }); }
     // explosive drops (type 3) go higher and stay up longer; onto higher ground the flight is cut short
     const big = d.type === 3, k = big ? 1.8 : 1, speed = big ? 720 : 400, up = fromY - y, top = big ? 180 : 100;
     const flight = up > 0 ? Math.min(k, ((up < top ? Math.floor(Math.sqrt((top - up) * 2.5)) : 0) + 1) * 0.03 + k / 2) : k;
     // freeAt: when anyone may take it after 15s counts from (its arrival plus the packet's delay, as the client)
-    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), freeAt: performance.now() + (d.delay || 0), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
+    this.drops.set(d.oid, { ...d, y, anim, landed: d.mode === 2, age: 0, born: performance.now(), freeAt: arrived + (d.delay || 0), cx: fromX, cy: fromY, fromX, fromY, alpha: 1, phase: 0,
       spin: !d.meso && !reward, angle: 0, speed, flight });
   }
 
@@ -6896,7 +6901,11 @@ export class Game {
     if (this.net) this.hypnoTouch();
     if (this.net) this.hypnoTargets();
     for (const e of this.map.life) if (e.kind === 'Mob' && e.chat && (e.chat.t -= dt) <= 0) e.chat = null;   // monsters' lines run out
-    for (const e of this.map.life) if (e.kind === 'Mob' && (e.hpQueue?.length || e.hpGauge)) this.takeMobHp(e, performance.now());
+    for (const e of this.map.life) {
+      if (e.kind !== 'Mob') continue;
+      if (e.hpQueue?.length || e.hpGauge) this.takeMobHp(e, performance.now());
+      if (e.dots) this.dotTicks(e, performance.now());
+    }
     if (this.net && this.petMpArmed) this.petAutoPot('mp');
     if (this.net) this.touchReactors();
     if (this.net) this.obstaclesHitMobs();
@@ -7965,11 +7974,11 @@ export class Game {
         this.linesLanded(t.mob, last);
         if (--t.mob.pendingHits <= 0 && !t.mob.queuedKill) this.releaseDrops(t.mob);   // no kill came after all
         if (t.mob.pendingHits <= 0 && t.mob.queuedKill) {               // the killing blow: hit, then die
-          t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, t.lead ? 'sound' : 'both', t.flip); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
+          t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, 'sent', skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, t.lead ? 'sound' : 'both', t.flip); this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
           this.after(last, () => { if (t.mob.queuedKill) this.finishKill(t.mob); });   // it dies after its last line lands
           return;
         }
-        t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, true, skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, t.lead ? 'sound' : 'both', t.flip);
+        t.mob.takeDamage(t.dmg.reduce((a, b) => a + b, 0)); this.flinchLines(t.mob, t.dmg, !p.facingRight, knockback, hypnotized(t.mob) ? null : p, skillId); if (skillId !== HEAVENS_HAMMER) this.damageNumbers(t.mob, mx ? foldLines(t.dmg) : t.dmg, 'sent', skillId, t.crit, ...this.lineTiming(p)); this.playHitEffect(skillId, t.mob, p, t.dmg, looks[i] ?? null, cash, t.at, t.lead ? 'sound' : 'both', t.flip);
         this.aranComboHit(t.dmg.reduce((a, b) => a + b, 0));
         if (t.mob.kind === 'Mob' && !hypnotized(t.mob)) t.mob.chase(p);   // a struck monster comes after you (not a Hypnotized one)
       };
@@ -8016,6 +8025,8 @@ export class Game {
     if (MAGIC_AT_ONCE.has(skillId)) this.teleportLock = performance.now() + TELEPORT_AFTER_ULTIMATE;
     if (heal && !out.length) return true;   // no undead in reach: only the heal went out
     this.catchBreath();   // any attack that goes out (5s before a channel change, a chair...)
+    // each monster it strikes shows its HP bar (and name) for 5s from now (see Vfx.drawWorld)
+    { const now = performance.now(); for (const t of out) if (t.mob?.kind === 'Mob') { t.mob.myHitAt = now; t.mob.hpShownUntil = now + 5000; } }
     this.net?.attack(kind, { targets: out, lines: mx ? Math.min(15, mx.mesos.length) : lines, skill: skillId, stance: spellAct && !opts.stance && pose === spellAct[1] ? spellAct[0] : this.actionId(opts.stance || pose, kind === 'ranged'), facingLeft: !p.facingRight,
       speed: this.attackSpeed(skillId), charge, display: opts.stage2 ? 0x20 : 0, attackType: Number(this.windows?.info(weapon)?.attack) || 0,
       mesos: mx?.mesos.map((d) => ({ oid: d.oid, mask: out.reduce((b, t, i) => (i < 8 && mx.touches(t.mob, d) ? b | (1 << i) : b), 0) })), pos: p, delay: Math.round(hitDelay) });
@@ -10658,12 +10669,12 @@ export class Game {
    * faces. Without a head point, the middle of its body.
    */
   /**
-   * One damage line's sound: the skill's Hit, or the monster's Damage when there is none (a miss: Hit only).
-   * A cash star or bullet (cash) has its own Hit instead, on the first line that hurt; Avenger keeps the skill's.
+   * One damage line's sound, a miss's too: the skill's Hit, or the monster's Damage when there is none. A cash star
+   * or bullet (cash) has its own Hit instead, on the first line that hurt; Avenger keeps the skill's.
    */
   hitSound(id, mob, d, line, cash = 0) {
     const volume = mob ? this.volumeAt(mob.x, mob.y) : 1;
-    const damage = () => { if (d > 0 && mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`, { volume }); };
+    const damage = () => { if (mob?.kind === 'Mob') sfx.play(`Mob/${pad(Number(mob.spawn.id), 7)}/Damage`, { volume }); };
     const hitOr = (path) => sfx.has(path).then((found) => (found ? sfx.play(path, { volume }) : damage()));
     if (cash && !AVENGERS.has(id)) {
       if (line > 0 || !(d > 0)) damage(); else hitOr(`CashEffect/${pad(cash, 8)}/Hit`);
@@ -10686,12 +10697,12 @@ export class Game {
     if (fx) await this.assets.preload(new Anim(fx, false).frames);
     if (later && later !== fx) await this.assets.preload(new Anim(later, false).frames);
     // every damage line is its own blow, on the same beat as its number: Magic Claw's two lines sound twice, Lucky
-    // Seven's two stars twice... (a miss makes no monster damage sound)
+    // Seven's two stars twice... (a miss sounds too, but shows no hit art)
     dmgs.forEach((d, line) => this.after(lineDelay(id, line, ...this.lineTiming(by)), () => {
       if (part !== 'art') this.hitSound(id, mob, d, line, cash);
       if (part === 'sound') return;
       const art = line ? later : fx;
-      if (!art || (line && HIT_ART_ONCE.has(id))) return;
+      if (!art || !(d > 0) || (line && HIT_ART_ONCE.has(id))) return;
       // where it plays, as the client attaches it by the art's pos: 1 the monster's feet, 2 its head, 3 the middle of
       // its body, 4 where the blow struck it - each moving with it; none: where the blow struck (`at`, from the monster
       // as it stood when the attack went out) on the monster as it is now, kept within its body (joined with a frame
@@ -10861,7 +10872,7 @@ export class Game {
     });
     const gauge = Number(info.HPgaugeHide);
     if (pct !== null) {
-      e.hpPct = pct; e.hp = Math.round((e.maxHp * pct) / 100);
+      e.hpPct = pct; e.hp = Math.round((e.maxHp * pct) / 100); e.hpBar = true;
       if (gauge) { this.vfx?.bossHp({ oid: Number(e.spawn.id), hp: Math.floor((e.maxHp * pct) / 100), maxHp: e.maxHp, tag: Number(info.hpTagColor) || 0, bg: Number(info.hpTagBgcolor) || 0 }); e.hpGauge = true; }
     }
     if (e.hpGauge && now - (e.myHitAt ?? -Infinity) > 20000) {
@@ -10915,9 +10926,37 @@ export class Game {
     }
     this.spawnLife('Npc', n, true).then(() => { const s = this.lifeByOid.get(n.oid); if (s && !s.pending) s.npcFlags = (s.npcFlags || 0) | 2; });
   }
-  /** Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar. */
+  /**
+   * An escort (info/damagedByMob) struck for `dmg`: at its pushed or more its hit pose plays, as it faces - not
+   * mid-attack, mid-skill or already reeling, and a boss not within 10s of its last one's end.
+   */
+  escortHitPose(e, dmg) {
+    if (!(dmg >= (Number(e.src?.info?.pushed) || 1)) || e.attacking || e.state === 'hit1') return;
+    const now = performance.now();
+    if (Number(e.src?.info?.boss) && now <= (e.escortPoseEnd ?? -Infinity) + 10000) return;
+    e.hitPose(e.facingRight);
+    e.escortPoseEnd = now + e.hitPoseMs();
+  }
+  /**
+   * Poison, Ninja Ambush and Venom on a monster: the client shows what each does, every second, as a number over it -
+   * the status's value (the monster's fixedDamage if it has one), MISS when the skill behind it can't hurt that
+   * monster. (The server deals the damage; it sends no number for these.)
+   */
+  dotTicks(e, now) {
+    if (!e.dots || !(e.status?.second & DOT_BITS)) return;
+    for (const [bit, s] of e.dots) {
+      if (!(e.status.second & bit) || now - ((e.dotAt ??= {})[bit] ?? -Infinity) <= 999) continue;
+      e.dotAt[bit] = now;
+      const fixed = Number(e.src?.info?.fixedDamage) || 0;
+      this.vfx?.damage(e, [skillHurts(e, s.source) ? (fixed > 0 ? fixed : s.value) : 0], 'red');
+    }
+  }
+  /**
+   * Your hits in red (NoRed), other players' in blue (NoBlue); your hits also show the monster's HP bar for 5s (`mine`
+   * 'sent': an attack whose 5s already count from when it went out).
+   */
   damageNumbers(target, dmgs, mine, skillId = 0, crits = [], weaponId = 0, scale = 1) {
-    if (mine && target.kind === 'Mob') { target.myHitAt = performance.now(); target.hpShownUntil = target.myHitAt + 5000; }
+    if (mine === true && target.kind === 'Mob') { target.myHitAt = performance.now(); target.hpShownUntil = target.myHitAt + 5000; }
     // a monster's numbers are red (crit art on a crit) whoever struck it; blue is only for one being healed
     this.vfx?.damage(target, dmgs, target.kind === 'Mob' || mine ? 'red' : 'blue', skillId, crits, weaponId, scale);
   }
@@ -11512,6 +11551,7 @@ export class Game {
     if ((bit >= 0 && bit <= 5) || (bit >= 12 && bit <= 15)) (m.buffVal ??= {})[bit] = s.value;
     // values the damage rolls read: bit 31's guard, bit 34's damage taken (%)
     if (s.second & 0x80000000) { m.guardValue = s.value; m.disableValue = s.value2 || 0; }
+    if (s.second & DOT_BITS) for (let b = 1; b; b <<= 1) if (s.second & DOT_BITS & b) (m.dots ??= new Map()).set(b >>> 0, { value: s.value, source: s.source });
     if (s.first & 0x4) m.takenPct = s.value;
     const low = s.source & 0xffff, high = s.source >>> 16, mobSkill = s.source > 0 && low >= 100 && low <= 200 && high > 0 && high < 256;
     let node = null, icon = null, doom = null;

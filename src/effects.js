@@ -207,17 +207,20 @@ export class WorldFx {
 
   drawWorld(ctx, cam) {
     const im = (n) => this.assets.image(n);
-    // a monster you hit shows its HP bar and its level and name for 5s after your last hit (System Option MONSTER
-    // INFO: none / HP / name and HP); one that other monsters can hurt always shows its bar, in red
+    // a monster you attacked shows its HP bar and its level and name for 5s from your last attack on it (System
+    // Option MONSTER INFO: none / HP / name and HP), once the server has sent its HP (the bar then lasts those 5s, and
+    // a later HP is needed after them), a dying one too until it is gone; one that other monsters can hurt always
+    // shows its bar, in red, and never a name
     const now = performance.now();
     for (const e of this.game.map.life) {
-      if (e.kind !== 'Mob' || !e.alive || Number(e.spawn.id) === this.boss?.oid) continue;
+      if (e.kind !== 'Mob' || e.removed || (!e.alive && e.state !== 'die1') || Number(e.spawn.id) === this.boss?.oid) continue;
       const info = e.src?.info || {}, escort = !!Number(info.damagedByMob), shown = e.hpShownUntil > now;
-      if (!escort && (!shown || !settings.mobInfo)) continue;
+      if (!escort && !shown) e.hpBar = false;
+      if (!escort && (!shown || !e.hpBar || !settings.mobInfo)) continue;
       // the bar shows the HP % the server last sent (an escort starts full), not what our own hits took off
       const pct = e.hpPct ?? (escort ? 100 : null);
       if (pct !== null && (escort || !(Number(info.hideHP) || Number(info.HPgaugeHide)))) mobHpBar(ctx, e, cam, pct, escort ? '#f00' : '#0f0');
-      if (shown && settings.mobInfo === 2 && !Number(info.hideName) && e.name) mobNameTag(ctx, e, cam, info, this);
+      if (!escort && settings.mobInfo === 2 && !Number(info.hideName) && e.name) mobNameTag(ctx, e, cam, info, this);
     }
     // quest icons above NPC heads
     for (const [e] of this.questIcons) {
