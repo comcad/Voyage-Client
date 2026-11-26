@@ -947,11 +947,20 @@ const MOB_DEPTH = new Map([
   ...[8810009, 8810017].map((id) => [id, -8]),
 ]);
 const BALROG_BACK = [new Set([8830001, 8830002, 8830004, 8830005, 8830006, 8830008, 8830009, 8830011, 8830012, 8830013]), new Set([8830000, 8830003, 8830007, 8830010])];
+/**
+ * The page a monster is drawn in, and its zMass there: its floor's. Off any floor (a jump, a blow, a path point
+ * with no floor) it stays where it was; one that hasn't stood anywhere yet is on page 7.
+ */
+const mobPage = (e) => {
+  if (e.fh) { e.drawPage = e.fh.layer; e.drawZMass = e.fh.zMass; }
+  return e.drawPage ?? 7;
+};
 const mobDepth = (e) => {
   const id = Number(e.spawn?.id);
   if (BALROG_BACK[0].has(id)) return -1e6;
   if (BALROG_BACK[1].has(id)) return -1e6 - 1;
-  return -10 * (e.fh?.zMass || 0) + (MOB_DEPTH.get(id) || 0);
+  mobPage(e);
+  return -10 * (e.drawZMass || 0) + (MOB_DEPTH.get(id) || 0);
 };
 
 export class Game {
@@ -3773,6 +3782,13 @@ export class Game {
       summonSkill: later((owner, oid, action, cosmic) => this.summonPose(owner, oid, action, cosmic)),
       playerDamaged: later((d) => this.onPlayerDamaged(d)),
       spawnMob: later(async (m) => {
+        // one already here (Zakum's body, once its arms are gone) stays as it is, with only its statuses set afresh
+        const had = this.lifeByOid.get(m.oid);
+        if (had && !had.pending) {
+          had.removeStatus(had.status.first, had.status.second);
+          for (const s of m.statuses) this.applyMobStatus(had, s);
+          return;
+        }
         await this.spawnLife('Mob', m, false);
         const e = this.lifeByOid.get(m.oid);
         if (e && !e.pending) for (const s of m.statuses) this.applyMobStatus(e, s);
@@ -12291,7 +12307,7 @@ export class Game {
       if (l === this.ship?.page) this.drawShip(ctx, cam);
       this.drawDoors(ctx, cam, l);
       lap('other');
-      for (const e of mobs) if (!(e.flying && !e.doomArt) && (e.fh?.layer ?? 7) === l && this.lifeInView(e)) e.draw(ctx, cam, this.assets);
+      for (const e of mobs) if (!(e.flying && !e.doomArt) && mobPage(e) === l && this.lifeInView(e)) e.draw(ctx, cam, this.assets);
       lap('mobs');
       if (this.reactors) for (const r of this.reactors.values()) if (r.layer === l && this.inView(r.x, r.y, 400, 500, 250)) r.draw(ctx, cam, this.assets);
       if (l === playerLayer) this.guildBoss?.draw(ctx, cam);
