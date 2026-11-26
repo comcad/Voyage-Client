@@ -1022,8 +1022,8 @@ export class LoginScene {
         } catch (e) { reject(cancelled ? new BackToTitle() : e); } finally { loading.close(); pending = false; }
       };
       let worldStatus = 0;   // the open world's SERVERSTATUS: 1 (busy) puts WorldNotice/Populated/1 on its paper
-      // pre: the channel the server picks for it, selected as it opens
-      const openWorld = (w, status = 0, pre = -1) => {
+      // the channel list opens with none selected, as the client's does
+      const openWorld = (w, status = 0) => {
         worldStatus = status;
         if (!world || closing) { scroll = new WzSprite(WS.scroll[0], roll.x, roll.y, { loop: false }); closing = false; sfx.play('UI/RollDown'); }
         world = w; channel = -1;
@@ -1038,7 +1038,6 @@ export class LoginScene {
           b.enabled = !!c; b.users = c?.load || 0; b.downSound = 'UI/WorldSelect';
           return b;
         });
-        if (w.channels[pre]) { channel = pre; select.anim.reset(); }
         this.assets.preload([...chButtons.flatMap((b) => b.frames()), WS.channel.chgauge, ...select.frames()]).then(() => this.hover());
       };
       const closeWorld = () => {
@@ -1055,11 +1054,11 @@ export class LoginScene {
         btn.enabled = false;   // the clicked tag stays pressed
         picked = true; focusWorld(w.id);      // and takes the keyboard focus, so no other tag keeps the highlight
         pending = true;
-        let status, pre;
-        try { ({ status, channel: pre } = await this.s.serverStatus(w.id)); } catch (e) { reject(e); return; } finally { pending = false; }
+        let status;
+        try { ({ status } = await this.s.serverStatus(w.id)); } catch (e) { reject(e); return; } finally { pending = false; }
         if (status === 2) { await this.notice(WORLD_FULL, 'info'); btn.enabled = true; return; }
         if (status === 1) await this.notice(WORLD_BUSY, 'info');
-        openWorld(w, status, pre);
+        openWorld(w, status);
       };
       const hang = WS.BtWorld[0]?.disabled?.[0];
       const worldButtons = this.worlds.map((w, i) => {

@@ -826,7 +826,7 @@ export class StatusBar {
 
   /**
    * The client's own cursor (Basic.img/Cursor), animated through its frames by their delays: 7 dragging the chat,
-   * 1 over a button; otherwise what is under it on the field (1 an NPC, 2 another player, as v83's field picks it).
+   * 1 over a button; otherwise what is under it on the field (Game.fieldCursor: an NPC, a game or shop balloon).
    */
   syncCursor() {
     let want = this.chatDrag || this.edgeHover ? 7 : this.hovered ? 1 : 0;

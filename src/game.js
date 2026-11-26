@@ -1361,11 +1361,18 @@ export class Game {
    * The field's cursor under the mouse, as v83 picks it each frame when no window is there: 1 over an NPC, 2 over
    * another player (who wins over an NPC), else 0. (x, y) is the interface's point.
    */
+  /**
+   * The field's cursor under (x, y), as the client picks it: over another player's mini-room balloon 2 for a game
+   * (Omok, Match Cards) and 3 for a shop; else over an NPC 1; else 0 (a player alone changes nothing).
+   */
   fieldCursor(x, y) {
     if (x < 0 || !this.map || this.windows?.top(x, y) || this.statusBar?.contains?.(x, y)) return 0;
     x *= UI_SCALE; y *= UI_SCALE;
-    if (this.playerAt(x, y)) return 2;
     const wx = x + snapPx(this.cam.x), wy = y + snapPx(this.cam.y);
+    for (const rp of this.others.values()) {
+      const r = rp.signRect, t = rp.box?.type;
+      if (t && r && wx >= r.x && wx < r.x + r.w && wy >= r.y && wy < r.y + r.h) return t > 2 ? 3 : 2;
+    }
     for (const e of this.map.life) {
       if (e.kind !== 'Npc' || e.oid === null) continue;
       const b = e.box();
