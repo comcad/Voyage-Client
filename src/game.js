@@ -4718,6 +4718,8 @@ export class Game {
       if (pos) this.placeAt(pos.x, pos.y);
       else if (door) this.placeAt(door.x, door.y);
       else this.placeAtPortal(portalIdx !== null ? map.portalById(portalIdx & 0x7f) : map.spawnPortal(portal));
+      // a new map: where you stood on the old one is no "tick before" for the touch check (or monsters' attacks)
+      this.lastPos = this.prevPos = null;
       this.refreshTownDoors(false);
       if (this.dead) { const at = this.tombPoint(this.player.x, this.player.y); this.vfx?.tomb(this.player, at.x, at.y, false); }   // still a ghost here
       if (this.guideSkill) this.guide = new Guide(this, this.guideSkill, this.guide);   // the guide comes along to every map
