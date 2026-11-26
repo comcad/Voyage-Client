@@ -423,9 +423,12 @@ const idRun = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const NO_LADDER = new Set([4121004, 4221004, 5001005, 15001003, 5221006, 1013, 1014, 1017, 1018, 1019, 10001014, 10001015,
   10001019, 20001019, 10001022, 20001022, 10001023, 20001023, 22131001, 22181003, ...idRun(1027, 1031),
   ...idRun(10001027, 10001031), ...idRun(20001027, 20001031), ...idRun(20011027, 20011031), 2311002, ...PUPPETS, 4221006]);
-/** Characters on a ladder or rope, and ghosts, are drawn facing left whichever way they face. */
+/**
+ * Characters on a ladder or rope (ladder2, rope2, and a ghost's ghostladder / ghostrope) are drawn facing left
+ * whichever way they face; anything else, a ghost too, is mirrored when they face right.
+ */
 const CLIMBING = /^(ladder|rope)2?$/;
-const drawnRight = (ent) => !!ent.facingRight && ent.action !== 'dead' && !CLIMBING.test(ent.action);
+const drawnRight = (ent) => !!ent.facingRight && !CLIMBING.test(ent.action);
 /**
  * Spells that strike what is in their box: Thunder Bolt, Heal, Explosion, Ice Strike, Shining Ray, Big Bang, Meteor
  * Shower, Blizzard, Genesis, Fire Demon, Ice Demon, Fire Pillar, Fire Strike, Ninja Ambush and Evan's. Any other spell
