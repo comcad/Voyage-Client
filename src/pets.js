@@ -156,7 +156,9 @@ export class Pet {
     if (this.ladder) {
       this.ladderMs += TICK;
       if (this.ladderMs < 200) { this.climb(p); return; }
-      this.inX = g.lastJumpDir || 0;   // off a ladder after 200ms: the owner's last jump direction, nothing else (none: straight up)
+      // off a ladder after 200ms: a jump the way the owner last jumped (any jump; 0, a jump with none, leaves it hanging
+      // there - as the client's pet does - until the owner's next jump gives it one)
+      this.inX = g.lastJumpDir || 0;
       this.jumpReq = true;
       return;
     }

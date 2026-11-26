@@ -7239,6 +7239,7 @@ export class Game {
           // a little hop first, then down through the floor: it stays ignored until we are well past it
           if (this.downJumpAllowed()) {
             this.moveEvent = { kind: 'down', ofh: p.fh.id, x: p.x, y: p.y };
+            this.lastJumpDir = dir;   // every jump leaves its direction (0 for none): a pet left on a ladder jumps off that way
             p.ignoreFh = p.fh; p.ignoreT = 0.45; p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * 0.35355339; p.vx = 0; sfx.play('Game/Jump');
           }
           else if (!dir) action = 'prone';   // nothing to drop to: stay lying down
@@ -7250,6 +7251,7 @@ export class Game {
           if (dir * p.vx > J) p.vx = dir * J;
           p.fh = null; p.y = Math.floor(p.y - 1); p.vy = -JUMP * (swim ? 0.7 : 1);   // leaving a floor lifts you 1px
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
+          this.lastJumpDir = dir;
           sfx.play('Game/Jump');
         }
       } else {
@@ -7273,6 +7275,7 @@ export class Game {
         if (key && !this.hasDisease(WEAKEN) && this.swimJumpReady(true) && this.jumpAllowed()) {
           p.vy = -PHYS.swimSpeed * 5 * this.swimShoe(ms).v;
           this.moveEvent = { kind: 'jump', vx: p.vx, vy: p.vy };
+          this.lastJumpDir = dir;
         }
         this.playerFall(dt, dir, inY, ms);
       } else {
